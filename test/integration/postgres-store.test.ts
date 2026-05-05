@@ -24,7 +24,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'TRUNCATE flue_sessions, integration_deliveries, external_threads, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
+      'TRUNCATE flue_sessions, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
     );
     store = new PostgresStore(testDatabaseUrl!);
   });
@@ -95,6 +95,51 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     } finally {
       await flueStore.close();
     }
+  });
+
+  it('persists active sandbox lifecycle state', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Sandbox state' });
+    const now = new Date();
+
+    const created = await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000701',
+      sessionId: session.id,
+      provider: 'fake',
+      providerSandboxId: 'fake-sandbox-1',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: { target: 'test' },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await expect(store.getActiveSandbox(session.id, 'fake')).resolves.toMatchObject({
+      id: created.id,
+      providerSandboxId: 'fake-sandbox-1',
+      status: 'ready',
+      metadata: { target: 'test' },
+    });
+
+    const checkedAt = new Date(now.getTime() + 1_000);
+    await store.updateSandbox({
+      ...created,
+      status: 'unhealthy',
+      lastHealthCheckAt: checkedAt,
+      updatedAt: checkedAt,
+    });
+    await expect(store.getActiveSandbox(session.id, 'fake')).resolves.toMatchObject({
+      status: 'unhealthy',
+      lastHealthCheckAt: checkedAt,
+    });
+
+    await store.updateSandbox({
+      ...created,
+      status: 'destroyed',
+      destroyedAt: checkedAt,
+      updatedAt: checkedAt,
+    });
+    await expect(store.getActiveSandbox(session.id, 'fake')).resolves.toBeNull();
   });
 
   it('claims each pending message once under concurrent workers', async () => {
@@ -216,6 +261,8 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
         'session_created',
         'message_created',
         'message_started',
+        'sandbox_starting',
+        'sandbox_ready',
         'run_started',
         'agent_text_delta',
         'run_completed',

@@ -4,6 +4,7 @@ import type {
   AppStore,
   ClaimedMessage,
   CreateMessageRecord,
+  CreateSandboxRecord,
   CreateSessionRecord,
   CreateWebhookSourceRecord,
   ExternalThreadRecord,
@@ -13,6 +14,8 @@ import type {
   RecoveredRun,
   RunRecord,
   RunStatus,
+  SandboxRecord,
+  SandboxStatus,
   SessionRecord,
   SessionStatus,
   WebhookSourceRecord,
@@ -64,6 +67,20 @@ type RunRow = QueryResultRow & {
   failed_at: Date | null;
   error: string | null;
   metadata: Record<string, unknown>;
+};
+
+type SandboxRow = QueryResultRow & {
+  id: string;
+  session_id: string;
+  provider: string;
+  provider_sandbox_id: string;
+  status: SandboxStatus;
+  workspace_path: string;
+  metadata: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+  last_health_check_at: Date | null;
+  destroyed_at: Date | null;
 };
 
 type WebhookSourceRow = QueryResultRow & {
@@ -308,6 +325,70 @@ export class PostgresStore implements AppStore {
 
   async failRun(input: { runId: string; failedAt: Date; error: string }): Promise<ClaimedMessage> {
     return this.finishRun(input.runId, 'failed', input.failedAt, input.error);
+  }
+
+  async getActiveSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null> {
+    const result = await this.pool.query<SandboxRow>(
+      `SELECT id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata,
+              created_at, updated_at, last_health_check_at, destroyed_at
+       FROM sandboxes
+       WHERE session_id = $1
+         AND provider = $2
+         AND destroyed_at IS NULL
+         AND status IN ('ready', 'unhealthy')
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+      [sessionId, provider],
+    );
+    const row = result.rows[0];
+    return row ? toSandbox(row) : null;
+  }
+
+  async createSandbox(record: CreateSandboxRecord): Promise<SandboxRecord> {
+    const result = await this.pool.query<SandboxRow>(
+      `INSERT INTO sandboxes (id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata,
+                 created_at, updated_at, last_health_check_at, destroyed_at`,
+      [
+        record.id,
+        record.sessionId,
+        record.provider,
+        record.providerSandboxId,
+        record.status,
+        record.workspacePath,
+        record.metadata,
+        record.createdAt,
+        record.updatedAt,
+      ],
+    );
+    return toSandbox(result.rows[0]!);
+  }
+
+  async updateSandbox(record: SandboxRecord): Promise<SandboxRecord> {
+    const result = await this.pool.query<SandboxRow>(
+      `UPDATE sandboxes
+       SET status = $2,
+           workspace_path = $3,
+           metadata = $4,
+           updated_at = $5,
+           last_health_check_at = $6,
+           destroyed_at = $7
+       WHERE id = $1
+       RETURNING id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata,
+                 created_at, updated_at, last_health_check_at, destroyed_at`,
+      [
+        record.id,
+        record.status,
+        record.workspacePath,
+        record.metadata,
+        record.updatedAt,
+        record.lastHealthCheckAt ?? null,
+        record.destroyedAt ?? null,
+      ],
+    );
+    if (!result.rows[0]) throw new Error(`Sandbox does not exist: ${record.id}`);
+    return toSandbox(result.rows[0]);
   }
 
   async nextEventSequence(sessionId: string): Promise<number> {
@@ -569,6 +650,23 @@ function toRun(row: RunRow): RunRecord {
   if (row.failed_at) run.failedAt = row.failed_at;
   if (row.error) run.error = row.error;
   return run;
+}
+
+function toSandbox(row: SandboxRow): SandboxRecord {
+  const record: SandboxRecord = {
+    id: row.id,
+    sessionId: row.session_id,
+    provider: row.provider,
+    providerSandboxId: row.provider_sandbox_id,
+    status: row.status,
+    workspacePath: row.workspace_path,
+    metadata: row.metadata,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  if (row.last_health_check_at) record.lastHealthCheckAt = row.last_health_check_at;
+  if (row.destroyed_at) record.destroyedAt = row.destroyed_at;
+  return record;
 }
 
 function toWebhookSource(row: WebhookSourceRow): WebhookSourceRecord {

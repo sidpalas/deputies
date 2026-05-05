@@ -76,11 +76,12 @@ The current scaffold has implemented the portable control-plane foundation:
 - Unit, Postgres integration, architecture fitness, and built-artifact UAT tests.
 - Daytona SDK dependency, provider lifecycle adapter, and Flue `SandboxFactory` bridge.
 - Real Flue agent factory wiring behind `RUNNER=flue` using provider-backed sandbox handles.
+- Sandbox lifecycle persistence with reconnect/reuse semantics for follow-up messages.
 
 The following MVP pieces are still planned:
 
 - Flue live event normalization beyond the current runner-level events.
-- sandbox lifecycle persistence and real Daytona/Flue UAT with credentials.
+- real Daytona/Flue UAT with credentials.
 
 ## MVP Target
 

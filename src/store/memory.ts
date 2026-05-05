@@ -1,6 +1,7 @@
 import type { NormalizedEvent } from '../events/types.js';
 import type {
   AppStore,
+  CreateSandboxRecord,
   CreateWebhookSourceRecord,
   ExternalThreadRecord,
   IntegrationDeliveryRecord,
@@ -10,6 +11,7 @@ import type {
   MessageRecord,
   RecoveredRun,
   RunRecord,
+  SandboxRecord,
   SessionRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -19,6 +21,7 @@ export class MemoryStore implements AppStore {
   private readonly messages = new Map<string, MessageRecord[]>();
   private readonly runs = new Map<string, RunRecord>();
   private readonly events = new Map<string, Array<NormalizedEvent & { sequence: number }>>();
+  private readonly sandboxes = new Map<string, SandboxRecord>();
   private readonly webhookSources = new Map<string, WebhookSourceRecord>();
   private readonly externalThreads = new Map<string, ExternalThreadRecord>();
   private readonly integrationDeliveries = new Map<string, IntegrationDeliveryRecord>();
@@ -160,6 +163,26 @@ export class MemoryStore implements AppStore {
     const claimed = await this.finishRun(input.runId, input.failedAt, 'failed');
     this.runs.set(input.runId, { ...claimed.run, error: input.error });
     return { ...claimed, run: this.runs.get(input.runId)! };
+  }
+
+  async getActiveSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null> {
+    const candidates = Array.from(this.sandboxes.values())
+      .filter((sandbox) => sandbox.sessionId === sessionId && sandbox.provider === provider)
+      .filter((sandbox) => !sandbox.destroyedAt && (sandbox.status === 'ready' || sandbox.status === 'unhealthy'))
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    return candidates[0] ?? null;
+  }
+
+  async createSandbox(record: CreateSandboxRecord): Promise<SandboxRecord> {
+    if (this.sandboxes.has(record.id)) throw new Error(`Sandbox already exists: ${record.id}`);
+    this.sandboxes.set(record.id, record);
+    return record;
+  }
+
+  async updateSandbox(record: SandboxRecord): Promise<SandboxRecord> {
+    if (!this.sandboxes.has(record.id)) throw new Error(`Sandbox does not exist: ${record.id}`);
+    this.sandboxes.set(record.id, record);
+    return record;
   }
 
   async nextEventSequence(sessionId: string): Promise<number> {

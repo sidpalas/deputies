@@ -16,7 +16,7 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'TRUNCATE integration_deliveries, external_threads, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
+      'TRUNCATE integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
     );
     server = spawn(process.execPath, ['dist/index.js'], {
       cwd: process.cwd(),
@@ -55,6 +55,8 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
       'session_created',
       'message_created',
       'message_started',
+      'sandbox_starting',
+      'sandbox_ready',
       'run_started',
       'agent_text_delta',
       'run_completed',

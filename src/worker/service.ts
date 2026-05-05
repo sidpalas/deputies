@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EventService } from '../events/service.js';
 import type { Runner } from '../runner/types.js';
+import { SandboxLifecycleService } from '../sandbox/service.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import type { AppStore, ClaimedMessage } from '../store/types.js';
 
@@ -123,7 +124,27 @@ export class WorkerService {
   }
 
   private async runClaimedMessage(claimed: ClaimedMessage): Promise<void> {
-    const sandbox = await this.options.sandboxProvider.create({ sessionId: claimed.message.sessionId });
+    await this.options.events.append({
+      sessionId: claimed.message.sessionId,
+      runId: claimed.run.id,
+      messageId: claimed.message.id,
+      type: 'sandbox_starting',
+      payload: { provider: this.options.sandboxProvider.name },
+    });
+    const lifecycle = new SandboxLifecycleService(this.options.store, this.options.sandboxProvider);
+    const { sandbox, created } = await lifecycle.ensure(claimed.message.sessionId);
+    await this.options.events.append({
+      sessionId: claimed.message.sessionId,
+      runId: claimed.run.id,
+      messageId: claimed.message.id,
+      type: 'sandbox_ready',
+      payload: {
+        provider: sandbox.provider,
+        providerSandboxId: sandbox.providerSandboxId,
+        created,
+        workspacePath: sandbox.workspacePath,
+      },
+    });
     await this.options.runner.run({
       sessionId: claimed.message.sessionId,
       runId: claimed.run.id,

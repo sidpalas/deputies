@@ -4,6 +4,7 @@ export type SessionStatus = 'created' | 'active' | 'idle' | 'completed' | 'faile
 export type MessageStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 export type RunStatus = 'starting' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'stale';
 export type IntegrationDeliveryStatus = 'received' | 'processed' | 'failed';
+export type SandboxStatus = 'ready' | 'unhealthy' | 'destroyed' | 'failed';
 
 export type SessionRecord = {
   id: string;
@@ -83,6 +84,20 @@ export type IntegrationDeliveryRecord = {
   metadata: Record<string, unknown>;
 };
 
+export type SandboxRecord = {
+  id: string;
+  sessionId: string;
+  provider: string;
+  providerSandboxId: string;
+  status: SandboxStatus;
+  workspacePath: string;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+  lastHealthCheckAt?: Date;
+  destroyedAt?: Date;
+};
+
 export type CreateSessionRecord = {
   id: string;
   status: SessionStatus;
@@ -113,6 +128,18 @@ export type CreateWebhookSourceRecord = {
   updatedAt: Date;
 };
 
+export type CreateSandboxRecord = {
+  id: string;
+  sessionId: string;
+  provider: string;
+  providerSandboxId: string;
+  status: SandboxStatus;
+  workspacePath: string;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export interface AppStore {
   createSession(record: CreateSessionRecord): Promise<SessionRecord>;
   getSession(id: string): Promise<SessionRecord | null>;
@@ -133,6 +160,10 @@ export interface AppStore {
   recoverStaleRuns(input: { now: Date; limit: number }): Promise<RecoveredRun[]>;
   completeRun(input: { runId: string; completedAt: Date }): Promise<ClaimedMessage>;
   failRun(input: { runId: string; failedAt: Date; error: string }): Promise<ClaimedMessage>;
+
+  getActiveSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null>;
+  createSandbox(record: CreateSandboxRecord): Promise<SandboxRecord>;
+  updateSandbox(record: SandboxRecord): Promise<SandboxRecord>;
 
   nextEventSequence(sessionId: string): Promise<number>;
   appendEvent(event: NormalizedEvent & { sequence: number }): Promise<NormalizedEvent & { sequence: number }>;

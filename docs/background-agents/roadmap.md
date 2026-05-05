@@ -19,6 +19,7 @@ Implemented so far:
 - Postgres-backed Flue `SessionStore` and `runner-flue` adapter seam.
 - Daytona SDK dependency, sandbox provider adapter, and Flue `SandboxFactory` bridge.
 - Real Flue agent factory wiring behind `RUNNER=flue`.
+- Sandbox lifecycle persistence with active sandbox reconnect/reuse.
 - Postgres integration test path.
 - App-level Postgres worker integration test.
 
@@ -26,7 +27,7 @@ Still open from the early phases:
 
 - Contract schemas for public API responses and events.
 
-The next implementation phase should add sandbox lifecycle persistence, then real Daytona/Flue UAT coverage with credentials.
+The next implementation phase should add real Daytona/Flue UAT coverage with credentials, then normalize actual Flue live events into product events.
 
 ## Phase 0: Repository And Agent Context
 
@@ -190,7 +191,7 @@ Acceptance criteria:
 - Unhealthy sandbox fails clearly or is recreated according to policy.
 - Tests use fake provider without real infrastructure.
 
-Status: partially implemented. The fake provider and Daytona provider adapter exist. Daytona creation, connection, health, destroy, exec, and filesystem operations are unit-tested with an SDK-shaped fake client. Provider metadata persistence and real Daytona UAT remain open.
+Status: mostly implemented for the current provider set. The fake provider and Daytona provider adapter exist. Daytona creation, connection, health, destroy, exec, and filesystem operations are unit-tested with an SDK-shaped fake client. The `sandboxes` table persists provider sandbox IDs, workspace paths, status, metadata, and health timestamps. The worker reuses a ready active sandbox for follow-up messages and creates a replacement if health/connect fails. Real Daytona UAT remains open.
 
 ## Phase 7: UAT Suite
 

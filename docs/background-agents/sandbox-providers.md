@@ -302,7 +302,8 @@ Current implementation:
 - `src/runner-flue/sandbox-factory.ts` adapts any filesystem-capable `SandboxHandle` into Flue's `SandboxFactory` using `createSandboxSessionEnv`.
 - Daytona creation supports optional `DAYTONA_IMAGE`, `DAYTONA_SNAPSHOT`, `DAYTONA_API_URL`, and `DAYTONA_TARGET` configuration.
 - This follows Flue's documented connector shape: product code creates/configures the Daytona sandbox, then Flue receives a connector-wrapped sandbox.
-- Provider sandbox IDs are not persisted yet, so reconnect across process restarts remains a lifecycle-manager follow-up.
+- Provider sandbox IDs, workspace paths, metadata, health timestamps, and lifecycle status are persisted in `sandboxes`.
+- Follow-up messages reconnect to the latest active sandbox for the session/provider when health is ready; unhealthy or missing sandboxes are marked unhealthy and replaced.
 
 ### Kubernetes Provider
 
