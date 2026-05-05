@@ -4,10 +4,10 @@ import { runMigrations } from '../../src/db/migrate.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 const uatPort = 4593;
+let server: ChildProcess | undefined;
 
 describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
   let pool: Pool;
-  let server: ChildProcess;
 
   beforeAll(async () => {
     await runMigrations(testDatabaseUrl!);
@@ -18,24 +18,14 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
     await pool.query(
       'TRUNCATE integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
     );
-    server = spawn(process.execPath, ['dist/index.js'], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        APP_STORE: 'postgres',
-        DATABASE_URL: testDatabaseUrl!,
-        PORT: String(uatPort),
-        RUN_MODE: 'all',
-        RUNNER: 'fake',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    await waitForHealth();
+    await startServer();
   });
 
   afterEach(async () => {
+    if (!server) return;
     server.kill();
-    await new Promise<void>((resolve) => server.once('exit', () => resolve()));
+    await new Promise<void>((resolve) => server?.once('exit', () => resolve()));
+    server = undefined;
   });
 
   afterAll(async () => {
@@ -85,12 +75,118 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
     const events = await waitForEvents(session.id, ['message_completed']);
     expect(events.map((event) => event.type)).toContain('message_completed');
   });
+
+  it('protects product API routes when bearer auth is enabled', async () => {
+    await restartServer({ API_AUTH_MODE: 'bearer', API_BEARER_TOKEN: 'secret' });
+
+    const health = await fetch(`http://127.0.0.1:${uatPort}/health`);
+    expect(health.status).toBe(200);
+
+    const missingAuth = await postJson('/sessions', { title: 'Private UAT' });
+    expect(missingAuth.status).toBe(401);
+
+    const invalidAuth = await postJson('/sessions', { title: 'Private UAT' }, 'wrong');
+    expect(invalidAuth.status).toBe(401);
+
+    const createSession = await postJson('/sessions', { title: 'Private UAT' }, 'secret');
+    expect(createSession.status).toBe(201);
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const createMessage = await postJson(
+      `/sessions/${session.id}/messages`,
+      { prompt: 'complete from authenticated API' },
+      'secret',
+    );
+    expect(createMessage.status).toBe(202);
+
+    const noAuthEvents = await fetch(`http://127.0.0.1:${uatPort}/sessions/${session.id}/events`);
+    expect(noAuthEvents.status).toBe(401);
+
+    const events = await waitForEvents(session.id, ['message_completed'], { bearerToken: 'secret' });
+    expect(events.map((event) => event.type)).toContain('message_completed');
+  });
+
+  it('reuses the same sandbox for follow-up messages', async () => {
+    const createSession = await postJson('/sessions', { title: 'Follow-up UAT' });
+    expect(createSession.status).toBe(201);
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const firstMessage = await postJson(`/sessions/${session.id}/messages`, { prompt: 'first message' });
+    expect(firstMessage.status).toBe(202);
+    await waitForEventCount(session.id, 'message_completed', 1);
+
+    const secondMessage = await postJson(`/sessions/${session.id}/messages`, { prompt: 'second message' });
+    expect(secondMessage.status).toBe(202);
+    const events = await waitForEventCount(session.id, 'message_completed', 2);
+
+    const sandboxReadyEvents = events.filter((event) => event.type === 'sandbox_ready');
+    expect(sandboxReadyEvents.map((event) => event.payload?.created)).toEqual([true, false]);
+    expect(new Set(sandboxReadyEvents.map((event) => event.payload?.providerSandboxId)).size).toBe(1);
+  });
+
+  it('keeps generic webhook auth independent from product API auth', async () => {
+    await restartServer({ API_AUTH_MODE: 'bearer', API_BEARER_TOKEN: 'product-secret' });
+    const now = new Date();
+    await pool.query(
+      `INSERT INTO webhook_sources (id, key, name, enabled, bearer_token, prompt_prefix, created_at, updated_at)
+       VALUES ($1, 'auth-split', 'Auth Split', true, 'webhook-secret', null, $2, $2)`,
+      ['00000000-0000-4000-8000-000000000302', now],
+    );
+
+    const productApi = await postJson('/sessions', { title: 'Blocked' });
+    expect(productApi.status).toBe(401);
+
+    const wrongWebhookAuth = await postJsonWithAuth('/webhooks/generic/auth-split', 'product-secret', {
+      threadId: 'thread-1',
+      dedupeKey: 'delivery-1',
+      prompt: 'wrong auth',
+    });
+    expect(wrongWebhookAuth.status).toBe(401);
+
+    const webhook = await postJsonWithAuth('/webhooks/generic/auth-split', 'webhook-secret', {
+      threadId: 'thread-1',
+      dedupeKey: 'delivery-2',
+      prompt: 'complete via webhook auth',
+    });
+    expect(webhook.status).toBe(202);
+    const { session } = (await webhook.json()) as { session: { id: string } };
+
+    const events = await waitForEvents(session.id, ['message_completed'], { bearerToken: 'product-secret' });
+    expect(events.map((event) => event.type)).toContain('message_completed');
+  });
 });
 
-function postJson(path: string, body: unknown): Promise<Response> {
+async function startServer(extraEnv: Record<string, string> = {}): Promise<void> {
+  server = spawn(process.execPath, ['dist/index.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      APP_STORE: 'postgres',
+      DATABASE_URL: testDatabaseUrl!,
+      PORT: String(uatPort),
+      RUN_MODE: 'all',
+      RUNNER: 'fake',
+      ...extraEnv,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  await waitForHealth();
+}
+
+async function restartServer(extraEnv: Record<string, string>): Promise<void> {
+  if (server) {
+    server.kill();
+    await new Promise<void>((resolve) => server?.once('exit', () => resolve()));
+  }
+  await startServer(extraEnv);
+}
+
+function postJson(path: string, body: unknown, bearerToken?: string): Promise<Response> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (bearerToken) headers.authorization = `Bearer ${bearerToken}`;
   return fetch(`http://127.0.0.1:${uatPort}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   });
 }
@@ -110,13 +206,31 @@ async function waitForHealth(): Promise<void> {
   });
 }
 
-async function waitForEvents(sessionId: string, terminalTypes: string[]): Promise<Array<{ type: string }>> {
-  let lastEvents: Array<{ type: string }> = [];
+type UatEvent = { type: string; payload?: Record<string, unknown> };
+
+async function waitForEvents(
+  sessionId: string,
+  terminalTypes: string[],
+  options: { bearerToken?: string } = {},
+): Promise<UatEvent[]> {
+  let lastEvents: UatEvent[] = [];
   await waitFor(async () => {
-    const response = await fetch(`http://127.0.0.1:${uatPort}/sessions/${sessionId}/events`);
-    const body = (await response.json()) as { events: Array<{ type: string }> };
+    const response = await fetch(`http://127.0.0.1:${uatPort}/sessions/${sessionId}/events`, {
+      headers: options.bearerToken ? { authorization: `Bearer ${options.bearerToken}` } : {},
+    });
+    const body = (await response.json()) as { events: UatEvent[] };
     lastEvents = body.events;
     return terminalTypes.every((type) => lastEvents.some((event) => event.type === type));
+  });
+
+  return lastEvents;
+}
+
+async function waitForEventCount(sessionId: string, type: string, count: number): Promise<UatEvent[]> {
+  let lastEvents: UatEvent[] = [];
+  await waitFor(async () => {
+    lastEvents = await waitForEvents(sessionId, []);
+    return lastEvents.filter((event) => event.type === type).length >= count;
   });
 
   return lastEvents;

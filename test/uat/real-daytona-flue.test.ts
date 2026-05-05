@@ -56,14 +56,28 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Daytona + Flue UAT', () => {
     const { session } = (await createSession.json()) as { session: { id: string } };
 
     const createMessage = await postJson(`/sessions/${session.id}/messages`, {
-      prompt: 'Use the shell to run: echo flue-daytona-uat. Then reply with the exact output.',
+      prompt:
+        'Use the shell to run: mkdir -p /tmp/flue-uat && printf flue-daytona-uat > /tmp/flue-uat/result.txt && cat /tmp/flue-uat/result.txt. Then reply with the exact output.',
     });
     expect(createMessage.status).toBe(202);
 
-    const events = await waitForEvents(session.id, ['message_completed'], 180_000);
+    await waitForEventCount(session.id, 'message_completed', 1, 180_000);
+
+    const followUp = await postJson(`/sessions/${session.id}/messages`, {
+      prompt: 'Use the shell to run: cat /tmp/flue-uat/result.txt. Then reply with the exact output.',
+    });
+    expect(followUp.status).toBe(202);
+
+    const events = await waitForEventCount(session.id, 'message_completed', 2, 180_000);
     expect(events.map((event) => event.type)).toContain('sandbox_ready');
     expect(events.map((event) => event.type)).toContain('run_completed');
     expect(events.map((event) => event.type)).toContain('message_completed');
+    expect(events.map((event) => event.type)).toContain('tool_started');
+    expect(events.map((event) => event.type)).toContain('tool_finished');
+
+    const sandboxReadyEvents = events.filter((event) => event.type === 'sandbox_ready');
+    expect(sandboxReadyEvents.map((event) => event.payload?.created)).toEqual([true, false]);
+    expect(new Set(sandboxReadyEvents.map((event) => event.payload?.providerSandboxId)).size).toBe(1);
   }, 180_000);
 });
 
@@ -109,15 +123,15 @@ async function waitForEvents(
   sessionId: string,
   terminalTypes: string[],
   timeoutMs: number,
-): Promise<Array<{ type: string }>> {
-  let lastEvents: Array<{ type: string }> = [];
+): Promise<UatEvent[]> {
+  let lastEvents: UatEvent[] = [];
   let lastBody: unknown;
   let lastStatus = 0;
   try {
     await waitFor(async () => {
       const response = await fetch(`http://127.0.0.1:${uatPort}/sessions/${sessionId}/events`);
       lastStatus = response.status;
-      const body = (await response.json()) as { events?: Array<{ type: string }> };
+      const body = (await response.json()) as { events?: UatEvent[] };
       lastBody = body;
       if (!Array.isArray(body.events)) return false;
       lastEvents = body.events;
@@ -129,6 +143,23 @@ async function waitForEvents(
       `${message}. Last events response status=${lastStatus} body=${JSON.stringify(lastBody)}`,
     );
   }
+
+  return lastEvents;
+}
+
+type UatEvent = { type: string; payload?: Record<string, unknown> };
+
+async function waitForEventCount(
+  sessionId: string,
+  type: string,
+  count: number,
+  timeoutMs: number,
+): Promise<UatEvent[]> {
+  let lastEvents: UatEvent[] = [];
+  await waitFor(async () => {
+    lastEvents = await waitForEvents(sessionId, [], timeoutMs);
+    return lastEvents.filter((event) => event.type === type).length >= count;
+  }, timeoutMs);
 
   return lastEvents;
 }

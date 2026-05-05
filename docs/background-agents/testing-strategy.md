@@ -208,6 +208,10 @@ Acceptance tests:
 - Generic webhook returns `202` and creates session/message.
 - Built fake-runner flow completes through the worker and emits sandbox lifecycle events.
 - Opt-in real Daytona/Flue flow provisions a hosted sandbox, runs through `RUNNER=flue`, and completes a message.
+- Product API bearer auth rejects unauthenticated session routes while leaving health public.
+- Follow-up messages reuse the same active sandbox and expose `sandbox_ready.created=false`.
+- Generic webhook auth remains independent from product API auth.
+- Real Daytona/Flue follow-up UAT validates persistent sandbox filesystem and Flue tool events.
 - Invalid auth returns stable JSON error.
 - Duplicate delivery does not create duplicate messages.
 - Event stream emits user-visible events.
