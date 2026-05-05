@@ -64,7 +64,7 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Daytona + Flue UAT', () => {
     expect(events.map((event) => event.type)).toContain('sandbox_ready');
     expect(events.map((event) => event.type)).toContain('run_completed');
     expect(events.map((event) => event.type)).toContain('message_completed');
-  });
+  }, 180_000);
 });
 
 async function cleanupDaytonaSandboxes(pool: Pool): Promise<void> {
@@ -111,12 +111,24 @@ async function waitForEvents(
   timeoutMs: number,
 ): Promise<Array<{ type: string }>> {
   let lastEvents: Array<{ type: string }> = [];
-  await waitFor(async () => {
-    const response = await fetch(`http://127.0.0.1:${uatPort}/sessions/${sessionId}/events`);
-    const body = (await response.json()) as { events: Array<{ type: string }> };
-    lastEvents = body.events;
-    return terminalTypes.every((type) => lastEvents.some((event) => event.type === type));
-  }, timeoutMs);
+  let lastBody: unknown;
+  let lastStatus = 0;
+  try {
+    await waitFor(async () => {
+      const response = await fetch(`http://127.0.0.1:${uatPort}/sessions/${sessionId}/events`);
+      lastStatus = response.status;
+      const body = (await response.json()) as { events?: Array<{ type: string }> };
+      lastBody = body;
+      if (!Array.isArray(body.events)) return false;
+      lastEvents = body.events;
+      return terminalTypes.every((type) => lastEvents.some((event) => event.type === type));
+    }, timeoutMs);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${message}. Last events response status=${lastStatus} body=${JSON.stringify(lastBody)}`,
+    );
+  }
 
   return lastEvents;
 }
