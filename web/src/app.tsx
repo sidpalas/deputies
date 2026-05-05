@@ -361,11 +361,11 @@ export function App() {
                         className="min-h-28 border-0 bg-transparent focus:ring-0"
                         value={prompt}
                         onChange={(event) => setPrompt(event.target.value)}
-                        onKeyDown={(event) => submitOnModifierEnter(event)}
+                        onKeyDown={(event) => submitOnEnter(event)}
                         placeholder="Ask your deputy to investigate, change code, or follow up..."
                       />
                       <div className="flex items-center justify-between border-t border-slate-800 px-3 py-2 text-xs text-slate-500">
-                        <span>Ctrl/⌘ Enter to send</span>
+                        <span>Enter to send · Shift Enter for newline</span>
                         <Button type="submit" disabled={!prompt.trim()}>Send message</Button>
                       </div>
                     </Card>
@@ -502,7 +502,7 @@ function NewThreadPanel(props: {
         <p className="mt-2 text-sm text-slate-400">Delegate follow-ups, watch the work trail, and inspect the results.</p>
         <h2 className="mt-6 text-xl font-semibold">What should your deputy do?</h2>
         <form className="mt-4 grid gap-3" onSubmit={props.onSubmit}>
-          <Textarea className="min-h-40" value={props.prompt} onChange={(event) => props.onPromptChange(event.target.value)} onKeyDown={(event) => submitOnModifierEnter(event)} placeholder="Ask your deputy to investigate, change code, or answer a question..." disabled={!props.canCallApi} autoFocus />
+          <Textarea className="min-h-40" value={props.prompt} onChange={(event) => props.onPromptChange(event.target.value)} onKeyDown={(event) => submitOnEnter(event)} placeholder="Ask your deputy to investigate, change code, or answer a question..." disabled={!props.canCallApi} autoFocus />
           <Button className="justify-self-end" type="submit" disabled={!props.canCallApi || props.loading || !props.prompt.trim()}>Start session</Button>
         </form>
       </Card>
@@ -708,8 +708,8 @@ function fuzzyScore(value: string, query: string): number | null {
   return score;
 }
 
-function submitOnModifierEnter(event: KeyboardEvent<HTMLTextAreaElement>): void {
-  if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return;
+function submitOnEnter(event: KeyboardEvent<HTMLTextAreaElement>): void {
+  if (event.key !== 'Enter' || event.shiftKey) return;
   event.preventDefault();
   event.currentTarget.form?.requestSubmit();
 }
