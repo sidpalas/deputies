@@ -1,0 +1,20 @@
+import type { NormalizedEvent } from '../events/types.js';
+import type { SandboxHandle } from '../sandbox/types.js';
+
+export type RunnerInput = {
+  sessionId: string;
+  messageId: string;
+  prompt: string;
+  context: Record<string, unknown>;
+  sandbox: SandboxHandle;
+  emit: (event: NormalizedEvent) => Promise<void>;
+};
+
+export type RunnerResult = {
+  text: string;
+  artifacts?: Array<{ type: string; url?: string; payload?: Record<string, unknown> }>;
+};
+
+export interface Runner {
+  run(input: RunnerInput): Promise<RunnerResult>;
+}

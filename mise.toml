@@ -1,0 +1,19 @@
+[tools]
+node = "24"
+pnpm = "10.14.0"
+
+[tasks.install]
+description = "Install project dependencies"
+run = "pnpm install"
+
+[tasks.test]
+description = "Run unit tests"
+run = "pnpm test"
+
+[tasks.typecheck]
+description = "Run TypeScript type checking"
+run = "pnpm typecheck"
+
+[tasks.check]
+description = "Run typecheck and tests"
+depends = ["typecheck", "test"]
