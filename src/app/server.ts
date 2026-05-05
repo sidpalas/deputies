@@ -3,12 +3,13 @@ import type { Server } from 'node:http';
 import { createAdaptorServer } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler } from 'hono';
+import { cors } from 'hono/cors';
 import { apiAuthMiddleware } from '../auth/middleware.js';
 import type { AppConfig } from '../config/index.js';
 import { EventService } from '../events/service.js';
 import { GenericWebhookError, GenericWebhookService } from '../integrations/generic-webhook/service.js';
 import { MessageService, MessageServiceError } from '../messages/service.js';
-import { SessionService } from '../sessions/service.js';
+import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
 import type { AppStore } from '../store/types.js';
 
@@ -41,6 +42,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   const app = new Hono<{ Variables: AppVariables }>();
 
   app.use('*', requestIdMiddleware());
+  app.use('*', cors({ origin: '*', allowHeaders: ['authorization', 'content-type', 'x-request-id'], allowMethods: ['GET', 'POST', 'OPTIONS'] }));
 
   app.onError((error, c) => {
     if (error instanceof HttpRequestError) {
@@ -51,7 +53,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.notFound((c) => c.json({ error: 'not_found', message: 'Route not found' }, 404));
 
-  app.get('/health', (c) => c.json({ status: 'ok', runMode: config.runMode }));
+  app.get('/health', (c) => c.json({ status: 'ok', runMode: config.runMode, apiAuthMode: config.apiAuthMode }));
 
   app.use('/sessions/*', apiAuthMiddleware(config));
   app.use('/sessions', apiAuthMiddleware(config));
@@ -61,6 +63,11 @@ export function createApp(config: AppConfig, services = createServices()) {
     const title = optionalString(body.title);
     const session = await services.sessions.create(title ? { title } : {});
     return c.json({ session }, 201);
+  });
+
+  app.get('/sessions', async (c) => {
+    const sessions = await services.store.listSessions();
+    return c.json({ sessions });
   });
 
   app.post('/webhooks/generic/:sourceKey', async (c) => {
@@ -88,6 +95,46 @@ export function createApp(config: AppConfig, services = createServices()) {
     return c.json({ session });
   });
 
+  app.patch('/sessions/:sessionId', async (c) => {
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    const title = optionalString(body.title);
+    if (body.title !== undefined && !title) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: title');
+
+    try {
+      const session = await services.sessions.update({ id: c.req.param('sessionId'), ...(title ? { title } : {}) });
+      return c.json({ session });
+    } catch (error) {
+      if (error instanceof SessionServiceError && error.code === 'not_found') {
+        return writeError(c, 404, 'not_found', 'Session not found');
+      }
+      throw error;
+    }
+  });
+
+  app.post('/sessions/:sessionId/archive', async (c) => {
+    try {
+      const session = await services.sessions.archive(c.req.param('sessionId'));
+      return c.json({ session });
+    } catch (error) {
+      if (error instanceof SessionServiceError && error.code === 'not_found') {
+        return writeError(c, 404, 'not_found', 'Session not found');
+      }
+      throw error;
+    }
+  });
+
+  app.post('/sessions/:sessionId/unarchive', async (c) => {
+    try {
+      const session = await services.sessions.unarchive(c.req.param('sessionId'));
+      return c.json({ session });
+    } catch (error) {
+      if (error instanceof SessionServiceError && error.code === 'not_found') {
+        return writeError(c, 404, 'not_found', 'Session not found');
+      }
+      throw error;
+    }
+  });
+
   app.post('/sessions/:sessionId/messages', async (c) => {
     const sessionId = c.req.param('sessionId');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
@@ -103,6 +150,15 @@ export function createApp(config: AppConfig, services = createServices()) {
       }
       throw error;
     }
+  });
+
+  app.get('/sessions/:sessionId/messages', async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const session = await services.sessions.get(sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+
+    const messages = await services.messages.list(sessionId);
+    return c.json({ messages });
   });
 
   app.get('/sessions/:sessionId/events', async (c) => {

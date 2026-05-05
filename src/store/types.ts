@@ -200,6 +200,7 @@ export type CreateCallbackDeliveryRecord = {
 export interface AppStore {
   createSession(record: CreateSessionRecord): Promise<SessionRecord>;
   getSession(id: string): Promise<SessionRecord | null>;
+  listSessions(): Promise<SessionRecord[]>;
   updateSession(record: SessionRecord): Promise<SessionRecord>;
 
   nextMessageSequence(sessionId: string): Promise<number>;

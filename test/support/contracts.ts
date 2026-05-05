@@ -1,5 +1,8 @@
 const eventTypes = new Set([
   'session_created',
+  'session_archived',
+  'session_unarchived',
+  'session_updated',
   'message_created',
   'message_started',
   'run_started',
@@ -29,6 +32,14 @@ export function expectSessionResponse(value: unknown): asserts value is { sessio
   if (session.title !== undefined) expect(typeof session.title).toBe('string');
 }
 
+export function expectSessionsResponse(value: unknown): asserts value is { sessions: Array<{ id: string; status: string; title?: string }> } {
+  expect(isRecord(value)).toBe(true);
+  const sessions = isRecord(value) ? value.sessions : undefined;
+  expect(Array.isArray(sessions)).toBe(true);
+  if (!Array.isArray(sessions)) return;
+  for (const session of sessions) expectSessionRecord(session);
+}
+
 export function expectMessageResponse(value: unknown): asserts value is { message: { id: string; sessionId: string; sequence: number; status: string; prompt: string } } {
   expect(isRecord(value)).toBe(true);
   const message = isRecord(value) ? value.message : undefined;
@@ -40,6 +51,14 @@ export function expectMessageResponse(value: unknown): asserts value is { messag
   expect(typeof message.status).toBe('string');
   expect(typeof message.prompt).toBe('string');
   expect(typeof message.createdAt).toBe('string');
+}
+
+export function expectMessagesResponse(value: unknown): asserts value is { messages: Array<{ id: string; sessionId: string; sequence: number; status: string; prompt: string }> } {
+  expect(isRecord(value)).toBe(true);
+  const messages = isRecord(value) ? value.messages : undefined;
+  expect(Array.isArray(messages)).toBe(true);
+  if (!Array.isArray(messages)) return;
+  for (const message of messages) expectMessageRecord(message);
 }
 
 export function expectEventsResponse(value: unknown): asserts value is { events: Array<{ type: string; sequence: number }> } {
@@ -101,6 +120,27 @@ function expectNormalizedEvent(value: unknown): void {
   expect(typeof value.sequence).toBe('number');
   expect(eventTypes.has(String(value.type))).toBe(true);
   expect(isRecord(value.payload)).toBe(true);
+  expect(typeof value.createdAt).toBe('string');
+}
+
+function expectSessionRecord(value: unknown): void {
+  expect(isRecord(value)).toBe(true);
+  if (!isRecord(value)) return;
+  expect(typeof value.id).toBe('string');
+  expect(typeof value.status).toBe('string');
+  expect(typeof value.createdAt).toBe('string');
+  expect(typeof value.updatedAt).toBe('string');
+  if (value.title !== undefined) expect(typeof value.title).toBe('string');
+}
+
+function expectMessageRecord(value: unknown): void {
+  expect(isRecord(value)).toBe(true);
+  if (!isRecord(value)) return;
+  expect(typeof value.id).toBe('string');
+  expect(typeof value.sessionId).toBe('string');
+  expect(typeof value.sequence).toBe('number');
+  expect(typeof value.status).toBe('string');
+  expect(typeof value.prompt).toBe('string');
   expect(typeof value.createdAt).toBe('string');
 }
 

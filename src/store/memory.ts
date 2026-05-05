@@ -45,6 +45,10 @@ export class MemoryStore implements AppStore {
     return this.sessions.get(id) ?? null;
   }
 
+  async listSessions(): Promise<SessionRecord[]> {
+    return [...this.sessions.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+
   async updateSession(record: SessionRecord): Promise<SessionRecord> {
     if (!this.sessions.has(record.id)) {
       throw new Error(`Session does not exist: ${record.id}`);

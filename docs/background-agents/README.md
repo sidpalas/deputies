@@ -12,6 +12,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Sandbox Providers](./sandbox-providers.md): provider contract, lifecycle APIs, capabilities, and conformance expectations.
 - [Flue Persistence](./flue-persistence.md): Postgres-backed Flue session store and how it relates to product session state.
 - [Integrations](./integrations.md): generic webhook, GitHub, Slack, Linear, callbacks, auth, and external thread mapping.
+- [Web UI](./web-ui.md): separate Vite React operator UI, browser auth, and static deployment notes.
 - [Testing Strategy](./testing-strategy.md): unit, integration, e2e, UAT, adversarial, prompt/context, and emulator-backed tests.
 - [Prior Art](./prior-art.md): comparison with Open-Inspect/background-agents and Open SWE, including what to adopt or avoid.
 - [Roadmap](./roadmap.md): phased implementation sequence and acceptance criteria.
@@ -79,6 +80,7 @@ The current scaffold has implemented the portable control-plane foundation:
 - Sandbox lifecycle persistence with reconnect/reuse semantics for follow-up messages.
 - Flue live event normalization for text deltas, tools, commands, and tasks.
 - Artifact persistence, session artifact reads, and generic HTTP completion callbacks.
+- Separate Vite React operator UI scaffold.
 
 The following MVP pieces are still planned:
 

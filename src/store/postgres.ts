@@ -182,6 +182,14 @@ export class PostgresStore implements AppStore {
     return row ? toSession(row) : null;
   }
 
+  async listSessions(): Promise<SessionRecord[]> {
+    const result = await this.pool.query<SessionRow>(
+      'SELECT id, status, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC, created_at DESC',
+    );
+
+    return result.rows.map(toSession);
+  }
+
   async updateSession(record: SessionRecord): Promise<SessionRecord> {
     const result = await this.pool.query<SessionRow>(
       `UPDATE sessions

@@ -2,7 +2,15 @@ import type { Server } from 'node:http';
 import { createServer, createServices } from '../../src/app/server.js';
 import { loadConfig } from '../../src/config/index.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { expectArtifactsResponse, expectErrorResponse, expectEventsResponse, expectMessageResponse, expectSessionResponse } from '../support/contracts.js';
+import {
+  expectArtifactsResponse,
+  expectErrorResponse,
+  expectEventsResponse,
+  expectMessageResponse,
+  expectMessagesResponse,
+  expectSessionResponse,
+  expectSessionsResponse,
+} from '../support/contracts.js';
 
 describe('core API', () => {
   let server: Server;
@@ -84,6 +92,81 @@ describe('core API', () => {
     expectEventsResponse(replayBody);
     const { events: replayed } = replayBody;
     expect(replayed.map((event) => event.type)).toEqual(['message_created']);
+  });
+
+  it('lists sessions and messages', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Listed session' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'show this message' });
+
+    const sessionsResponse = await fetch(`${baseUrl}/sessions`);
+    expect(sessionsResponse.status).toBe(200);
+    const sessionsBody = await sessionsResponse.json();
+    expectSessionsResponse(sessionsBody);
+    expect(sessionsBody.sessions).toMatchObject([{ id: session.id, title: 'Listed session' }]);
+
+    const messagesResponse = await fetch(`${baseUrl}/sessions/${session.id}/messages`);
+    expect(messagesResponse.status).toBe(200);
+    const messagesBody = await messagesResponse.json();
+    expectMessagesResponse(messagesBody);
+    expect(messagesBody.messages).toMatchObject([{ sessionId: session.id, prompt: 'show this message' }]);
+  });
+
+  it('updates a session title', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Draft title' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const updateSession = await patchJson(`${baseUrl}/sessions/${session.id}`, { title: 'Final title' });
+
+    expect(updateSession.status).toBe(200);
+    const updateBody = await updateSession.json();
+    expectSessionResponse(updateBody);
+    expect(updateBody.session.title).toBe('Final title');
+
+    const eventsResponse = await fetch(`${baseUrl}/sessions/${session.id}/events`);
+    const eventsBody = await eventsResponse.json();
+    expectEventsResponse(eventsBody);
+    expect(eventsBody.events.map((event) => event.type)).toEqual(['session_created', 'session_updated']);
+  });
+
+  it('archives a session', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Archive me' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const archiveSession = await postJson(`${baseUrl}/sessions/${session.id}/archive`, {});
+
+    expect(archiveSession.status).toBe(200);
+    const archiveBody = await archiveSession.json();
+    expectSessionResponse(archiveBody);
+    expect(archiveBody.session.status).toBe('archived');
+
+    const sessionsResponse = await fetch(`${baseUrl}/sessions`);
+    const sessionsBody = await sessionsResponse.json();
+    expectSessionsResponse(sessionsBody);
+    expect(sessionsBody.sessions).toMatchObject([{ id: session.id, status: 'archived' }]);
+
+    const eventsResponse = await fetch(`${baseUrl}/sessions/${session.id}/events`);
+    const eventsBody = await eventsResponse.json();
+    expectEventsResponse(eventsBody);
+    expect(eventsBody.events.map((event) => event.type)).toEqual(['session_created', 'session_archived']);
+  });
+
+  it('unarchives a session', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Restore me' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    await postJson(`${baseUrl}/sessions/${session.id}/archive`, {});
+
+    const unarchiveSession = await postJson(`${baseUrl}/sessions/${session.id}/unarchive`, {});
+
+    expect(unarchiveSession.status).toBe(200);
+    const unarchiveBody = await unarchiveSession.json();
+    expectSessionResponse(unarchiveBody);
+    expect(unarchiveBody.session.status).toBe('idle');
+
+    const eventsResponse = await fetch(`${baseUrl}/sessions/${session.id}/events`);
+    const eventsBody = await eventsResponse.json();
+    expectEventsResponse(eventsBody);
+    expect(eventsBody.events.map((event) => event.type)).toEqual(['session_created', 'session_archived', 'session_unarchived']);
   });
 
   it('streams replayed and live events with SSE', async () => {
@@ -196,6 +279,16 @@ function postJson(url: string, body: unknown, bearerToken?: string): Promise<Res
   if (bearerToken) headers.authorization = `Bearer ${bearerToken}`;
   return fetch(url, {
     method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+function patchJson(url: string, body: unknown, bearerToken?: string): Promise<Response> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (bearerToken) headers.authorization = `Bearer ${bearerToken}`;
+  return fetch(url, {
+    method: 'PATCH',
     headers,
     body: JSON.stringify(body),
   });

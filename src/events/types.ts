@@ -10,6 +10,9 @@ export type NormalizedEvent = {
 
 export type NormalizedEventType =
   | 'session_created'
+  | 'session_archived'
+  | 'session_unarchived'
+  | 'session_updated'
   | 'message_created'
   | 'message_started'
   | 'run_started'
