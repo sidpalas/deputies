@@ -25,6 +25,7 @@ Implemented so far:
 - Opt-in real Daytona/Flue built-artifact UAT scaffold.
 - Flue live event normalization for text deltas, tools, commands, and tasks.
 - Built-artifact E2E coverage for API auth, sandbox reuse, webhook auth separation, and real Daytona/Flue follow-up persistence.
+- Artifact persistence and generic HTTP completion callbacks.
 - Postgres integration test path.
 - App-level Postgres worker integration test.
 

@@ -26,4 +26,22 @@ describe('FakeRunner', () => {
       'run_completed',
     ]);
   });
+
+  it('can return scripted fake artifacts from context', async () => {
+    const sandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+
+    const result = await new FakeRunner().run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'hello',
+      context: { fakeArtifact: { type: 'external_link', url: 'https://example.com/result', payload: { ok: true } } },
+      sandbox,
+      emit: async () => {},
+    });
+
+    expect(result.artifacts).toEqual([
+      { type: 'external_link', url: 'https://example.com/result', payload: { ok: true } },
+    ]);
+  });
 });

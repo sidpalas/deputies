@@ -2,6 +2,11 @@ import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 import type { NormalizedEvent, NormalizedEventType } from '../events/types.js';
 import type {
   AppStore,
+  ArtifactRecord,
+  CallbackDeliveryRecord,
+  CallbackDeliveryStatus,
+  CreateArtifactRecord,
+  CreateCallbackDeliveryRecord,
   ClaimedMessage,
   CreateMessageRecord,
   CreateSandboxRecord,
@@ -81,6 +86,36 @@ type SandboxRow = QueryResultRow & {
   updated_at: Date;
   last_health_check_at: Date | null;
   destroyed_at: Date | null;
+};
+
+type ArtifactRow = QueryResultRow & {
+  id: string;
+  session_id: string;
+  run_id: string | null;
+  message_id: string | null;
+  type: string;
+  title: string | null;
+  url: string | null;
+  storage_key: string | null;
+  payload: Record<string, unknown>;
+  created_at: Date;
+};
+
+type CallbackDeliveryRow = QueryResultRow & {
+  id: string;
+  session_id: string;
+  run_id: string | null;
+  message_id: string | null;
+  target_type: 'http';
+  target: Record<string, unknown>;
+  status: CallbackDeliveryStatus;
+  event_type: string;
+  payload: Record<string, unknown>;
+  attempts: number;
+  last_error: string | null;
+  created_at: Date;
+  updated_at: Date;
+  delivered_at: Date | null;
 };
 
 type WebhookSourceRow = QueryResultRow & {
@@ -391,6 +426,83 @@ export class PostgresStore implements AppStore {
     return toSandbox(result.rows[0]);
   }
 
+  async createArtifact(record: CreateArtifactRecord): Promise<ArtifactRecord> {
+    const result = await this.pool.query<ArtifactRow>(
+      `INSERT INTO artifacts (id, session_id, run_id, message_id, type, title, url, storage_key, payload, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, session_id, run_id, message_id, type, title, url, storage_key, payload, created_at`,
+      [
+        record.id,
+        record.sessionId,
+        record.runId ?? null,
+        record.messageId ?? null,
+        record.type,
+        record.title ?? null,
+        record.url ?? null,
+        record.storageKey ?? null,
+        record.payload,
+        record.createdAt,
+      ],
+    );
+    return toArtifact(result.rows[0]!);
+  }
+
+  async getArtifacts(sessionId: string): Promise<ArtifactRecord[]> {
+    const result = await this.pool.query<ArtifactRow>(
+      `SELECT id, session_id, run_id, message_id, type, title, url, storage_key, payload, created_at
+       FROM artifacts
+       WHERE session_id = $1
+       ORDER BY created_at ASC`,
+      [sessionId],
+    );
+    return result.rows.map(toArtifact);
+  }
+
+  async createCallbackDelivery(record: CreateCallbackDeliveryRecord): Promise<CallbackDeliveryRecord> {
+    const result = await this.pool.query<CallbackDeliveryRow>(
+      `INSERT INTO callback_deliveries (id, session_id, run_id, message_id, target_type, target, status, event_type, payload, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10)
+       RETURNING id, session_id, run_id, message_id, target_type, target, status, event_type, payload, attempts, last_error, created_at, updated_at, delivered_at`,
+      [
+        record.id,
+        record.sessionId,
+        record.runId ?? null,
+        record.messageId ?? null,
+        record.targetType,
+        record.target,
+        record.eventType,
+        record.payload,
+        record.createdAt,
+        record.updatedAt,
+      ],
+    );
+    return toCallbackDelivery(result.rows[0]!);
+  }
+
+  async markCallbackDeliverySent(input: { id: string; deliveredAt: Date }): Promise<CallbackDeliveryRecord> {
+    const result = await this.pool.query<CallbackDeliveryRow>(
+      `UPDATE callback_deliveries
+       SET status = 'sent', attempts = attempts + 1, delivered_at = $2, updated_at = $2
+       WHERE id = $1
+       RETURNING id, session_id, run_id, message_id, target_type, target, status, event_type, payload, attempts, last_error, created_at, updated_at, delivered_at`,
+      [input.id, input.deliveredAt],
+    );
+    if (!result.rows[0]) throw new Error(`Callback delivery does not exist: ${input.id}`);
+    return toCallbackDelivery(result.rows[0]);
+  }
+
+  async markCallbackDeliveryFailed(input: { id: string; failedAt: Date; error: string }): Promise<CallbackDeliveryRecord> {
+    const result = await this.pool.query<CallbackDeliveryRow>(
+      `UPDATE callback_deliveries
+       SET status = 'failed', attempts = attempts + 1, last_error = $2, updated_at = $3
+       WHERE id = $1
+       RETURNING id, session_id, run_id, message_id, target_type, target, status, event_type, payload, attempts, last_error, created_at, updated_at, delivered_at`,
+      [input.id, input.error, input.failedAt],
+    );
+    if (!result.rows[0]) throw new Error(`Callback delivery does not exist: ${input.id}`);
+    return toCallbackDelivery(result.rows[0]);
+  }
+
   async nextEventSequence(sessionId: string): Promise<number> {
     return this.nextSequence(sessionId, 'events');
   }
@@ -666,6 +778,42 @@ function toSandbox(row: SandboxRow): SandboxRecord {
   };
   if (row.last_health_check_at) record.lastHealthCheckAt = row.last_health_check_at;
   if (row.destroyed_at) record.destroyedAt = row.destroyed_at;
+  return record;
+}
+
+function toArtifact(row: ArtifactRow): ArtifactRecord {
+  const record: ArtifactRecord = {
+    id: row.id,
+    sessionId: row.session_id,
+    type: row.type,
+    payload: row.payload,
+    createdAt: row.created_at,
+  };
+  if (row.run_id) record.runId = row.run_id;
+  if (row.message_id) record.messageId = row.message_id;
+  if (row.title) record.title = row.title;
+  if (row.url) record.url = row.url;
+  if (row.storage_key) record.storageKey = row.storage_key;
+  return record;
+}
+
+function toCallbackDelivery(row: CallbackDeliveryRow): CallbackDeliveryRecord {
+  const record: CallbackDeliveryRecord = {
+    id: row.id,
+    sessionId: row.session_id,
+    targetType: row.target_type,
+    target: row.target,
+    status: row.status,
+    eventType: row.event_type,
+    payload: row.payload,
+    attempts: row.attempts,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  if (row.run_id) record.runId = row.run_id;
+  if (row.message_id) record.messageId = row.message_id;
+  if (row.last_error) record.lastError = row.last_error;
+  if (row.delivered_at) record.deliveredAt = row.delivered_at;
   return record;
 }
 

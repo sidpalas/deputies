@@ -24,7 +24,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'TRUNCATE flue_sessions, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
+      'TRUNCATE flue_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
     );
     store = new PostgresStore(testDatabaseUrl!);
   });
@@ -140,6 +140,40 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       updatedAt: checkedAt,
     });
     await expect(store.getActiveSandbox(session.id, 'fake')).resolves.toBeNull();
+  });
+
+  it('persists artifacts and callback deliveries', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Outputs' });
+    const message = await services.messages.enqueue({ sessionId: session.id, prompt: 'produce output' });
+    const now = new Date();
+
+    const artifact = await store.createArtifact({
+      id: '00000000-0000-4000-8000-000000000801',
+      sessionId: session.id,
+      messageId: message.id,
+      type: 'external_link',
+      url: 'https://example.com/result',
+      payload: { ok: true },
+      createdAt: now,
+    });
+    await expect(store.getArtifacts(session.id)).resolves.toMatchObject([{ id: artifact.id, url: 'https://example.com/result' }]);
+
+    const delivery = await store.createCallbackDelivery({
+      id: '00000000-0000-4000-8000-000000000802',
+      sessionId: session.id,
+      messageId: message.id,
+      targetType: 'http',
+      target: { url: 'https://example.com/callback' },
+      eventType: 'message_completed',
+      payload: { text: 'done' },
+      createdAt: now,
+      updatedAt: now,
+    });
+    expect(delivery.status).toBe('pending');
+
+    const sent = await store.markCallbackDeliverySent({ id: delivery.id, deliveredAt: new Date(now.getTime() + 1_000) });
+    expect(sent).toMatchObject({ status: 'sent', attempts: 1 });
   });
 
   it('claims each pending message once under concurrent workers', async () => {

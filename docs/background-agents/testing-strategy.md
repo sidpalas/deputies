@@ -212,6 +212,7 @@ Acceptance tests:
 - Follow-up messages reuse the same active sandbox and expose `sandbox_ready.created=false`.
 - Generic webhook auth remains independent from product API auth.
 - Real Daytona/Flue follow-up UAT validates persistent sandbox filesystem and Flue tool events.
+- Generic webhook UAT validates HTTP completion callbacks and artifact events using a local callback server.
 - Invalid auth returns stable JSON error.
 - Duplicate delivery does not create duplicate messages.
 - Event stream emits user-visible events.

@@ -78,6 +78,7 @@ The current scaffold has implemented the portable control-plane foundation:
 - Real Flue agent factory wiring behind `RUNNER=flue` using provider-backed sandbox handles.
 - Sandbox lifecycle persistence with reconnect/reuse semantics for follow-up messages.
 - Flue live event normalization for text deltas, tools, commands, and tasks.
+- Artifact persistence and generic HTTP completion callbacks.
 
 The following MVP pieces are still planned:
 

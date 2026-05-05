@@ -1,6 +1,10 @@
 import type { NormalizedEvent } from '../events/types.js';
 import type {
   AppStore,
+  ArtifactRecord,
+  CallbackDeliveryRecord,
+  CreateArtifactRecord,
+  CreateCallbackDeliveryRecord,
   CreateSandboxRecord,
   CreateWebhookSourceRecord,
   ExternalThreadRecord,
@@ -22,6 +26,8 @@ export class MemoryStore implements AppStore {
   private readonly runs = new Map<string, RunRecord>();
   private readonly events = new Map<string, Array<NormalizedEvent & { sequence: number }>>();
   private readonly sandboxes = new Map<string, SandboxRecord>();
+  private readonly artifacts = new Map<string, ArtifactRecord>();
+  private readonly callbacks = new Map<string, CallbackDeliveryRecord>();
   private readonly webhookSources = new Map<string, WebhookSourceRecord>();
   private readonly externalThreads = new Map<string, ExternalThreadRecord>();
   private readonly integrationDeliveries = new Map<string, IntegrationDeliveryRecord>();
@@ -185,6 +191,48 @@ export class MemoryStore implements AppStore {
     return record;
   }
 
+  async createArtifact(record: CreateArtifactRecord): Promise<ArtifactRecord> {
+    if (this.artifacts.has(record.id)) throw new Error(`Artifact already exists: ${record.id}`);
+    this.artifacts.set(record.id, record);
+    return record;
+  }
+
+  async getArtifacts(sessionId: string): Promise<ArtifactRecord[]> {
+    return Array.from(this.artifacts.values()).filter((artifact) => artifact.sessionId === sessionId);
+  }
+
+  async createCallbackDelivery(record: CreateCallbackDeliveryRecord): Promise<CallbackDeliveryRecord> {
+    const delivery: CallbackDeliveryRecord = { ...record, status: 'pending', attempts: 0 };
+    this.callbacks.set(delivery.id, delivery);
+    return delivery;
+  }
+
+  async markCallbackDeliverySent(input: { id: string; deliveredAt: Date }): Promise<CallbackDeliveryRecord> {
+    const existing = this.requireCallback(input.id);
+    const updated: CallbackDeliveryRecord = {
+      ...existing,
+      status: 'sent',
+      attempts: existing.attempts + 1,
+      deliveredAt: input.deliveredAt,
+      updatedAt: input.deliveredAt,
+    };
+    this.callbacks.set(input.id, updated);
+    return updated;
+  }
+
+  async markCallbackDeliveryFailed(input: { id: string; failedAt: Date; error: string }): Promise<CallbackDeliveryRecord> {
+    const existing = this.requireCallback(input.id);
+    const updated: CallbackDeliveryRecord = {
+      ...existing,
+      status: 'failed',
+      attempts: existing.attempts + 1,
+      lastError: input.error,
+      updatedAt: input.failedAt,
+    };
+    this.callbacks.set(input.id, updated);
+    return updated;
+  }
+
   async nextEventSequence(sessionId: string): Promise<number> {
     return (this.events.get(sessionId)?.length ?? 0) + 1;
   }
@@ -304,6 +352,12 @@ export class MemoryStore implements AppStore {
     this.sessions.set(run.sessionId, { ...session, status: status === 'completed' ? 'idle' : 'failed', updatedAt: finishedAt });
 
     return { message: terminalMessage, run: terminalRun };
+  }
+
+  private requireCallback(id: string): CallbackDeliveryRecord {
+    const existing = this.callbacks.get(id);
+    if (!existing) throw new Error(`Callback delivery does not exist: ${id}`);
+    return existing;
   }
 }
 

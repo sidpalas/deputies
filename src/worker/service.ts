@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { ArtifactService } from '../artifacts/service.js';
+import { CallbackService } from '../callbacks/service.js';
 import type { EventService } from '../events/service.js';
 import type { Runner } from '../runner/types.js';
 import { SandboxLifecycleService } from '../sandbox/service.js';
@@ -145,7 +147,7 @@ export class WorkerService {
         workspacePath: sandbox.workspacePath,
       },
     });
-    await this.options.runner.run({
+    const result = await this.options.runner.run({
       sessionId: claimed.message.sessionId,
       runId: claimed.run.id,
       messageId: claimed.message.id,
@@ -162,6 +164,13 @@ export class WorkerService {
         });
       },
     });
+    await new ArtifactService(this.options.store, this.options.events).recordRunArtifacts({
+      sessionId: claimed.message.sessionId,
+      runId: claimed.run.id,
+      messageId: claimed.message.id,
+      result,
+    });
+    await new CallbackService(this.options.store, this.options.events).deliverCompletion({ claimed, result });
   }
 }
 

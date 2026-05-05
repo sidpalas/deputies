@@ -344,6 +344,12 @@ Rules:
 - PR artifacts should include repo, PR number, branch, title, and URL.
 - Artifacts should be referenced from events with `artifact_created`.
 
+Current implementation:
+
+- `008_artifacts_callbacks.sql` creates `artifacts` and `callback_deliveries`.
+- Runner-returned artifacts are persisted after successful runs and emitted as `artifact_created` events.
+- Generic webhook HTTP callbacks are recorded in `callback_deliveries` with `pending`, `sent`, or `failed` status.
+
 ## Flue Sessions
 
 Stores Flue's internal session history for Node deployments. This is separate from product session state.

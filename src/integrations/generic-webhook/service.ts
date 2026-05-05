@@ -57,6 +57,7 @@ export class GenericWebhookService {
         dedupeKey: parsed.dedupeKey,
         webhookContext: parsed.context,
         webhookPayload: input.payload,
+        callback: parsed.callbackUrl ? { type: 'http', url: parsed.callbackUrl } : undefined,
       },
     });
 
@@ -98,6 +99,7 @@ type ParsedWebhookPayload = {
   dedupeKey: string;
   prompt: string;
   title?: string;
+  callbackUrl?: string;
   context: Record<string, unknown>;
 };
 
@@ -119,9 +121,13 @@ function parseWebhookPayload(payload: Record<string, unknown>): ParsedWebhookPay
   const dedupeKey = requiredString(payload.dedupeKey, 'dedupeKey');
   const prompt = requiredString(payload.prompt, 'prompt');
   const title = optionalString(payload.title);
+  const callbackUrl = optionalUrl(payload.callbackUrl, 'callbackUrl');
   const context = isRecord(payload.context) ? payload.context : {};
 
-  return title ? { threadId, dedupeKey, prompt, title, context } : { threadId, dedupeKey, prompt, context };
+  const parsed: ParsedWebhookPayload = { threadId, dedupeKey, prompt, context };
+  if (title) parsed.title = title;
+  if (callbackUrl) parsed.callbackUrl = callbackUrl;
+  return parsed;
 }
 
 function renderPrompt(source: WebhookSourceRecord, prompt: string): string {
@@ -136,6 +142,18 @@ function requiredString(value: unknown, field: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function optionalUrl(value: unknown, field: string): string | undefined {
+  const raw = optionalString(value);
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    if (url.protocol === 'http:' || url.protocol === 'https:') return url.toString();
+  } catch {
+    // handled below
+  }
+  throw new GenericWebhookError('invalid_request', `Expected HTTP URL field: ${field}`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

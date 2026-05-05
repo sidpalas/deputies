@@ -5,6 +5,7 @@ export type MessageStatus = 'pending' | 'processing' | 'completed' | 'failed' | 
 export type RunStatus = 'starting' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'stale';
 export type IntegrationDeliveryStatus = 'received' | 'processed' | 'failed';
 export type SandboxStatus = 'ready' | 'unhealthy' | 'destroyed' | 'failed';
+export type CallbackDeliveryStatus = 'pending' | 'sent' | 'failed';
 
 export type SessionRecord = {
   id: string;
@@ -98,6 +99,36 @@ export type SandboxRecord = {
   destroyedAt?: Date;
 };
 
+export type ArtifactRecord = {
+  id: string;
+  sessionId: string;
+  runId?: string;
+  messageId?: string;
+  type: string;
+  createdAt: Date;
+  title?: string;
+  url?: string;
+  storageKey?: string;
+  payload: Record<string, unknown>;
+};
+
+export type CallbackDeliveryRecord = {
+  id: string;
+  sessionId: string;
+  targetType: 'http';
+  target: Record<string, unknown>;
+  status: CallbackDeliveryStatus;
+  eventType: string;
+  payload: Record<string, unknown>;
+  attempts: number;
+  createdAt: Date;
+  updatedAt: Date;
+  runId?: string;
+  messageId?: string;
+  lastError?: string;
+  deliveredAt?: Date;
+};
+
 export type CreateSessionRecord = {
   id: string;
   status: SessionStatus;
@@ -140,6 +171,32 @@ export type CreateSandboxRecord = {
   updatedAt: Date;
 };
 
+export type CreateArtifactRecord = {
+  id: string;
+  sessionId: string;
+  type: string;
+  payload: Record<string, unknown>;
+  createdAt: Date;
+  runId?: string;
+  messageId?: string;
+  title?: string;
+  url?: string;
+  storageKey?: string;
+};
+
+export type CreateCallbackDeliveryRecord = {
+  id: string;
+  sessionId: string;
+  targetType: 'http';
+  target: Record<string, unknown>;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+  runId?: string;
+  messageId?: string;
+};
+
 export interface AppStore {
   createSession(record: CreateSessionRecord): Promise<SessionRecord>;
   getSession(id: string): Promise<SessionRecord | null>;
@@ -164,6 +221,12 @@ export interface AppStore {
   getActiveSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null>;
   createSandbox(record: CreateSandboxRecord): Promise<SandboxRecord>;
   updateSandbox(record: SandboxRecord): Promise<SandboxRecord>;
+
+  createArtifact(record: CreateArtifactRecord): Promise<ArtifactRecord>;
+  getArtifacts(sessionId: string): Promise<ArtifactRecord[]>;
+  createCallbackDelivery(record: CreateCallbackDeliveryRecord): Promise<CallbackDeliveryRecord>;
+  markCallbackDeliverySent(input: { id: string; deliveredAt: Date }): Promise<CallbackDeliveryRecord>;
+  markCallbackDeliveryFailed(input: { id: string; failedAt: Date; error: string }): Promise<CallbackDeliveryRecord>;
 
   nextEventSequence(sessionId: string): Promise<number>;
   appendEvent(event: NormalizedEvent & { sequence: number }): Promise<NormalizedEvent & { sequence: number }>;

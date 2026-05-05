@@ -19,7 +19,7 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Daytona + Flue UAT', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'TRUNCATE integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
+      'TRUNCATE callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
     );
     server = spawn(process.execPath, ['dist/index.js'], {
       cwd: process.cwd(),

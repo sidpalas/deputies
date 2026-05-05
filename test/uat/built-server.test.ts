@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createServer, type Server } from 'node:http';
 import { Pool } from 'pg';
 import { runMigrations } from '../../src/db/migrate.js';
 
@@ -16,7 +17,7 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'TRUNCATE integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
+      'TRUNCATE callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
     );
     await startServer();
   });
@@ -154,6 +155,50 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
     const events = await waitForEvents(session.id, ['message_completed'], { bearerToken: 'product-secret' });
     expect(events.map((event) => event.type)).toContain('message_completed');
   });
+
+  it('delivers generic webhook completion callbacks and records artifacts', async () => {
+    const callbacks: unknown[] = [];
+    const callbackServer = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on('end', () => {
+        callbacks.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        response.writeHead(204);
+        response.end();
+      });
+    });
+    const callbackUrl = await listenCallbackServer(callbackServer);
+
+    try {
+      const now = new Date();
+      await pool.query(
+        `INSERT INTO webhook_sources (id, key, name, enabled, bearer_token, prompt_prefix, created_at, updated_at)
+         VALUES ($1, 'callback', 'Callback', true, 'secret', null, $2, $2)`,
+        ['00000000-0000-4000-8000-000000000303', now],
+      );
+
+      const response = await postJsonWithAuth('/webhooks/generic/callback', 'secret', {
+        threadId: 'thread-callback',
+        dedupeKey: 'delivery-callback',
+        prompt: 'complete with callback',
+        callbackUrl,
+        context: {
+          fakeArtifact: { type: 'external_link', url: 'https://example.com/result', payload: { ok: true } },
+        },
+      });
+      expect(response.status).toBe(202);
+      const { session } = (await response.json()) as { session: { id: string } };
+
+      const events = await waitForEvents(session.id, ['callback_sent']);
+      expect(events.map((event) => event.type)).toContain('artifact_created');
+      expect(events.map((event) => event.type)).toContain('callback_sent');
+      await waitFor(() => Promise.resolve(callbacks.length === 1));
+      expect(callbacks[0]).toMatchObject({ event: 'message_completed', sessionId: session.id });
+      expect((callbacks[0] as { artifacts: unknown[] }).artifacts).toHaveLength(1);
+    } finally {
+      await closeCallbackServer(callbackServer);
+    }
+  });
 });
 
 async function startServer(extraEnv: Record<string, string> = {}): Promise<void> {
@@ -244,4 +289,16 @@ async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 10_000): P
   }
 
   throw new Error('Timed out waiting for condition');
+}
+
+async function listenCallbackServer(server: Server): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Expected callback server address');
+  return `http://${address.address}:${address.port}/callback`;
+}
+
+async function closeCallbackServer(server: Server): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 }

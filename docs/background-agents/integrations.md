@@ -92,6 +92,12 @@ Future capabilities:
 - HTTP callbacks.
 - Admin API for source configuration.
 
+Current callback support:
+
+- Generic webhook payloads may include `callbackUrl`.
+- On message completion, the worker posts a JSON payload to that URL.
+- Callback attempts are persisted in `callback_deliveries` and reflected as `callback_sent` or `callback_failed` events.
+
 Example config:
 
 ```json
