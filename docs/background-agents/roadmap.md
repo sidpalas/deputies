@@ -16,6 +16,7 @@ Implemented so far:
 - Durable worker loop with `runs`, message claiming, fake-runner execution, run leases, heartbeat renewal, and stale lease recovery.
 - DB-backed generic webhook sources with bearer auth, prompt prefixes, thread reuse, and delivery dedupe.
 - Architecture fitness tests for core import boundaries.
+- Postgres-backed Flue `SessionStore` and `runner-flue` adapter seam.
 - Postgres integration test path.
 - App-level Postgres worker integration test.
 
@@ -23,7 +24,7 @@ Still open from the early phases:
 
 - Contract schemas for public API responses and events.
 
-The next implementation phase should add contract schemas for public API responses and events, then continue toward `runner-flue`.
+The next implementation phase should wire real Flue context/agent construction behind `runner-flue`, then add the first real sandbox provider.
 
 ## Phase 0: Repository And Agent Context
 
@@ -164,6 +165,8 @@ Acceptance criteria:
 - Real Flue runner can initialize a project-scoped agent with a sandbox `cwd`.
 - Real Flue runner uses Flue commands/tools/session APIs rather than a parallel harness.
 - Flue text/tool/task events are persisted as normalized events.
+
+Status: partially implemented. The Postgres-backed Flue `SessionStore` exists and is integration-tested. A `FlueRunner` adapter seam exists and is unit-tested with a fake Flue agent factory. Real Flue context/agent factory wiring, event normalization from actual Flue events, and controlled sandbox execution remain open.
 
 ## Phase 6: Sandbox Provider
 

@@ -21,6 +21,7 @@ describe('loadConfig', () => {
         SANDBOX_PROVIDER: 'kubernetes',
         APP_STORE: 'postgres',
         DATABASE_URL: 'postgres://example',
+        FLUE_MODEL: 'anthropic/claude-haiku-4-5',
         FLUE_SESSION_STORE: 'memory',
       }),
     ).toMatchObject({
@@ -30,6 +31,7 @@ describe('loadConfig', () => {
       sandboxProvider: 'kubernetes',
       appStore: 'postgres',
       databaseUrl: 'postgres://example',
+      flueModel: 'anthropic/claude-haiku-4-5',
       flueSessionStore: 'memory',
     });
   });

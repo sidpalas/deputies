@@ -1,5 +1,5 @@
 import { createServer, createServices } from './app/server.js';
-import { loadConfig, requireDatabaseUrl } from './config/index.js';
+import { loadConfig, requireDatabaseUrl, requireFlueModel } from './config/index.js';
 import { FakeRunner } from './runner/fake.js';
 import { FakeSandboxProvider } from './sandbox/fake.js';
 import { MemoryStore } from './store/memory.js';
@@ -19,7 +19,9 @@ if (config.runMode === 'all' || config.runMode === 'api') {
 
 if (config.runMode === 'all' || config.runMode === 'worker') {
   if (config.runner !== 'fake') {
-    throw new Error(`Runner is not implemented yet: ${config.runner}`);
+    requireDatabaseUrl(config);
+    requireFlueModel(config);
+    throw new Error('RUNNER=flue is configured but the Flue agent factory is not wired yet');
   }
 
   const worker = new WorkerService({

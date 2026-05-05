@@ -1,8 +1,10 @@
 import type { Server } from 'node:http';
+import type { SessionData } from '@flue/sdk';
 import { Pool } from 'pg';
 import { createServer, createServices } from '../../src/app/server.js';
 import { loadConfig } from '../../src/config/index.js';
 import { runMigrations } from '../../src/db/migrate.js';
+import { PostgresFlueSessionStore } from '../../src/runner-flue/session-store.js';
 import { FakeRunner } from '../../src/runner/fake.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
 import { PostgresStore } from '../../src/store/postgres.js';
@@ -22,7 +24,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'TRUNCATE integration_deliveries, external_threads, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
+      'TRUNCATE flue_sessions, integration_deliveries, external_threads, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
     );
     store = new PostgresStore(testDatabaseUrl!);
   });
@@ -72,6 +74,27 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
 
     const replayed = await restartedServices.events.list(session.id, 1);
     expect(replayed.map((event) => event.type)).toEqual(['message_created']);
+  });
+
+  it('persists Flue session data opaquely', async () => {
+    const flueStore = new PostgresFlueSessionStore(testDatabaseUrl!);
+    try {
+      const data: SessionData = {
+        version: 2,
+        entries: [],
+        leafId: null,
+        metadata: { appSessionId: 'session-1' },
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      };
+
+      await flueStore.save('agent-1:default', data);
+      await expect(flueStore.load('agent-1:default')).resolves.toEqual(data);
+      await flueStore.delete('agent-1:default');
+      await expect(flueStore.load('agent-1:default')).resolves.toBeNull();
+    } finally {
+      await flueStore.close();
+    }
   });
 
   it('claims each pending message once under concurrent workers', async () => {

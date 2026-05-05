@@ -11,6 +11,7 @@ export type AppConfig = {
   appStore: AppStoreKind;
   databaseUrl?: string;
   flueSessionStore: 'postgres' | 'memory';
+  flueModel?: string;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
@@ -28,8 +29,17 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   };
 
   if (env.DATABASE_URL) config.databaseUrl = env.DATABASE_URL;
+  if (env.FLUE_MODEL) config.flueModel = env.FLUE_MODEL;
 
   return config;
+}
+
+export function requireFlueModel(config: AppConfig): string {
+  if (!config.flueModel) {
+    throw new Error('FLUE_MODEL is required when RUNNER=flue');
+  }
+
+  return config.flueModel;
 }
 
 export function requireDatabaseUrl(config: AppConfig): string {

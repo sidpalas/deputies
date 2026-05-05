@@ -63,23 +63,23 @@ For Node deployments, Flue can generate a standalone server with `/agents/:name/
 
 ## Current Implementation Status
 
-The current scaffold has implemented the first durable product-state seam:
+The current scaffold has implemented the portable control-plane foundation:
 
-- TypeScript Node service with memory-backed unit tests.
+- TypeScript Node service with `RUN_MODE=all|api|worker`.
 - Core session/message/event HTTP loop.
 - Docker Compose Postgres for local development.
-- SQL migration runner.
-- Postgres-backed `AppStore` for `sessions`, `messages`, `events`, and per-session sequence counters.
-- Separate `test:integration` path gated by `TEST_DATABASE_URL`.
+- Raw SQL migration runner.
+- Postgres-backed `AppStore` for `sessions`, `messages`, `events`, `runs`, leases, webhook sources, external threads, and delivery dedupe.
+- Durable worker loop with fake runner execution, run leases, heartbeat renewal, and stale lease recovery.
+- Generic inbound webhook integration with DB-backed source config and prompt prefixes.
+- SSE event streaming with cursor replay.
+- Unit, Postgres integration, architecture fitness, and built-artifact UAT tests.
 
-The following MVP pieces are still planned, not implemented:
+The following MVP pieces are still planned:
 
-- worker loop, runs, and session leases;
-- SSE event streaming;
 - Postgres-backed Flue `SessionStore`;
-- real `runner-flue` adapter;
-- sandbox lifecycle persistence and a real sandbox provider;
-- integration ingress/egress adapters.
+- real Flue context/agent factory wiring for `runner-flue`;
+- sandbox lifecycle persistence and one real sandbox provider.
 
 ## MVP Target
 
