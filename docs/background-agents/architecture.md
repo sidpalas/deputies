@@ -196,6 +196,8 @@ The HTTP transport uses Hono on Node via `@hono/node-server`. This keeps the API
 
 Product session routes support optional bearer-token protection with `API_AUTH_MODE=bearer` and `API_BEARER_TOKEN`. `/health` remains public. Generic webhooks keep their own per-source bearer auth so external systems can be authorized independently from product API clients.
 
+JSON request bodies are capped by `MAX_JSON_BODY_BYTES` and malformed/non-object bodies produce stable JSON error envelopes. This prevents transport parsing failures from leaking as generic internal errors.
+
 `runner-flue` must also provide or configure a Postgres-backed Flue session store. Flue's Node default is in-memory and is not acceptable for production, CI, UAT, or multi-replica deployments. Product state and Flue runtime state are separate but both must be durable.
 
 ## Request Flow

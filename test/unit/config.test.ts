@@ -4,6 +4,7 @@ describe('loadConfig', () => {
   it('uses portable defaults for local development and tests', () => {
     expect(loadConfig({})).toEqual({
       port: 3583,
+      maxJsonBodyBytes: 1048576,
       runMode: 'all',
       runner: 'fake',
       sandboxProvider: 'fake',
@@ -17,6 +18,7 @@ describe('loadConfig', () => {
     expect(
       loadConfig({
         PORT: '4000',
+        MAX_JSON_BODY_BYTES: '2048',
         RUN_MODE: 'worker',
         RUNNER: 'flue',
         SANDBOX_PROVIDER: 'kubernetes',
@@ -33,6 +35,7 @@ describe('loadConfig', () => {
       }),
     ).toMatchObject({
       port: 4000,
+      maxJsonBodyBytes: 2048,
       runMode: 'worker',
       runner: 'flue',
       sandboxProvider: 'kubernetes',
@@ -51,6 +54,10 @@ describe('loadConfig', () => {
 
   it('rejects invalid ports', () => {
     expect(() => loadConfig({ PORT: 'nope' })).toThrow('PORT must be an integer');
+  });
+
+  it('rejects invalid body limits', () => {
+    expect(() => loadConfig({ MAX_JSON_BODY_BYTES: '0' })).toThrow('MAX_JSON_BODY_BYTES must be a positive integer');
   });
 
   it('rejects invalid enum values', () => {

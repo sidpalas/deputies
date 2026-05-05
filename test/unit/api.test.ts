@@ -123,6 +123,32 @@ describe('core API', () => {
     expectErrorResponse(body);
     expect(body).toMatchObject({ error: 'invalid_request' });
   });
+
+  it('returns stable errors for invalid JSON bodies', async () => {
+    const response = await fetch(`${baseUrl}/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{',
+    });
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expectErrorResponse(body);
+    expect(body).toMatchObject({ error: 'invalid_json' });
+  });
+
+  it('rejects oversized JSON bodies', async () => {
+    await closeServer(server);
+    server = createServer(loadConfig({ MAX_JSON_BODY_BYTES: '16' }));
+    baseUrl = await listen(server);
+
+    const response = await postJson(`${baseUrl}/sessions`, { title: 'this is too large' });
+
+    expect(response.status).toBe(413);
+    const body = await response.json();
+    expectErrorResponse(body);
+    expect(body).toMatchObject({ error: 'payload_too_large' });
+  });
 });
 
 function postJson(url: string, body: unknown, bearerToken?: string): Promise<Response> {

@@ -82,6 +82,7 @@ Current local policy:
 - Testcontainers is deferred until we need fully hermetic per-run databases.
 - Architecture fitness tests currently run with unit tests and enforce Flue SDK isolation, integration-to-runner separation, and store-to-domain-service separation.
 - API tests exercise the Hono app through the Node adapter so middleware, routing, JSON responses, and SSE behavior remain covered as transport internals change.
+- API hardening tests cover invalid JSON and oversized request bodies.
 
 Harness responsibilities:
 

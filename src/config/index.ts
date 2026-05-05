@@ -6,6 +6,7 @@ export type ApiAuthMode = 'none' | 'bearer';
 
 export type AppConfig = {
   port: number;
+  maxJsonBodyBytes: number;
   runMode: RunMode;
   runner: RunnerKind;
   sandboxProvider: SandboxProviderKind;
@@ -25,6 +26,7 @@ export type AppConfig = {
 export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   const config: AppConfig = {
     port: parsePort(env.PORT),
+    maxJsonBodyBytes: parsePositiveInteger(env.MAX_JSON_BODY_BYTES, 1_048_576, 'MAX_JSON_BODY_BYTES'),
     runMode: parseEnum(env.RUN_MODE, ['all', 'api', 'worker'], 'all'),
     runner: parseEnum(env.RUNNER, ['fake', 'flue'], 'fake'),
     sandboxProvider: parseEnum(
@@ -90,6 +92,17 @@ function parsePort(value: string | undefined): number {
   }
 
   return port;
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number, name: string): number {
+  if (!value) return fallback;
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer, received "${value}"`);
+  }
+
+  return parsed;
 }
 
 function parseEnum<const T extends readonly string[]>(

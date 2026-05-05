@@ -43,6 +43,9 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('*', requestIdMiddleware());
 
   app.onError((error, c) => {
+    if (error instanceof HttpRequestError) {
+      return writeError(c, error.statusCode, error.code, error.message);
+    }
     return writeError(c, 500, 'internal_error', error instanceof Error ? error.message : 'Unknown error');
   });
 
@@ -54,14 +57,14 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('/sessions', apiAuthMiddleware(config));
 
   app.post('/sessions', async (c) => {
-    const body = await readJsonBody(c);
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const title = optionalString(body.title);
     const session = await services.sessions.create(title ? { title } : {});
     return c.json({ session }, 201);
   });
 
   app.post('/webhooks/generic/:sourceKey', async (c) => {
-    const body = await readJsonBody(c);
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
 
     try {
       const result = await services.genericWebhooks.handle({
@@ -87,7 +90,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.post('/sessions/:sessionId/messages', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const body = await readJsonBody(c);
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const prompt = optionalString(body.prompt);
     if (!prompt) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: prompt');
 
@@ -196,16 +199,36 @@ async function writeEventStream(
   });
 }
 
-async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
-  const text = (await c.req.text()).trim();
-  if (!text) return {};
+async function readJsonBody(c: Context, maxBytes: number): Promise<Record<string, unknown>> {
+  const text = await c.req.text();
+  if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+    throw new HttpRequestError(413, 'payload_too_large', `JSON body exceeds ${maxBytes} bytes`);
+  }
 
-  const value: unknown = JSON.parse(text);
+  const trimmed = text.trim();
+  if (!trimmed) return {};
+
+  let value: unknown;
+  try {
+    value = JSON.parse(trimmed);
+  } catch {
+    throw new HttpRequestError(400, 'invalid_json', 'Expected valid JSON request body');
+  }
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Expected JSON object request body');
+    throw new HttpRequestError(400, 'invalid_request', 'Expected JSON object request body');
   }
 
   return value as Record<string, unknown>;
+}
+
+class HttpRequestError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 function optionalString(value: unknown): string | undefined {
