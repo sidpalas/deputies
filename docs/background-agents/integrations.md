@@ -223,6 +223,7 @@ Current implementation:
 - `message` events are accepted only as thread follow-ups, not as new top-level sessions.
 - Duplicate `event_id` values are ignored through `integration_deliveries`.
 - Bot messages are ignored to prevent loops.
+- Accepted Slack messages get a best-effort `:eyes:` reaction when `SLACK_BOT_TOKEN` has `reactions:write`.
 - `api/src/integrations/slack` owns Slack auth, types, prompts, client helpers, and service orchestration. It must not import runners, sandboxes, or Flue.
 
 Local HTTPS emulation:

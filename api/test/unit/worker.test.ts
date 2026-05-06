@@ -104,6 +104,45 @@ describe('WorkerService', () => {
     expect(text).toContain('third');
   });
 
+  it('posts final deputy text to Slack thread callbacks', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Slack callback' });
+    const replies: Array<{ channel: string; threadTs: string; text: string }> = [];
+    await services.messages.enqueue({
+      sessionId: session.id,
+      prompt: 'from slack',
+      source: 'slack',
+      context: { callback: { type: 'slack', channel: 'C123', threadTs: '1710000000.000100' } },
+    });
+
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      runner: new TextRunner('final deputy reply'),
+      runnerType: 'fake',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+      callbackSenders: [{
+        type: 'slack',
+        async deliver(callback, payload) {
+          replies.push({
+            channel: String(callback.target.channel),
+            threadTs: String(callback.target.threadTs),
+            text: payload.text,
+          });
+        },
+      }],
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+
+    expect(replies).toEqual([{ channel: 'C123', threadTs: '1710000000.000100', text: 'final deputy reply' }]);
+    const events = await services.events.list(session.id);
+    expect(events.map((event) => event.type)).toContain('callback_sent');
+    expect(events.find((event) => event.type === 'callback_sent')?.payload).toMatchObject({ targetType: 'slack' });
+  });
+
   it('does not claim queued messages while the session queue is paused', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -323,6 +362,17 @@ describe('WorkerService', () => {
     expect(cleanupCalled).toBe(false);
   });
 });
+
+class TextRunner implements Runner {
+  constructor(private readonly text: string) {}
+
+  async run(input: RunnerInput): Promise<RunnerResult> {
+    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: {}, createdAt: new Date() });
+    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'agent_text_delta', payload: { text: this.text }, createdAt: new Date() });
+    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_completed', payload: {}, createdAt: new Date() });
+    return { text: this.text };
+  }
+}
 
 class BlockingRunner implements Runner {
   private started = false;

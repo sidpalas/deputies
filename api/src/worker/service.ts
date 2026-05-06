@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ArtifactService } from '../artifacts/service.js';
-import { CallbackService } from '../callbacks/service.js';
+import { CallbackService, type CompletionCallbackSender } from '../callbacks/service.js';
 import type { EventService } from '../events/service.js';
 import type { Runner } from '../runner/types.js';
 import { SandboxLifecycleService } from '../sandbox/service.js';
@@ -18,6 +18,7 @@ export type WorkerServiceOptions = {
   heartbeatIntervalMs?: number;
   cancellationPollIntervalMs?: number;
   staleRecoveryLimit?: number;
+  callbackSenders?: CompletionCallbackSender[];
 };
 
 export class WorkerService {
@@ -190,7 +191,7 @@ export class WorkerService {
         messageId: primary.id,
         result,
       });
-      await new CallbackService(this.options.store, this.options.events).deliverCompletion({ claimed: { message: primary, run: claimed.run }, result });
+      await new CallbackService(this.options.store, this.options.events, this.options.callbackSenders).deliverCompletion({ claimed: { message: primary, run: claimed.run }, result });
     } finally {
       await this.options.store.updateSandbox({ ...record, updatedAt: new Date() });
     }

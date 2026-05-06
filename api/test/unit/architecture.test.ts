@@ -57,6 +57,18 @@ describe('architecture boundaries', () => {
 
     expect(offenders).toEqual([]);
   });
+
+  it('keeps callback core independent from concrete integrations', async () => {
+    const files = (await sourceFiles()).filter((file) => relative(srcRoot, file).startsWith('callbacks/'));
+    const offenders: string[] = [];
+
+    for (const file of files) {
+      const text = await readFile(file, 'utf8');
+      if (text.includes('../integrations/') || text.includes('../../integrations/')) offenders.push(relative(root, file));
+    }
+
+    expect(offenders).toEqual([]);
+  });
 });
 
 async function sourceFiles(dir = srcRoot): Promise<string[]> {

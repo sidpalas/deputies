@@ -9,6 +9,7 @@ import { clearSessionCookie, createSessionCookie, readSession } from '../auth/se
 import { requireAuthSessionSecret, requireSlackSigningSecret, requireStaticCredentials, type AppConfig } from '../config/index.js';
 import { EventService } from '../events/service.js';
 import { GenericWebhookError, GenericWebhookService } from '../integrations/generic-webhook/service.js';
+import { SlackClient } from '../integrations/slack/client.js';
 import { verifySlackSignature } from '../integrations/slack/auth.js';
 import { SlackIntegrationError, SlackIntegrationService } from '../integrations/slack/service.js';
 import type { SlackEventEnvelope } from '../integrations/slack/types.js';
@@ -146,7 +147,10 @@ export function createApp(config: AppConfig, services = createServices()) {
     }
 
     try {
-      const result = await new SlackIntegrationService(services.store, services.sessions, services.messages).handle(payload);
+      const slackOptions = config.slackBotToken
+        ? { reactionClient: new SlackClient({ apiBaseUrl: config.slackApiBaseUrl, botToken: config.slackBotToken }) }
+        : {};
+      const result = await new SlackIntegrationService(services.store, services.sessions, services.messages, slackOptions).handle(payload);
       if (result.type === 'challenge') return c.json({ challenge: result.challenge });
       return c.json({ ok: true, type: result.type });
     } catch (error) {

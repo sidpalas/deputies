@@ -1,6 +1,9 @@
 import { AppLifecycle, installProcessShutdownHandlers, type CloseableResource } from './app/lifecycle.js';
 import { createServer, createServices } from './app/server.js';
+import { HttpCompletionCallbackSender, type CompletionCallbackSender } from './callbacks/service.js';
 import { loadConfig, requireDatabaseUrl, requireDaytonaApiKey, requireFlueModel } from './config/index.js';
+import { SlackClient } from './integrations/slack/client.js';
+import { SlackCompletionCallbackSender } from './integrations/slack/callback-sender.js';
 import { FakeRunner } from './runner/fake.js';
 import type { Runner } from './runner/types.js';
 import { RealFlueAgentFactory } from './runner-flue/agent-factory.js';
@@ -41,6 +44,7 @@ if (config.runMode === 'all' || config.runMode === 'worker') {
     sandboxProvider,
     leaseOwner: `worker-${process.pid}`,
     cancellationPollIntervalMs: config.runCancellationPollIntervalMs,
+    callbackSenders: createCallbackSenders(),
   });
   workerLoop = startWorkerLoop(worker);
   if (services.sandboxCleanup) {
@@ -53,6 +57,14 @@ if (config.runMode === 'all' || config.runMode === 'worker') {
     });
   }
   console.log(`background-agent worker started (${config.runMode})`);
+}
+
+function createCallbackSenders(): CompletionCallbackSender[] {
+  const senders: CompletionCallbackSender[] = [new HttpCompletionCallbackSender()];
+  if (config.slackBotToken) {
+    senders.push(new SlackCompletionCallbackSender(new SlackClient({ apiBaseUrl: config.slackApiBaseUrl, botToken: config.slackBotToken })));
+  }
+  return senders;
 }
 
 const lifecycleOptions = {

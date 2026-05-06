@@ -26,7 +26,7 @@ Slack app settings:
 
 - Events request URL: `https://<public-tunnel>/webhooks/slack/events`
 - Subscribe to bot event: `app_mention`
-- Bot scopes: `app_mentions:read`, `chat:write` later when outbound replies are enabled
+- Bot scopes: `app_mentions:read`, `reactions:write`, `chat:write` for outbound replies
 - Install the app to the workspace
 - Invite the bot to the test channel
 
@@ -49,6 +49,7 @@ Expected result:
 - Slack receives `200 { "ok": true, "type": "accepted" }`.
 - A product session is created with title `Slack: ...`.
 - A message is queued with source `slack`.
+- The bot adds an `:eyes:` reaction to the received Slack message when `SLACK_BOT_TOKEN` has `reactions:write`.
 - Follow-up replies in the same Slack thread reuse the same product session.
 - Duplicate Slack `event_id` deliveries do not create duplicate messages.
 

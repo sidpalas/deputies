@@ -2,10 +2,13 @@ import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
 import type { AppStore, MessageRecord, SessionRecord } from '../../store/types.js';
+import type { SlackReactionClient } from './client.js';
 import { renderSlackPrompt, slackSessionTitle } from './prompts.js';
 import type { SlackAcceptedEvent, SlackEventEnvelope } from './types.js';
 
 export type SlackIntegrationOptions = {
+  reactionClient?: SlackReactionClient;
+  receivedReactionName?: string;
 };
 
 export type HandleSlackEventResult =
@@ -42,6 +45,8 @@ export class SlackIntegrationService {
     });
     if (!delivery) return { ok: true, type: 'duplicate' };
 
+    await this.addReceivedReaction(accepted);
+
     const threadId = slackExternalThreadId(accepted);
     const session = await this.getOrCreateSession(threadId, accepted);
     const message = await this.messages.enqueue({
@@ -59,11 +64,28 @@ export class SlackIntegrationService {
           eventId: accepted.eventId,
           type: accepted.type,
         },
+        callback: { type: 'slack', channel: accepted.channel, threadTs: accepted.threadTs },
       },
     });
 
     await this.store.markIntegrationDeliveryProcessed({ source: 'slack', dedupeKey: accepted.eventId, processedAt: new Date() });
     return { ok: true, type: 'accepted', session, message };
+  }
+
+  private async addReceivedReaction(event: SlackAcceptedEvent): Promise<void> {
+    if (!this.options.reactionClient) return;
+    try {
+      const response = await this.options.reactionClient.addReaction({
+        channel: event.channel,
+        timestamp: event.ts,
+        name: this.options.receivedReactionName ?? 'eyes',
+      });
+      if (!response.ok && response.error !== 'already_reacted') {
+        console.warn(`Slack reaction failed: ${response.error ?? 'unknown_error'}`);
+      }
+    } catch (error) {
+      console.warn(error instanceof Error ? error.message : error);
+    }
   }
 
   private parseAcceptedEvent(payload: SlackEventEnvelope): SlackAcceptedEvent | null {

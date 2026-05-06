@@ -121,7 +121,7 @@ export type ArtifactRecord = {
 export type CallbackDeliveryRecord = {
   id: string;
   sessionId: string;
-  targetType: 'http';
+  targetType: 'http' | 'slack';
   target: Record<string, unknown>;
   status: CallbackDeliveryStatus;
   eventType: string;
@@ -193,7 +193,7 @@ export type CreateArtifactRecord = {
 export type CreateCallbackDeliveryRecord = {
   id: string;
   sessionId: string;
-  targetType: 'http';
+  targetType: 'http' | 'slack';
   target: Record<string, unknown>;
   eventType: string;
   payload: Record<string, unknown>;

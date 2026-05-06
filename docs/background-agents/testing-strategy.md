@@ -303,6 +303,7 @@ Required rules:
 - Only `runner-flue` imports `@flue/sdk`.
 - Public event types must be declared in one shared module.
 - Public API responses must have schemas.
+- Callback core must not import concrete integrations; integrations may provide callback sender plugins.
 
 These tests protect against agent-driven architecture drift.
 
