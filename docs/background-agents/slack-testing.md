@@ -26,7 +26,7 @@ Slack app settings:
 
 - Events request URL: `https://<public-tunnel>/webhooks/slack/events`
 - Subscribe to bot event: `app_mention`
-- Bot scopes: `app_mentions:read`, `reactions:write`, `chat:write` for outbound replies
+- Bot scopes: `app_mentions:read`, `reactions:write`, `chat:write` for outbound replies, `users:read` for prompt usernames, and channel history/read scopes for thread context and channel names
 - Install the app to the workspace
 - Invite the bot to the test channel
 
@@ -58,6 +58,8 @@ Expected result:
 - Slack receives `200 { "ok": true, "type": "accepted" }`.
 - A product session is created with title `Slack: ...`.
 - A message is queued with source `slack`.
+- When the bot is tagged later in an existing thread, earlier unprocessed thread messages are fetched as prior Slack thread context for that one queued message.
+- When `SLACK_BOT_TOKEN` has `users:read`, `channels:read`, or `groups:read`, prompts use readable Slack usernames and channel names instead of raw Slack IDs.
 - The bot adds an `:eyes:` reaction to the received Slack message when `SLACK_BOT_TOKEN` has `reactions:write`.
 - When work starts, the bot adds `:hourglass_flowing_sand:` to the same Slack message.
 - When the final Slack reply is delivered, the bot adds `:white_check_mark:` to the same Slack message.
@@ -92,5 +94,6 @@ Automated tests should usually start emulate programmatically with `createEmulat
 - Optional team/channel/user allowlists are implemented.
 - Bot/self-message ignore and event dedupe are implemented.
 - Outbound Slack replies are delivered through the generic callback dispatcher and retried with backoff.
-- Thread history fetching is not implemented yet.
+- Thread history fetching is implemented for tagged mentions when `SLACK_BOT_TOKEN` has the needed history scope for the channel type. Previously processed Slack message timestamps are omitted from fetched context.
+- Prompt channel/user name lookup is implemented when `SLACK_BOT_TOKEN` has `channels:read` or `groups:read` for the channel type and `users:read` for users. After adding Slack scopes, reinstall the app so the bot token receives them.
 - Direct messages are intentionally deferred.

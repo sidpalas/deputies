@@ -192,9 +192,9 @@ Inbound responsibilities:
 - Ignore bot/self events.
 - Resolve Slack thread to session.
 - Strip the bot mention from app mention prompts.
-- Wrap Slack text as untrusted content in the product prompt.
+- Include prior unprocessed Slack thread messages as background context when the bot is tagged later in a thread.
+- Resolve readable Slack channel and user names for prompts when Slack API scopes allow it.
 - Resolve repo from explicit syntax, defaults, or classifier later.
-- Fetch thread history when useful later.
 
 External thread ID:
 
@@ -227,6 +227,8 @@ Current implementation:
 - Duplicate `event_id` values are ignored through `integration_deliveries`.
 - Bot messages are ignored to prevent loops.
 - Accepted Slack messages get a best-effort `:eyes:` reaction when `SLACK_BOT_TOKEN` has `reactions:write`.
+- Tagged Slack thread messages can include fetched prior thread replies as prior-message context. Context messages whose Slack `ts` already exists on prior product messages are omitted to avoid replaying already processed requests.
+- Prompts use Slack channel/user names when `SLACK_BOT_TOKEN` has `channels:read` or `groups:read` for channel lookup and `users:read` for user lookup; raw Slack IDs remain in message context only.
 - Running Slack-originated work gets a best-effort `:hourglass_flowing_sand:` reaction through the Slack progress notifier plugin.
 - Completed Slack replies get a best-effort `:white_check_mark:` reaction through the Slack callback sender.
 - `api/src/integrations/slack` owns Slack auth, types, prompts, client helpers, and service orchestration. It must not import runners, sandboxes, or Flue.

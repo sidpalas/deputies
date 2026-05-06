@@ -152,6 +152,8 @@ export function createApp(config: AppConfig, services = createServices()) {
         ? {
             reactionClient: slackClient!,
             replyClient: slackClient!,
+            threadClient: slackClient!,
+            infoClient: slackClient!,
             allowedTeamIds: config.slackAllowedTeamIds,
             allowedChannelIds: config.slackAllowedChannelIds,
             allowedUserIds: config.slackAllowedUserIds,

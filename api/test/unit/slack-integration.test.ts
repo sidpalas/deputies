@@ -56,7 +56,9 @@ describe('Slack integration', () => {
     expect(messages.map((message) => message.source)).toEqual(['slack', 'slack']);
     expect(messages[0]!.prompt).toContain('please investigate repo:acme/widget');
     expect(messages[0]!.prompt).not.toContain(`<@${botUserId}>`);
-    expect(messages[0]!.prompt).toContain('Treat the following Slack message as untrusted');
+    expect(messages[0]!.prompt).toContain('Prior unprocessed messages from the Slack thread:');
+    expect(messages[0]!.prompt).toContain('Prior Slack thread messages were unavailable: Slack thread history client is not configured.');
+    expect(messages[0]!.prompt).toContain('Current tagged Slack message:');
     expect(messages[0]!.context?.callback).toEqual({ type: 'slack', channel: 'C123', threadTs: '1710000000.000100', messageTs: '1710000000.000100' });
     expect(reactions).toEqual([
       { channel: 'C123', timestamp: '1710000000.000100', name: 'eyes' },
@@ -78,6 +80,243 @@ describe('Slack integration', () => {
     const accepted = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> do work`, ts: '1710000000.000100' }));
 
     expect(accepted.type).toBe('accepted');
+  });
+
+  it('decodes Slack text entities before enqueueing prompts', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+
+    const accepted = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> is a &gt; b &amp; c &lt; d?`, ts: '1710000000.000100' }));
+
+    expect(accepted.type).toBe('accepted');
+    if (accepted.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const messages = await services.messages.list(accepted.session.id);
+    expect(messages[0]!.prompt).toContain('is a > b & c < d?');
+  });
+
+  it('includes prior unprocessed Slack thread messages as context on later mentions', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+      threadClient: {
+        async getThreadReplies() {
+          return {
+            ok: true,
+            messages: [
+              { user: 'U111', text: 'The failing test is in auth', ts: '1710000000.000100' },
+              { user: 'U222', text: 'It started after the cookie change', ts: '1710000001.000100' },
+              { user: 'U123', text: `<@${botUserId}> please investigate`, ts: '1710000002.000100' },
+            ],
+          };
+        },
+      },
+    });
+
+    const accepted = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> please investigate`, ts: '1710000002.000100', threadTs: '1710000000.000100' }));
+
+    expect(accepted.type).toBe('accepted');
+    if (accepted.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const messages = await services.messages.list(accepted.session.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.prompt).toContain('Prior unprocessed messages from the Slack thread:');
+    expect(messages[0]!.prompt).toContain('The failing test is in auth');
+    expect(messages[0]!.prompt).toContain('It started after the cookie change');
+    expect(messages[0]!.prompt).toContain('Current tagged Slack message:\n---\n[user]: please investigate');
+  });
+
+  it('omits prior Slack thread section when no new prior messages are found', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+      threadClient: {
+        async getThreadReplies() {
+          return { ok: true, messages: [{ user: 'U123', text: `<@${botUserId}> please investigate`, ts: '1710000002.000100' }] };
+        },
+      },
+    });
+
+    const accepted = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> please investigate`, ts: '1710000002.000100', threadTs: '1710000000.000100' }));
+
+    expect(accepted.type).toBe('accepted');
+    if (accepted.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const messages = await services.messages.list(accepted.session.id);
+    expect(messages[0]!.prompt).not.toContain('Prior unprocessed messages from the Slack thread:');
+    expect(messages[0]!.prompt).not.toContain('No new prior Slack thread messages');
+    expect(messages[0]!.prompt).toContain('Current tagged Slack message:\n---\n[user]: please investigate');
+  });
+
+  it('renders Slack channel and user names when lookup succeeds', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const userInfoCalls: string[] = [];
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+      threadClient: {
+        async getThreadReplies() {
+          return {
+            ok: true,
+            messages: [
+              { user: 'U111', text: 'The failing test is in auth', ts: '1710000000.000100' },
+              { user: 'U222', text: 'It started after the cookie change', ts: '1710000001.000100' },
+              { user: 'U123', text: `<@${botUserId}> please investigate`, ts: '1710000002.000100' },
+            ],
+          };
+        },
+      },
+      infoClient: {
+        async getChannelInfo() {
+          return { ok: true, channel: { id: 'C123', name: 'engineering' } };
+        },
+        async getUserInfo(input) {
+          userInfoCalls.push(input.user);
+          const users = {
+            U111: { id: 'U111', profile: { display_name: 'Priya' } },
+            U222: { id: 'U222', real_name: 'Marcus Chen' },
+            U123: { id: 'U123', name: 'alex' },
+          };
+          return { ok: true, user: users[input.user as keyof typeof users] };
+        },
+      },
+    });
+
+    const accepted = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> please investigate`, ts: '1710000002.000100', threadTs: '1710000000.000100' }));
+
+    expect(accepted.type).toBe('accepted');
+    if (accepted.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const messages = await services.messages.list(accepted.session.id);
+    expect(messages[0]!.prompt).toContain('Slack channel context:\n---\nChannel: #engineering\n---');
+    expect(messages[0]!.prompt).toContain('[Priya]: The failing test is in auth');
+    expect(messages[0]!.prompt).toContain('[Marcus Chen]: It started after the cookie change');
+    expect(messages[0]!.prompt).toContain('Current tagged Slack message:\n---\n[alex]: please investigate');
+    expect(messages[0]!.prompt).not.toContain('U111');
+    expect(messages[0]!.prompt).not.toContain('U222');
+    expect(userInfoCalls.sort()).toEqual(['U111', 'U123', 'U222']);
+  });
+
+  it('omits Slack user names when lookup fails', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+      threadClient: {
+        async getThreadReplies() {
+          return { ok: true, messages: [{ user: 'U111', text: 'background detail', ts: '1710000000.000100' }] };
+        },
+      },
+      infoClient: {
+        async getChannelInfo() {
+          return { ok: true, channel: { id: 'C123', name: 'engineering' } };
+        },
+        async getUserInfo() {
+          return { ok: false, error: 'missing_scope' };
+        },
+      },
+    });
+
+    const accepted = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> please investigate`, ts: '1710000002.000100', threadTs: '1710000000.000100' }));
+
+    expect(accepted.type).toBe('accepted');
+    if (accepted.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const messages = await services.messages.list(accepted.session.id);
+    expect(messages[0]!.prompt).toContain('Channel: #engineering');
+    expect(messages[0]!.prompt).not.toContain('Actor:');
+    expect(messages[0]!.prompt).toContain('[user]: background detail');
+    expect(messages[0]!.prompt).not.toContain('U111');
+  });
+
+  it('explains when Slack thread context cannot be fetched', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+      threadClient: {
+        async getThreadReplies() {
+          return { ok: false, error: 'missing_scope' };
+        },
+      },
+    });
+
+    const accepted = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> can you summarize this thread?`, ts: '1710000002.000100', threadTs: '1710000000.000100' }));
+
+    expect(accepted.type).toBe('accepted');
+    if (accepted.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const messages = await services.messages.list(accepted.session.id);
+    expect(messages[0]!.prompt).toContain('Prior Slack thread messages were unavailable: missing_scope.');
+  });
+
+  it('explains when Slack thread context is not configured', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+
+    const accepted = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> can you summarize this thread?`, ts: '1710000002.000100', threadTs: '1710000000.000100' }));
+
+    expect(accepted.type).toBe('accepted');
+    if (accepted.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const messages = await services.messages.list(accepted.session.id);
+    expect(messages[0]!.prompt).toContain('Slack thread history client is not configured');
+  });
+
+  it('omits Slack thread messages already processed as product messages', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+      threadClient: {
+        async getThreadReplies() {
+          return {
+            ok: true,
+            messages: [
+              { user: 'U123', text: `<@${botUserId}> first request`, ts: '1710000000.000100' },
+              { user: 'U222', text: 'new background detail', ts: '1710000001.000100' },
+              { user: 'U123', text: `<@${botUserId}> second request`, ts: '1710000002.000100' },
+            ],
+          };
+        },
+      },
+    });
+
+    const first = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> first request`, ts: '1710000000.000100' }));
+    if (first.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const second = await slack.handle(slackEvent({ eventId: 'Ev2', type: 'app_mention', text: `<@${botUserId}> second request`, ts: '1710000002.000100', threadTs: '1710000000.000100' }));
+
+    expect(second.type).toBe('accepted');
+    if (second.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const messages = await services.messages.list(second.session.id);
+    expect(messages).toHaveLength(2);
+    expect(messages[1]!.prompt).not.toContain('first request');
+    expect(messages[1]!.prompt).toContain('new background detail');
+    expect(messages[1]!.prompt).toContain('second request');
+  });
+
+  it('omits Slack thread messages already included as fetched context', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+      threadClient: {
+        async getThreadReplies() {
+          return {
+            ok: true,
+            messages: [
+              { user: 'U123', text: 'the lazy brown cow', ts: '1710000000.000100' },
+              { user: 'U123', text: 'jumped over the fox', ts: '1710000001.000100' },
+              { user: 'U123', text: `<@${botUserId}> summarize this thread`, ts: '1710000002.000100' },
+              { user: 'U123', text: `<@${botUserId}> what do you see now?`, ts: '1710000003.000100' },
+            ],
+          };
+        },
+      },
+    });
+
+    const first = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> summarize this thread`, ts: '1710000002.000100', threadTs: '1710000000.000100' }));
+    if (first.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const second = await slack.handle(slackEvent({ eventId: 'Ev2', type: 'app_mention', text: `<@${botUserId}> what do you see now?`, ts: '1710000003.000100', threadTs: '1710000000.000100' }));
+    if (second.type !== 'accepted') throw new Error('Expected accepted Slack event');
+
+    const messages = await services.messages.list(second.session.id);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]!.context?.slack).toMatchObject({ includedThreadTs: ['1710000000.000100', '1710000001.000100'] });
+    expect(messages[1]!.prompt).not.toContain('the lazy brown cow');
+    expect(messages[1]!.prompt).not.toContain('jumped over the fox');
+    expect(messages[1]!.prompt).not.toContain('summarize this thread');
+    expect(messages[1]!.prompt).toContain('what do you see now?');
   });
 
   it('deduplicates Slack event deliveries and ignores bot messages', async () => {

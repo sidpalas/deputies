@@ -31,3 +31,16 @@ export type SlackAcceptedEvent = {
   threadTs: string;
   raw: SlackInnerEvent;
 };
+
+export type SlackThreadMessage = {
+  user?: string;
+  username?: string;
+  text: string;
+  ts: string;
+  botId?: string;
+};
+
+export type SlackPromptMetadata = {
+  channelName?: string;
+  actorName?: string;
+};
