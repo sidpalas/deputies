@@ -73,11 +73,7 @@ id uuid primary key
 title text
 status text not null
 queue_paused_at timestamptz
-repo_owner text
-repo_name text
-repo_url text
-base_branch text
-working_branch text
+context jsonb
 source text
 created_by jsonb
 metadata jsonb not null default '{}'
@@ -107,6 +103,7 @@ Rules:
 - Source-specific identifiers belong in `external_threads`, not the session row.
 - Archived sessions are read-only until restored.
 - `queue_paused_at` is used while editing pending messages so the worker does not claim a message mid-edit.
+- `context` stores durable session-level defaults such as the current repository. It must not store transient delivery data, callbacks, provider tokens, or raw webhook payloads.
 
 ## Messages
 
@@ -157,6 +154,7 @@ Rules:
 
 - `sequence` is monotonically increasing per session.
 - Pending messages are processed in sequence order. The worker claims all currently pending messages for one session as an ordered batch.
+- Message context is the effective run context. It inherits durable session context and can override it with message-specific values such as a new repository.
 - Duplicate external deliveries must not create duplicate messages.
 - Follow-ups sent during an active run remain pending and are handled by the next batch.
 - Pending messages can be edited or cancelled before the worker claims them.

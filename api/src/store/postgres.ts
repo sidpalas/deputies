@@ -31,6 +31,7 @@ type SessionRow = QueryResultRow & {
   id: string;
   status: SessionStatus;
   title: string | null;
+  context: Record<string, unknown> | null;
   created_at: Date;
   updated_at: Date;
   queue_paused_at: Date | null;
@@ -183,10 +184,10 @@ export class PostgresStore implements AppStore {
 
   async createSession(record: CreateSessionRecord): Promise<SessionRecord> {
     const result = await this.pool.query<SessionRow>(
-      `INSERT INTO sessions (id, status, title, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, status, title, created_at, updated_at, queue_paused_at`,
-      [record.id, record.status, record.title ?? null, record.createdAt, record.updatedAt],
+      `INSERT INTO sessions (id, status, title, context, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, status, title, context, created_at, updated_at, queue_paused_at`,
+      [record.id, record.status, record.title ?? null, record.context ?? null, record.createdAt, record.updatedAt],
     );
 
     return toSession(result.rows[0]!);
@@ -194,7 +195,7 @@ export class PostgresStore implements AppStore {
 
   async getSession(id: string): Promise<SessionRecord | null> {
     const result = await this.pool.query<SessionRow>(
-      'SELECT id, status, title, created_at, updated_at, queue_paused_at FROM sessions WHERE id = $1',
+      'SELECT id, status, title, context, created_at, updated_at, queue_paused_at FROM sessions WHERE id = $1',
       [id],
     );
 
@@ -204,7 +205,7 @@ export class PostgresStore implements AppStore {
 
   async listSessions(): Promise<SessionRecord[]> {
     const result = await this.pool.query<SessionRow>(
-      'SELECT id, status, title, created_at, updated_at, queue_paused_at FROM sessions ORDER BY updated_at DESC, created_at DESC',
+      'SELECT id, status, title, context, created_at, updated_at, queue_paused_at FROM sessions ORDER BY updated_at DESC, created_at DESC',
     );
 
     return result.rows.map(toSession);
@@ -213,10 +214,10 @@ export class PostgresStore implements AppStore {
   async updateSession(record: SessionRecord): Promise<SessionRecord> {
     const result = await this.pool.query<SessionRow>(
       `UPDATE sessions
-       SET status = $2, title = $3, created_at = $4, updated_at = $5
+       SET status = $2, title = $3, context = $4, created_at = $5, updated_at = $6
        WHERE id = $1
-       RETURNING id, status, title, created_at, updated_at, queue_paused_at`,
-      [record.id, record.status, record.title ?? null, record.createdAt, record.updatedAt],
+       RETURNING id, status, title, context, created_at, updated_at, queue_paused_at`,
+      [record.id, record.status, record.title ?? null, record.context ?? null, record.createdAt, record.updatedAt],
     );
 
     const row = result.rows[0];
@@ -227,7 +228,7 @@ export class PostgresStore implements AppStore {
   async pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord> {
     const result = await this.pool.query<SessionRow>(
       `UPDATE sessions SET queue_paused_at = $2, updated_at = $2 WHERE id = $1
-       RETURNING id, status, title, created_at, updated_at, queue_paused_at`,
+       RETURNING id, status, title, context, created_at, updated_at, queue_paused_at`,
       [input.sessionId, input.pausedAt],
     );
     if (!result.rows[0]) throw new Error(`Session does not exist: ${input.sessionId}`);
@@ -238,7 +239,7 @@ export class PostgresStore implements AppStore {
     const now = new Date();
     const result = await this.pool.query<SessionRow>(
       `UPDATE sessions SET queue_paused_at = NULL, updated_at = $2 WHERE id = $1
-       RETURNING id, status, title, created_at, updated_at, queue_paused_at`,
+       RETURNING id, status, title, context, created_at, updated_at, queue_paused_at`,
       [input.sessionId, now],
     );
     if (!result.rows[0]) throw new Error(`Session does not exist: ${input.sessionId}`);
@@ -971,6 +972,7 @@ function toSession(row: SessionRow): SessionRecord {
   };
   if (row.title) record.title = row.title;
   if (row.queue_paused_at) record.queuePausedAt = row.queue_paused_at;
+  if (row.context) record.context = row.context;
   return record;
 }
 

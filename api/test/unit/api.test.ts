@@ -163,6 +163,54 @@ describe('core API', () => {
     expect((body.message as { context?: unknown }).context).toEqual({
       repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
     });
+
+    const sessionResponse = await fetch(`${baseUrl}/sessions/${session.id}`);
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = await sessionResponse.json();
+    expectSessionResponse(sessionBody);
+    expect((sessionBody.session as { context?: unknown }).context).toEqual({
+      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
+    });
+  });
+
+  it('inherits and overrides session repository context on follow-up messages', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Repository session' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
+      prompt: 'Use the app repo',
+      repository: 'manaflow-ai/manaflow',
+    });
+
+    const inherited = await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
+      prompt: 'Create a test issue',
+    });
+    expect(inherited.status).toBe(202);
+    const inheritedBody = await inherited.json();
+    expectMessageResponse(inheritedBody);
+    expect((inheritedBody.message as { context?: unknown }).context).toEqual({
+      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
+    });
+
+    const overridden = await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
+      prompt: 'Switch repos',
+      repository: 'manaflow-ai/agent-runtime',
+    });
+    expect(overridden.status).toBe(202);
+    const overriddenBody = await overridden.json();
+    expectMessageResponse(overriddenBody);
+    expect((overriddenBody.message as { context?: unknown }).context).toEqual({
+      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'agent-runtime' },
+    });
+
+    const inheritedOverride = await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
+      prompt: 'Use the new repo',
+    });
+    const inheritedOverrideBody = await inheritedOverride.json();
+    expectMessageResponse(inheritedOverrideBody);
+    expect((inheritedOverrideBody.message as { context?: unknown }).context).toEqual({
+      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'agent-runtime' },
+    });
   });
 
   it('rejects invalid repository context', async () => {

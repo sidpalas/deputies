@@ -106,6 +106,38 @@ describe('WorkerService', () => {
     expect(text).toContain('third');
   });
 
+  it('runs a queued batch with the latest message context', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Queued context' });
+    await services.messages.enqueue({
+      sessionId: session.id,
+      prompt: 'first',
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'old-repo' } },
+    });
+    await services.messages.enqueue({
+      sessionId: session.id,
+      prompt: 'second',
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'new-repo' } },
+    });
+    const runner = new CaptureRunner();
+
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      runner,
+      runnerType: 'capture',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+
+    expect(runner.inputs[0]?.context).toEqual({
+      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'new-repo' },
+    });
+  });
+
   it('posts final deputy text to Slack thread callbacks', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -425,6 +457,17 @@ class TextRunner implements Runner {
     await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'agent_text_delta', payload: { text: this.text }, createdAt: new Date() });
     await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_completed', payload: {}, createdAt: new Date() });
     return { text: this.text };
+  }
+}
+
+class CaptureRunner implements Runner {
+  readonly inputs: RunnerInput[] = [];
+
+  async run(input: RunnerInput): Promise<RunnerResult> {
+    this.inputs.push(input);
+    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: {}, createdAt: new Date() });
+    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_completed', payload: {}, createdAt: new Date() });
+    return { text: 'captured' };
   }
 }
 

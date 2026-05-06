@@ -43,6 +43,7 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
       persist: this.sessionStore,
     };
     if (input.cwd) initOptions.cwd = input.cwd;
+    if (input.tools) initOptions.tools = input.tools;
 
     return ctx.init(initOptions);
   }

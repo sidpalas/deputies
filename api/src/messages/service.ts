@@ -24,6 +24,17 @@ export class MessageService {
       throw new MessageServiceError('conflict', 'Cannot enqueue messages to an archived session');
     }
 
+    const context = mergeMessageContext(session.context, input.context);
+    const sessionContext = mergeSessionContext(session.context, input.context);
+    if (sessionContext) {
+      const updatedSession = await this.store.updateSession({ ...session, context: sessionContext, updatedAt: new Date() });
+      await this.events.append({
+        sessionId: input.sessionId,
+        type: 'session_updated',
+        payload: { title: updatedSession.title ?? null, context: updatedSession.context ?? null },
+      });
+    }
+
     const sequence = await this.store.nextMessageSequence(input.sessionId);
     const record: MessageRecord = {
       id: randomUUID(),
@@ -35,7 +46,7 @@ export class MessageService {
     };
 
     if (input.source) record.source = input.source;
-    if (input.context) record.context = input.context;
+    if (context) record.context = context;
 
     const message = await this.store.createMessage(record);
     await this.events.append({
@@ -94,6 +105,22 @@ export class MessageService {
 
     return cancelling.messages;
   }
+}
+
+function mergeMessageContext(
+  sessionContext: Record<string, unknown> | undefined,
+  messageContext: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (sessionContext && messageContext) return { ...sessionContext, ...messageContext };
+  return messageContext ?? sessionContext;
+}
+
+function mergeSessionContext(
+  sessionContext: Record<string, unknown> | undefined,
+  messageContext: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!messageContext || !Object.prototype.hasOwnProperty.call(messageContext, 'repository')) return undefined;
+  return { ...(sessionContext ?? {}), repository: messageContext.repository };
 }
 
 export class MessageServiceError extends Error {

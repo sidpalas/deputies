@@ -13,6 +13,7 @@ export type Session = {
   updatedAt: string;
   title?: string;
   queuePausedAt?: string;
+  context?: Record<string, unknown>;
 };
 
 export type Message = {

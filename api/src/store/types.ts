@@ -14,6 +14,7 @@ export type SessionRecord = {
   updatedAt: Date;
   title?: string;
   queuePausedAt?: Date;
+  context?: Record<string, unknown>;
 };
 
 export type MessageRecord = {
@@ -144,6 +145,7 @@ export type CreateSessionRecord = {
   createdAt: Date;
   updatedAt: Date;
   title?: string;
+  context?: Record<string, unknown>;
 };
 
 export type CreateMessageRecord = {

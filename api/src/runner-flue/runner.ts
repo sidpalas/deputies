@@ -2,6 +2,7 @@ import type { FlueEvent } from '@flue/sdk';
 import type { NormalizedEvent } from '../events/types.js';
 import { prepareRepositoryShellSetup, type RepositoryAccessProvider, type RepositoryShellSetup } from '../repositories/setup.js';
 import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
+import { createGitHubCliTool } from './github-cli-tool.js';
 import type { FlueAgentFactory, FlueSessionPort } from './types.js';
 
 export type FlueRunnerOptions = {
@@ -30,6 +31,7 @@ export class FlueRunner implements Runner {
       sessionId: input.sessionId,
       sandbox: input.sandbox,
       cwd: repositorySetup?.workspacePath ?? input.sandbox.workspacePath,
+      tools: repositorySetup ? [createGitHubCliTool(repositorySetup.access)] : [],
       onEvent: (event) => {
         if (input.signal?.aborted) return;
         const normalized = normalizeFlueEvent(event, input);

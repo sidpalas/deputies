@@ -176,7 +176,7 @@ export class WorkerService {
         runId: claimed.run.id,
         messageId: primary.id,
         prompt: buildBatchPrompt(claimed.messages),
-        context: primary.context ?? {},
+        context: buildBatchContext(claimed.messages),
         sandbox,
         signal,
         emit: async (event) => {
@@ -250,6 +250,11 @@ export class WorkerService {
 function buildBatchPrompt(messages: ClaimedMessageBatch['messages']): string {
   if (messages.length === 1) return messages[0]!.prompt;
   return `The user sent these queued follow-up messages. Address them in order.\n\n${messages.map((message) => `Message ${message.sequence}:\n${message.prompt}`).join('\n\n')}`;
+}
+
+function buildBatchContext(messages: ClaimedMessageBatch['messages']): Record<string, unknown> {
+  const context = messages.reduce<Record<string, unknown>>((merged, message) => ({ ...merged, ...(message.context ?? {}) }), {});
+  return context;
 }
 
 export type WorkerLoopHandle = {

@@ -87,6 +87,7 @@ export function App() {
   const canCallApi = Boolean(health) && (!bearerAuthRequired || Boolean(token)) && (!sessionAuthRequired || Boolean(currentUser));
   const startupLoading = waitingForAuth || (canCallApi && !sessionsLoaded);
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
+  const selectedRepository = repositoryLabel(selectedSession?.context?.repository);
   const selectedSessionArchived = selectedSession?.status === 'archived';
   const filteredSessions = filterSessions(sortSessionsByLastActivity(sessions), threadSearch);
   const activeSessions = filteredSessions.filter((session) => session.status !== 'archived');
@@ -587,21 +588,21 @@ export function App() {
                         placeholder={selectedSessionArchived ? 'Restore this archived session before sending new work.' : 'Ask your deputy to investigate, change code, or follow up...'}
                         disabled={selectedSessionArchived}
                       />
-                      <div className="flex items-center justify-between border-t border-slate-800 px-3 py-2 text-xs text-slate-500">
+                      <div className="flex flex-wrap items-center gap-2 border-t border-slate-800 px-3 py-2 text-xs text-slate-500">
                         <Input
-                          className="mr-3 h-8 max-w-64 border-slate-800 bg-slate-950/70 text-xs"
+                          className="h-8 min-w-0 flex-1 border-slate-800 bg-slate-950/70 text-xs min-[480px]:max-w-80"
                           value={repository}
                           onChange={(event) => setRepository(event.target.value)}
-                          placeholder="GitHub repo, e.g. owner/repo"
+                          placeholder={selectedRepository ? 'Override repo...' : 'GitHub repo, e.g. owner/repo'}
                           disabled={selectedSessionArchived}
                         />
-                        <span className="min-w-fit">{selectedSessionArchived ? 'Archived sessions are read-only until restored.' : 'Enter to send · Shift Enter for newline'}</span>
-                        <Button type="submit" disabled={selectedSessionArchived || !prompt.trim()}>Send message</Button>
+                        {selectedSessionArchived ? <span className="min-w-full text-center sm:min-w-0 sm:flex-1 sm:text-left">Archived sessions are read-only until restored.</span> : null}
+                        <Button className="ml-auto shrink-0 whitespace-nowrap" type="submit" disabled={selectedSessionArchived || !prompt.trim()}>Send message</Button>
                       </div>
                     </Card>
                   </form>
                 </section>
-                <ContextPanel artifacts={artifacts} callbacks={callbacks} onReplayCallback={handleReplayCallback} />
+                <ContextPanel repository={selectedRepository} artifacts={artifacts} callbacks={callbacks} onReplayCallback={handleReplayCallback} />
               </div>
             </section>
           )}
@@ -977,10 +978,21 @@ function Diagnostics(props: { events: AgentEvent[] }) {
   );
 }
 
-function ContextPanel(props: { artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
+function ContextPanel(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
   return (
     <aside className="min-h-0 overflow-auto border-t border-slate-800 bg-slate-950/40 p-4 lg:border-l lg:border-t-0">
       <h2 className="text-sm font-semibold">Context</h2>
+      <div className="mt-3 border-b border-slate-800 pb-3 text-sm text-slate-400">
+        <strong className="block font-medium text-slate-200">Repository</strong>
+        {props.repository ? (
+          <>
+            <a className="mt-1 block break-all text-sky-300" href={`https://github.com/${props.repository}`} target="_blank" rel="noreferrer">{props.repository}</a>
+            <span className="mt-1 block text-xs">Follow-ups inherit this repo. Enter another repo in the composer to switch.</span>
+          </>
+        ) : (
+          <span className="mt-1 block">No repository selected.</span>
+        )}
+      </div>
       <div className="mt-3 border-b border-slate-800 pb-3 text-sm text-slate-400">
         <strong className="block font-medium text-slate-200">Artifacts</strong>
         <span>Outputs and links created by the deputy appear here.</span>
@@ -1048,6 +1060,15 @@ function shouldRefreshSessionDetail(eventType: string): boolean {
 function callbackEventLabel(eventType: string): string {
   if (eventType === 'message_completed') return 'Completion reply';
   return eventType.replace(/_/g, ' ');
+}
+
+function repositoryLabel(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const repository = value as Record<string, unknown>;
+  if (repository.provider !== 'github') return null;
+  const owner = typeof repository.owner === 'string' ? repository.owner : '';
+  const repo = typeof repository.repo === 'string' ? repository.repo : '';
+  return owner && repo ? `${owner}/${repo}` : null;
 }
 
 function buildAssistantText(events: AgentEvent[]): Record<string, string> {

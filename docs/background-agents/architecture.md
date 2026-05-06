@@ -102,6 +102,46 @@ Flue live events are normalized before being written to the product event log:
 - `tool_end` and `command_end` and `task_end` -> `tool_finished`.
 - low-level lifecycle events such as `agent_start`, `turn_end`, `idle`, and compaction events are currently ignored unless they need product-visible UI later.
 
+## Flue Custom Tools
+
+Flue custom tools passed through `init({ tools })` are the preferred non-MCP extension point when we need authenticated or policy-scoped capabilities that should not expose raw credentials to the agent shell. They are useful for narrow provider actions and pragmatic CLI-backed operations such as the GitHub `gh` tool.
+
+Execution boundary:
+
+- A custom tool handler runs in the trusted worker/runner process that called `init()`, not inside the remote Daytona sandbox.
+- The model sees the tool schema, description, arguments, and returned text, but not process-local secrets unless the handler returns them.
+- The tool can use service environment variables, minted provider tokens, stores, provider clients, and other backend-only dependencies.
+- Tool handlers should return concise structured text and redact secrets from stdout, stderr, API errors, and thrown messages.
+
+Side-effect boundary:
+
+- Provider API side effects happen wherever the provider API applies them, for example creating a GitHub issue or comment.
+- Database side effects happen in our service database if the handler calls stores directly.
+- Filesystem side effects from ordinary Node filesystem APIs happen in the worker container and usually should be avoided for task workspaces.
+- Filesystem side effects intended for the agent workspace must be routed through the active Flue session or sandbox APIs, for example `session.shell(...)`, so they occur in the remote sandbox worktree.
+
+Security model:
+
+- Custom tools protect the credential boundary by exposing a capability instead of a bearer token.
+- They do not automatically protect the permission boundary; broad tools still allow broad behavior within the token/app permissions.
+- Keep provider tokens short-lived, repo-scoped when possible, and never persisted in messages, events, artifacts, callbacks, prompts, or Flue session history.
+- Validate tool inputs server-side even if the schema is strict; models can still request unsafe or nonsensical operations.
+- Prefer product-policy checks in the handler, such as repository allowlists, blocked subcommands, route allowlists, timeouts, non-interactive modes, temporary config directories, and output redaction.
+- Log operation metadata and outcomes, not secret-bearing command lines, environment values, or raw provider auth headers.
+
+Choosing an extension point:
+
+- Use a Flue custom tool when the operation belongs to our trusted backend policy layer and can be represented as a model-callable capability.
+- Use remote MCP when a high-quality provider MCP server or our own MCP server gives the right tool surface and lifecycle semantics.
+- Use `session.shell(..., { env })` for one-off trusted setup commands that must mutate the remote sandbox, such as clone/fetch, with command-scoped credentials.
+- Avoid session-scoped shell credentials for general agent use; they are easier to leak into logs, files, command output, model context, or artifacts.
+- Avoid `defineCommand` for the current Daytona remote path; it is a local/bash-runtime command registration mechanism and does not provide the same tool surface for our remote sandbox sessions.
+
+Current examples:
+
+- Repository clone/fetch uses `session.shell(..., { env: { GITHUB_AUTH_HEADER } })` because the side effect must create or update files inside the remote sandbox.
+- GitHub issue/comment-style operations can use the `gh` custom tool because the side effect is a GitHub API action and the installation token can stay in trusted worker code.
+
 If we later expose raw Flue agent endpoints, they should be clearly separated from product session endpoints:
 
 ```txt

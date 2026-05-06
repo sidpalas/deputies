@@ -137,7 +137,7 @@ else:
 
 GitHub App runtime access should be implemented before inbound GitHub webhooks are treated as production-ready. The webhook path creates sessions and comments, but repo-scoped agent work also needs short-lived installation credentials for clone, fetch, push, branch, PR, and status/comment operations.
 
-Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, and Flue-runner repository refresh from message repository context. The worker only ensures a sandbox exists. When the configured runner is Flue, the runner mints short-lived repository access, sets the agent `cwd` to the repository worktree path, runs a pre-prompt `session.shell` clone/fetch step inside the sandbox, then emits `repository_ready` without token material. Push/branch/PR helper operations are still future work.
+Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, Flue-runner repository refresh from message repository context, and an agent `gh` tool for authenticated GitHub CLI operations against the current repository. The worker only ensures a sandbox exists. When the configured runner is Flue, the runner mints short-lived repository access, sets the agent `cwd` to the repository worktree path, runs a pre-prompt `session.shell` clone/fetch step inside the sandbox, exposes the scoped `gh` tool, then emits `repository_ready` without token material. Push/branch/PR helper operations are still future work.
 
 `GITHUB_API_BASE_URL` and `GITHUB_CLONE_BASE_URL` are intentionally separate. The API base points at GitHub's REST API or an emulator; the clone base points at the git remote host used for clone/fetch/push. Defaults are `https://api.github.com` and `https://github.com`.
 
@@ -147,6 +147,7 @@ Credential handling:
 - Installation tokens are minted in memory, cached per installation until near expiry, and are not persisted in messages, events, artifacts, callbacks, or prompts.
 - Git clone/fetch auth is passed to Flue `session.shell` as command-scoped env: `GITHUB_AUTH_HEADER=Authorization: Basic base64(x-access-token:<installation-token>)`.
 - Shell commands reference only `$GITHUB_AUTH_HEADER`; token values are not embedded in command strings. Flue shell history records env variable names, not values.
+- The agent `gh` tool runs in trusted worker code with command-scoped `GH_TOKEN`, `GH_REPO`, a temporary `GH_CONFIG_DIR`, disabled prompts, token redaction, and blocked auth/config/extension/clone escape hatches.
 - `repository_ready` events contain repository identity, workspace path, and expiry metadata only.
 
 The intended runtime model is snapshot-friendly: Daytona images/snapshots may pre-bake common repos and build artifacts, but every Flue run still refreshes or repairs the requested repository as its first sandbox shell step so reused/stale sandboxes get current code and fresh credentials.
@@ -160,6 +161,8 @@ Repository-scoped messages can carry context in either shape:
 ```json
 { "github": { "repository": { "owner": "owner", "repo": "repo" } } }
 ```
+
+When a message provides repository context through the product API, the repository is also persisted as durable session context. Later messages inherit that repository automatically. Supplying a different repository on a later message updates the session default and overrides the effective context for that message and future follow-ups. Only durable repository context should be promoted to the session; transient integration metadata, callbacks, delivery IDs, and webhook payloads remain message-scoped.
 
 Future multi-repository context should distinguish repository roles instead of treating every cloned repo as equally writable:
 
