@@ -32,11 +32,18 @@ import { Input } from './components/ui/input.js';
 import { Textarea } from './components/ui/textarea.js';
 import { cn } from './lib/utils.js';
 
-const tokenStorageKey = 'devops-deputies-api-token';
+const legacyTokenStorageKey = 'devops-deputies-api-token';
+const tokenStorageKey = 'dev-deputies-api-token';
+
+function loadStoredToken(): string {
+  const token = localStorage.getItem(tokenStorageKey) ?? localStorage.getItem(legacyTokenStorageKey) ?? '';
+  if (token && !localStorage.getItem(tokenStorageKey)) localStorage.setItem(tokenStorageKey, token);
+  return token;
+}
 
 export function App() {
   const [health, setHealth] = useState<Health | null>(null);
-  const [token, setToken] = useState(() => localStorage.getItem(tokenStorageKey) ?? '');
+  const [token, setToken] = useState(loadStoredToken);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -290,6 +297,7 @@ export function App() {
 
   function signOut() {
     localStorage.removeItem(tokenStorageKey);
+    localStorage.removeItem(legacyTokenStorageKey);
     setToken('');
     setDraftToken('');
     setSessions([]);
@@ -578,7 +586,7 @@ function AuthPanel(props: { draftToken: string; setDraftToken: (value: string) =
   return (
     <section className="grid min-h-screen place-items-center px-4">
       <Card className="w-full max-w-2xl p-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-sky-300">DevOps Deputies</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-sky-300">Dev Deputies</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-50">Your async engineering deputies.</h1>
         <p className="mt-2 text-sm text-slate-400">Delegate follow-ups, watch the work trail, and inspect the results.</p>
         <form className="mt-6 grid gap-3" onSubmit={props.saveToken}>
@@ -606,7 +614,7 @@ function NewThreadPanel(props: {
   return (
     <section className="grid min-h-screen place-items-center px-4">
       <Card className="w-full max-w-2xl p-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-sky-300">DevOps Deputies</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-sky-300">Dev Deputies</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-50">Your async engineering deputies.</h1>
         <p className="mt-2 text-sm text-slate-400">Delegate follow-ups, watch the work trail, and inspect the results.</p>
         <h2 className="mt-6 text-xl font-semibold">What should your deputy do?</h2>
