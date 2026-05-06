@@ -32,6 +32,7 @@ export type NormalizedEventType =
   | 'artifact_created'
   | 'run_completed'
   | 'run_failed'
+  | 'run_cancel_requested'
   | 'run_cancelled'
   | 'message_completed'
   | 'message_failed'

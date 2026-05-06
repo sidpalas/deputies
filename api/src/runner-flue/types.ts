@@ -14,6 +14,7 @@ export interface FlueRunnerPort {
 
 export interface FlueSessionPort {
   prompt(text: string): Promise<PromptResponse>;
+  abort?: () => void;
 }
 
 export interface FlueAgentPort {

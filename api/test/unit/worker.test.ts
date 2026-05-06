@@ -142,12 +142,14 @@ describe('WorkerService', () => {
       runnerType: 'blocking',
       sandboxProvider: new FakeSandboxProvider(),
       leaseOwner: 'test-worker',
+      heartbeatIntervalMs: 60_000,
+      cancellationPollIntervalMs: 5,
     });
 
     const processing = worker.processNext();
     await runner.waitForStart();
-    await expect(services.messages.cancelActiveRun({ sessionId: session.id })).resolves.toHaveLength(2);
-    runner.release();
+    await expect(services.messages.cancelActiveRun({ sessionId: session.id })).resolves.toMatchObject([{ status: 'cancelling' }, { status: 'cancelling' }]);
+    await runner.waitForAbort();
 
     await expect(processing).resolves.toBe(true);
     await expect(services.messages.list(session.id)).resolves.toMatchObject([
@@ -155,7 +157,19 @@ describe('WorkerService', () => {
       { sequence: 2, status: 'cancelled' },
     ]);
     expect(await store.getArtifacts(session.id)).toEqual([]);
-    expect((await services.events.list(session.id)).map((event) => event.type)).not.toContain('message_completed');
+    expect((await services.events.list(session.id)).map((event) => event.type)).toEqual([
+      'session_created',
+      'message_created',
+      'message_created',
+      'message_started',
+      'sandbox_starting',
+      'sandbox_ready',
+      'run_started',
+      'run_cancel_requested',
+      'run_cancelled',
+      'message_cancelled',
+      'message_cancelled',
+    ]);
   });
 
   it('restarts a stopped persisted sandbox for follow-up messages', async () => {
@@ -312,20 +326,33 @@ describe('WorkerService', () => {
 
 class BlockingRunner implements Runner {
   private started = false;
-  private releaseRun!: () => void;
-  private readonly released = new Promise<void>((resolve) => {
-    this.releaseRun = resolve;
+  private aborted = false;
+  private abortRun!: () => void;
+  private readonly abortReceived = new Promise<void>((resolve) => {
+    this.abortRun = resolve;
   });
 
   async run(input: RunnerInput): Promise<RunnerResult> {
     this.started = true;
     await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: {}, createdAt: new Date() });
-    await this.released;
-    return { text: 'late result', artifacts: [{ type: 'log', payload: { late: true } }] };
+    input.signal?.addEventListener('abort', () => {
+      this.aborted = true;
+      this.abortRun();
+    }, { once: true });
+    if (input.signal?.aborted) {
+      this.aborted = true;
+      this.abortRun();
+    }
+    await this.abortReceived;
+    throw new Error('Operation aborted');
+  }
+
+  async waitForAbort(): Promise<void> {
+    await waitFor(() => this.aborted);
   }
 
   release(): void {
-    this.releaseRun();
+    this.abortRun();
   }
 
   async waitForStart(): Promise<void> {

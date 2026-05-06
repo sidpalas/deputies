@@ -1,8 +1,8 @@
 import type { NormalizedEvent } from '../events/types.js';
 
 export type SessionStatus = 'created' | 'active' | 'idle' | 'completed' | 'failed' | 'cancelled' | 'archived';
-export type MessageStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
-export type RunStatus = 'starting' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'stale';
+export type MessageStatus = 'pending' | 'processing' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
+export type RunStatus = 'starting' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'stale';
 export type IntegrationDeliveryStatus = 'received' | 'processed' | 'failed';
 export type SandboxStatus = 'ready' | 'stopped' | 'unhealthy' | 'destroyed' | 'failed';
 export type CallbackDeliveryStatus = 'pending' | 'sent' | 'failed';
@@ -234,7 +234,8 @@ export interface AppStore {
   renewRunLease(input: { runId: string; leaseOwner: string; leaseExpiresAt: Date; heartbeatAt: Date }): Promise<RunRecord | null>;
   getRun(runId: string): Promise<RunRecord | null>;
   recoverStaleRuns(input: { now: Date; limit: number }): Promise<RecoveredRun[]>;
-  cancelActiveRun(input: { sessionId: string; cancelledAt: Date; error: string }): Promise<ClaimedMessageBatch | null>;
+  requestRunCancellation(input: { sessionId: string; requestedAt: Date; error: string }): Promise<ClaimedMessageBatch | null>;
+  finalizeRunCancellation(input: { runId: string; cancelledAt: Date; error: string }): Promise<ClaimedMessageBatch>;
   completeRun(input: { runId: string; completedAt: Date }): Promise<ClaimedMessage>;
   failRun(input: { runId: string; failedAt: Date; error: string }): Promise<ClaimedMessage>;
   completeRunBatch(input: { runId: string; completedAt: Date }): Promise<ClaimedMessageBatch>;

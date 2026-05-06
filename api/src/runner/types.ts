@@ -8,6 +8,7 @@ export type RunnerInput = {
   prompt: string;
   context: Record<string, unknown>;
   sandbox: SandboxHandle;
+  signal?: AbortSignal;
   emit: (event: NormalizedEvent) => Promise<void>;
 };
 

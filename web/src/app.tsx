@@ -61,7 +61,7 @@ export function App() {
   const authRequired = health?.apiAuthMode === 'bearer';
   const canCallApi = Boolean(health) && (!authRequired || Boolean(token));
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
-  const hasActiveRun = messages.some((message) => message.status === 'processing') || selectedSession?.status === 'active';
+  const hasActiveRun = messages.some((message) => message.status === 'processing' || message.status === 'cancelling') || selectedSession?.status === 'active';
   const filteredSessions = filterSessions(sortSessionsByLastActivity(sessions), threadSearch);
   const activeSessions = filteredSessions.filter((session) => session.status !== 'archived');
   const archivedSessions = filteredSessions.filter((session) => session.status === 'archived');
@@ -792,7 +792,7 @@ function upsertEvent(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
 }
 
 function shouldRefreshSessionDetail(eventType: string): boolean {
-  return new Set(['message_created', 'message_started', 'message_completed', 'message_failed', 'message_cancelled', 'run_cancelled', 'artifact_created']).has(eventType);
+  return new Set(['message_created', 'message_started', 'message_completed', 'message_failed', 'message_cancelled', 'run_cancel_requested', 'run_cancelled', 'artifact_created']).has(eventType);
 }
 
 function buildAssistantText(events: AgentEvent[]): Record<string, string> {
@@ -912,7 +912,7 @@ function fuzzyScore(value: string, query: string): number | null {
 
 function statusTextClass(status: string): string {
   if (['completed', 'ready', 'ok'].includes(status)) return 'text-emerald-300';
-  if (['active', 'processing', 'running', 'starting'].includes(status)) return 'text-cyan-300';
+  if (['active', 'processing', 'running', 'starting', 'cancelling'].includes(status)) return 'text-cyan-300';
   if (['pending', 'queued', 'created', 'stopped'].includes(status)) return 'text-amber-300';
   if (['failed', 'cancelled', 'unhealthy', 'destroyed', 'missing'].includes(status)) return 'text-red-300';
   if (status === 'idle' || status === 'archived') return 'text-slate-400';

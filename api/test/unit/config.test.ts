@@ -5,6 +5,7 @@ describe('loadConfig', () => {
     expect(loadConfig({})).toEqual({
       port: 3583,
       maxJsonBodyBytes: 1048576,
+      runCancellationPollIntervalMs: 1000,
       sandboxIdleTimeoutSeconds: 900,
       sandboxStopDelaySeconds: 60,
       sandboxRetentionSeconds: 3600,
@@ -22,6 +23,7 @@ describe('loadConfig', () => {
       loadConfig({
         PORT: '4000',
         MAX_JSON_BODY_BYTES: '2048',
+        RUN_CANCELLATION_POLL_INTERVAL_MS: '250',
         SANDBOX_IDLE_TIMEOUT_SECONDS: '120',
         SANDBOX_STOP_DELAY_SECONDS: '30',
         SANDBOX_RETENTION_SECONDS: '240',
@@ -42,6 +44,7 @@ describe('loadConfig', () => {
     ).toMatchObject({
       port: 4000,
       maxJsonBodyBytes: 2048,
+      runCancellationPollIntervalMs: 250,
       sandboxIdleTimeoutSeconds: 120,
       sandboxStopDelaySeconds: 30,
       sandboxRetentionSeconds: 240,
@@ -67,6 +70,10 @@ describe('loadConfig', () => {
 
   it('rejects invalid body limits', () => {
     expect(() => loadConfig({ MAX_JSON_BODY_BYTES: '0' })).toThrow('MAX_JSON_BODY_BYTES must be a positive integer');
+  });
+
+  it('rejects invalid run cancellation poll intervals', () => {
+    expect(() => loadConfig({ RUN_CANCELLATION_POLL_INTERVAL_MS: '0' })).toThrow('RUN_CANCELLATION_POLL_INTERVAL_MS must be a positive integer');
   });
 
   it('rejects invalid sandbox idle timeout', () => {

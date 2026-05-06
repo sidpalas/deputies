@@ -15,6 +15,7 @@ export class FlueRunner implements Runner {
       sandbox: input.sandbox,
       cwd: input.sandbox.workspacePath,
       onEvent: (event) => {
+        if (input.signal?.aborted) return;
         const normalized = normalizeFlueEvent(event, input);
         if (!normalized) return;
         if (normalized.type === 'agent_text_delta') sawTextDelta = true;
@@ -22,39 +23,47 @@ export class FlueRunner implements Runner {
       },
     });
     const session = await agent.session(input.sessionId);
+    const abortSession = () => session.abort?.();
+    input.signal?.addEventListener('abort', abortSession, { once: true });
 
-    await input.emit({
-      sessionId: input.sessionId,
-      runId: input.runId,
-      messageId: input.messageId,
-      type: 'run_started',
-      payload: { runner: 'flue' },
-      createdAt: new Date(),
-    });
-
-    const response = await session.prompt(input.prompt);
-    await Promise.all(pendingEvents);
-
-    if (!sawTextDelta && response.text) {
+    try {
       await input.emit({
         sessionId: input.sessionId,
         runId: input.runId,
         messageId: input.messageId,
-        type: 'agent_text_delta',
-        payload: { text: response.text },
+        type: 'run_started',
+        payload: { runner: 'flue' },
         createdAt: new Date(),
       });
-    }
-    await input.emit({
-      sessionId: input.sessionId,
-      runId: input.runId,
-      messageId: input.messageId,
-      type: 'run_completed',
-      payload: { runner: 'flue' },
-      createdAt: new Date(),
-    });
 
-    return { text: response.text };
+      if (input.signal?.aborted) throw new Error('Operation aborted');
+      const response = await session.prompt(input.prompt);
+      await Promise.all(pendingEvents);
+      if (input.signal?.aborted) throw new Error('Operation aborted');
+
+      if (!sawTextDelta && response.text) {
+        await input.emit({
+          sessionId: input.sessionId,
+          runId: input.runId,
+          messageId: input.messageId,
+          type: 'agent_text_delta',
+          payload: { text: response.text },
+          createdAt: new Date(),
+        });
+      }
+      await input.emit({
+        sessionId: input.sessionId,
+        runId: input.runId,
+        messageId: input.messageId,
+        type: 'run_completed',
+        payload: { runner: 'flue' },
+        createdAt: new Date(),
+      });
+
+      return { text: response.text };
+    } finally {
+      input.signal?.removeEventListener('abort', abortSession);
+    }
   }
 }
 

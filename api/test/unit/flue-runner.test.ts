@@ -16,6 +16,7 @@ describe('FlueRunner', () => {
               async prompt(text) {
                 return { text: `flue: ${text}` };
               },
+              abort() {},
             };
           },
         };
@@ -71,6 +72,7 @@ describe('FlueRunner', () => {
                 input.onEvent?.({ type: 'task_end', taskId: 'task-1', isError: false, result: 'done' });
                 return { text: 'hello' };
               },
+              abort() {},
             };
           },
         };

@@ -124,7 +124,7 @@ function mockApi(options: { submittedPrompts?: string[]; messages?: unknown[]; e
 
     if (url.pathname === `/sessions/${currentSession.id}/runs/current/cancel` && method === 'POST') {
       options.onCancelRun?.();
-      return jsonResponse({ messages: (options.messages ?? []).map((message) => ({ ...(message as object), status: 'cancelled' })) });
+      return jsonResponse({ messages: (options.messages ?? []).map((message) => ({ ...(message as object), status: 'cancelling' })) });
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/events`) {

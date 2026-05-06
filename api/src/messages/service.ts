@@ -77,28 +77,19 @@ export class MessageService {
     const session = await this.store.getSession(input.sessionId);
     if (!session) throw new MessageServiceError('not_found', `Session not found: ${input.sessionId}`);
 
-    const cancelled = await this.store.cancelActiveRun({ sessionId: input.sessionId, cancelledAt: new Date(), error: 'Run cancelled by user' });
-    if (!cancelled) throw new MessageServiceError('conflict', 'Session has no active run to cancel');
+    const cancelling = await this.store.requestRunCancellation({ sessionId: input.sessionId, requestedAt: new Date(), error: 'Run cancellation requested by user' });
+    if (!cancelling) throw new MessageServiceError('conflict', 'Session has no active run to cancel');
 
-    const primary = cancelled.messages[0];
+    const primary = cancelling.messages[0];
     await this.events.append({
       sessionId: input.sessionId,
-      runId: cancelled.run.id,
+      runId: cancelling.run.id,
       ...(primary ? { messageId: primary.id } : {}),
-      type: 'run_cancelled',
-      payload: { sequences: cancelled.messages.map((message) => message.sequence), batchSize: cancelled.messages.length },
+      type: 'run_cancel_requested',
+      payload: { sequences: cancelling.messages.map((message) => message.sequence), batchSize: cancelling.messages.length },
     });
-    for (const message of cancelled.messages) {
-      await this.events.append({
-        sessionId: input.sessionId,
-        runId: cancelled.run.id,
-        messageId: message.id,
-        type: 'message_cancelled',
-        payload: { sequence: message.sequence },
-      });
-    }
 
-    return cancelled.messages;
+    return cancelling.messages;
   }
 }
 

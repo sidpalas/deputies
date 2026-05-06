@@ -182,12 +182,12 @@ describe('core API', () => {
 
     expect(cancel.status).toBe(200);
     const body = (await cancel.json()) as { messages: Array<{ status: string }> };
-    expect(body.messages).toMatchObject([{ status: 'cancelled' }]);
+    expect(body.messages).toMatchObject([{ status: 'cancelling' }]);
 
     const eventsResponse = await fetch(`${baseUrl}/sessions/${session.id}/events`);
     const eventsBody = await eventsResponse.json();
     expectEventsResponse(eventsBody);
-    expect(eventsBody.events.map((event) => event.type)).toEqual(['session_created', 'message_created', 'run_cancelled', 'message_cancelled']);
+    expect(eventsBody.events.map((event) => event.type)).toEqual(['session_created', 'message_created', 'run_cancel_requested']);
   });
 
   it('archives a session', async () => {

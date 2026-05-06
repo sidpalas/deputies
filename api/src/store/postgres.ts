@@ -324,7 +324,7 @@ export class PostgresStore implements AppStore {
            AND NOT EXISTS (
              SELECT 1 FROM runs r
              WHERE r.session_id = m.session_id
-               AND r.status IN ('starting', 'running')
+                AND r.status IN ('starting', 'running', 'cancelling')
                AND (r.lease_expires_at IS NULL OR r.lease_expires_at > $1)
            )
          ORDER BY m.created_at ASC, m.sequence ASC
@@ -381,7 +381,7 @@ export class PostgresStore implements AppStore {
       `UPDATE runs
        SET lease_expires_at = $3,
            heartbeat_at = $4
-       WHERE id = $1 AND lease_owner = $2 AND status = 'running'
+        WHERE id = $1 AND lease_owner = $2 AND status IN ('running', 'cancelling')
        RETURNING id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, attempt, started_at, completed_at, failed_at, error, metadata`,
       [input.runId, input.leaseOwner, input.leaseExpiresAt, input.heartbeatAt],
     );
@@ -405,7 +405,7 @@ export class PostgresStore implements AppStore {
       const stale = await client.query<RunRow>(
         `SELECT id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, attempt, started_at, completed_at, failed_at, error, metadata
          FROM runs
-         WHERE status IN ('starting', 'running') AND lease_expires_at <= $1
+          WHERE status IN ('starting', 'running', 'cancelling') AND lease_expires_at <= $1
          ORDER BY lease_expires_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT $2`,
@@ -431,7 +431,7 @@ export class PostgresStore implements AppStore {
         const messageResult = await client.query<MessageRow>(
           `UPDATE messages
            SET status = 'pending'
-         WHERE id = ANY($1::uuid[]) AND status = 'processing'
+          WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
            RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
           [messageIds],
         );
@@ -459,25 +459,22 @@ export class PostgresStore implements AppStore {
     return this.finishRunBatch(input.runId, 'failed', input.failedAt, input.error);
   }
 
-  async cancelActiveRun(input: { sessionId: string; cancelledAt: Date; error: string }): Promise<ClaimedMessageBatch | null> {
+  async requestRunCancellation(input: { sessionId: string; requestedAt: Date; error: string }): Promise<ClaimedMessageBatch | null> {
     return this.transaction(async (client) => {
       const runResult = await client.query<RunRow>(
         `UPDATE runs
-         SET status = 'cancelled',
-             lease_owner = NULL,
-             lease_expires_at = NULL,
+         SET status = 'cancelling',
              heartbeat_at = $2,
-             failed_at = $2,
              error = $3
          WHERE id = (
            SELECT id FROM runs
-           WHERE session_id = $1 AND status IN ('starting', 'running')
+           WHERE session_id = $1 AND status IN ('starting', 'running', 'cancelling')
            ORDER BY started_at DESC
            LIMIT 1
            FOR UPDATE SKIP LOCKED
          )
          RETURNING id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, attempt, started_at, completed_at, failed_at, error, metadata`,
-        [input.sessionId, input.cancelledAt, input.error],
+        [input.sessionId, input.requestedAt, input.error],
       );
 
       const run = runResult.rows[0];
@@ -486,20 +483,20 @@ export class PostgresStore implements AppStore {
       const messageIds = getRunMessageIds(toRun(run));
       const messageResult = await client.query<MessageRow>(
         `UPDATE messages
-         SET status = 'cancelled'
-         WHERE id = ANY($1::uuid[]) AND status = 'processing'
+         SET status = 'cancelling'
+         WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
          RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
         [messageIds],
       );
 
-      await client.query('UPDATE sessions SET status = $2, updated_at = $3 WHERE id = $1', [
-        input.sessionId,
-        'idle',
-        input.cancelledAt,
-      ]);
+      await client.query('UPDATE sessions SET status = $2, updated_at = $3 WHERE id = $1', [input.sessionId, 'active', input.requestedAt]);
 
       return { messages: messageResult.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence), run: toRun(run) };
     });
+  }
+
+  async finalizeRunCancellation(input: { runId: string; cancelledAt: Date; error: string }): Promise<ClaimedMessageBatch> {
+    return this.finishRunBatch(input.runId, 'cancelled', input.cancelledAt, input.error);
   }
 
   async getActiveSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null> {
@@ -833,7 +830,7 @@ export class PostgresStore implements AppStore {
 
   private async finishRun(
     runId: string,
-    status: 'completed' | 'failed',
+    status: 'completed' | 'failed' | 'cancelled',
     finishedAt: Date,
     error?: string,
   ): Promise<ClaimedMessage> {
@@ -843,7 +840,7 @@ export class PostgresStore implements AppStore {
 
   private async finishRunBatch(
     runId: string,
-    status: 'completed' | 'failed',
+    status: 'completed' | 'failed' | 'cancelled',
     finishedAt: Date,
     error?: string,
   ): Promise<ClaimedMessageBatch> {
@@ -854,8 +851,8 @@ export class PostgresStore implements AppStore {
              lease_owner = NULL,
              lease_expires_at = NULL,
              heartbeat_at = $3,
-             completed_at = CASE WHEN $2 = 'completed' THEN $3 ELSE completed_at END,
-             failed_at = CASE WHEN $2 = 'failed' THEN $3 ELSE failed_at END,
+              completed_at = CASE WHEN $2 = 'completed' THEN $3 ELSE completed_at END,
+              failed_at = CASE WHEN $2 IN ('failed', 'cancelled') THEN $3 ELSE failed_at END,
              error = $4
          WHERE id = $1
          RETURNING id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, attempt, started_at, completed_at, failed_at, error, metadata`,
@@ -869,14 +866,14 @@ export class PostgresStore implements AppStore {
       const messageResult = await client.query<MessageRow>(
         `UPDATE messages
          SET status = $2
-         WHERE id = ANY($1::uuid[])
-         RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
+          WHERE id = ANY($1::uuid[])
+          RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
         [messageIds, status],
       );
 
       await client.query('UPDATE sessions SET status = $2, updated_at = $3 WHERE id = $1', [
         run.session_id,
-        status === 'completed' ? 'idle' : 'failed',
+        status === 'failed' ? 'failed' : 'idle',
         finishedAt,
       ]);
 

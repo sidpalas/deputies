@@ -40,6 +40,7 @@ if (config.runMode === 'all' || config.runMode === 'worker') {
     runnerType: config.runner,
     sandboxProvider,
     leaseOwner: `worker-${process.pid}`,
+    cancellationPollIntervalMs: config.runCancellationPollIntervalMs,
   });
   workerLoop = startWorkerLoop(worker);
   if (services.sandboxCleanup) {

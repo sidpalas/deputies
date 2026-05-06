@@ -179,7 +179,7 @@ export class MemoryStore implements AppStore {
     heartbeatAt: Date;
   }): Promise<RunRecord | null> {
     const run = this.runs.get(input.runId);
-    if (!run || run.status !== 'running' || run.leaseOwner !== input.leaseOwner) return null;
+    if (!run || (run.status !== 'running' && run.status !== 'cancelling') || run.leaseOwner !== input.leaseOwner) return null;
 
     const renewed: RunRecord = {
       ...run,
@@ -199,7 +199,7 @@ export class MemoryStore implements AppStore {
 
     for (const run of this.runs.values()) {
       if (recovered.length >= input.limit) break;
-      if (run.status !== 'running' && run.status !== 'starting') continue;
+      if (run.status !== 'running' && run.status !== 'starting' && run.status !== 'cancelling') continue;
       if (!run.leaseExpiresAt || run.leaseExpiresAt > input.now) continue;
 
       const sessionMessages = this.messages.get(run.sessionId) ?? [];
@@ -239,13 +239,27 @@ export class MemoryStore implements AppStore {
     return { ...claimed, run: this.runs.get(input.runId)! };
   }
 
-  async cancelActiveRun(input: { sessionId: string; cancelledAt: Date; error: string }): Promise<ClaimedMessageBatch | null> {
-    const run = [...this.runs.values()].find((candidate) => candidate.sessionId === input.sessionId && (candidate.status === 'running' || candidate.status === 'starting'));
+  async requestRunCancellation(input: { sessionId: string; requestedAt: Date; error: string }): Promise<ClaimedMessageBatch | null> {
+    const run = [...this.runs.values()].find((candidate) => candidate.sessionId === input.sessionId && (candidate.status === 'running' || candidate.status === 'starting' || candidate.status === 'cancelling'));
     if (!run) return null;
 
-    const claimed = this.finishRun(run.id, input.cancelledAt, 'cancelled');
+    const sessionMessages = this.messages.get(run.sessionId) ?? [];
+    const messages = getRunMessageIds(run).map((messageId) => {
+      const message = sessionMessages.find((candidate) => candidate.id === messageId);
+      if (!message) throw new Error(`Message does not exist: ${messageId}`);
+      const cancellingMessage: MessageRecord = { ...message, status: message.status === 'cancelled' ? 'cancelled' : 'cancelling' };
+      sessionMessages[sessionMessages.indexOf(message)] = cancellingMessage;
+      return cancellingMessage;
+    });
+    const cancellingRun: RunRecord = { ...run, status: 'cancelling', heartbeatAt: input.requestedAt, error: input.error };
+    this.runs.set(run.id, cancellingRun);
+    return { messages, run: cancellingRun };
+  }
+
+  async finalizeRunCancellation(input: { runId: string; cancelledAt: Date; error: string }): Promise<ClaimedMessageBatch> {
+    const claimed = this.finishRun(input.runId, input.cancelledAt, 'cancelled');
     const cancelledRun: RunRecord = { ...claimed.run, error: input.error };
-    this.runs.set(run.id, cancelledRun);
+    this.runs.set(input.runId, cancelledRun);
     return { ...claimed, run: cancelledRun };
   }
 
@@ -425,7 +439,7 @@ export class MemoryStore implements AppStore {
   private hasActiveRun(sessionId: string, now: Date): boolean {
     for (const run of this.runs.values()) {
       if (run.sessionId !== sessionId) continue;
-      if (run.status !== 'running' && run.status !== 'starting') continue;
+      if (run.status !== 'running' && run.status !== 'starting' && run.status !== 'cancelling') continue;
       if (run.leaseExpiresAt && run.leaseExpiresAt <= now) continue;
       return true;
     }

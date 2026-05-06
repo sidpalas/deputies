@@ -16,17 +16,20 @@ export type WorkerServiceOptions = {
   leaseOwner: string;
   leaseDurationMs?: number;
   heartbeatIntervalMs?: number;
+  cancellationPollIntervalMs?: number;
   staleRecoveryLimit?: number;
 };
 
 export class WorkerService {
   private readonly leaseDurationMs: number;
   private readonly heartbeatIntervalMs: number;
+  private readonly cancellationPollIntervalMs: number;
   private readonly staleRecoveryLimit: number;
 
   constructor(private readonly options: WorkerServiceOptions) {
     this.leaseDurationMs = options.leaseDurationMs ?? 60_000;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? Math.max(1_000, Math.floor(this.leaseDurationMs / 2));
+    this.cancellationPollIntervalMs = options.cancellationPollIntervalMs ?? 1_000;
     this.staleRecoveryLimit = options.staleRecoveryLimit ?? 10;
   }
 
@@ -54,13 +57,13 @@ export class WorkerService {
 
     try {
       await this.runWithHeartbeat(claimed);
-      if (await this.isRunCancelled(claimed.run.id)) return true;
+      if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
       const completed = await this.options.store.completeRunBatch({ runId: claimed.run.id, completedAt: new Date() });
       for (const message of completed.messages) {
         await this.options.events.append({ sessionId: message.sessionId, runId: completed.run.id, messageId: message.id, type: 'message_completed', payload: { sequence: message.sequence } });
       }
     } catch (error) {
-      if (await this.isRunCancelled(claimed.run.id)) return true;
+      if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
       const message = error instanceof Error ? error.message : 'Unknown worker error';
       const failed = await this.options.store.failRunBatch({ runId: claimed.run.id, failedAt: new Date(), error: message });
       await this.options.events.append({
@@ -98,6 +101,17 @@ export class WorkerService {
   }
 
   private async runWithHeartbeat(claimed: ClaimedMessageBatch): Promise<void> {
+    const abort = new AbortController();
+    const pollCancellation = () => {
+      this.options.store
+        .getRun(claimed.run.id)
+        .then((run) => {
+          if (run?.status === 'cancelling') abort.abort();
+        })
+        .catch((error: unknown) => {
+          console.error(error instanceof Error ? error.message : error);
+        });
+    };
     const heartbeat = setInterval(() => {
       const heartbeatAt = new Date();
       this.options.store
@@ -107,19 +121,25 @@ export class WorkerService {
           leaseExpiresAt: new Date(heartbeatAt.getTime() + this.leaseDurationMs),
           heartbeatAt,
         })
+        .then((run) => {
+          if (run?.status === 'cancelling') abort.abort();
+        })
         .catch((error: unknown) => {
           console.error(error instanceof Error ? error.message : error);
         });
     }, this.heartbeatIntervalMs);
+    const cancellationPoll = setInterval(pollCancellation, this.cancellationPollIntervalMs);
+    pollCancellation();
 
     try {
-      await this.runClaimedMessage(claimed);
+      await this.runClaimedMessage(claimed, abort.signal);
     } finally {
       clearInterval(heartbeat);
+      clearInterval(cancellationPoll);
     }
   }
 
-  private async runClaimedMessage(claimed: ClaimedMessageBatch): Promise<void> {
+  private async runClaimedMessage(claimed: ClaimedMessageBatch, signal: AbortSignal): Promise<void> {
     const primary = claimed.messages[0]!;
     await this.options.events.append({
       sessionId: primary.sessionId,
@@ -151,7 +171,9 @@ export class WorkerService {
         prompt: buildBatchPrompt(claimed.messages),
         context: primary.context ?? {},
         sandbox,
+        signal,
         emit: async (event) => {
+          if (signal.aborted) return;
           await this.options.events.append({
             sessionId: event.sessionId,
             runId: event.runId ?? claimed.run.id,
@@ -161,7 +183,7 @@ export class WorkerService {
           });
         },
       });
-      if (await this.isRunCancelled(claimed.run.id)) return;
+      if (await this.isRunCancellationRequested(claimed.run.id)) return;
       await new ArtifactService(this.options.store, this.options.events).recordRunArtifacts({
         sessionId: primary.sessionId,
         runId: claimed.run.id,
@@ -174,8 +196,26 @@ export class WorkerService {
     }
   }
 
-  private async isRunCancelled(runId: string): Promise<boolean> {
-    return (await this.options.store.getRun(runId))?.status === 'cancelled';
+  private async isRunCancellationRequested(runId: string): Promise<boolean> {
+    const status = (await this.options.store.getRun(runId))?.status;
+    return status === 'cancelling' || status === 'cancelled';
+  }
+
+  private async finalizeCancellationIfRequested(runId: string): Promise<boolean> {
+    if (!(await this.isRunCancellationRequested(runId))) return false;
+    const cancelled = await this.options.store.finalizeRunCancellation({ runId, cancelledAt: new Date(), error: 'Run cancelled by user' });
+    const primary = cancelled.messages[0]!;
+    await this.options.events.append({
+      sessionId: primary.sessionId,
+      runId: cancelled.run.id,
+      messageId: primary.id,
+      type: 'run_cancelled',
+      payload: { sequences: cancelled.messages.map((message) => message.sequence), batchSize: cancelled.messages.length },
+    });
+    for (const message of cancelled.messages) {
+      await this.options.events.append({ sessionId: message.sessionId, runId: cancelled.run.id, messageId: message.id, type: 'message_cancelled', payload: { sequence: message.sequence } });
+    }
+    return true;
   }
 }
 

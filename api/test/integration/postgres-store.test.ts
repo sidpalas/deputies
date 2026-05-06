@@ -190,7 +190,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(completed.messages.map((message) => message.status)).toEqual(['completed', 'completed']);
   });
 
-  it('cancels active postgres run batches', async () => {
+  it('keeps cancelling postgres run batches active until finalized', async () => {
     const services = createServices(store);
     const session = await services.sessions.create({ title: 'Postgres cancel' });
     await services.messages.enqueue({ sessionId: session.id, prompt: 'first' });
@@ -204,12 +204,24 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       now: new Date(),
     });
     expect(claimed?.messages).toHaveLength(2);
+    if (!claimed) throw new Error('Expected batch to be claimed');
 
-    const cancelled = await store.cancelActiveRun({ sessionId: session.id, cancelledAt: new Date(), error: 'cancelled by test' });
+    const cancelling = await store.requestRunCancellation({ sessionId: session.id, requestedAt: new Date(), error: 'cancelled by test' });
 
-    expect(cancelled?.run.status).toBe('cancelled');
-    expect(cancelled?.messages.map((message) => message.status)).toEqual(['cancelled', 'cancelled']);
-    await expect(store.getRun(claimed!.run.id)).resolves.toMatchObject({ status: 'cancelled', error: 'cancelled by test' });
+    expect(cancelling?.run.status).toBe('cancelling');
+    expect(cancelling?.messages.map((message) => message.status)).toEqual(['cancelling', 'cancelling']);
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'third' });
+    await expect(store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000904',
+      runnerType: 'fake',
+      leaseOwner: 'worker-2',
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      now: new Date(),
+    })).resolves.toBeNull();
+
+    const cancelled = await store.finalizeRunCancellation({ runId: claimed.run.id, cancelledAt: new Date(), error: 'cancelled by test' });
+    expect(cancelled.messages.map((message) => message.status)).toEqual(['cancelled', 'cancelled']);
+    await expect(store.getRun(claimed.run.id)).resolves.toMatchObject({ status: 'cancelled', error: 'cancelled by test' });
     await expect(services.sessions.get(session.id)).resolves.toMatchObject({ status: 'idle' });
   });
 
