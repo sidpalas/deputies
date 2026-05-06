@@ -1,4 +1,4 @@
-import type { FlueEvent, PromptResponse, SandboxFactory, SessionData } from '@flue/sdk';
+import type { FlueEvent, PromptResponse, SandboxFactory, SessionData, ShellOptions, ShellResult } from '@flue/sdk';
 import type { RunnerInput, RunnerResult } from '../runner/types.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 
@@ -14,6 +14,7 @@ export interface FlueRunnerPort {
 
 export interface FlueSessionPort {
   prompt(text: string): Promise<PromptResponse>;
+  shell?(command: string, options?: ShellOptions): Promise<ShellResult>;
   abort?: () => void;
 }
 

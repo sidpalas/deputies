@@ -49,7 +49,6 @@ if (config.runMode === 'all' || config.runMode === 'worker') {
     cancellationPollIntervalMs: config.runCancellationPollIntervalMs,
     callbackSenders: createCallbackSenders(),
     progressNotifiers: createProgressNotifiers(),
-    repositoryAccess: createRepositoryAccess(),
   });
   workerLoop = startWorkerLoop(worker);
   if (services.sandboxCleanup) {
@@ -128,5 +127,5 @@ function createRunner(): Runner {
     Object.assign(options, { sessionStore });
   }
 
-  return new FlueRunner(new RealFlueAgentFactory(options));
+  return new FlueRunner(new RealFlueAgentFactory(options), { repositoryAccess: createRepositoryAccess() });
 }

@@ -2,10 +2,8 @@ import { CallbackDispatcher } from '../../src/callbacks/service.js';
 import { createServices } from '../../src/app/server.js';
 import { FakeRunner } from '../../src/runner/fake.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
-import type { RepositoryAccessProvider } from '../../src/repositories/setup.js';
 import type { Runner, RunnerInput, RunnerResult } from '../../src/runner/types.js';
 import { runSandboxReaperOnce } from '../../src/sandbox/reaper.js';
-import type { ConnectSandboxInput, CreateSandboxInput, SandboxCapabilities, SandboxHandle, SandboxHealth, SandboxProvider, SandboxRef } from '../../src/sandbox/types.js';
 import { SandboxCleanupService } from '../../src/sandbox/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import { startWorkerLoop, WorkerService } from '../../src/worker/service.js';
@@ -106,42 +104,6 @@ describe('WorkerService', () => {
     const text = (await services.events.list(session.id)).find((event) => event.type === 'agent_text_delta')?.payload.text;
     expect(text).toContain('Message 2:');
     expect(text).toContain('third');
-  });
-
-  it('sets up GitHub repositories in the sandbox without persisting tokens to events', async () => {
-    const store = new MemoryStore();
-    const services = createServices(store);
-    const provider = new RecordingSandboxProvider();
-    const runner = new WorkspaceRunner();
-    const session = await services.sessions.create({ title: 'GitHub repository' });
-    await services.messages.enqueue({
-      sessionId: session.id,
-      prompt: 'work on repo',
-      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
-    });
-
-    const worker = new WorkerService({
-      store,
-      events: services.events,
-      runner,
-      runnerType: 'fake',
-      sandboxProvider: provider,
-      leaseOwner: 'test-worker',
-      repositoryAccess: { github: new StaticGitHubAccessProvider('ghs_secret_token') },
-    });
-
-    await expect(worker.processNext()).resolves.toBe(true);
-
-    expect(provider.execs).toHaveLength(1);
-    expect(provider.execs[0]!.command).toContain('git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone');
-    expect(provider.execs[0]!.command).not.toContain('ghs_secret_token');
-    expect(provider.execs[0]!.env).toEqual({ GITHUB_AUTH_HEADER: 'AUTHORIZATION: bearer ghs_secret_token' });
-    expect(runner.workspacePath).toBe('/workspace/manaflow');
-
-    const eventsJson = JSON.stringify(await services.events.list(session.id));
-    expect(eventsJson).toContain('repository_ready');
-    expect(eventsJson).toContain('/workspace/manaflow');
-    expect(eventsJson).not.toContain('ghs_secret_token');
   });
 
   it('posts final deputy text to Slack thread callbacks', async () => {
@@ -463,82 +425,6 @@ class TextRunner implements Runner {
     await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'agent_text_delta', payload: { text: this.text }, createdAt: new Date() });
     await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_completed', payload: {}, createdAt: new Date() });
     return { text: this.text };
-  }
-}
-
-class WorkspaceRunner implements Runner {
-  workspacePath = '';
-
-  async run(input: RunnerInput): Promise<RunnerResult> {
-    this.workspacePath = input.sandbox.workspacePath;
-    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: {}, createdAt: new Date() });
-    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_completed', payload: {}, createdAt: new Date() });
-    return { text: `workspace: ${this.workspacePath}` };
-  }
-}
-
-class StaticGitHubAccessProvider implements RepositoryAccessProvider {
-  constructor(private readonly token: string) {}
-
-  async getRepositoryAccess() {
-    return {
-      provider: 'github' as const,
-      owner: 'manaflow-ai',
-      repo: 'manaflow',
-      cloneUrl: 'https://github.com/manaflow-ai/manaflow.git',
-      expiresAt: new Date('2026-05-06T01:00:00.000Z'),
-      auth: { type: 'bearer' as const, token: this.token },
-    };
-  }
-}
-
-class RecordingSandboxProvider implements SandboxProvider {
-  readonly name = 'recording';
-  readonly capabilities: SandboxCapabilities = {
-    persistentFilesystem: true,
-    snapshots: false,
-    stopStart: false,
-    exec: true,
-    filesystem: false,
-    streamingLogs: false,
-    portForwarding: false,
-    objectStorageArtifacts: false,
-  };
-  readonly execs: Array<{ command: string; env?: Record<string, string> }> = [];
-  private handle: SandboxHandle | null = null;
-
-  async create(input: CreateSandboxInput): Promise<SandboxHandle> {
-    this.handle = this.createHandle(input.sessionId);
-    return this.handle;
-  }
-
-  async connect(input: ConnectSandboxInput): Promise<SandboxHandle> {
-    this.handle ??= this.createHandle(input.sessionId);
-    return this.handle;
-  }
-
-  async destroy(_input: SandboxRef): Promise<void> {}
-
-  async health(_input: SandboxRef): Promise<SandboxHealth> {
-    return { status: this.handle ? 'ready' : 'missing', checkedAt: new Date() };
-  }
-
-  private createHandle(sessionId: string): SandboxHandle {
-    return {
-      provider: this.name,
-      providerSandboxId: `recording-${sessionId}`,
-      sessionId,
-      workspacePath: '/workspace',
-      metadata: {},
-      capabilities: this.capabilities,
-      exec: async (input) => {
-        const record: { command: string; env?: Record<string, string> } = { command: input.command };
-        if (input.env) record.env = input.env;
-        this.execs.push(record);
-        const now = new Date();
-        return { exitCode: 0, stdout: '', stderr: '', startedAt: now, completedAt: now };
-      },
-    };
   }
 }
 

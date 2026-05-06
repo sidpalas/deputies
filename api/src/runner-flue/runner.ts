@@ -1,19 +1,35 @@
 import type { FlueEvent } from '@flue/sdk';
 import type { NormalizedEvent } from '../events/types.js';
+import { prepareRepositoryShellSetup, type RepositoryAccessProvider, type RepositoryShellSetup } from '../repositories/setup.js';
 import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
-import type { FlueAgentFactory } from './types.js';
+import type { FlueAgentFactory, FlueSessionPort } from './types.js';
+
+export type FlueRunnerOptions = {
+  repositoryAccess?: {
+    github?: RepositoryAccessProvider;
+  };
+};
 
 export class FlueRunner implements Runner {
-  constructor(private readonly agentFactory: FlueAgentFactory) {}
+  constructor(
+    private readonly agentFactory: FlueAgentFactory,
+    private readonly options: FlueRunnerOptions = {},
+  ) {}
 
   async run(input: RunnerInput): Promise<RunnerResult> {
     const pendingEvents: Array<Promise<void>> = [];
     let sawTextDelta = false;
+    const repositorySetupInput: Parameters<typeof prepareRepositoryShellSetup>[0] = {
+      context: input.context,
+      sandbox: input.sandbox,
+    };
+    if (this.options.repositoryAccess?.github) repositorySetupInput.github = this.options.repositoryAccess.github;
+    const repositorySetup = await prepareRepositoryShellSetup(repositorySetupInput);
     const agent = await this.agentFactory.create({
       agentId: input.sessionId,
       sessionId: input.sessionId,
       sandbox: input.sandbox,
-      cwd: input.sandbox.workspacePath,
+      cwd: repositorySetup?.workspacePath ?? input.sandbox.workspacePath,
       onEvent: (event) => {
         if (input.signal?.aborted) return;
         const normalized = normalizeFlueEvent(event, input);
@@ -35,6 +51,8 @@ export class FlueRunner implements Runner {
         payload: { runner: 'flue' },
         createdAt: new Date(),
       });
+
+      if (repositorySetup) await this.runRepositorySetup(input, repositorySetup, session);
 
       // Cancellation must not leave partial Flue turn state in durable history.
       // A prompt-only warning is cheaper but advisory, and models can still continue
@@ -73,6 +91,36 @@ export class FlueRunner implements Runner {
     } finally {
       input.signal?.removeEventListener('abort', abortSession);
     }
+  }
+
+  private async runRepositorySetup(
+    input: RunnerInput,
+    setup: RepositoryShellSetup,
+    session: FlueSessionPort,
+  ): Promise<void> {
+    if (!session.shell) throw new Error('Flue session does not support shell commands for repository setup');
+    const result = await session.shell(setup.command, {
+      cwd: input.sandbox.workspacePath,
+      env: setup.env,
+      timeout: 120,
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`Repository setup failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`);
+    }
+    await input.emit({
+      sessionId: input.sessionId,
+      runId: input.runId,
+      messageId: input.messageId,
+      type: 'repository_ready',
+      payload: {
+        provider: setup.access.provider,
+        owner: setup.access.owner,
+        repo: setup.access.repo,
+        workspacePath: setup.workspacePath,
+        expiresAt: setup.access.expiresAt.toISOString(),
+      },
+      createdAt: new Date(),
+    });
   }
 
   private async loadSessionSnapshot(sessionId: string) {

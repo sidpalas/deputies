@@ -3,6 +3,7 @@ import { RealFlueAgentFactory } from '../../src/runner-flue/agent-factory.js';
 import type { FlueAgentFactory } from '../../src/runner-flue/types.js';
 import type { SessionData, SessionStore } from '@flue/sdk';
 import type { NormalizedEvent } from '../../src/events/types.js';
+import type { RepositoryAccessProvider } from '../../src/repositories/setup.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
 
 describe('FlueRunner', () => {
@@ -111,6 +112,59 @@ describe('FlueRunner', () => {
     expect(events[2]?.payload).toMatchObject({ toolName: 'shell', toolCallId: 'tool-1' });
     expect(events[4]?.payload).toMatchObject({ toolName: 'command', command: 'gh' });
     expect(events[6]?.payload).toMatchObject({ toolName: 'task', taskId: 'task-1' });
+  });
+
+  it('refreshes GitHub repositories through Flue shell setup without persisting tokens to events', async () => {
+    const calls: Parameters<FlueAgentFactory['create']>[0][] = [];
+    const shells: Array<{ command: string; env?: Record<string, string>; cwd?: string }> = [];
+    const factory: FlueAgentFactory = {
+      async create(input) {
+        calls.push(input);
+        return {
+          async session() {
+            return {
+              async shell(command, options) {
+                const shell: { command: string; env?: Record<string, string>; cwd?: string } = { command };
+                if (options?.env) shell.env = options.env;
+                if (options?.cwd) shell.cwd = options.cwd;
+                shells.push(shell);
+                return { stdout: 'cloned', stderr: '', exitCode: 0 };
+              },
+              async prompt(text) {
+                return { text: `done: ${text}` };
+              },
+              abort() {},
+            };
+          },
+        };
+      },
+    };
+    const sandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+    const events: NormalizedEvent[] = [];
+
+    await new FlueRunner(factory, { repositoryAccess: { github: new StaticGitHubAccessProvider('ghs_secret_token') } }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'work on repo',
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
+      sandbox,
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(calls[0]).toMatchObject({ cwd: '/workspace/manaflow' });
+    expect(shells).toHaveLength(1);
+    expect(shells[0]!.cwd).toBe('/workspace');
+    expect(shells[0]!.command).toContain('git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone');
+    expect(shells[0]!.command).not.toContain('ghs_secret_token');
+    expect(shells[0]!.env).toEqual({
+      GITHUB_AUTH_HEADER: `Authorization: Basic ${Buffer.from('x-access-token:ghs_secret_token').toString('base64')}`,
+    });
+
+    const eventsJson = JSON.stringify(events);
+    expect(events.map((event) => event.type)).toEqual(['run_started', 'repository_ready', 'agent_text_delta', 'run_completed']);
+    expect(eventsJson).toContain('/workspace/manaflow');
+    expect(eventsJson).not.toContain('ghs_secret_token');
   });
 
   it('restores persisted Flue session state after abort', async () => {
@@ -248,3 +302,18 @@ describe('FlueRunner', () => {
   });
 
 });
+
+class StaticGitHubAccessProvider implements RepositoryAccessProvider {
+  constructor(private readonly token: string) {}
+
+  async getRepositoryAccess() {
+    return {
+      provider: 'github' as const,
+      owner: 'manaflow-ai',
+      repo: 'manaflow',
+      cloneUrl: 'https://github.com/manaflow-ai/manaflow.git',
+      expiresAt: new Date('2026-05-06T01:00:00.000Z'),
+      auth: { type: 'bearer' as const, token: this.token },
+    };
+  }
+}

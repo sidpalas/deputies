@@ -137,9 +137,19 @@ else:
 
 GitHub App runtime access should be implemented before inbound GitHub webhooks are treated as production-ready. The webhook path creates sessions and comments, but repo-scoped agent work also needs short-lived installation credentials for clone, fetch, push, branch, PR, and status/comment operations.
 
-Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, and sandbox clone/fetch setup from message repository context. The worker passes the cloned repository path to the runner and emits `repository_ready` without token material. Push/branch/PR helper operations are still future work.
+Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, and Flue-runner repository refresh from message repository context. The worker only ensures a sandbox exists. When the configured runner is Flue, the runner mints short-lived repository access, sets the agent `cwd` to the repository worktree path, runs a pre-prompt `session.shell` clone/fetch step inside the sandbox, then emits `repository_ready` without token material. Push/branch/PR helper operations are still future work.
 
 `GITHUB_API_BASE_URL` and `GITHUB_CLONE_BASE_URL` are intentionally separate. The API base points at GitHub's REST API or an emulator; the clone base points at the git remote host used for clone/fetch/push. Defaults are `https://api.github.com` and `https://github.com`.
+
+Credential handling:
+
+- `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_ID` stay in service environment/secrets and are used only server-side to sign GitHub App JWTs.
+- Installation tokens are minted in memory, cached per installation until near expiry, and are not persisted in messages, events, artifacts, callbacks, or prompts.
+- Git clone/fetch auth is passed to Flue `session.shell` as command-scoped env: `GITHUB_AUTH_HEADER=Authorization: Basic base64(x-access-token:<installation-token>)`.
+- Shell commands reference only `$GITHUB_AUTH_HEADER`; token values are not embedded in command strings. Flue shell history records env variable names, not values.
+- `repository_ready` events contain repository identity, workspace path, and expiry metadata only.
+
+The intended runtime model is snapshot-friendly: Daytona images/snapshots may pre-bake common repos and build artifacts, but every Flue run still refreshes or repairs the requested repository as its first sandbox shell step so reused/stale sandboxes get current code and fresh credentials.
 
 Repository-scoped messages can carry context in either shape:
 
@@ -181,7 +191,7 @@ Callback responsibilities:
 - Post PR URL when an artifact is created.
 - Avoid noisy tool-level updates unless explicitly enabled.
 
-Testing should use `vercel-labs/emulate` GitHub service:
+Testing should use `vercel-labs/emulate` GitHub service where possible:
 
 - Seed users, org, repo, issue, PR, GitHub App installation.
 - Send realistic webhooks to the app.
@@ -189,9 +199,18 @@ Testing should use `vercel-labs/emulate` GitHub service:
 - Assert comments or PRs are created in the emulated GitHub API.
 - Assert duplicate deliveries are ignored.
 
+Current emulator caveat: published `emulate@0.5.0` rejects valid GitHub App JWTs during installation token minting because of upstream issue [vercel-labs/emulate#96](https://github.com/vercel-labs/emulate/issues/96). The GitHub emulator token-flow test is committed but hard-skipped until a fixed emulate release is available. Real-provider smoke coverage is opt-in:
+
+```sh
+RUN_REAL_GITHUB_APP_UAT=true pnpm --dir api exec vitest run --config vitest.uat.config.ts test/uat/real-github-app.test.ts
+RUN_REAL_GITHUB_DAYTONA_UAT=true pnpm --dir api exec vitest run --config vitest.uat.config.ts test/uat/real-github-app.test.ts
+```
+
+The first UAT mints a real installation token and performs a non-mutating local `git ls-remote`. The second creates a real Daytona sandbox and verifies the Flue-runner startup path clones/fetches the repository inside the sandbox.
+
 ### GitHub Implementation Plan
 
-This plan combines the strongest patterns from Background Agents/Open Inspect and Open SWE while preserving this service's boundaries: integrations normalize external events, workers own sandbox setup, runners stay provider-neutral, and GitHub-specific API/push/PR details stay in GitHub adapters.
+This plan combines the strongest patterns from Background Agents/Open Inspect and Open SWE while preserving this service's boundaries: integrations normalize external events, workers own sandbox lifecycle, Flue owns runner startup shell setup, and GitHub-specific API/push/PR details stay in GitHub adapters.
 
 #### 1. Webhook ingress and dedupe
 
@@ -217,7 +236,7 @@ Normalize raw GitHub payloads into a small internal event shape before session/m
 
 - Support `issue_comment.created`, `pull_request_review_comment.created`, and selected `pull_request` actions first.
 - Add stable `triggerKey` and `concurrencyKey` fields, e.g. `issue_comment:<commentId>`, `pr:<number>`, and `issue:<number>`.
-- Resolve repository as `{ provider: 'github', owner, repo }` and attach it to message context so worker repository setup can clone/fetch it.
+- Resolve repository as `{ provider: 'github', owner, repo }` and attach it to message context so the Flue runner startup step can clone/fetch it inside the sandbox before the agent prompt.
 - Ignore bot/self comments to avoid loops.
 - Enforce `GITHUB_ALLOWED_REPOSITORIES` before any API fetch or session creation.
 - Add caller gating after repo allowlist: either explicit allowed GitHub users or collaborator permission check requiring `write`, `maintain`, or `admin`.
@@ -314,10 +333,10 @@ Acceptance criteria:
 
 Keep runtime GitHub auth fresh whenever a reused sandbox performs repository operations.
 
-- Continue minting/accessing short-lived tokens during worker repository setup for clone/fetch.
+- Continue minting/accessing short-lived tokens during Flue runner startup setup for clone/fetch.
 - Re-mint or refresh auth before push/PR operations, not only at sandbox creation time.
 - If a future sandbox provider supports outbound proxy or secret injection, implement it behind the sandbox provider boundary; do not require it for all providers.
-- Prefer command-scoped environment auth for Daytona until a stronger provider-native mechanism exists.
+- Prefer Flue `session.shell(..., { env })` command-scoped auth for Daytona until a stronger provider-native mechanism exists.
 
 Acceptance criteria:
 
@@ -331,7 +350,8 @@ Add focused unit tests first, then emulator-backed integration tests.
 
 - Unit-test webhook signature verification, delivery dedupe, normalization, repo extraction, permission gating decisions, prompt wrappers, and branch sanitization.
 - Use fake GitHub clients for token, permission, comment, branch, push, and PR flows.
-- Add opt-in emulator tests that seed GitHub users/repos/issues/PRs/installations, send webhooks, process worker runs, and assert comments/PRs in the emulator.
+- Add opt-in emulator tests that seed GitHub users/repos/issues/PRs/installations, send webhooks, process worker runs, and assert comments/PRs in the emulator once `emulate` has a fixed GitHub App JWT verification release.
+- Keep real GitHub App and real GitHub + Daytona smoke tests opt-in and skipped by default.
 - Add regression tests proving token strings are absent from events, messages, artifacts, callback payloads, and logs under controlled fakes.
 
 Acceptance criteria:

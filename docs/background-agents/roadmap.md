@@ -32,6 +32,7 @@ Implemented so far:
 - App-level Postgres worker integration test.
 - Daytona sandbox idle cleanup with stop-before-destroy retention policy and advisory-lock reaper coordination.
 - Vite React operator UI with session-cookie login, session list/search, queued message editing/cancelling, active-run cancellation, archive/restore, SSE streaming, and artifact/event views.
+- GitHub App runtime access for allowlisted repositories, including real GitHub token minting, Flue-runner repository refresh, and opt-in real GitHub + Daytona clone UAT coverage.
 
 Still open from the early phases:
 
@@ -283,7 +284,7 @@ Acceptance criteria:
 - Tokens are not persisted in events, messages, artifacts, or logs.
 - GitHub API base URLs remain configurable for emulator-backed tests.
 
-Status: initial runtime path implemented. Config parsing, GitHub App JWT signing, repository installation lookup, installation token minting, per-installation token caching, repository allowlist checks, and runner-safe repository access instructions exist with focused unit coverage. Worker setup can clone or fetch a repo declared in message context before runner execution without writing tokens to events/messages/artifacts. Push/branch/PR helper operations remain next.
+Status: initial runtime path implemented. Config parsing, GitHub App JWT signing, repository installation lookup, installation token minting, per-installation token caching, repository allowlist checks, and runner-safe repository access instructions exist with focused unit coverage. Messages can carry repository context, and the Flue runner uses a pre-prompt `session.shell` step to clone or fetch the repo inside the sandbox with command-scoped env auth. Token values are not written to events/messages/artifacts or prompt text. Opt-in real GitHub App and real GitHub + Daytona UATs verify token minting and sandbox clone/fetch. Push/branch/PR helper operations remain next.
 
 ## Phase 9: GitHub Integration
 

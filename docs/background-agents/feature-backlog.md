@@ -6,8 +6,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 - Slack start/queued status acknowledgement beyond reaction-only progress.
 - Slack direct-message support.
-- GitHub App runtime access for clone, push, branch, and PR operations.
-- GitHub App installation token minting and repository installation resolution.
+- GitHub App push, branch, and PR operations using fresh installation access.
 - GitHub integration for issue comments, PR comments, and review comments.
 - GitHub App signature verification, installation token flow, and delivery dedupe.
 - GitHub callback comments with completion summaries and PR/artifact links.
@@ -35,8 +34,8 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Multi-repository task support, including repo selection, cloning/syncing multiple worktrees, and cross-repo context.
 - Prompt templates and snapshot tests for Slack/GitHub/Linear inputs.
 - Better repo resolution from Slack/GitHub/Linear context.
-- Setup/install hook observability.
-- Repo sync after first clone instead of recloning.
+- Setup/install hook observability beyond `repository_ready`.
+- Snapshot/image baking for common repos and build artifacts, with Flue startup refresh for stale or missing worktrees.
 - Upstream Flue cancellation improvement for built-in bash/tool execution.
 
 ## Sandboxes

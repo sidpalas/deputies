@@ -1,4 +1,3 @@
-import type { NormalizedEvent } from '../events/types.js';
 import type { GitHubRepository, GitHubRepositoryAccess } from '../integrations/github/types.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 
@@ -6,38 +5,31 @@ export type RepositoryAccessProvider = {
   getRepositoryAccess(repository: GitHubRepository): Promise<GitHubRepositoryAccess>;
 };
 
-export type RepositorySetupInput = {
-  context: Record<string, unknown>;
-  sandbox: SandboxHandle;
-  sessionId: string;
-  runId: string;
-  messageId: string;
-  emit: (event: NormalizedEvent) => Promise<void>;
+export type RepositoryShellSetup = {
+  access: GitHubRepositoryAccess;
+  workspacePath: string;
+  command: string;
+  env: Record<string, string>;
 };
 
-export class RepositorySetupService {
-  constructor(private readonly github?: RepositoryAccessProvider) {}
+export async function prepareRepositoryShellSetup(input: {
+  context: Record<string, unknown>;
+  sandbox: SandboxHandle;
+  github?: RepositoryAccessProvider;
+}): Promise<RepositoryShellSetup | null> {
+  const repository = parseRepositoryContext(input.context);
+  if (!repository) return null;
+  if (repository.provider !== 'github') throw new RepositorySetupError('unsupported_repository_provider', `Unsupported repository provider: ${repository.provider}`);
+  if (!input.github) throw new RepositorySetupError('repository_access_unavailable', 'GitHub repository access is not configured');
 
-  async setup(input: RepositorySetupInput): Promise<SandboxHandle> {
-    const repository = parseRepositoryContext(input.context);
-    if (!repository) return input.sandbox;
-    if (repository.provider !== 'github') throw new RepositorySetupError('unsupported_repository_provider', `Unsupported repository provider: ${repository.provider}`);
-    if (!this.github) throw new RepositorySetupError('repository_access_unavailable', 'GitHub repository access is not configured');
-
-    const access = await this.github.getRepositoryAccess({ owner: repository.owner, repo: repository.repo });
-    const workspacePath = joinPath(input.sandbox.workspacePath, access.repo);
-    await cloneOrFetchRepository(input.sandbox, access, workspacePath);
-    await input.emit({
-      sessionId: input.sessionId,
-      runId: input.runId,
-      messageId: input.messageId,
-      type: 'repository_ready',
-      payload: { provider: access.provider, owner: access.owner, repo: access.repo, workspacePath, expiresAt: access.expiresAt.toISOString() },
-      createdAt: new Date(),
-    });
-
-    return { ...input.sandbox, workspacePath };
-  }
+  const access = await input.github.getRepositoryAccess({ owner: repository.owner, repo: repository.repo });
+  const workspacePath = joinPath(input.sandbox.workspacePath, access.repo);
+  return {
+    access,
+    workspacePath,
+    command: repositorySetupCommand(access, workspacePath),
+    env: { GITHUB_AUTH_HEADER: gitAuthHeader(access.auth.token) },
+  };
 }
 
 export class RepositorySetupError extends Error {
@@ -60,24 +52,17 @@ export function parseRepositoryContext(context: Record<string, unknown>): Reposi
   return parseRepositoryValue(github.repository);
 }
 
-async function cloneOrFetchRepository(sandbox: SandboxHandle, access: GitHubRepositoryAccess, workspacePath: string): Promise<void> {
-  const result = await sandbox.exec({
-    command: [
-      'set -eu',
-      `mkdir -p ${quoteShell(parentPath(workspacePath))}`,
-      `if [ -d ${quoteShell(joinPath(workspacePath, '.git'))} ]; then`,
-      `  git -C ${quoteShell(workspacePath)} remote set-url origin ${quoteShell(access.cloneUrl)}`,
-      `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" -C ${quoteShell(workspacePath)} fetch --prune origin`,
-      'else',
-      `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone -- ${quoteShell(access.cloneUrl)} ${quoteShell(workspacePath)}`,
-      'fi',
-    ].join('\n'),
-    env: { GITHUB_AUTH_HEADER: `AUTHORIZATION: bearer ${access.auth.token}` },
-  });
-
-  if (result.exitCode !== 0) {
-    throw new Error(`Repository setup failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`);
-  }
+function repositorySetupCommand(access: GitHubRepositoryAccess, workspacePath: string): string {
+  return [
+    'set -eu',
+    `mkdir -p ${quoteShell(parentPath(workspacePath))}`,
+    `if [ -d ${quoteShell(joinPath(workspacePath, '.git'))} ]; then`,
+    `  git -C ${quoteShell(workspacePath)} remote set-url origin ${quoteShell(access.cloneUrl)}`,
+    `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" -C ${quoteShell(workspacePath)} fetch --prune origin`,
+    'else',
+    `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone -- ${quoteShell(access.cloneUrl)} ${quoteShell(workspacePath)}`,
+    'fi',
+  ].join('\n');
 }
 
 function parseRepositoryValue(value: unknown): RepositoryContext | null {
@@ -103,6 +88,11 @@ function joinPath(base: string, child: string): string {
 function parentPath(path: string): string {
   const index = path.lastIndexOf('/');
   return index <= 0 ? '/' : path.slice(0, index);
+}
+
+function gitAuthHeader(token: string): string {
+  const credentials = Buffer.from(`x-access-token:${token}`).toString('base64');
+  return `Authorization: Basic ${credentials}`;
 }
 
 function quoteShell(value: string): string {
