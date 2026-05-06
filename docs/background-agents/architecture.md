@@ -211,7 +211,7 @@ Only `runner-flue` should import `@flue/sdk`. This keeps Flue replaceable and ma
 
 The HTTP transport uses Hono on Node via `@hono/node-server`. This keeps the API layer lightweight while giving us middleware hooks for auth, request IDs, CORS, body limits, and route grouping as integrations grow.
 
-Product session routes support optional bearer-token protection with `API_AUTH_MODE=bearer` and `API_BEARER_TOKEN`. `/health` remains public. Generic webhooks keep their own per-source bearer auth so external systems can be authorized independently from product API clients.
+Product session routes support `API_AUTH_MODE=none|bearer|session`. `/health` remains public and reports the active mode. Bearer mode uses `API_BEARER_TOKEN` for machine/developer access. Session mode uses `POST /auth/login`, `POST /auth/logout`, and `GET /auth/me` with a signed HTTP-only `dev_deputies_session` cookie created from static operator credentials. Generic webhooks keep their own per-source bearer auth so external systems can be authorized independently from product API clients.
 
 Session-scoped product state is exposed through the product API. Artifact reads use `GET /sessions/:sessionId/artifacts` and are protected by the same product session auth as session, message, and event routes.
 
@@ -227,6 +227,7 @@ When a user or integration sends a prompt:
 POST /sessions/:id/messages or integration webhook
   -> validate request
   -> find or create session
+  -> reject if the session is archived
   -> append pending message
   -> append message_created event
   -> return 202 Accepted
@@ -238,13 +239,13 @@ Worker execution:
 
 ```txt
 worker loop
-  -> claim pending message using Postgres transaction
-  -> acquire session run lease
+  -> claim all pending messages for one session using Postgres transaction
+  -> create/renew session run lease
   -> ensure sandbox exists and is healthy
   -> start Flue runner
   -> normalize Flue/sandbox events into event log
   -> record artifacts
-  -> mark message completed or failed
+  -> mark claimed batch completed, failed, or cancelled
   -> release lease
 ```
 
@@ -257,14 +258,18 @@ Rules:
 - Multiple API replicas may receive messages for the same session.
 - Multiple worker replicas may poll concurrently.
 - Only one active run may process a session at a time.
-- Follow-up messages must queue behind the active run or be injected at safe turn boundaries.
+- Follow-up messages queue behind the active run. The worker claims all currently pending messages for a session as one ordered batch and prompts the runner with those messages in sequence.
+- Pending messages can be edited or cancelled before claim. Editing pauses the session queue until the edit is saved or cancelled.
+- Archived sessions are read-only. They must be restored before accepting new messages.
+- Active run cancellation is two-phase: API requests cancellation, the run/messages enter `cancelling`, the owning worker aborts its runner signal, then the worker finalizes the run/messages as `cancelled`. `cancelling` still counts as an active run so another worker cannot claim the same session.
 - Worker crashes must not permanently strand messages in `processing`.
 
 Implementation mechanisms:
 
 - `SELECT ... FOR UPDATE SKIP LOCKED` for message claiming.
-- Session-level run lease rows or Postgres advisory locks.
+- Partial unique run index for `starting`, `running`, and `cancelling` states.
 - Lease expiry and heartbeat timestamps.
+- Dedicated cancellation polling while a run is active; default `RUN_CANCELLATION_POLL_INTERVAL_MS=1000`.
 - Idempotent event writes where possible.
 - Dedupe keys for external webhooks.
 
@@ -279,10 +284,12 @@ interface Runner {
 
 type RunnerInput = {
   sessionId: string;
+  runId: string;
   messageId: string;
   prompt: string;
   context: PromptContext;
   sandbox: SandboxHandle;
+  signal?: AbortSignal;
   emit: (event: NormalizedEvent) => Promise<void>;
 };
 ```
@@ -299,6 +306,7 @@ Implementations:
 - use stable Flue agent/session IDs derived from product session IDs;
 - follow Flue's remote coding-agent pattern: create or connect a real sandbox, run setup in that sandbox, then initialize a project-scoped agent with `cwd` set to the cloned repo;
 - call Flue `agent.session()` / `session.prompt()` / `session.skill()` / `session.task()` instead of implementing its own conversation or subagent system;
+- call `session.abort()` when the worker cancellation signal aborts, and suppress post-abort events/results;
 - grant product-authorized Flue tools, commands, and MCP tools;
 - treat Flue session data as runner-owned state;
 - persist normalized product events separately through the `events` module.

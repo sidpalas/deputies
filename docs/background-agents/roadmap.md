@@ -6,16 +6,16 @@ Implemented so far:
 
 - Core TypeScript service scaffold.
 - Config parser, Hono transport layer, and health endpoint.
-- Optional bearer auth middleware for product session routes.
+- Product API auth modes: `none`, bearer token, and static-credential session cookie login for the operator UI.
 - Stable JSON parse/body-limit errors for API routes.
 - Core session/message/event modules.
-- HTTP routes for creating sessions, enqueueing messages, and replaying events.
+- HTTP routes for creating/listing/updating/archiving/restoring sessions, enqueueing/editing/cancelling queued messages, cancelling active runs, listing artifacts, and replaying events.
 - SSE event streaming with cursor replay.
 - Memory-backed `AppStore` for deterministic unit tests.
 - Docker Compose local Postgres.
 - SQL migration runner.
-- Postgres-backed `AppStore` for `sessions`, `messages`, `events`, and sequence counters.
-- Durable worker loop with `runs`, message claiming, fake-runner execution, run leases, heartbeat renewal, and stale lease recovery.
+- Postgres-backed `AppStore` for sessions, messages, events, runs, sandboxes, artifacts, Flue sessions, generic webhooks, callbacks, external thread mappings, and sequence counters.
+- Durable worker loop with run leases, heartbeat renewal, stale lease recovery, batched same-session message claiming, queue pause/edit/cancel behavior, and active-run cancellation finalization.
 - DB-backed generic webhook sources with bearer auth, prompt prefixes, thread reuse, and delivery dedupe.
 - Architecture fitness tests for core import boundaries.
 - Postgres-backed Flue `SessionStore` and `runner-flue` adapter seam.
@@ -30,12 +30,14 @@ Implemented so far:
 - Graceful shutdown for HTTP server, worker loop, and Postgres-backed resources.
 - Postgres integration test path.
 - App-level Postgres worker integration test.
+- Daytona sandbox idle cleanup with stop-before-destroy retention policy and advisory-lock reaper coordination.
+- Vite React operator UI with session-cookie login, session list/search, queued message editing/cancelling, active-run cancellation, archive/restore, SSE streaming, and artifact/event views.
 
 Still open from the early phases:
 
 - Contract schemas for public API responses and events.
 
-The next implementation phase should focus on deployability: release/migration commands, environment documentation, and Railway/ECS/Kubernetes operational guidance.
+The next implementation phase should focus on deployability and operational polish: release/migration commands, Railway/ECS/Kubernetes guidance, callback retry dispatch, richer UI observability for sandbox cleanup, and contract schemas for public API/events.
 
 ## Phase 0: Repository And Agent Context
 
@@ -104,7 +106,7 @@ Acceptance criteria:
 - Event replay by cursor works.
 - SSE stream receives appended events.
 
-Status: mostly implemented. Session/message/event routes, cursor replay, and SSE streaming exist. Contract schemas remain open.
+Status: implemented beyond the original scope. Session/message/event routes, cursor replay, SSE streaming, title updates, archive/restore, queued follow-up edit/cancel, and active-run cancellation routes exist. Contract schemas remain open.
 
 ## Phase 3: Worker, Runs, Leases
 
@@ -127,7 +129,7 @@ Acceptance criteria:
 - Stale processing messages recover.
 - Failed runner marks message/run failed and emits failure event.
 
-Status: implemented for the fake-runner path. The worker can claim pending messages transactionally, enforce one active run per session, execute the fake runner, renew heartbeats, recover stale leases, and mark success/failure terminal states. More recovery policy can be added later when retry limits are introduced.
+Status: implemented for fake and Flue runner paths. The worker claims pending messages transactionally, batches all queued messages for one session, enforces one active/cancelling run per session, executes the configured runner, renews heartbeats, recovers stale leases, supports active-run cancellation, and marks success/failure/cancel terminal states. More recovery policy can be added later when retry limits are introduced.
 
 ## Phase 4: Generic Webhook Integration
 
@@ -199,7 +201,7 @@ Acceptance criteria:
 - Unhealthy sandbox fails clearly or is recreated according to policy.
 - Tests use fake provider without real infrastructure.
 
-Status: mostly implemented for the current provider set. The fake provider and Daytona provider adapter exist. Daytona creation, connection, health, destroy, exec, and filesystem operations are unit-tested with an SDK-shaped fake client. The `sandboxes` table persists provider sandbox IDs, workspace paths, status, metadata, and health timestamps. The worker reuses a ready active sandbox for follow-up messages and creates a replacement if health/connect fails. Real Daytona UAT remains open.
+Status: implemented for the current provider set. The fake provider and Daytona provider adapter exist. Daytona creation, connection, start, stop, health, destroy, exec, and filesystem operations are unit-tested with an SDK-shaped fake client. The `sandboxes` table persists provider sandbox IDs, workspace paths, status, metadata, and health timestamps. The worker reuses ready/stopped active sandboxes for follow-up messages, restarts stopped Daytona sandboxes before reconnect, and creates a replacement if health/connect fails. Idle cleanup stops sandboxes before retention destroy, and archive destroys active sandboxes immediately. Real Daytona UAT is opt-in.
 
 ## Phase 7: UAT Suite
 

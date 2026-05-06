@@ -76,6 +76,8 @@ Current local policy:
 - `pnpm api:test` runs deterministic unit tests from `api/test/unit` without Postgres.
 - `pnpm api:test:integration` runs Postgres-backed integration tests and requires `TEST_DATABASE_URL`.
 - `pnpm api:test:uat` runs built-artifact UAT tests from `api/test/uat` and requires `TEST_DATABASE_URL` plus a prior `pnpm api:build`.
+- `pnpm web:test -- --run` runs the Vite/jsdom operator UI regression tests.
+- `pnpm check` runs API typecheck/tests and web typecheck/tests.
 - Real Daytona/Flue UAT is opt-in: set `RUN_REAL_DAYTONA_FLUE_UAT=true`, `DAYTONA_API_KEY`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm api:test:uat`.
 - `docker compose up -d postgres` starts local Postgres and creates both `flue` and `flue_test`.
 - Integration tests apply migrations to `flue_test` and truncate app tables between tests.
@@ -85,6 +87,8 @@ Current local policy:
 - API tests exercise the Hono app through the Node adapter so middleware, routing, JSON responses, and SSE behavior remain covered as transport internals change.
 - API hardening tests cover invalid JSON and oversized request bodies.
 - Lifecycle unit tests cover worker-loop stop behavior and idempotent resource shutdown.
+- API tests cover auth modes, session-cookie login/logout, archive/restore behavior, queued-message edit/cancel/pause/resume, active-run cancellation, callback/artifact persistence, sandbox stop/destroy cleanup, and worker batching.
+- Web tests cover session-cookie login, keyboard send behavior, mobile/sidebar reachability, active-run cancellation button, archived restore notice, and batch rendering for cancelled middle messages.
 - `pnpm web:build` typechecks and builds the separate Vite React operator UI.
 
 Harness responsibilities:
@@ -102,7 +106,11 @@ Core integration tests:
 
 - Create session writes session row and event.
 - Append message writes message and `message_created` event.
-- Worker claims one message under concurrent polling.
+- Worker claims each pending message at most once under concurrent polling.
+- Worker claims a same-session pending batch in sequence order.
+- Paused queues are skipped until resumed.
+- Active cancellation finalizes run/messages as `cancelled` and blocks next same-session claim while `cancelling`.
+- Sandbox idle cleanup stops before destroying, skips active sessions, and uses advisory-lock coordination with Postgres.
 - Stale processing message is recovered.
 - Event replay returns events after cursor.
 - SSE stream receives appended events.
@@ -211,7 +219,7 @@ Acceptance tests:
 - Generic webhook returns `202` and creates session/message.
 - Built fake-runner flow completes through the worker and emits sandbox lifecycle events.
 - Opt-in real Daytona/Flue flow provisions a hosted sandbox, runs through `RUNNER=flue`, and completes a message.
-- Product API bearer auth rejects unauthenticated session routes while leaving health public.
+- Product API auth rejects unauthenticated session routes while leaving health public, including bearer and session-cookie modes.
 - Follow-up messages reuse the same active sandbox and expose `sandbox_ready.created=false`.
 - Generic webhook auth remains independent from product API auth.
 - Real Daytona/Flue follow-up UAT validates persistent sandbox filesystem and Flue tool events.

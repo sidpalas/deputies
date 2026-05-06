@@ -63,7 +63,7 @@ external webhook
 
 ## Generic Inbound Webhook
 
-Generic webhook auth is independent of product API auth. `API_AUTH_MODE=bearer` protects product session routes, but `POST /webhooks/generic/:sourceKey` uses the bearer token configured for that webhook source in the database.
+Generic webhook auth is independent of product API auth. Product session routes can use `API_AUTH_MODE=none|bearer|session`, but `POST /webhooks/generic/:sourceKey` always uses the bearer token configured for that webhook source in the database.
 
 The generic webhook is the first integration to implement.
 
@@ -77,19 +77,18 @@ MVP capabilities:
 
 - Bearer token auth.
 - JSON body only.
-- Dedupe key extraction.
-- External thread ID extraction.
-- Repo extraction.
-- Prompt extraction or prompt template rendering.
-- Optional filters.
-- No outbound callback initially, except session URL in response if synchronous auth allows it.
+- Dedupe via request-provided `dedupeKey`.
+- External thread reuse via request-provided `threadId`.
+- Prompt ingestion via request-provided `prompt` plus optional source prompt prefix.
+- Context ingestion via request-provided `context`.
+- Optional HTTP completion callback via request-provided `callbackUrl`.
 
 Future capabilities:
 
+- JSON-path mapping/filtering/template configuration.
 - HMAC auth.
 - Basic auth.
 - CIDR allowlist.
-- HTTP callbacks.
 - Admin API for source configuration.
 
 Current callback support:

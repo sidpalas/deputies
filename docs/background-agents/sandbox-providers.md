@@ -196,6 +196,19 @@ Rules:
 - Missing sandbox should be treated as success.
 - It must not delete database state. The caller owns DB updates.
 
+### Stop And Start
+
+`stop()` and `start()` are optional. Providers that support them should preserve the workspace filesystem across stop/start.
+
+Product lifecycle policy:
+
+- `SANDBOX_IDLE_TIMEOUT_SECONDS` is passed to providers that have their own auto-stop mechanism. Daytona uses this for `autoStopInterval`.
+- `SANDBOX_STOP_DELAY_SECONDS` controls the product reaper's first cleanup phase: stop idle ready sandboxes when the session is not active and has no pending messages.
+- `SANDBOX_RETENTION_SECONDS` controls the destroy phase: destroy ready, stopped, or unhealthy sandboxes after retention expires.
+- Archive destroys active session sandboxes immediately.
+- Stopped sandboxes are still reusable when the provider supports `start()`; the lifecycle manager starts them before reconnecting.
+- The Postgres reaper uses an advisory lock so only one instance runs cleanup work at a time.
+
 ### Snapshot And Restore
 
 Snapshot support is optional.
@@ -366,6 +379,8 @@ Required tests:
 - `mkdir()` and `readdir()` work.
 - `rm()` removes files/directories.
 - `destroy()` is idempotent.
+- Optional `stop()` is idempotent and preserves workspace when `persistentFilesystem` is true.
+- Optional `start()` reconnects to the same provider sandbox ID or returns an equivalent handle documented by the provider.
 - Missing sandbox health returns `missing` or `unhealthy`.
 
 Optional capability tests run only when capability flags are enabled:

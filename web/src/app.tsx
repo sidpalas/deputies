@@ -743,10 +743,12 @@ function ThreadHeader(props: {
         )}
         <p className="mt-1 hidden truncate text-xs text-slate-500 sm:block">{props.selectedSession.id}</p>
       </div>
-      <div className="flex shrink-0 items-center gap-2 justify-self-end">
-        <Badge className={statusTextClass(props.selectedSession.status)}>{props.selectedSession.status}</Badge>
-        {props.hasActiveRun && props.selectedSession.status !== 'archived' ? <Button type="button" variant="secondary" onClick={props.onCancelRun}><X className="h-4 w-4" /> Cancel run</Button> : null}
-        {props.selectedSession.status !== 'archived' ? <Button type="button" variant="secondary" onClick={props.onArchive}><Archive className="h-4 w-4" /> Archive</Button> : null}
+      <div className="grid min-h-9 shrink-0 grid-cols-[auto_auto] items-center justify-items-end gap-2 justify-self-end">
+        <Badge className={cn('col-start-1', statusTextClass(props.selectedSession.status))}>{props.selectedSession.status}</Badge>
+        <div className="col-start-2 flex min-w-28 justify-end gap-2">
+          {props.hasActiveRun && props.selectedSession.status !== 'archived' ? <Button type="button" variant="secondary" onClick={props.onCancelRun}><X className="h-4 w-4" /> Cancel run</Button> : null}
+          {props.selectedSession.status !== 'archived' ? <Button type="button" variant="secondary" onClick={props.onArchive}><Archive className="h-4 w-4" /> Archive</Button> : null}
+        </div>
       </div>
     </section>
   );

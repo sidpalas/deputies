@@ -33,27 +33,27 @@ webhook_sources
 
 ## Implementation Stages
 
-The data model below is the target product model. It is intentionally broader than the current scaffold.
+The data model below is both the product target and the current implementation reference. Some columns are still narrower than the long-term target, but the core durable API/worker model is implemented.
 
 Current implemented tables:
 
 - `sessions`
 - `messages`
-- `events`
-- `session_sequence_counters`
-- `app_migrations`
-
-Planned tables:
-
 - `runs`
+- `events`
 - `sandboxes`
 - `artifacts`
 - `flue_sessions`
 - `external_threads`
 - `integration_deliveries`
-- `message_callbacks`
-- `repo_credentials`
+- `callback_deliveries`
 - `webhook_sources`
+- `session_sequence_counters`
+- `app_migrations`
+
+Planned tables:
+
+- `repo_credentials`
 
 Identifier policy:
 
@@ -72,6 +72,7 @@ Suggested columns:
 id uuid primary key
 title text
 status text not null
+queue_paused_at timestamptz
 repo_owner text
 repo_name text
 repo_url text
@@ -90,6 +91,7 @@ Statuses:
 ```txt
 created
 active
+processing
 idle
 completed
 failed
@@ -103,6 +105,8 @@ Rules:
 - A session may have at most one active run.
 - A session may have one current sandbox, but historical sandbox rows should be preserved.
 - Source-specific identifiers belong in `external_threads`, not the session row.
+- Archived sessions are read-only until restored.
+- `queue_paused_at` is used while editing pending messages so the worker does not claim a message mid-edit.
 
 ## Messages
 
@@ -143,6 +147,7 @@ Statuses:
 ```txt
 pending
 processing
+cancelling
 completed
 failed
 cancelled
@@ -151,9 +156,11 @@ cancelled
 Rules:
 
 - `sequence` is monotonically increasing per session.
-- Pending messages are processed in sequence order.
+- Pending messages are processed in sequence order. The worker claims all currently pending messages for one session as an ordered batch.
 - Duplicate external deliveries must not create duplicate messages.
-- Follow-ups sent during an active run remain pending unless the runner supports safe injection.
+- Follow-ups sent during an active run remain pending and are handled by the next batch.
+- Pending messages can be edited or cancelled before the worker claims them.
+- Active run cancellation marks claimed messages `cancelling` first, then the worker finalizes them as `cancelled`.
 
 Indexes:
 
@@ -192,6 +199,7 @@ Statuses:
 ```txt
 starting
 running
+cancelling
 completed
 failed
 cancelled
@@ -201,9 +209,10 @@ stale
 
 Rules:
 
-- Only one `starting` or `running` run is allowed per session.
+- Only one `starting`, `running`, or `cancelling` run is allowed per session.
 - Leases must expire if a process crashes.
 - A retry should create a new run row, not overwrite historical run data.
+- A batch run stores the first claimed message in `message_id`; all claimed message IDs are retained in run metadata and completed/cancelled together.
 
 ## Events
 
@@ -230,16 +239,24 @@ session_created
 message_created
 message_started
 run_started
+message_batch_started
 sandbox_starting
 sandbox_ready
+sandbox_stopped
+sandbox_stop_failed
+sandbox_destroyed
+sandbox_destroy_failed
 agent_text_delta
 tool_started
 tool_finished
 artifact_created
+run_cancelling
+run_cancelled
 run_completed
 run_failed
 message_completed
 message_failed
+message_cancelled
 callback_sent
 callback_failed
 ```
@@ -307,6 +324,9 @@ Current implementation:
 - The worker health-checks and reconnects a ready active sandbox before running a follow-up message.
 - Stopped sandboxes remain active candidates and are restarted before reconnect when the provider supports start/stop.
 - If health or reconnect fails, the row is marked `unhealthy` and a replacement sandbox is created.
+- The reaper first stops idle ready sandboxes after `SANDBOX_STOP_DELAY_SECONDS`, then destroys ready/stopped/unhealthy sandboxes after `SANDBOX_RETENTION_SECONDS`.
+- Archive destroys active session sandboxes immediately.
+- Reaper coordination uses a Postgres advisory lock when the Postgres store is active.
 
 ## Artifacts
 
@@ -375,7 +395,7 @@ Rules:
 - Use a custom Postgres-backed Flue session store in production and CI.
 - Do not rely on Flue's Node in-memory default outside local experiments.
 - Product state remains in `sessions`, `messages`, `runs`, `events`, `artifacts`, and `sandboxes`.
-- Do not create this table until `runner-flue` is implemented; the current Postgres `AppStore` is product-state persistence only.
+- The current `flue_sessions` table is implemented by `006_flue_sessions.sql` and is used by the Postgres-backed Flue session store.
 
 See [Flue Persistence](./flue-persistence.md) for details.
 
@@ -434,24 +454,27 @@ Index:
 unique(source, dedupe_key)
 ```
 
-## Message Callbacks
+## Callback Deliveries
 
 Tracks outbound notifications.
 
-Suggested columns:
+Implemented columns:
 
 ```txt
 id uuid primary key
-message_id uuid references messages(id)
 session_id uuid not null references sessions(id)
-source text not null
+run_id uuid references runs(id)
+message_id uuid references messages(id)
+target_type text not null
 target jsonb not null
 status text not null
+event_type text not null
+payload jsonb not null default '{}'
 attempts int not null default 0
-last_attempt_at timestamptz
+last_error text
 created_at timestamptz not null
-completed_at timestamptz
-error text
+updated_at timestamptz not null
+delivered_at timestamptz
 ```
 
 Statuses:
@@ -460,7 +483,6 @@ Statuses:
 pending
 sent
 failed
-disabled
 ```
 
 ## Repo Credentials
@@ -515,7 +537,7 @@ created_at timestamptz not null
 updated_at timestamptz not null
 ```
 
-For MVP this can be loaded from static config first, then moved to DB-backed admin APIs later.
+Current implementation stores generic webhook sources in Postgres with `key`, `name`, `enabled`, `bearer_token`, and `prompt_prefix`. Rich mapping/filter/default configuration remains a future extension.
 
 ## Transaction Patterns
 
@@ -537,10 +559,11 @@ Claim message:
 
 ```txt
 begin
-  select pending message for update skip locked
-  acquire session lease or create run row
-  mark message processing
-  insert message_started/run_started events
+  select one pending session for update skip locked, excluding paused queues
+  claim every pending message in that session in sequence order
+  create run row and acquire active-run lease
+  mark messages processing
+  insert message_started/message_batch_started/run_started events
 commit
 ```
 
@@ -550,8 +573,27 @@ Complete message:
 begin
   insert terminal events
   update run completed/failed
-  update message completed/failed
+  update all claimed messages completed/failed/cancelled
   update session status
+  release lease
+commit
+```
+
+Cancel active run:
+
+```txt
+begin
+  find active starting/running run for session
+  mark run and processing messages cancelling
+  insert run_cancelling/message_cancelling events
+commit
+
+worker observes cancellation
+  abort runner signal
+
+begin
+  mark run and claimed messages cancelled
+  insert run_cancelled/message_cancelled events
   release lease
 commit
 ```
