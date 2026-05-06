@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './app.js';
 
 const session = {
@@ -43,7 +43,7 @@ it('keeps sidebar reachable after mobile open, hide, and reopen actions', async 
   expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeInTheDocument();
 });
 
-it('shows and calls cancel run for an active session', async () => {
+it('shows and calls cancel task on the active message', async () => {
   let cancelled = false;
   mockApi({
     sessionOverride: { status: 'active' },
@@ -61,9 +61,28 @@ it('shows and calls cancel run for an active session', async () => {
   });
   render(<App />);
 
-  fireEvent.click(await screen.findByRole('button', { name: 'Cancel run' }));
+  const messageCard = await screen.findByRole('article', { name: 'Message 1' });
+  fireEvent.click(within(messageCard).getByRole('button', { name: 'Cancel task' }));
 
   await waitFor(() => expect(cancelled).toBe(true));
+});
+
+it('shows cancelling state on the active message cancel action', async () => {
+  mockApi({
+    sessionOverride: { status: 'active' },
+    messages: [{
+      id: '00000000-0000-4000-8000-000000000102',
+      sessionId: session.id,
+      sequence: 1,
+      status: 'cancelling',
+      prompt: 'stopping work',
+      createdAt: '2026-05-05T12:01:00.000Z',
+    }],
+  });
+  render(<App />);
+
+  const messageCard = await screen.findByRole('article', { name: 'Message 1' });
+  expect(within(messageCard).getByRole('button', { name: 'Cancelling...' })).toBeDisabled();
 });
 
 it('logs in with session auth before loading sessions', async () => {

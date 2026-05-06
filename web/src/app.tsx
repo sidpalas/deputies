@@ -84,7 +84,6 @@ export function App() {
   const startupLoading = waitingForAuth || (canCallApi && !sessionsLoaded);
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
   const selectedSessionArchived = selectedSession?.status === 'archived';
-  const hasActiveRun = messages.some((message) => message.status === 'processing' || message.status === 'cancelling') || selectedSession?.status === 'active';
   const filteredSessions = filterSessions(sortSessionsByLastActivity(sessions), threadSearch);
   const activeSessions = filteredSessions.filter((session) => session.status !== 'archived');
   const archivedSessions = filteredSessions.filter((session) => session.status === 'archived');
@@ -506,11 +505,9 @@ export function App() {
               <ThreadHeader
                 editingTitle={editingTitle}
                 selectedSession={selectedSession}
-                hasActiveRun={hasActiveRun}
                 titleDraft={titleDraft}
                 onArchive={handleArchiveSession}
                 onCancelTitle={() => setEditingTitle(false)}
-                onCancelRun={cancelRun}
                 onEditTitle={() => setEditingTitle(true)}
                 onTitleDraftChange={setTitleDraft}
                 onUpdateTitle={handleUpdateTitle}
@@ -525,6 +522,7 @@ export function App() {
                       messages={messages}
                       onCancelEdit={() => finishEditingMessage(true)}
                       onCancelQueuedMessage={cancelQueuedMessage}
+                      onCancelRun={cancelRun}
                       onEditMessage={startEditingMessage}
                       onMessageDraftChange={setMessageDraft}
                       onSaveEdit={saveMessageEdit}
@@ -758,12 +756,10 @@ function NewThreadPanel(props: {
 
 function ThreadHeader(props: {
   editingTitle: boolean;
-  hasActiveRun: boolean;
   selectedSession: Session;
   titleDraft: string;
   onArchive: () => void;
   onCancelTitle: () => void;
-  onCancelRun: () => void;
   onEditTitle: () => void;
   onTitleDraftChange: (value: string) => void;
   onUpdateTitle: (event: FormEvent) => void;
@@ -789,7 +785,6 @@ function ThreadHeader(props: {
       <div className="grid min-h-9 shrink-0 grid-cols-[auto_auto] items-center justify-items-end gap-2 justify-self-end">
         <Badge className={cn('col-start-1', statusTextClass(props.selectedSession.status))}>{props.selectedSession.status}</Badge>
         <div className="col-start-2 flex min-w-28 justify-end gap-2">
-          {props.hasActiveRun && props.selectedSession.status !== 'archived' ? <Button type="button" variant="secondary" onClick={props.onCancelRun}><X className="h-4 w-4" /> Cancel run</Button> : null}
           {props.selectedSession.status !== 'archived' ? <Button type="button" variant="secondary" onClick={props.onArchive}><Archive className="h-4 w-4" /> Archive</Button> : null}
         </div>
       </div>
@@ -804,6 +799,7 @@ function ChatPanel(props: {
   messages: Message[];
   onCancelEdit: () => void;
   onCancelQueuedMessage: (messageId: string) => void;
+  onCancelRun: () => void;
   onEditMessage: (message: Message) => void;
   onMessageDraftChange: (value: string) => void;
   onSaveEdit: () => void;
@@ -817,17 +813,27 @@ function ChatPanel(props: {
       {groups.map((group) => {
         const response = assistantText[group.responseMessageId];
         const groupDiagnostics = diagnostics[group.runId ?? group.responseMessageId] ?? [];
+        const activeRun = isActiveRunGroup(group.messages);
+        const cancellingRun = isCancellingRunGroup(group.messages);
         return (
           <div className="grid gap-2" key={group.key}>
-            {group.messages.length > 1 ? <p className="text-xs font-medium uppercase tracking-widest text-slate-500">Queued batch · {group.messages.filter((message) => message.status !== 'cancelled').length} active messages</p> : null}
+            {group.messages.length > 1 ? (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-medium uppercase tracking-widest text-slate-500">Queued batch · {group.messages.filter((message) => message.status !== 'cancelled').length} active messages</p>
+                {activeRun ? <CancelRunButton cancelling={cancellingRun} onCancelRun={props.onCancelRun} /> : null}
+              </div>
+            ) : null}
             {group.messages.map((message) => (
               <UserMessageCard
                 editingMessageId={props.editingMessageId}
                 key={message.id}
                 message={message}
                 messageDraft={props.messageDraft}
+                showRunCancel={group.messages.length === 1 && activeRun}
+                runCancelling={cancellingRun}
                 onCancelEdit={props.onCancelEdit}
                 onCancelQueuedMessage={props.onCancelQueuedMessage}
+                onCancelRun={props.onCancelRun}
                 onEditMessage={props.onEditMessage}
                 onMessageDraftChange={props.onMessageDraftChange}
                 onSaveEdit={props.onSaveEdit}
@@ -852,15 +858,18 @@ function UserMessageCard(props: {
   editingMessageId: string;
   message: Message;
   messageDraft: string;
+  showRunCancel: boolean;
+  runCancelling: boolean;
   onCancelEdit: () => void;
   onCancelQueuedMessage: (messageId: string) => void;
+  onCancelRun: () => void;
   onEditMessage: (message: Message) => void;
   onMessageDraftChange: (value: string) => void;
   onSaveEdit: () => void;
 }) {
   const { message } = props;
   return (
-    <Card className="border-sky-500/70 bg-sky-950/30 p-3">
+    <Card className="border-sky-500/70 bg-sky-950/30 p-3" role="article" aria-label={`Message ${message.sequence}`}>
       <div className="mb-1 flex items-center justify-between gap-2">
         <h3 className="text-xs font-medium text-slate-400">Message {message.sequence} <Badge className={statusTextClass(message.status)}>{message.status === 'pending' ? 'queued' : message.status}</Badge></h3>
         {message.status === 'pending' && props.editingMessageId !== message.id ? (
@@ -869,6 +878,7 @@ function UserMessageCard(props: {
             <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onCancelQueuedMessage(message.id)}>Cancel</Button>
           </div>
         ) : null}
+        {props.showRunCancel ? <CancelRunButton cancelling={props.runCancelling} onCancelRun={props.onCancelRun} /> : null}
       </div>
       {props.editingMessageId === message.id ? (
         <div className="grid gap-2">
@@ -880,6 +890,14 @@ function UserMessageCard(props: {
         </div>
       ) : <p className="whitespace-pre-wrap text-sm leading-6 text-slate-100">{message.prompt}</p>}
     </Card>
+  );
+}
+
+function CancelRunButton(props: { cancelling: boolean; onCancelRun: () => void }) {
+  return (
+    <Button className="h-7 px-2" type="button" variant="secondary" size="sm" onClick={props.onCancelRun} disabled={props.cancelling}>
+      <X className="h-3.5 w-3.5" /> {props.cancelling ? 'Cancelling...' : 'Cancel task'}
+    </Button>
   );
 }
 
@@ -999,6 +1017,14 @@ function groupMessagesByRun(messages: Message[], events: AgentEvent[]): MessageG
   }
 
   return groups;
+}
+
+function isActiveRunGroup(messages: Message[]): boolean {
+  return messages.some((message) => message.status === 'processing' || message.status === 'cancelling');
+}
+
+function isCancellingRunGroup(messages: Message[]): boolean {
+  return messages.some((message) => message.status === 'cancelling');
 }
 
 function groupDiagnosticsByRun(events: AgentEvent[]): Record<string, AgentEvent[]> {
