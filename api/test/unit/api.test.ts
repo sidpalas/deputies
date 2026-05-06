@@ -143,6 +143,29 @@ describe('core API', () => {
     expect(eventsBody.events.map((event) => event.type)).toEqual(['session_created', 'session_updated']);
   });
 
+  it('edits and cancels pending messages while queue is paused', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Queue edits' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    const createMessage = await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'draft' });
+    const { message } = (await createMessage.json()) as { message: { id: string } };
+
+    const pause = await postJson(`${baseUrl}/sessions/${session.id}/queue/pause`, {});
+    expect(pause.status).toBe(200);
+    expect((await pause.json()) as { session: { queuePausedAt?: string } }).toMatchObject({ session: { queuePausedAt: expect.any(String) } });
+
+    const update = await patchJson(`${baseUrl}/sessions/${session.id}/messages/${message.id}`, { prompt: 'final' });
+    expect(update.status).toBe(200);
+    expect((await update.json()) as { message: { prompt: string } }).toMatchObject({ message: { prompt: 'final' } });
+
+    const cancel = await postJson(`${baseUrl}/sessions/${session.id}/messages/${message.id}/cancel`, {});
+    expect(cancel.status).toBe(200);
+    expect((await cancel.json()) as { message: { status: string } }).toMatchObject({ message: { status: 'cancelled' } });
+
+    const resume = await postJson(`${baseUrl}/sessions/${session.id}/queue/resume`, {});
+    expect(resume.status).toBe(200);
+    expect((await resume.json()) as { session: { queuePausedAt?: string } }).toMatchObject({ session: {} });
+  });
+
   it('archives a session', async () => {
     const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Archive me' });
     const { session } = (await createSession.json()) as { session: { id: string } };

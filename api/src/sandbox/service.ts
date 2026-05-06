@@ -84,6 +84,7 @@ export class SandboxLifecycleService {
 
 export type SandboxCleanupResult = {
   destroyed: number;
+  stopped: number;
   failed: number;
 };
 
@@ -96,7 +97,8 @@ export class SandboxCleanupService {
 
   async destroySessionSandboxes(sessionId: string): Promise<SandboxCleanupResult> {
     const sandboxes = await this.store.listActiveSandboxes(sessionId, this.provider.name);
-    return this.destroySandboxes(sandboxes, 'archive');
+    const result = await this.destroySandboxes(sandboxes, 'archive');
+    return { ...result, stopped: 0 };
   }
 
   async destroyIdleSandboxes(input: { idleBefore: Date; limit: number }): Promise<SandboxCleanupResult> {
@@ -105,10 +107,50 @@ export class SandboxCleanupService {
       idleBefore: input.idleBefore,
       limit: input.limit,
     });
-    return this.destroySandboxes(sandboxes, 'idle_reaper');
+    const result = await this.destroySandboxes(sandboxes, 'idle_reaper');
+    return { ...result, stopped: 0 };
   }
 
-  private async destroySandboxes(sandboxes: SandboxRecord[], reason: string): Promise<SandboxCleanupResult> {
+  async stopIdleSandboxes(input: { idleBefore: Date; limit: number }): Promise<SandboxCleanupResult> {
+    if (!this.provider.stop) return { destroyed: 0, stopped: 0, failed: 0 };
+    const sandboxes = await this.store.listStoppableSandboxes({
+      provider: this.provider.name,
+      idleBefore: input.idleBefore,
+      limit: input.limit,
+    });
+    return this.stopSandboxes(sandboxes, 'idle_stop');
+  }
+
+  private async stopSandboxes(sandboxes: SandboxRecord[], reason: string): Promise<SandboxCleanupResult> {
+    let stopped = 0;
+    let failed = 0;
+
+    for (const sandbox of sandboxes) {
+      try {
+        await this.provider.stop?.(sandbox);
+        const stoppedAt = new Date();
+        await this.store.updateSandbox({ ...sandbox, status: 'stopped', updatedAt: stoppedAt });
+        await this.events.append({
+          sessionId: sandbox.sessionId,
+          type: 'sandbox_stopped',
+          payload: { reason, provider: sandbox.provider, providerSandboxId: sandbox.providerSandboxId },
+        });
+        stopped += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown sandbox stop error';
+        await this.events.append({
+          sessionId: sandbox.sessionId,
+          type: 'sandbox_stop_failed',
+          payload: { reason, provider: sandbox.provider, providerSandboxId: sandbox.providerSandboxId, error: message },
+        });
+        failed += 1;
+      }
+    }
+
+    return { destroyed: 0, stopped, failed };
+  }
+
+  private async destroySandboxes(sandboxes: SandboxRecord[], reason: string): Promise<Omit<SandboxCleanupResult, 'stopped'>> {
     let destroyed = 0;
     let failed = 0;
 

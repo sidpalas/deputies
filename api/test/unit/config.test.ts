@@ -6,6 +6,7 @@ describe('loadConfig', () => {
       port: 3583,
       maxJsonBodyBytes: 1048576,
       sandboxIdleTimeoutSeconds: 900,
+      sandboxStopDelaySeconds: 60,
       sandboxRetentionSeconds: 3600,
       runMode: 'all',
       runner: 'fake',
@@ -22,6 +23,7 @@ describe('loadConfig', () => {
         PORT: '4000',
         MAX_JSON_BODY_BYTES: '2048',
         SANDBOX_IDLE_TIMEOUT_SECONDS: '120',
+        SANDBOX_STOP_DELAY_SECONDS: '30',
         SANDBOX_RETENTION_SECONDS: '240',
         RUN_MODE: 'worker',
         RUNNER: 'flue',
@@ -41,6 +43,7 @@ describe('loadConfig', () => {
       port: 4000,
       maxJsonBodyBytes: 2048,
       sandboxIdleTimeoutSeconds: 120,
+      sandboxStopDelaySeconds: 30,
       sandboxRetentionSeconds: 240,
       runMode: 'worker',
       runner: 'flue',
@@ -72,6 +75,10 @@ describe('loadConfig', () => {
 
   it('rejects invalid sandbox retention', () => {
     expect(() => loadConfig({ SANDBOX_RETENTION_SECONDS: '0' })).toThrow('SANDBOX_RETENTION_SECONDS must be a positive integer');
+  });
+
+  it('rejects invalid sandbox stop delay', () => {
+    expect(() => loadConfig({ SANDBOX_STOP_DELAY_SECONDS: '-1' })).toThrow('SANDBOX_STOP_DELAY_SECONDS must be a non-negative integer');
   });
 
   it('rejects invalid enum values', () => {

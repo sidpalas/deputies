@@ -141,6 +141,26 @@ export function createApp(config: AppConfig, services = createServices()) {
     }
   });
 
+  app.post('/sessions/:sessionId/queue/pause', async (c) => {
+    try {
+      const session = await services.sessions.pauseQueue(c.req.param('sessionId'));
+      return c.json({ session });
+    } catch (error) {
+      if (error instanceof SessionServiceError && error.code === 'not_found') return writeError(c, 404, 'not_found', 'Session not found');
+      throw error;
+    }
+  });
+
+  app.post('/sessions/:sessionId/queue/resume', async (c) => {
+    try {
+      const session = await services.sessions.resumeQueue(c.req.param('sessionId'));
+      return c.json({ session });
+    } catch (error) {
+      if (error instanceof SessionServiceError && error.code === 'not_found') return writeError(c, 404, 'not_found', 'Session not found');
+      throw error;
+    }
+  });
+
   app.post('/sessions/:sessionId/messages', async (c) => {
     const sessionId = c.req.param('sessionId');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
@@ -165,6 +185,29 @@ export function createApp(config: AppConfig, services = createServices()) {
 
     const messages = await services.messages.list(sessionId);
     return c.json({ messages });
+  });
+
+  app.patch('/sessions/:sessionId/messages/:messageId', async (c) => {
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    const prompt = optionalString(body.prompt);
+    if (!prompt) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: prompt');
+    try {
+      const message = await services.messages.updatePending({ sessionId: c.req.param('sessionId'), messageId: c.req.param('messageId'), prompt });
+      return c.json({ message });
+    } catch (error) {
+      if (error instanceof MessageServiceError && error.code === 'conflict') return writeError(c, 409, 'conflict', error.message);
+      throw error;
+    }
+  });
+
+  app.post('/sessions/:sessionId/messages/:messageId/cancel', async (c) => {
+    try {
+      const message = await services.messages.cancelPending({ sessionId: c.req.param('sessionId'), messageId: c.req.param('messageId') });
+      return c.json({ message });
+    } catch (error) {
+      if (error instanceof MessageServiceError && error.code === 'conflict') return writeError(c, 409, 'conflict', error.message);
+      throw error;
+    }
   });
 
   app.get('/sessions/:sessionId/events', async (c) => {

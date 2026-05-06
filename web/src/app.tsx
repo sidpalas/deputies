@@ -7,6 +7,7 @@ import {
   Message,
   Session,
   archiveSession,
+  cancelMessage,
   createSession,
   enqueueMessage,
   getApiBaseUrl,
@@ -15,8 +16,11 @@ import {
   listEvents,
   listMessages,
   listSessions,
+  pauseQueue,
+  resumeQueue,
   streamEvents,
   unarchiveSession,
+  updateMessage,
   updateSession,
   type Health,
 } from './api.js';
@@ -44,6 +48,8 @@ export function App() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [prompt, setPrompt] = useState('');
+  const [editingMessageId, setEditingMessageId] = useState('');
+  const [messageDraft, setMessageDraft] = useState('');
   const [draftToken, setDraftToken] = useState(token);
   const [threadSearch, setThreadSearch] = useState('');
   const [error, setError] = useState<string>('');
@@ -209,6 +215,57 @@ export function App() {
     }
   }
 
+  async function startEditingMessage(message: Message) {
+    if (!selectedSessionId || message.status !== 'pending') return;
+    setError('');
+    try {
+      const session = await pauseQueue({ sessionId: selectedSessionId, token });
+      setSessions((current) => current.map((candidate) => (candidate.id === session.id ? session : candidate)));
+      setEditingMessageId(message.id);
+      setMessageDraft(message.prompt);
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  async function finishEditingMessage(resume: boolean) {
+    if (!selectedSessionId || !editingMessageId) return;
+    setError('');
+    try {
+      if (resume) {
+        const session = await resumeQueue({ sessionId: selectedSessionId, token });
+        setSessions((current) => current.map((candidate) => (candidate.id === session.id ? session : candidate)));
+      }
+      setEditingMessageId('');
+      setMessageDraft('');
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  async function saveMessageEdit() {
+    if (!selectedSessionId || !editingMessageId || !messageDraft.trim()) return;
+    setError('');
+    try {
+      const message = await updateMessage({ sessionId: selectedSessionId, messageId: editingMessageId, prompt: messageDraft.trim(), token });
+      setMessages((current) => current.map((candidate) => (candidate.id === message.id ? message : candidate)));
+      await finishEditingMessage(true);
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  async function cancelQueuedMessage(messageId: string) {
+    if (!selectedSessionId) return;
+    setError('');
+    try {
+      const message = await cancelMessage({ sessionId: selectedSessionId, messageId, token });
+      setMessages((current) => current.map((candidate) => (candidate.id === message.id ? message : candidate)));
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
   function saveToken(event: FormEvent) {
     event.preventDefault();
     const nextToken = draftToken.trim();
@@ -357,7 +414,17 @@ export function App() {
               <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_20rem]">
                 <section className="flex min-h-0 min-w-0 flex-col px-3 pt-4 md:px-8 xl:px-20">
                   <div className="min-h-0 flex-1 overflow-auto pb-4">
-                    <ChatPanel events={events} messages={messages} />
+                    <ChatPanel
+                      editingMessageId={editingMessageId}
+                      events={events}
+                      messageDraft={messageDraft}
+                      messages={messages}
+                      onCancelEdit={() => finishEditingMessage(true)}
+                      onCancelQueuedMessage={cancelQueuedMessage}
+                      onEditMessage={startEditingMessage}
+                      onMessageDraftChange={setMessageDraft}
+                      onSaveEdit={saveMessageEdit}
+                    />
                     <div ref={threadEndRef} />
                   </div>
                   <form className="shrink-0 bg-slate-950/95 py-3" onSubmit={handleSendMessage}>
@@ -483,7 +550,7 @@ function SessionButton(props: {
     <div className={cn('group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-transparent p-2 hover:bg-slate-900', props.selected && 'border-sky-400 bg-sky-950/30')}>
       <button className="block min-w-0 flex-1 overflow-hidden bg-transparent p-0 text-left" type="button" onClick={() => props.onSelect(props.session.id)}>
         <strong className="block w-full truncate text-sm font-medium text-slate-100">{props.session.title || 'Untitled session'}</strong>
-        <span className="block w-full truncate text-xs text-slate-500">{props.session.status} · {formatDate(props.session.updatedAt)}</span>
+        <span className="block w-full truncate text-xs text-slate-500"><span className={statusTextClass(props.session.status)}>{props.session.status}</span> · {formatDate(props.session.updatedAt)}</span>
       </button>
       {props.onArchive ? <Button className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" variant="ghost" size="sm" onClick={() => props.onArchive?.(props.session.id)} aria-label="Archive session" title="Archive session"><Archive className="h-3.5 w-3.5" /></Button> : null}
       {props.onUnarchive ? <Button className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" variant="ghost" size="sm" onClick={() => props.onUnarchive?.(props.session.id)} aria-label="Restore session" title="Restore session"><RotateCcw className="h-3.5 w-3.5" /></Button> : null}
@@ -565,36 +632,96 @@ function ThreadHeader(props: {
         <p className="mt-1 hidden truncate text-xs text-slate-500 sm:block">{props.selectedSession.id}</p>
       </div>
       <div className="flex shrink-0 items-center gap-2 justify-self-end">
-        <Badge>{props.selectedSession.status}</Badge>
+        <Badge className={statusTextClass(props.selectedSession.status)}>{props.selectedSession.status}</Badge>
         {props.selectedSession.status !== 'archived' ? <Button type="button" variant="secondary" onClick={props.onArchive}><Archive className="h-4 w-4" /> Archive</Button> : null}
       </div>
     </section>
   );
 }
 
-function ChatPanel(props: { events: AgentEvent[]; messages: Message[] }) {
+function ChatPanel(props: {
+  editingMessageId: string;
+  events: AgentEvent[];
+  messageDraft: string;
+  messages: Message[];
+  onCancelEdit: () => void;
+  onCancelQueuedMessage: (messageId: string) => void;
+  onEditMessage: (message: Message) => void;
+  onMessageDraftChange: (value: string) => void;
+  onSaveEdit: () => void;
+}) {
   const assistantText = buildAssistantText(props.events);
-  const diagnostics = groupDiagnosticsByMessage(props.events);
+  const diagnostics = groupDiagnosticsByRun(props.events);
+  const groups = groupMessagesByRun(props.messages, props.events);
 
   return (
     <section className="grid gap-3">
-      {props.messages.map((message) => (
-        <div className="grid gap-2" key={message.id}>
-          <Card className="border-sky-500/70 bg-sky-950/30 p-3">
-            <h3 className="mb-1 text-xs font-medium text-slate-400">Message {message.sequence} <Badge>{message.status}</Badge></h3>
-            <p className="whitespace-pre-wrap text-sm leading-6 text-slate-100">{message.prompt}</p>
-          </Card>
-          {assistantText[message.id] ? (
+      {groups.map((group) => {
+        const response = assistantText[group.responseMessageId];
+        const groupDiagnostics = diagnostics[group.runId ?? group.responseMessageId] ?? [];
+        return (
+          <div className="grid gap-2" key={group.key}>
+            {group.messages.length > 1 ? <p className="text-xs font-medium uppercase tracking-widest text-slate-500">Queued batch · {group.messages.length} messages</p> : null}
+            {group.messages.map((message) => (
+              <UserMessageCard
+                editingMessageId={props.editingMessageId}
+                key={message.id}
+                message={message}
+                messageDraft={props.messageDraft}
+                onCancelEdit={props.onCancelEdit}
+                onCancelQueuedMessage={props.onCancelQueuedMessage}
+                onEditMessage={props.onEditMessage}
+                onMessageDraftChange={props.onMessageDraftChange}
+                onSaveEdit={props.onSaveEdit}
+              />
+            ))}
+            {response ? (
             <Card className="p-3">
               <h3 className="mb-1 text-xs font-medium text-slate-400">Deputy response</h3>
-              <p className="whitespace-pre-wrap text-sm leading-6 text-slate-100">{assistantText[message.id]}</p>
+              <p className="whitespace-pre-wrap text-sm leading-6 text-slate-100">{response}</p>
             </Card>
           ) : null}
-          <Diagnostics events={diagnostics[message.id] ?? []} />
-        </div>
-      ))}
+            <Diagnostics events={groupDiagnostics} />
+          </div>
+        );
+      })}
       {!props.messages.length ? <p className="text-sm text-slate-500">No messages yet.</p> : null}
     </section>
+  );
+}
+
+function UserMessageCard(props: {
+  editingMessageId: string;
+  message: Message;
+  messageDraft: string;
+  onCancelEdit: () => void;
+  onCancelQueuedMessage: (messageId: string) => void;
+  onEditMessage: (message: Message) => void;
+  onMessageDraftChange: (value: string) => void;
+  onSaveEdit: () => void;
+}) {
+  const { message } = props;
+  return (
+    <Card className="border-sky-500/70 bg-sky-950/30 p-3">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h3 className="text-xs font-medium text-slate-400">Message {message.sequence} <Badge className={statusTextClass(message.status)}>{message.status === 'pending' ? 'queued' : message.status}</Badge></h3>
+        {message.status === 'pending' && props.editingMessageId !== message.id ? (
+          <div className="flex gap-1">
+            <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onEditMessage(message)}>Edit</Button>
+            <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onCancelQueuedMessage(message.id)}>Cancel</Button>
+          </div>
+        ) : null}
+      </div>
+      {props.editingMessageId === message.id ? (
+        <div className="grid gap-2">
+          <Textarea className="min-h-24" value={props.messageDraft} onChange={(event) => props.onMessageDraftChange(event.target.value)} autoFocus />
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" size="sm" onClick={props.onCancelEdit}>Cancel</Button>
+            <Button size="sm" onClick={props.onSaveEdit} disabled={!props.messageDraft.trim()}>Save</Button>
+          </div>
+        </div>
+      ) : <p className="whitespace-pre-wrap text-sm leading-6 text-slate-100">{message.prompt}</p>}
+    </Card>
   );
 }
 
@@ -674,25 +801,50 @@ function buildAssistantText(events: AgentEvent[]): Record<string, string> {
   return outputByMessageId;
 }
 
-function groupDiagnosticsByMessage(events: AgentEvent[]): Record<string, AgentEvent[]> {
-  const messageIdsBySequence: Record<number, string> = {};
-  const grouped: Record<string, AgentEvent[]> = {};
-  let currentMessageId = '';
-  let currentSequence = 0;
+type MessageGroup = {
+  key: string;
+  messages: Message[];
+  responseMessageId: string;
+  runId?: string;
+};
 
+function groupMessagesByRun(messages: Message[], events: AgentEvent[]): MessageGroup[] {
+  const batchBySequence = new Map<number, { runId: string; sequences: number[] }>();
   for (const event of events) {
-    const maybeSequence = event.payload.sequence;
-    if (typeof maybeSequence === 'number') {
-      currentSequence = maybeSequence;
-      if (event.messageId) messageIdsBySequence[maybeSequence] = event.messageId;
-    }
-    if (event.messageId) currentMessageId = event.messageId;
-
-    const messageId = event.messageId || currentMessageId || messageIdsBySequence[currentSequence];
-    if (!messageId || event.type === 'message_created' || event.type === 'agent_text_delta') continue;
-    grouped[messageId] = [...(grouped[messageId] ?? []), event];
+    if (event.type !== 'message_started' || !event.runId) continue;
+    const sequences = Array.isArray(event.payload.sequences) ? event.payload.sequences.filter((value): value is number => typeof value === 'number') : [];
+    if (sequences.length <= 1) continue;
+    for (const sequence of sequences) batchBySequence.set(sequence, { runId: event.runId, sequences });
   }
 
+  const groups: MessageGroup[] = [];
+  const messageBySequence = new Map(messages.map((message) => [message.sequence, message]));
+  const seen = new Set<string>();
+
+  for (const message of messages) {
+    if (seen.has(message.id)) continue;
+    const batch = batchBySequence.get(message.sequence);
+    if (!batch) {
+      groups.push({ key: message.id, messages: [message], responseMessageId: message.id });
+      seen.add(message.id);
+      continue;
+    }
+
+    const batchMessages = batch.sequences.map((sequence) => messageBySequence.get(sequence)).filter((item): item is Message => Boolean(item));
+    for (const item of batchMessages) seen.add(item.id);
+    groups.push({ key: batch.runId, messages: batchMessages, responseMessageId: batchMessages[0]?.id ?? message.id, runId: batch.runId });
+  }
+
+  return groups;
+}
+
+function groupDiagnosticsByRun(events: AgentEvent[]): Record<string, AgentEvent[]> {
+  const grouped: Record<string, AgentEvent[]> = {};
+  for (const event of events) {
+    const key = event.runId ?? event.messageId;
+    if (!key || event.type === 'message_created' || event.type === 'agent_text_delta') continue;
+    grouped[key] = [...(grouped[key] ?? []), event];
+  }
   return grouped;
 }
 
@@ -732,6 +884,14 @@ function fuzzyScore(value: string, query: string): number | null {
   if (haystack.includes(query)) score -= query.length;
   if (haystack.startsWith(query)) score -= query.length * 2;
   return score;
+}
+
+function statusTextClass(status: string): string {
+  if (['completed', 'ready', 'ok'].includes(status)) return 'text-emerald-300';
+  if (['pending', 'processing', 'active', 'created', 'queued', 'stopped', 'starting'].includes(status)) return 'text-amber-300';
+  if (['failed', 'cancelled', 'unhealthy', 'destroyed', 'missing'].includes(status)) return 'text-red-300';
+  if (status === 'idle' || status === 'archived') return 'text-slate-400';
+  return 'text-slate-300';
 }
 
 function submitOnEnter(event: KeyboardEvent<HTMLTextAreaElement>): void {

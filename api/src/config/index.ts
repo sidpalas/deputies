@@ -8,6 +8,7 @@ export type AppConfig = {
   port: number;
   maxJsonBodyBytes: number;
   sandboxIdleTimeoutSeconds: number;
+  sandboxStopDelaySeconds: number;
   sandboxRetentionSeconds: number;
   runMode: RunMode;
   runner: RunnerKind;
@@ -30,6 +31,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     port: parsePort(env.PORT),
     maxJsonBodyBytes: parsePositiveInteger(env.MAX_JSON_BODY_BYTES, 1_048_576, 'MAX_JSON_BODY_BYTES'),
     sandboxIdleTimeoutSeconds: parsePositiveInteger(env.SANDBOX_IDLE_TIMEOUT_SECONDS, 900, 'SANDBOX_IDLE_TIMEOUT_SECONDS'),
+    sandboxStopDelaySeconds: parseNonNegativeInteger(env.SANDBOX_STOP_DELAY_SECONDS, 60, 'SANDBOX_STOP_DELAY_SECONDS'),
     sandboxRetentionSeconds: parsePositiveInteger(env.SANDBOX_RETENTION_SECONDS, 3600, 'SANDBOX_RETENTION_SECONDS'),
     runMode: parseEnum(env.RUN_MODE, ['all', 'api', 'worker'], 'all'),
     runner: parseEnum(env.RUNNER, ['fake', 'flue'], 'fake'),
@@ -104,6 +106,17 @@ function parsePositiveInteger(value: string | undefined, fallback: number, name:
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new Error(`${name} must be a positive integer, received "${value}"`);
+  }
+
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: string | undefined, fallback: number, name: string): number {
+  if (!value) return fallback;
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer, received "${value}"`);
   }
 
   return parsed;

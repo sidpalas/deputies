@@ -46,6 +46,7 @@ if (config.runMode === 'all' || config.runMode === 'worker') {
     sandboxReaper = startSandboxReaper({
       cleanup: services.sandboxCleanup,
       store,
+      stopDelayMs: config.sandboxStopDelaySeconds * 1000,
       retentionMs: config.sandboxRetentionSeconds * 1000,
       onError: (error: unknown) => console.error(error instanceof Error ? error.message : error),
     });

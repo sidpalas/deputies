@@ -122,6 +122,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     });
     await expect(store.listActiveSandboxes(session.id, 'fake')).resolves.toMatchObject([{ id: created.id }]);
     await expect(store.listIdleSandboxes({ provider: 'fake', idleBefore: new Date(now.getTime() + 1_000), limit: 10 })).resolves.toMatchObject([{ id: created.id }]);
+    await expect(store.listStoppableSandboxes({ provider: 'fake', idleBefore: new Date(now.getTime() + 1_000), limit: 10 })).resolves.toMatchObject([{ id: created.id }]);
 
     const checkedAt = new Date(now.getTime() + 1_000);
     await store.updateSandbox({
@@ -153,6 +154,40 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     });
     await expect(store.getActiveSandbox(session.id, 'fake')).resolves.toBeNull();
     await expect(store.listIdleSandboxes({ provider: 'fake', idleBefore: new Date(now.getTime() + 3_000), limit: 10 })).resolves.toEqual([]);
+  });
+
+  it('claims pending messages as a queue batch and respects queue pause', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Postgres queue' });
+    const first = await services.messages.enqueue({ sessionId: session.id, prompt: 'first' });
+    const second = await services.messages.enqueue({ sessionId: session.id, prompt: 'second' });
+
+    await services.sessions.pauseQueue(session.id);
+    await expect(store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000901',
+      runnerType: 'fake',
+      leaseOwner: 'worker-1',
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      now: new Date(),
+    })).resolves.toBeNull();
+
+    await expect(services.messages.updatePending({ sessionId: session.id, messageId: second.id, prompt: 'edited second' })).resolves.toMatchObject({ prompt: 'edited second' });
+    await services.sessions.resumeQueue(session.id);
+
+    const claimed = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000902',
+      runnerType: 'fake',
+      leaseOwner: 'worker-1',
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      now: new Date(),
+    });
+
+    expect(claimed?.messages.map((message) => message.id)).toEqual([first.id, second.id]);
+    expect(claimed?.messages.map((message) => message.prompt)).toEqual(['first', 'edited second']);
+    expect(claimed?.run.metadata).toMatchObject({ messageIds: [first.id, second.id], sequences: [1, 2] });
+
+    const completed = await store.completeRunBatch({ runId: claimed!.run.id, completedAt: new Date() });
+    expect(completed.messages.map((message) => message.status)).toEqual(['completed', 'completed']);
   });
 
   it('runs postgres advisory locks on only one holder', async () => {

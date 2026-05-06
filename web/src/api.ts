@@ -12,6 +12,7 @@ export type Session = {
   createdAt: string;
   updatedAt: string;
   title?: string;
+  queuePausedAt?: string;
 };
 
 export type Message = {
@@ -115,6 +116,42 @@ export async function enqueueMessage(input: { sessionId: string; prompt: string;
     body: { prompt: input.prompt },
   });
   return body.message;
+}
+
+export async function updateMessage(input: { sessionId: string; messageId: string; prompt: string; token: string }): Promise<Message> {
+  const body = await request<{ message: Message }>(`/sessions/${input.sessionId}/messages/${input.messageId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: { prompt: input.prompt },
+  });
+  return body.message;
+}
+
+export async function cancelMessage(input: { sessionId: string; messageId: string; token: string }): Promise<Message> {
+  const body = await request<{ message: Message }>(`/sessions/${input.sessionId}/messages/${input.messageId}/cancel`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.message;
+}
+
+export async function pauseQueue(input: { sessionId: string; token: string }): Promise<Session> {
+  const body = await request<{ session: Session }>(`/sessions/${input.sessionId}/queue/pause`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.session;
+}
+
+export async function resumeQueue(input: { sessionId: string; token: string }): Promise<Session> {
+  const body = await request<{ session: Session }>(`/sessions/${input.sessionId}/queue/resume`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.session;
 }
 
 export async function listEvents(sessionId: string, token: string): Promise<AgentEvent[]> {

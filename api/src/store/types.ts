@@ -13,6 +13,7 @@ export type SessionRecord = {
   createdAt: Date;
   updatedAt: Date;
   title?: string;
+  queuePausedAt?: Date;
 };
 
 export type MessageRecord = {
@@ -45,6 +46,11 @@ export type RunRecord = {
 
 export type ClaimedMessage = {
   message: MessageRecord;
+  run: RunRecord;
+};
+
+export type ClaimedMessageBatch = {
+  messages: MessageRecord[];
   run: RunRecord;
 };
 
@@ -202,10 +208,14 @@ export interface AppStore {
   getSession(id: string): Promise<SessionRecord | null>;
   listSessions(): Promise<SessionRecord[]>;
   updateSession(record: SessionRecord): Promise<SessionRecord>;
+  pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord>;
+  resumeSessionQueue(input: { sessionId: string }): Promise<SessionRecord>;
 
   nextMessageSequence(sessionId: string): Promise<number>;
   createMessage(record: CreateMessageRecord): Promise<MessageRecord>;
   getMessages(sessionId: string): Promise<MessageRecord[]>;
+  updatePendingMessage(input: { sessionId: string; messageId: string; prompt: string }): Promise<MessageRecord | null>;
+  cancelPendingMessage(input: { sessionId: string; messageId: string; cancelledAt: Date }): Promise<MessageRecord | null>;
 
   claimNextPendingMessage(input: {
     runId: string;
@@ -214,14 +224,24 @@ export interface AppStore {
     leaseExpiresAt: Date;
     now: Date;
   }): Promise<ClaimedMessage | null>;
+  claimNextPendingMessageBatch(input: {
+    runId: string;
+    runnerType: string;
+    leaseOwner: string;
+    leaseExpiresAt: Date;
+    now: Date;
+  }): Promise<ClaimedMessageBatch | null>;
   renewRunLease(input: { runId: string; leaseOwner: string; leaseExpiresAt: Date; heartbeatAt: Date }): Promise<RunRecord | null>;
   recoverStaleRuns(input: { now: Date; limit: number }): Promise<RecoveredRun[]>;
   completeRun(input: { runId: string; completedAt: Date }): Promise<ClaimedMessage>;
   failRun(input: { runId: string; failedAt: Date; error: string }): Promise<ClaimedMessage>;
+  completeRunBatch(input: { runId: string; completedAt: Date }): Promise<ClaimedMessageBatch>;
+  failRunBatch(input: { runId: string; failedAt: Date; error: string }): Promise<ClaimedMessageBatch>;
 
   getActiveSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null>;
   listActiveSandboxes(sessionId: string, provider: string): Promise<SandboxRecord[]>;
   listIdleSandboxes(input: { provider: string; idleBefore: Date; limit: number }): Promise<SandboxRecord[]>;
+  listStoppableSandboxes(input: { provider: string; idleBefore: Date; limit: number }): Promise<SandboxRecord[]>;
   createSandbox(record: CreateSandboxRecord): Promise<SandboxRecord>;
   updateSandbox(record: SandboxRecord): Promise<SandboxRecord>;
 

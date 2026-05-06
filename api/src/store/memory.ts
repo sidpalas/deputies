@@ -12,6 +12,7 @@ import type {
   CreateMessageRecord,
   CreateSessionRecord,
   ClaimedMessage,
+  ClaimedMessageBatch,
   MessageRecord,
   RecoveredRun,
   RunRecord,
@@ -58,6 +59,22 @@ export class MemoryStore implements AppStore {
     return record;
   }
 
+  async pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord> {
+    const existing = this.sessions.get(input.sessionId);
+    if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
+    const updated = { ...existing, queuePausedAt: input.pausedAt, updatedAt: input.pausedAt };
+    this.sessions.set(input.sessionId, updated);
+    return updated;
+  }
+
+  async resumeSessionQueue(input: { sessionId: string }): Promise<SessionRecord> {
+    const existing = this.sessions.get(input.sessionId);
+    if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
+    const { queuePausedAt: _queuePausedAt, ...updated } = { ...existing, updatedAt: new Date() };
+    this.sessions.set(input.sessionId, updated);
+    return updated;
+  }
+
   async nextMessageSequence(sessionId: string): Promise<number> {
     return (this.messages.get(sessionId)?.length ?? 0) + 1;
   }
@@ -73,6 +90,24 @@ export class MemoryStore implements AppStore {
     return [...(this.messages.get(sessionId) ?? [])];
   }
 
+  async updatePendingMessage(input: { sessionId: string; messageId: string; prompt: string }): Promise<MessageRecord | null> {
+    const sessionMessages = this.messages.get(input.sessionId) ?? [];
+    const message = sessionMessages.find((candidate) => candidate.id === input.messageId && candidate.status === 'pending');
+    if (!message) return null;
+    const updated = { ...message, prompt: input.prompt };
+    sessionMessages[sessionMessages.indexOf(message)] = updated;
+    return updated;
+  }
+
+  async cancelPendingMessage(input: { sessionId: string; messageId: string; cancelledAt: Date }): Promise<MessageRecord | null> {
+    const sessionMessages = this.messages.get(input.sessionId) ?? [];
+    const message = sessionMessages.find((candidate) => candidate.id === input.messageId && candidate.status === 'pending');
+    if (!message) return null;
+    const updated: MessageRecord = { ...message, status: 'cancelled' };
+    sessionMessages[sessionMessages.indexOf(message)] = updated;
+    return updated;
+  }
+
   async claimNextPendingMessage(input: {
     runId: string;
     runnerType: string;
@@ -80,14 +115,29 @@ export class MemoryStore implements AppStore {
     leaseExpiresAt: Date;
     now: Date;
   }): Promise<ClaimedMessage | null> {
+    const batch = await this.claimNextPendingMessageBatch(input);
+    return batch ? { message: batch.messages[0]!, run: batch.run } : null;
+  }
+
+  async claimNextPendingMessageBatch(input: {
+    runId: string;
+    runnerType: string;
+    leaseOwner: string;
+    leaseExpiresAt: Date;
+    now: Date;
+  }): Promise<ClaimedMessageBatch | null> {
     for (const [sessionId, sessionMessages] of this.messages) {
+      if (this.sessions.get(sessionId)?.queuePausedAt) continue;
       if (this.hasActiveRun(sessionId, input.now)) continue;
 
-      const message = sessionMessages.find((candidate) => candidate.status === 'pending');
-      if (!message) continue;
+      const pendingMessages = sessionMessages.filter((candidate) => candidate.status === 'pending').sort((a, b) => a.sequence - b.sequence);
+      if (!pendingMessages.length) continue;
 
-      const processingMessage: MessageRecord = { ...message, status: 'processing' };
-      sessionMessages[sessionMessages.indexOf(message)] = processingMessage;
+      const processingMessages = pendingMessages.map((message) => ({ ...message, status: 'processing' as const }));
+      for (const message of processingMessages) {
+        const existing = sessionMessages.find((candidate) => candidate.id === message.id)!;
+        sessionMessages[sessionMessages.indexOf(existing)] = message;
+      }
 
       const session = this.sessions.get(sessionId);
       if (!session) throw new Error(`Session does not exist: ${sessionId}`);
@@ -96,7 +146,7 @@ export class MemoryStore implements AppStore {
       const run: RunRecord = {
         id: input.runId,
         sessionId,
-        messageId: processingMessage.id,
+        messageId: processingMessages[0]!.id,
         status: 'running',
         runnerType: input.runnerType,
         leaseOwner: input.leaseOwner,
@@ -104,16 +154,21 @@ export class MemoryStore implements AppStore {
         heartbeatAt: input.now,
         attempt: 1,
         startedAt: input.now,
-        metadata: {},
+        metadata: { messageIds: processingMessages.map((message) => message.id), sequences: processingMessages.map((message) => message.sequence) },
       };
       this.runs.set(run.id, run);
-      return { message: processingMessage, run };
+      return { messages: processingMessages, run };
     }
 
     return null;
   }
 
   async completeRun(input: { runId: string; completedAt: Date }): Promise<ClaimedMessage> {
+    const batch = await this.completeRunBatch(input);
+    return { message: batch.messages[0]!, run: batch.run };
+  }
+
+  async completeRunBatch(input: { runId: string; completedAt: Date }): Promise<ClaimedMessageBatch> {
     return this.finishRun(input.runId, input.completedAt, 'completed');
   }
 
@@ -170,6 +225,11 @@ export class MemoryStore implements AppStore {
   }
 
   async failRun(input: { runId: string; failedAt: Date; error: string }): Promise<ClaimedMessage> {
+    const batch = await this.failRunBatch(input);
+    return { message: batch.messages[0]!, run: batch.run };
+  }
+
+  async failRunBatch(input: { runId: string; failedAt: Date; error: string }): Promise<ClaimedMessageBatch> {
     const claimed = await this.finishRun(input.runId, input.failedAt, 'failed');
     this.runs.set(input.runId, { ...claimed.run, error: input.error });
     return { ...claimed, run: this.runs.get(input.runId)! };
@@ -192,6 +252,17 @@ export class MemoryStore implements AppStore {
       .filter(isActiveSandbox)
       .filter((sandbox) => sandbox.updatedAt <= input.idleBefore)
       .filter((sandbox) => this.sessions.get(sandbox.sessionId)?.status !== 'active')
+      .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
+      .slice(0, input.limit);
+  }
+
+  async listStoppableSandboxes(input: { provider: string; idleBefore: Date; limit: number }): Promise<SandboxRecord[]> {
+    return Array.from(this.sandboxes.values())
+      .filter((sandbox) => sandbox.provider === input.provider)
+      .filter((sandbox) => !sandbox.destroyedAt && sandbox.status === 'ready')
+      .filter((sandbox) => sandbox.updatedAt <= input.idleBefore)
+      .filter((sandbox) => this.sessions.get(sandbox.sessionId)?.status !== 'active')
+      .filter((sandbox) => !(this.messages.get(sandbox.sessionId) ?? []).some((message) => message.status === 'pending'))
       .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
       .slice(0, input.limit);
   }
@@ -347,16 +418,21 @@ export class MemoryStore implements AppStore {
     return false;
   }
 
-  private finishRun(runId: string, finishedAt: Date, status: 'completed' | 'failed'): ClaimedMessage {
+  private finishRun(runId: string, finishedAt: Date, status: 'completed' | 'failed'): ClaimedMessageBatch {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`Run does not exist: ${runId}`);
 
     const sessionMessages = this.messages.get(run.sessionId) ?? [];
-    const message = sessionMessages.find((candidate) => candidate.id === run.messageId);
-    if (!message) throw new Error(`Message does not exist: ${run.messageId}`);
+    const messageIds = getRunMessageIds(run);
+    const terminalMessages: MessageRecord[] = [];
 
-    const terminalMessage: MessageRecord = { ...message, status };
-    sessionMessages[sessionMessages.indexOf(message)] = terminalMessage;
+    for (const messageId of messageIds) {
+      const message = sessionMessages.find((candidate) => candidate.id === messageId);
+      if (!message) throw new Error(`Message does not exist: ${messageId}`);
+      const terminalMessage: MessageRecord = { ...message, status };
+      sessionMessages[sessionMessages.indexOf(message)] = terminalMessage;
+      terminalMessages.push(terminalMessage);
+    }
 
     const { leaseExpiresAt: _leaseExpiresAt, leaseOwner: _leaseOwner, ...runWithoutLease } = run;
     const terminalRun: RunRecord = { ...runWithoutLease, status, heartbeatAt: finishedAt };
@@ -368,7 +444,7 @@ export class MemoryStore implements AppStore {
     if (!session) throw new Error(`Session does not exist: ${run.sessionId}`);
     this.sessions.set(run.sessionId, { ...session, status: status === 'completed' ? 'idle' : 'failed', updatedAt: finishedAt });
 
-    return { message: terminalMessage, run: terminalRun };
+    return { messages: terminalMessages, run: terminalRun };
   }
 
   private requireCallback(id: string): CallbackDeliveryRecord {
@@ -380,6 +456,12 @@ export class MemoryStore implements AppStore {
 
 function isActiveSandbox(sandbox: SandboxRecord): boolean {
   return !sandbox.destroyedAt && (sandbox.status === 'ready' || sandbox.status === 'stopped' || sandbox.status === 'unhealthy');
+}
+
+function getRunMessageIds(run: RunRecord): string[] {
+  const messageIds = run.metadata.messageIds;
+  if (Array.isArray(messageIds) && messageIds.every((id) => typeof id === 'string')) return messageIds;
+  return [run.messageId];
 }
 
 function externalThreadKey(source: string, externalId: string): string {

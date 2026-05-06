@@ -71,6 +71,61 @@ describe('WorkerService', () => {
     ]);
   });
 
+  it('claims queued messages for a session as one ordered batch', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Queued batch' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'first' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'second' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'third' });
+
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      runner: new FakeRunner(),
+      runnerType: 'fake',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+    await expect(worker.processNext()).resolves.toBe(false);
+
+    await expect(services.messages.list(session.id)).resolves.toMatchObject([
+      { sequence: 1, status: 'completed' },
+      { sequence: 2, status: 'completed' },
+      { sequence: 3, status: 'completed' },
+    ]);
+    const sandboxReadyEvents = (await services.events.list(session.id)).filter((event) => event.type === 'sandbox_ready');
+    expect(sandboxReadyEvents).toHaveLength(1);
+    const text = (await services.events.list(session.id)).find((event) => event.type === 'agent_text_delta')?.payload.text;
+    expect(text).toContain('Message 2:');
+    expect(text).toContain('third');
+  });
+
+  it('does not claim queued messages while the session queue is paused', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Paused queue' });
+    const message = await services.messages.enqueue({ sessionId: session.id, prompt: 'original' });
+    await services.sessions.pauseQueue(session.id);
+
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      runner: new FakeRunner(),
+      runnerType: 'fake',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(false);
+    await expect(services.messages.updatePending({ sessionId: session.id, messageId: message.id, prompt: 'edited' })).resolves.toMatchObject({ prompt: 'edited' });
+    await services.sessions.resumeQueue(session.id);
+    await expect(worker.processNext()).resolves.toBe(true);
+    await expect(services.messages.list(session.id)).resolves.toMatchObject([{ prompt: 'edited', status: 'completed' }]);
+  });
+
   it('restarts a stopped persisted sandbox for follow-up messages', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -151,6 +206,7 @@ describe('WorkerService', () => {
     const destroyed = await runSandboxReaperOnce({
       cleanup: new SandboxCleanupService(store, services.events, provider),
       store,
+      stopDelayMs: 60_000,
       retentionMs: 60_000,
     });
 
@@ -162,14 +218,50 @@ describe('WorkerService', () => {
     expect(events.map((event) => event.type)).toEqual(['session_created', 'sandbox_destroyed']);
   });
 
+  it('stops ready sandboxes after the stop delay when no messages are queued', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const provider = new FakeSandboxProvider();
+    const session = await services.sessions.create({ title: 'Stop sandbox' });
+    const old = new Date(Date.now() - 120_000);
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000602',
+      sessionId: session.id,
+      provider: provider.name,
+      providerSandboxId: `fake-${session.id}`,
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: old,
+      updatedAt: old,
+    });
+
+    const stopped = await runSandboxReaperOnce({
+      cleanup: new SandboxCleanupService(store, services.events, provider),
+      store,
+      stopDelayMs: 60_000,
+      retentionMs: 3_600_000,
+    });
+
+    expect(stopped).toBe(1);
+    expect(provider.stops).toBe(1);
+    await expect(store.getActiveSandbox(session.id, provider.name)).resolves.toMatchObject({ status: 'stopped' });
+    const events = await services.events.list(session.id);
+    expect(events.map((event) => event.type)).toEqual(['session_created', 'sandbox_stopped']);
+  });
+
   it('skips the sandbox reaper when another postgres advisory lock holder is active', async () => {
     let cleanupCalled = false;
 
     const destroyed = await runSandboxReaperOnce({
       cleanup: {
+        async stopIdleSandboxes() {
+          cleanupCalled = true;
+          return { destroyed: 0, stopped: 1, failed: 0 };
+        },
         async destroyIdleSandboxes() {
           cleanupCalled = true;
-          return { destroyed: 1, failed: 0 };
+          return { destroyed: 1, stopped: 0, failed: 0 };
         },
       } as unknown as SandboxCleanupService,
       store: {
@@ -177,6 +269,7 @@ describe('WorkerService', () => {
           return null;
         },
       },
+      stopDelayMs: 60_000,
       retentionMs: 60_000,
     });
 

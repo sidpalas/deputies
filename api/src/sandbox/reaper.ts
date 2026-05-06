@@ -9,6 +9,7 @@ export type AdvisoryLockStore = {
 export type SandboxReaperOptions = {
   cleanup: SandboxCleanupService;
   store: unknown;
+  stopDelayMs: number;
   retentionMs: number;
   batchSize?: number;
   intervalMs?: number;
@@ -20,14 +21,17 @@ export type SandboxReaperHandle = {
   close(): Promise<void>;
 };
 
-export async function runSandboxReaperOnce(options: Pick<SandboxReaperOptions, 'cleanup' | 'store' | 'retentionMs' | 'batchSize'>): Promise<number> {
+export async function runSandboxReaperOnce(options: Pick<SandboxReaperOptions, 'cleanup' | 'store' | 'stopDelayMs' | 'retentionMs' | 'batchSize'>): Promise<number> {
   const run = async () => {
-    const idleBefore = new Date(Date.now() - options.retentionMs);
-    const result = await options.cleanup.destroyIdleSandboxes({
-      idleBefore,
+    const stopResult = await options.cleanup.stopIdleSandboxes({
+      idleBefore: new Date(Date.now() - options.stopDelayMs),
       limit: options.batchSize ?? 25,
     });
-    return result.destroyed;
+    const destroyResult = await options.cleanup.destroyIdleSandboxes({
+      idleBefore: new Date(Date.now() - options.retentionMs),
+      limit: options.batchSize ?? 25,
+    });
+    return stopResult.stopped + destroyResult.destroyed;
   };
 
   if (hasAdvisoryLock(options.store)) return (await options.store.withAdvisoryLock(sandboxReaperLockId, run)) ?? 0;

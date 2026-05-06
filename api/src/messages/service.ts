@@ -48,11 +48,35 @@ export class MessageService {
   async list(sessionId: string): Promise<MessageRecord[]> {
     return this.store.getMessages(sessionId);
   }
+
+  async updatePending(input: { sessionId: string; messageId: string; prompt: string }): Promise<MessageRecord> {
+    const message = await this.store.updatePendingMessage(input);
+    if (!message) throw new MessageServiceError('conflict', 'Message is not pending or does not exist');
+    await this.events.append({
+      sessionId: input.sessionId,
+      messageId: message.id,
+      type: 'message_updated',
+      payload: { sequence: message.sequence },
+    });
+    return message;
+  }
+
+  async cancelPending(input: { sessionId: string; messageId: string }): Promise<MessageRecord> {
+    const message = await this.store.cancelPendingMessage({ ...input, cancelledAt: new Date() });
+    if (!message) throw new MessageServiceError('conflict', 'Message is not pending or does not exist');
+    await this.events.append({
+      sessionId: input.sessionId,
+      messageId: message.id,
+      type: 'message_cancelled',
+      payload: { sequence: message.sequence },
+    });
+    return message;
+  }
 }
 
 export class MessageServiceError extends Error {
   constructor(
-    readonly code: 'not_found',
+    readonly code: 'not_found' | 'conflict',
     message: string,
   ) {
     super(message);

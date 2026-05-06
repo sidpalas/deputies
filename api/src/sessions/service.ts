@@ -101,4 +101,20 @@ export class SessionService {
     });
     return session;
   }
+
+  async pauseQueue(id: string): Promise<SessionRecord> {
+    const existing = await this.store.getSession(id);
+    if (!existing) throw new SessionServiceError('not_found');
+    const session = await this.store.pauseSessionQueue({ sessionId: id, pausedAt: new Date() });
+    await this.events.append({ sessionId: id, type: 'session_queue_paused', payload: {} });
+    return session;
+  }
+
+  async resumeQueue(id: string): Promise<SessionRecord> {
+    const existing = await this.store.getSession(id);
+    if (!existing) throw new SessionServiceError('not_found');
+    const session = await this.store.resumeSessionQueue({ sessionId: id });
+    await this.events.append({ sessionId: id, type: 'session_queue_resumed', payload: {} });
+    return session;
+  }
 }
