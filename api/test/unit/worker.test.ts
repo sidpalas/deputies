@@ -138,6 +138,30 @@ describe('WorkerService', () => {
     });
   });
 
+  it('lets runners update durable session context during a run', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Dynamic context' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'choose repo' });
+
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      runner: new ContextUpdatingRunner(),
+      runnerType: 'context-updating',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
+    });
+    const events = await services.events.list(session.id);
+    expect(events.map((event) => event.type)).toContain('session_updated');
+  });
+
   it('posts final deputy text to Slack thread callbacks', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -468,6 +492,13 @@ class CaptureRunner implements Runner {
     await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: {}, createdAt: new Date() });
     await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_completed', payload: {}, createdAt: new Date() });
     return { text: 'captured' };
+  }
+}
+
+class ContextUpdatingRunner implements Runner {
+  async run(input: RunnerInput): Promise<RunnerResult> {
+    await input.updateSessionContext?.({ repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } });
+    return { text: 'updated' };
   }
 }
 

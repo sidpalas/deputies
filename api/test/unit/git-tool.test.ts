@@ -1,5 +1,6 @@
 import { createGitTool, type AgentRef } from '../../src/runner-flue/git-tool.js';
 import type { GitHubRepositoryAccess } from '../../src/integrations/github/types.js';
+import type { RepositoryToolServices } from '../../src/runner-flue/repository-tool.js';
 
 describe('authenticated git Flue tool', () => {
   it('runs git inside the sandbox repo with command-scoped auth', async () => {
@@ -16,7 +17,7 @@ describe('authenticated git Flue tool', () => {
         },
       },
     };
-    const tool = createGitTool({ access, workspacePath: '/workspace/manaflow', agentRef });
+    const tool = createGitTool({ agentRef, repository: repositoryServices(agentRef) });
 
     const result = await tool.execute({ args: ['push', 'origin', 'sp/test'] });
 
@@ -27,10 +28,18 @@ describe('authenticated git Flue tool', () => {
   });
 
   it('rejects executable names and top-level flags', async () => {
-    const tool = createGitTool({ access, workspacePath: '/workspace/manaflow', agentRef: {} });
+    const tool = createGitTool({ agentRef: {}, repository: repositoryServices({}) });
 
     await expect(tool.execute({ args: ['git', 'push'] })).rejects.toThrow('omit the git executable name');
     await expect(tool.execute({ args: ['-c', 'http.extraHeader=bad', 'push'] })).rejects.toThrow('explicit subcommand');
+  });
+
+  it('requires a prepared repository', async () => {
+    const services = repositoryServices({});
+    delete services.state.prepared;
+    const tool = createGitTool({ agentRef: {}, repository: services });
+
+    await expect(tool.execute({ args: ['push', 'origin', 'sp/test'] })).rejects.toThrow('has not been prepared');
   });
 });
 
@@ -42,3 +51,17 @@ const access: GitHubRepositoryAccess = {
   expiresAt: new Date('2026-05-06T01:00:00.000Z'),
   auth: { type: 'bearer', token: 'ghs_secret_token' },
 };
+
+function repositoryServices(agentRef: AgentRef): RepositoryToolServices {
+  return {
+    github: { async getRepositoryAccess() { return access; } },
+    sandbox: { workspacePath: '/workspace' } as never,
+    agentRef,
+    state: {
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
+      prepared: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' }, access, workspacePath: '/workspace/manaflow' },
+    },
+    emit: async () => {},
+    eventBase: { sessionId: 'session-1', runId: 'run-1', messageId: 'message-1' },
+  };
+}

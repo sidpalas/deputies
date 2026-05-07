@@ -3,6 +3,7 @@ import type { SandboxHandle } from '../sandbox/types.js';
 
 export type RepositoryAccessProvider = {
   getRepositoryAccess(repository: GitHubRepository): Promise<GitHubRepositoryAccess>;
+  listAllowedRepositories?(): string[];
 };
 
 export type RepositoryShellSetup = {

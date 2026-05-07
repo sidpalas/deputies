@@ -4,6 +4,7 @@ import { prepareRepositoryShellSetup, type RepositoryAccessProvider, type Reposi
 import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
 import { createGitTool, type AgentRef } from './git-tool.js';
 import { createGitHubCliTool } from './github-cli-tool.js';
+import { createRepositoryTool, type RepositoryToolServices, type RepositoryToolState } from './repository-tool.js';
 import type { FlueAgentFactory, FlueSessionPort } from './types.js';
 
 export type FlueRunnerOptions = {
@@ -28,14 +29,32 @@ export class FlueRunner implements Runner {
     if (this.options.repositoryAccess?.github) repositorySetupInput.github = this.options.repositoryAccess.github;
     const repositorySetup = await prepareRepositoryShellSetup(repositorySetupInput);
     const agentRef: AgentRef = {};
+    const repositoryState: RepositoryToolState = { context: structuredClone(input.context) };
+    if (repositorySetup) {
+      repositoryState.prepared = {
+        repository: { provider: 'github', owner: repositorySetup.access.owner, repo: repositorySetup.access.repo },
+        access: repositorySetup.access,
+        workspacePath: repositorySetup.workspacePath,
+      };
+    }
+    const repositoryServices = this.options.repositoryAccess?.github ? {
+      github: this.options.repositoryAccess.github,
+      sandbox: input.sandbox,
+      agentRef,
+      state: repositoryState,
+      emit: input.emit,
+      eventBase: { sessionId: input.sessionId, runId: input.runId, messageId: input.messageId },
+      ...(input.updateSessionContext ? { updateSessionContext: input.updateSessionContext } : {}),
+    } satisfies RepositoryToolServices : null;
     const agent = await this.agentFactory.create({
       agentId: input.sessionId,
       sessionId: input.sessionId,
       sandbox: input.sandbox,
       cwd: repositorySetup?.workspacePath ?? input.sandbox.workspacePath,
-      tools: repositorySetup ? [
-        createGitHubCliTool(repositorySetup.access),
-        createGitTool({ access: repositorySetup.access, workspacePath: repositorySetup.workspacePath, agentRef }),
+      tools: repositoryServices ? [
+        createRepositoryTool(repositoryServices),
+        createGitHubCliTool(repositoryServices),
+        createGitTool({ agentRef, repository: repositoryServices }),
       ] : [],
       onEvent: (event) => {
         if (input.signal?.aborted) return;

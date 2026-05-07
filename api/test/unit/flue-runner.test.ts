@@ -153,7 +153,7 @@ describe('FlueRunner', () => {
     });
 
     expect(calls[0]).toMatchObject({ cwd: '/workspace/manaflow' });
-    expect(calls[0]?.tools?.map((tool) => tool.name)).toEqual(['gh', 'git']);
+    expect(calls[0]?.tools?.map((tool) => tool.name)).toEqual(['repository', 'gh', 'git']);
     expect(shells).toHaveLength(1);
     expect(shells[0]!.cwd).toBe('/workspace');
     expect(shells[0]!.command).toContain('git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone');

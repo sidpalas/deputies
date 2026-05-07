@@ -10,6 +10,7 @@ export type RunnerInput = {
   sandbox: SandboxHandle;
   signal?: AbortSignal;
   emit: (event: NormalizedEvent) => Promise<void>;
+  updateSessionContext?: (context: Record<string, unknown>) => Promise<Record<string, unknown>>;
 };
 
 export type RunnerResult = {

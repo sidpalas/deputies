@@ -118,7 +118,7 @@ Side-effect boundary:
 - Provider API side effects happen wherever the provider API applies them, for example creating a GitHub issue or comment.
 - Database side effects happen in our service database if the handler calls stores directly.
 - Filesystem side effects from ordinary Node filesystem APIs happen in the worker container and usually should be avoided for task workspaces.
-- Filesystem side effects intended for the agent workspace must be routed through the active Flue session or sandbox APIs, for example `session.shell(...)`, so they occur in the remote sandbox worktree.
+- Filesystem side effects intended for the agent workspace must be routed through Flue session/agent shell or sandbox APIs, for example startup `session.shell(...)` or prompt-time agent-level `shell(...)`, so they occur in the remote sandbox worktree.
 
 Security model:
 
@@ -140,6 +140,7 @@ Choosing an extension point:
 Current examples:
 
 - Repository clone/fetch uses `session.shell(..., { env: { GITHUB_AUTH_HEADER } })` because the side effect must create or update files inside the remote sandbox.
+- Dynamic repository selection uses the `repository` custom tool. `set` validates and persists session repo context, `list` helps the agent ask for clarification when uncertain, and `prepare` clones/fetches the selected repo inside the sandbox during the active run.
 - GitHub issue/comment-style operations use the `gh` custom tool because the side effect is a GitHub API action and the installation token can stay in trusted worker code.
 - Authenticated git network operations such as push use the `git` custom tool. Its handler runs in trusted worker code, but it calls Flue agent-level `shell(...)` so the actual git process and object transfer happen inside the remote sandbox repository with command-scoped credentials while the prompt is active.
 - Local file edits and local commits should use sandbox tools such as `write`, `edit`, and `bash`; publishing those commits should use the authenticated `git` tool rather than trying to use `gh` API refs for sandbox-local objects.

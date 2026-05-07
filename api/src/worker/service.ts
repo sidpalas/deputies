@@ -171,14 +171,29 @@ export class WorkerService {
       },
     });
     try {
+      let runContext = buildBatchContext(claimed.messages);
       const result = await this.options.runner.run({
         sessionId: primary.sessionId,
         runId: claimed.run.id,
         messageId: primary.id,
         prompt: buildBatchPrompt(claimed.messages),
-        context: buildBatchContext(claimed.messages),
+        context: runContext,
         sandbox,
         signal,
+        updateSessionContext: async (context) => {
+          const session = await this.options.store.getSession(primary.sessionId);
+          if (!session) throw new Error(`Session not found: ${primary.sessionId}`);
+          const updated = await this.options.store.updateSession({ ...session, context, updatedAt: new Date() });
+          runContext = updated.context ?? {};
+          await this.options.events.append({
+            sessionId: primary.sessionId,
+            runId: claimed.run.id,
+            messageId: primary.id,
+            type: 'session_updated',
+            payload: { title: updated.title ?? null, context: updated.context ?? null },
+          });
+          return updated.context ?? {};
+        },
         emit: async (event) => {
           if (signal.aborted) return;
           await this.options.events.append({

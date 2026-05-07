@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolDef } from '@flue/sdk';
 import type { GitHubRepositoryAccess } from '../integrations/github/types.js';
+import { resolveActiveRepositoryAccess, type RepositoryToolServices } from './repository-tool.js';
 
 const BLOCKED_COMMANDS = new Set(['alias', 'auth', 'config', 'extension']);
 const MAX_ARGS = 64;
@@ -23,14 +24,13 @@ export type GitHubCliResult = {
 };
 
 export function createGitHubCliTool(
-  access: GitHubRepositoryAccess,
+  repository: RepositoryToolServices,
   options: { runner?: GitHubCliRunner } = {},
 ): ToolDef {
   return {
     name: 'gh',
     description:
-      `Run authenticated GitHub CLI operations for ${access.owner}/${access.repo}. ` +
-      'The command is executed by trusted backend code with a short-lived GitHub App installation token. ' +
+      'Run authenticated GitHub CLI/API operations for the active session repository. Use repository status/list/set first if no repository is active. The command is executed by trusted backend code with a short-lived GitHub App installation token. ' +
       'Pass only gh arguments, not the "gh" executable name.',
     parameters: {
       type: 'object',
@@ -48,6 +48,7 @@ export function createGitHubCliTool(
     },
     async execute(params, signal) {
       const args = validateArgs(params.args);
+      const access = await resolveActiveRepositoryAccess(repository);
       const configDir = await mkdtemp(join(tmpdir(), 'dev-deputies-gh-'));
       try {
         const runner = options.runner ?? runGitHubCli;

@@ -38,6 +38,10 @@ export class GitHubRepositoryAccessService {
     };
   }
 
+  listAllowedRepositories(): string[] {
+    return [...this.allowedRepositories];
+  }
+
   private async getInstallationId(repository: GitHubRepository): Promise<number> {
     const key = repositoryKey(repository);
     const cached = this.installationsByRepository.get(key);

@@ -1,6 +1,6 @@
 import type { ToolDef } from '@flue/sdk';
-import type { GitHubRepositoryAccess } from '../integrations/github/types.js';
 import type { FlueAgentPort } from './types.js';
+import { getPreparedRepository, type RepositoryToolServices } from './repository-tool.js';
 
 const MAX_ARGS = 64;
 const MAX_ARG_LENGTH = 4_096;
@@ -10,15 +10,13 @@ export type AgentRef = {
 };
 
 export function createGitTool(input: {
-  access: GitHubRepositoryAccess;
-  workspacePath: string;
   agentRef: AgentRef;
+  repository: RepositoryToolServices;
 }): ToolDef {
   return {
     name: 'git',
     description:
-      `Run authenticated git commands inside the checked-out sandbox repository for ${input.access.owner}/${input.access.repo}. ` +
-      'Use this for network git operations such as push, fetch, pull, and ls-remote. ' +
+      'Run authenticated git commands inside the prepared sandbox repository. Use repository status/set/prepare first if no repository is prepared. Use this for network git operations such as push, fetch, pull, and ls-remote. ' +
       'This tool runs in the remote sandbox worktree with command-scoped GitHub App authentication. ' +
       'Pass only git arguments, not the "git" executable name. For local read-only git commands or commits, bash is also acceptable; for GitHub issues, comments, and PRs, use the gh tool.',
     parameters: {
@@ -37,14 +35,15 @@ export function createGitTool(input: {
     },
     async execute(params) {
       const args = validateArgs(params.args);
+      const prepared = getPreparedRepository(input.repository);
       const agent = input.agentRef.current;
       if (!agent?.shell) throw new Error('Authenticated git is unavailable before the sandbox agent is ready');
       const result = await agent.shell(gitCommand(args), {
-        cwd: input.workspacePath,
-        env: { GITHUB_AUTH_HEADER: gitAuthHeader(input.access.auth.token) },
+        cwd: prepared.workspacePath,
+        env: { GITHUB_AUTH_HEADER: gitAuthHeader(prepared.access.auth.token) },
         timeout: 120,
       });
-      const output = formatShellResult(result, input.access.auth.token);
+      const output = formatShellResult(result, prepared.access.auth.token);
       if (result.exitCode !== 0) throw new Error(output);
       return output;
     },
