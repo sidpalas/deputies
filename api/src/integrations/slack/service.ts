@@ -73,10 +73,11 @@ export class SlackIntegrationService {
     await this.addReceivedReaction(accepted);
     const threadContext = accepted.type === 'app_mention' ? await this.fetchThreadContext(session, accepted) : { messages: [] };
     const promptMetadata = await this.fetchPromptMetadata(accepted, threadContext.messages);
+    const includeChannelContext = (await this.store.getMessages(session.id)).length === 0;
 
     const message = await this.messages.enqueue({
       sessionId: session.id,
-      prompt: renderSlackPrompt(accepted, threadContext, promptMetadata),
+      prompt: renderSlackPrompt(accepted, threadContext, promptMetadata, { includeChannelContext }),
       source: 'slack',
       context: {
         source: 'slack',

@@ -30,7 +30,7 @@ export function createRepositoryTool(services: RepositoryToolServices): ToolDef 
   return {
     name: 'repository',
     description:
-      'Manage the active GitHub repository for this session. Use status to inspect current repo, list when uncertain, set when you have a confident repo choice, and prepare before reading/editing files. If the repo is unclear, ask the user instead of guessing.',
+      'Manage the active GitHub repository for this session. Use status to inspect current repo, list when uncertain, set when you have a confident repo choice, and prepare before reading/editing files. After setting a repo for ongoing work, prepare it in the same turn unless the user only asked to inspect or select. If the repo is unclear, ask the user instead of guessing.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -156,7 +156,7 @@ async function setRepositoryContext(services: RepositoryToolServices, params: Re
     delete services.state.prepared;
   }
   const reason = typeof params.reason === 'string' && params.reason.trim() ? `\nReason: ${params.reason.trim()}` : '';
-  return `Active repository set to ${owner}/${repo}.${reason}\nUse repository({ action: "prepare" }) before working with files in this repository.`;
+  return `Active repository set to ${owner}/${repo}.${reason}\nNext step: use repository({ action: "prepare" }) now if the user intends any work in this repository.`;
 }
 
 function parseRepositoryValue(value: unknown): (GitHubRepository & { provider: 'github' }) | null {

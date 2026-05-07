@@ -10,6 +10,10 @@ import { CallbackService, CallbackServiceError } from '../callbacks/service.js';
 import { requireAuthSessionSecret, requireSlackSigningSecret, requireStaticCredentials, type AppConfig } from '../config/index.js';
 import { EventService } from '../events/service.js';
 import { GenericWebhookError, GenericWebhookService } from '../integrations/generic-webhook/service.js';
+import { verifyGitHubWebhookSignature } from '../integrations/github/webhook-auth.js';
+import { GitHubWebhookService } from '../integrations/github/webhook-service.js';
+import { type GitHubIssueContextFetcher } from '../integrations/github/issue-context-fetcher.js';
+import { type GitHubReactionSender } from '../integrations/github/reaction-sender.js';
 import { SlackClient } from '../integrations/slack/client.js';
 import { verifySlackSignature } from '../integrations/slack/auth.js';
 import { SlackIntegrationError, SlackIntegrationService } from '../integrations/slack/service.js';
@@ -34,6 +38,8 @@ export type AppServices = {
   genericWebhooks: GenericWebhookService;
   callbacks: CallbackService;
   sandboxCleanup?: SandboxCleanupService;
+  githubReactionSender?: Pick<GitHubReactionSender, 'addEyes'>;
+  githubIssueContextFetcher?: Pick<GitHubIssueContextFetcher, 'listIssueComments'>;
 };
 
 export function createServices(store: AppStore = new MemoryStore(), options: { sandboxProvider?: SandboxProvider } = {}): AppServices {
@@ -174,6 +180,39 @@ export function createApp(config: AppConfig, services = createServices()) {
       if (error instanceof SlackIntegrationError) return writeError(c, 400, error.code, error.message);
       throw error;
     }
+  });
+
+  app.post('/webhooks/github/events', async (c) => {
+    const body = await readRawBody(c, config.maxJsonBodyBytes, 'GitHub body');
+    if (!config.githubWebhookSecret) return writeError(c, 500, 'configuration_error', 'GITHUB_WEBHOOK_SECRET is required for GitHub webhooks');
+    const signatureValid = verifyGitHubWebhookSignature({
+      signature: c.req.header('x-hub-signature-256'),
+      body,
+      secret: config.githubWebhookSecret,
+    });
+    if (!signatureValid) return writeError(c, 401, 'unauthorized', 'Invalid GitHub signature');
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(body) as Record<string, unknown>;
+    } catch {
+      return writeError(c, 400, 'invalid_json', 'Expected valid GitHub JSON payload');
+    }
+
+    const headers: { deliveryId?: string; event?: string } = {};
+    const deliveryId = c.req.header('x-github-delivery');
+    const event = c.req.header('x-github-event');
+    if (deliveryId) headers.deliveryId = deliveryId;
+    if (event) headers.event = event;
+
+    const result = await new GitHubWebhookService(services.store, services.sessions, services.messages, {
+      allowedUsers: config.githubAllowedUsers,
+      allowedOrganizations: config.githubAllowedOrganizations,
+      triggerHandles: config.githubTriggerHandles,
+      ...(services.githubReactionSender ? { reactionSender: services.githubReactionSender } : {}),
+      ...(services.githubIssueContextFetcher ? { issueContextFetcher: services.githubIssueContextFetcher } : {}),
+    }).handle({ headers, payload });
+    return c.json({ ok: true, type: result.type, ...('reason' in result ? { reason: result.reason } : {}) }, result.type === 'accepted' ? 202 : 200);
   });
 
   app.get('/sessions/:sessionId', async (c) => {

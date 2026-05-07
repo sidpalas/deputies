@@ -3,7 +3,7 @@ import type { EventService } from '../events/service.js';
 import type { RunnerResult } from '../runner/types.js';
 import type { AppStore, CallbackDeliveryRecord, ClaimedMessage } from '../store/types.js';
 
-export type CompletionCallbackType = 'http' | 'slack';
+export type CompletionCallbackType = 'http' | 'slack' | 'github';
 
 export type CompletionCallback = {
   type: CompletionCallbackType;
@@ -196,6 +196,12 @@ function getCompletionCallback(context: Record<string, unknown> | undefined): Co
     const messageTs = 'messageTs' in callback ? callback.messageTs : undefined;
     if (typeof messageTs === 'string' && messageTs) target.messageTs = messageTs;
     return { type: 'slack', target };
+  }
+  const owner = 'owner' in callback ? callback.owner : undefined;
+  const repo = 'repo' in callback ? callback.repo : undefined;
+  const issueNumber = 'issueNumber' in callback ? callback.issueNumber : undefined;
+  if (type === 'github' && typeof owner === 'string' && owner && typeof repo === 'string' && repo && typeof issueNumber === 'number' && Number.isInteger(issueNumber) && issueNumber > 0) {
+    return { type: 'github', target: { owner, repo, issueNumber } };
   }
   return null;
 }

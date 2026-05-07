@@ -2,7 +2,10 @@ import { AppLifecycle, installProcessShutdownHandlers, type CloseableResource } 
 import { createServer, createServices } from './app/server.js';
 import { HttpCompletionCallbackSender, type CompletionCallbackSender } from './callbacks/service.js';
 import { loadConfig, requireDatabaseUrl, requireDaytonaApiKey, requireFlueModel, requireGitHubAppCredentials } from './config/index.js';
+import { GitHubCompletionCallbackSender } from './integrations/github/callback-sender.js';
 import { GitHubClient } from './integrations/github/client.js';
+import { GitHubIssueContextFetcher } from './integrations/github/issue-context-fetcher.js';
+import { GitHubReactionSender } from './integrations/github/reaction-sender.js';
 import { GitHubRepositoryAccessService } from './integrations/github/repository-access.js';
 import { SlackClient } from './integrations/slack/client.js';
 import { SlackCompletionCallbackSender } from './integrations/slack/callback-sender.js';
@@ -24,6 +27,12 @@ const config = loadConfig(process.env);
 const store = config.appStore === 'postgres' ? new PostgresStore(requireDatabaseUrl(config)) : new MemoryStore();
 const sandboxProvider = createSandboxProvider();
 const services = createServices(store, { sandboxProvider });
+const githubClient = config.githubAppId || config.githubAppPrivateKey ? new GitHubClient({ apiBaseUrl: config.githubApiBaseUrl }) : null;
+const githubRepositoryAccess = githubClient ? createGitHubRepositoryAccess(githubClient) : null;
+if (githubClient && githubRepositoryAccess) {
+  services.githubReactionSender = new GitHubReactionSender(githubClient, githubRepositoryAccess);
+  services.githubIssueContextFetcher = new GitHubIssueContextFetcher(githubClient, githubRepositoryAccess);
+}
 const resources: CloseableResource[] = [];
 let server: ReturnType<typeof createServer> | undefined;
 let workerLoop: ReturnType<typeof startWorkerLoop> | undefined;
@@ -68,6 +77,10 @@ function createCallbackSenders(): CompletionCallbackSender[] {
   if (config.slackBotToken) {
     senders.push(new SlackCompletionCallbackSender(new SlackClient({ apiBaseUrl: config.slackApiBaseUrl, botToken: config.slackBotToken })));
   }
+  if (config.githubAppId || config.githubAppPrivateKey) {
+    if (!githubClient || !githubRepositoryAccess) throw new Error('GitHub callback sender requires GitHub App credentials');
+    senders.push(new GitHubCompletionCallbackSender(githubClient, githubRepositoryAccess));
+  }
   return senders;
 }
 
@@ -78,15 +91,18 @@ function createProgressNotifiers() {
 
 function createRepositoryAccess() {
   if (!config.githubAppId && !config.githubAppPrivateKey) return {};
+  if (!githubRepositoryAccess) throw new Error('GitHub repository access requires GitHub App credentials');
+  return { github: githubRepositoryAccess };
+}
+
+function createGitHubRepositoryAccess(client: GitHubClient): GitHubRepositoryAccessService {
   const credentials = requireGitHubAppCredentials(config);
-  return {
-    github: new GitHubRepositoryAccessService({
-      ...credentials,
-      client: new GitHubClient({ apiBaseUrl: config.githubApiBaseUrl }),
-      cloneBaseUrl: config.githubCloneBaseUrl,
-      allowedRepositories: config.githubAllowedRepositories,
-    }),
-  };
+  return new GitHubRepositoryAccessService({
+    ...credentials,
+    client,
+    cloneBaseUrl: config.githubCloneBaseUrl,
+    allowedRepositories: config.githubAllowedRepositories,
+  });
 }
 
 const lifecycleOptions = {

@@ -5,12 +5,18 @@ export type SlackThreadContext = {
   unavailableReason?: string;
 };
 
-export function renderSlackPrompt(event: SlackAcceptedEvent, threadContext: SlackThreadContext = { messages: [] }, metadata: SlackPromptMetadata = {}): string {
+export type SlackPromptOptions = {
+  includeChannelContext?: boolean;
+};
+
+export function renderSlackPrompt(event: SlackAcceptedEvent, threadContext: SlackThreadContext = { messages: [] }, metadata: SlackPromptMetadata = {}, options: SlackPromptOptions = {}): string {
   const parts: string[] = [];
-  if (metadata.channelName) {
+  if (options.includeChannelContext && metadata.channelName) {
     parts.push('Slack channel context:', '---');
     if (metadata.channelName) parts.push(`Channel: #${metadata.channelName}`);
     parts.push('---', '');
+  } else if (metadata.channelName) {
+    parts.push(`Slack thread: #${metadata.channelName}`, '');
   }
 
   if (threadContext.messages.length) {

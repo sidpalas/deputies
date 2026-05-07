@@ -34,6 +34,14 @@ describe('GitHub CLI Flue tool', () => {
     await expect(tool.execute({ args: ['api', 'repos/manaflow-ai/manaflow/git/refs/heads/main'] })).rejects.toThrow('GitHub Git Database API routes');
   });
 
+  it('rejects direct issue and PR comment posting', async () => {
+    const tool = createGitHubCliTool(repositoryServices(), { runner: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
+
+    await expect(tool.execute({ args: ['issue', 'comment', '42', '--body', 'Done'] })).rejects.toThrow('Posting GitHub issue/PR comments directly through gh is not available');
+    await expect(tool.execute({ args: ['pr', 'comment', '42', '--body', 'Done'] })).rejects.toThrow('Posting GitHub issue/PR comments directly through gh is not available');
+    await expect(tool.execute({ args: ['api', 'repos/manaflow-ai/manaflow/issues/42/comments', '--method', 'POST', '-f', 'body=Done'] })).rejects.toThrow('Posting GitHub issue/PR comments directly through gh is not available');
+  });
+
   it('requires an active repository', async () => {
     const services = repositoryServices();
     services.state.context = {};

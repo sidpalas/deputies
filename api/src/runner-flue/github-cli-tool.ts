@@ -84,10 +84,31 @@ function validateArgs(value: unknown): string[] {
   if ((command === 'repo' || command === 'gist') && args[1] === 'clone') {
     throw new Error(`gh ${command} clone is not available through this tool`);
   }
+  if (isDirectCommentCommand(args)) {
+    throw new Error('Posting GitHub issue/PR comments directly through gh is not available. Return the final response normally; Dev Deputies posts it back to GitHub through the callback layer.');
+  }
   if (command === 'api' && isGitDatabaseApiRoute(args[1])) {
     throw new Error('GitHub Git Database API routes are not available through gh. Use sandbox git commands and the authenticated git tool for branch/object pushes.');
   }
   return args;
+}
+
+function isDirectCommentCommand(args: string[]): boolean {
+  // Final GitHub replies are owned by the callback layer so each webhook turn
+  // posts at most one response. Blocking direct comments prevents duplicates.
+  const command = args[0];
+  const subcommand = args[1];
+  if ((command === 'issue' || command === 'pr') && subcommand === 'comment') return true;
+  if (command === 'api') return isCommentApiRoute(args[1], args);
+  return false;
+}
+
+function isCommentApiRoute(route: string | undefined, args: string[]): boolean {
+  if (!route || !args.includes('--method') || !args.includes('POST')) return false;
+  const normalized = route.replace(/^\/+/, '');
+  return /^repos\/[^/]+\/[^/]+\/issues\/\d+\/comments$/.test(normalized) ||
+    /^repos\/[^/]+\/[^/]+\/pulls\/comments(?:\/\d+\/replies)?$/.test(normalized) ||
+    /^repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews$/.test(normalized);
 }
 
 function isGitDatabaseApiRoute(route: string | undefined): boolean {

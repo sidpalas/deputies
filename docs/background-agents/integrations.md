@@ -61,6 +61,29 @@ external webhook
   -> callback dispatcher posts progress/completion
 ```
 
+## Cross-Integration Learnings
+
+Slack, GitHub, and the web UI now exercise the same product loop from different entry points. New integrations should follow these constraints instead of creating source-specific side channels:
+
+- Integration prompts should contain source/thread context only. Behavior rules belong in runner/agent instructions, tool descriptions, and callback senders, not in chat-visible message text.
+- Every public webhook should authenticate origin, dedupe deliveries, authorize actor/resource, map an external thread to a Dev Deputies session, fetch unseen prior context, enqueue the current request, add a lightweight received signal, and post exactly one final response through callbacks.
+- Received/progress signals and final replies are separate. Slack/GitHub use reactions for received state; callback senders own final replies. Agent tools should not post final Slack/GitHub replies directly.
+- Follow-up prompts should be compact. The first message can include full channel/issue/PR metadata; later messages should include only a compact event/thread identity, unseen prior context, and the current tagged request.
+- Prompt text from integrations should be Markdown-safe in the web UI. Source prompts are rendered as plain text; assistant responses remain Markdown.
+- Public integrations should fail closed: webhook secret/signature checks, source-specific allowlists, and explicit trigger gating where applicable.
+- Context de-duplication is a platform concern. Slack tracks timestamps; GitHub tracks comment IDs. Future integrations should record source item IDs in message context so prior context is not repeated.
+
+Shared utilities worth extracting before the next major integration:
+
+- `getOrCreateIntegrationSession(source, externalId, title, metadata)` for external-thread/session mapping.
+- Delivery dedupe helpers around `integration_deliveries` for claim/processed/failed paths.
+- Allowlist helpers with consistent case-sensitive/case-insensitive matching and skip reasons.
+- Processed-item helpers for reading item IDs from prior message context and recording newly included IDs.
+- Prompt section rendering helpers using the Slack-style `Label:` / `---` convention.
+- Callback target parsing and received/final response interfaces so each source can share the same lifecycle while keeping source-specific clients isolated.
+
+Avoid a large abstract integration framework for now. Prefer small shared utilities extracted from repeated Slack/GitHub patterns.
+
 ## Generic Inbound Webhook
 
 Generic webhook auth is independent of product API auth. Product session routes can use `API_AUTH_MODE=none|bearer|session`, but `POST /webhooks/generic/:sourceKey` always uses the bearer token configured for that webhook source in the database.
@@ -137,7 +160,7 @@ else:
 
 GitHub App runtime access should be implemented before inbound GitHub webhooks are treated as production-ready. The webhook path creates sessions and comments, but repo-scoped agent work also needs short-lived installation credentials for clone, fetch, push, branch, PR, and status/comment operations.
 
-Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, Flue-runner repository refresh from message repository context, a dynamic `repository` tool for status/list/set/prepare actions, a dynamic `gh` tool for authenticated GitHub CLI/API operations against the active repository, and a dynamic `git` tool for authenticated git network operations inside the prepared sandbox repository. The worker only ensures a sandbox exists. When a run starts with repository context, Flue still performs pre-prompt clone/fetch and starts in the repository `cwd`. When no repository context exists, agents can choose an allowlisted repo with `repository set`, prepare it with `repository prepare`, and then use absolute paths in the returned workspace. PR helper operations are still future work.
+Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, signed inbound GitHub webhooks, webhook sender/repo-owner allowlists, GitHub completion comments, Flue-runner repository refresh from message repository context, a dynamic `repository` tool for status/list/set/prepare actions, a dynamic `gh` tool for authenticated GitHub CLI/API operations against the active repository, and a dynamic `git` tool for authenticated git network operations inside the prepared sandbox repository. The worker only ensures a sandbox exists. When a run starts with repository context, Flue still performs pre-prompt clone/fetch and starts in the repository `cwd`. When no repository context exists, agents can choose an allowlisted repo with `repository set`, prepare it with `repository prepare`, and then use absolute paths in the returned workspace. PR helper operations are still future work.
 
 `GITHUB_API_BASE_URL` and `GITHUB_CLONE_BASE_URL` are intentionally separate. The API base points at GitHub's REST API or an emulator; the clone base points at the git remote host used for clone/fetch/push. Defaults are `https://api.github.com` and `https://github.com`.
 
@@ -152,6 +175,9 @@ Credential handling:
 - The agent `gh` tool runs in trusted worker code with command-scoped `GH_TOKEN`, `GH_REPO`, a temporary `GH_CONFIG_DIR`, disabled prompts, token redaction, and blocked auth/config/extension/clone escape hatches. It resolves the active repo at call time and blocks GitHub Git Database API routes so sandbox-local commits are published through git, not remote object surgery.
 - The agent `git` tool runs the git process inside the prepared remote sandbox repository through Flue agent-level `shell` with command-scoped `GITHUB_AUTH_HEADER`. Agents should use it for authenticated push/fetch/pull operations, not for GitHub issue/comment/PR API work. Risky push forms such as force, mirror, delete, and force refspecs are blocked.
 - `repository_ready` events contain repository identity, workspace path, and expiry metadata only.
+- GitHub webhook allowlists fail closed when `GITHUB_WEBHOOK_SECRET` is set. Configure `GITHUB_ALLOWED_USERS` or `GITHUB_ALLOWED_ORGANIZATIONS`, or explicitly set `UNSAFE_ALLOW_ALL_GITHUB_USERS_AND_ORGS=true` for unrestricted GitHub webhook access.
+- `GITHUB_ALLOWED_USERS` and `GITHUB_ALLOWED_ORGANIZATIONS` gate inbound webhooks. Empty means unrestricted for that dimension only after at least one webhook allowlist exists, or after unsafe allow-all is enabled. Configured lists are matched case-insensitively. Non-matching deliveries are recorded as failed integration deliveries and no session/message is created.
+- `GITHUB_TRIGGER_HANDLES` optionally requires issue/PR/comment/review text to tag one of the configured GitHub handles, such as `@dev-deputies`. Handles may be configured with or without the `@` prefix. Empty disables trigger-handle gating.
 
 The intended runtime model is snapshot-friendly: Daytona images/snapshots may pre-bake common repos and build artifacts, but every Flue run still refreshes or repairs the requested repository as its first sandbox shell step so reused/stale sandboxes get current code and fresh credentials.
 
@@ -186,22 +212,27 @@ Planned semantics:
 - Snapshot/image baking can pre-populate common primary and auxiliary repositories, but startup refresh still verifies each requested worktree exists and is current enough for the run.
 - Prompt context should list each repository role and sandbox path so the agent knows which repo is safe to modify.
 
-Supported triggers:
+Current webhook triggers:
 
-- Issue comments mentioning the agent.
-- PR comments mentioning the agent.
-- PR review comments mentioning the agent.
-- Optional issue opened or label-based triggers later.
+- `issues.opened`, `issues.reopened`, and title/body `issues.edited`.
+- `issue_comment.created` on issues or PRs.
+- `pull_request.opened`, `pull_request.reopened`, `pull_request.synchronize`, and title/body/base `pull_request.edited`.
+- `pull_request_review_comment.created` for inline PR review comments.
+- `pull_request_review.submitted` for submitted PR reviews.
+
+Planned webhook gating refinements:
+
+- Add label-based triggers for teams that want non-mention workflows.
+- Fetch richer issue/PR context when needed.
 
 Inbound responsibilities:
 
 - Verify `X-Hub-Signature-256`.
 - Dedupe with `X-GitHub-Delivery`.
-- Ignore irrelevant events and bot loops.
-- Detect trigger phrases.
-- Resolve repo, issue, PR, comment, actor, and installation ID.
-- Fetch relevant issue/PR context when needed.
-- Mark PR/comment bodies as untrusted prompt content.
+- Ignore irrelevant events, bot loops, and non-allowlisted actors/repo owners.
+- Resolve repo, issue, PR, comment, and actor.
+- Fetch issue/PR comments and include only comments not already represented in prior Dev Deputies messages for that GitHub thread. The current triggering comment is excluded because it is rendered separately.
+- Render GitHub context with Slack-style section labels and separators; rely on webhook auth, repo/user/org allowlists, and trigger-handle gating for authorization.
 
 External thread IDs:
 
@@ -210,9 +241,12 @@ github:owner/repo:issue:123
 github:owner/repo:pr:456
 ```
 
-Callback responsibilities:
+Reaction/callback responsibilities:
 
-- Post start/completion/failure comments when configured.
+- Add an `eyes` reaction to accepted webhook subjects when GitHub App credentials allow it.
+- Post completion comments when configured.
+- Skip GitHub completion comments that are only webhook acknowledgement text; the received `eyes` reaction is the acknowledgement.
+- Post start/failure comments when configured later.
 - Post PR URL when an artifact is created.
 - Avoid noisy tool-level updates unless explicitly enabled.
 
@@ -305,20 +339,20 @@ Acceptance criteria:
 - Concurrent messages for the same session are handled by the existing queue/batch behavior.
 - Large PR/issue payloads do not produce unbounded prompts.
 
-#### 5. GitHub prompt safety wrappers
+#### 5. GitHub prompt context
 
-Adopt Open SWE's compact safety pattern for GitHub-originated content.
+Keep GitHub webhook prompts compact and similar to Slack prompts.
 
-- Wrap untrusted GitHub text in reserved tags, e.g. `<github_untrusted_content ...>`.
-- Sanitize those reserved tags if they appear inside user-controlled GitHub content.
-- Keep the heavy trust guidance in a shared GitHub prompt preamble or system section rather than repeating bulky warnings around every comment.
+- Do not inject bulky untrusted-content warnings into every webhook prompt; they can cause the model to reject legitimate tagged requests.
+- Use structured labels and `---` separators for webhook context.
+- Sanitize legacy reserved wrapper tags if they appear inside user-controlled GitHub content.
 - Preserve readable author/source labels for comments, review comments, PR titles, bodies, branch names, and diff hunks.
-- Add snapshot tests for prompt construction and tag sanitization.
+- Add tests for prompt construction and tag sanitization.
 
 Acceptance criteria:
 
-- Prompt tests prove external content cannot spoof trusted wrapper boundaries.
-- GitHub prompts remain compact while clearly separating task instructions from untrusted GitHub text.
+- Prompt tests prove external content cannot spoof legacy reserved boundaries.
+- GitHub prompts remain compact while clearly separating event metadata, prior comments, and the current tagged request.
 
 #### 6. Callback comments and completion behavior
 

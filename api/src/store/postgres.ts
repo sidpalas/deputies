@@ -109,7 +109,7 @@ type CallbackDeliveryRow = QueryResultRow & {
   session_id: string;
   run_id: string | null;
   message_id: string | null;
-  target_type: 'http' | 'slack';
+  target_type: 'http' | 'slack' | 'github';
   target: Record<string, unknown>;
   status: CallbackDeliveryStatus;
   event_type: string;

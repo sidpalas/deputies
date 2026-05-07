@@ -34,6 +34,10 @@ export function wrapGitHubUntrustedContent(source: string, content: string): str
   return `<${untrustedTagName} source="${escapeTagAttribute(source)}">\n${sanitizeGitHubUntrustedContent(content)}\n</${untrustedTagName}>`;
 }
 
+export function renderGitHubWebhookContext(content: string): string {
+  return ['GitHub webhook context:', '---', sanitizeGitHubUntrustedContent(content), '---'].join('\n');
+}
+
 export function sanitizeGitHubUntrustedContent(content: string): string {
   return content.replace(reservedTagPattern, (match) => `&lt;${match.slice(1)}`);
 }

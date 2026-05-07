@@ -28,6 +28,7 @@ describe('repository Flue tool', () => {
     const result = await tool.execute({ action: 'set', owner: 'manaflow-ai', repo: 'manaflow', reason: 'User mentioned the app' });
 
     expect(result).toContain('Active repository set to manaflow-ai/manaflow');
+    expect(result).toContain('use repository({ action: "prepare" }) now');
     expect(updates).toEqual([{ repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } }]);
     expect(services.state.context).toEqual({ repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } });
   });

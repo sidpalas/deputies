@@ -36,9 +36,13 @@ export type AppConfig = {
   slackAllowedTeamIds: string[];
   slackAllowedChannelIds: string[];
   slackAllowedUserIds: string[];
+  unsafeAllowAllGithubUsersAndOrgs: boolean;
   githubApiBaseUrl: string;
   githubCloneBaseUrl: string;
   githubAllowedRepositories: string[];
+  githubAllowedUsers: string[];
+  githubAllowedOrganizations: string[];
+  githubTriggerHandles: string[];
   githubAppId?: string;
   githubAppPrivateKey?: string;
   githubWebhookSecret?: string;
@@ -68,9 +72,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     slackAllowedTeamIds: parseStringList(env.SLACK_ALLOWED_TEAM_IDS),
     slackAllowedChannelIds: parseStringList(env.SLACK_ALLOWED_CHANNEL_IDS),
     slackAllowedUserIds: parseStringList(env.SLACK_ALLOWED_USER_IDS),
+    unsafeAllowAllGithubUsersAndOrgs: parseBoolean(env.UNSAFE_ALLOW_ALL_GITHUB_USERS_AND_ORGS, false, 'UNSAFE_ALLOW_ALL_GITHUB_USERS_AND_ORGS'),
     githubApiBaseUrl: env.GITHUB_API_BASE_URL ?? 'https://api.github.com',
     githubCloneBaseUrl: env.GITHUB_CLONE_BASE_URL ?? 'https://github.com',
     githubAllowedRepositories: parseStringList(env.GITHUB_ALLOWED_REPOSITORIES),
+    githubAllowedUsers: parseStringList(env.GITHUB_ALLOWED_USERS),
+    githubAllowedOrganizations: parseStringList(env.GITHUB_ALLOWED_ORGANIZATIONS),
+    githubTriggerHandles: parseStringList(env.GITHUB_TRIGGER_HANDLES),
   };
 
   if (env.API_BEARER_TOKEN) config.apiBearerToken = env.API_BEARER_TOKEN;
@@ -93,12 +101,22 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (config.slackSigningSecret && !config.unsafeAllowAllSlackIds && !hasAnySlackAllowlist(config)) {
     throw new Error('Slack allowlists are required when SLACK_SIGNING_SECRET is set. Configure SLACK_ALLOWED_TEAM_IDS, SLACK_ALLOWED_CHANNEL_IDS, or SLACK_ALLOWED_USER_IDS, or set UNSAFE_ALLOW_ALL_SLACK_IDS=true for unrestricted Slack access.');
   }
+  if (config.githubWebhookSecret && !config.unsafeAllowAllGithubUsersAndOrgs && !hasAnyGitHubWebhookAllowlist(config)) {
+    throw new Error('GitHub webhook allowlists are required when GITHUB_WEBHOOK_SECRET is set. Configure GITHUB_ALLOWED_USERS or GITHUB_ALLOWED_ORGANIZATIONS, or set UNSAFE_ALLOW_ALL_GITHUB_USERS_AND_ORGS=true for unrestricted GitHub webhook access.');
+  }
+  if (config.githubWebhookSecret && !config.githubTriggerHandles.length) {
+    throw new Error('GITHUB_TRIGGER_HANDLES is required when GITHUB_WEBHOOK_SECRET is set so GitHub webhooks only process explicitly tagged requests.');
+  }
 
   return config;
 }
 
 function hasAnySlackAllowlist(config: Pick<AppConfig, 'slackAllowedTeamIds' | 'slackAllowedChannelIds' | 'slackAllowedUserIds'>): boolean {
   return Boolean(config.slackAllowedTeamIds.length || config.slackAllowedChannelIds.length || config.slackAllowedUserIds.length);
+}
+
+function hasAnyGitHubWebhookAllowlist(config: Pick<AppConfig, 'githubAllowedUsers' | 'githubAllowedOrganizations'>): boolean {
+  return Boolean(config.githubAllowedUsers.length || config.githubAllowedOrganizations.length);
 }
 
 export function requireApiBearerToken(config: AppConfig): string {

@@ -88,7 +88,7 @@ export class FlueRunner implements Runner {
       if (input.signal?.aborted) throw new Error('Operation aborted');
       let response;
       try {
-        response = await session.prompt(input.prompt);
+        response = await session.prompt(repositoryServices ? withRepositoryGuidance(input.prompt) : input.prompt);
       } finally {
         if (input.signal?.aborted) await this.restoreSessionSnapshot(input.sessionId, sessionSnapshot);
       }
@@ -162,6 +162,22 @@ export class FlueRunner implements Runner {
       await this.agentFactory.deleteSession?.(sessionId);
     }
   }
+}
+
+function withRepositoryGuidance(prompt: string): string {
+  return [
+    'Repository tool guidance:',
+    '- Before doing repository-specific work, use repository({ action: "status" }) to inspect the active repo.',
+    '- If a repository is already active and the user did not ask to switch, use it.',
+    '- If the user clearly names or chooses a repo for ongoing work, use repository({ action: "set", owner, repo, reason }) and then repository({ action: "prepare" }) in the same turn.',
+    '- Do not stop after setting the repo when the next useful step is obviously preparation; prepare immediately unless the user only asked to inspect or select repos.',
+    '- If the repo is unclear, use repository({ action: "list" }) and ask the user to choose instead of guessing.',
+    '- Use repository({ action: "prepare" }) before reading or editing files in the repo.',
+    '- Use normal file and shell tools for local code changes and commits, git for authenticated remote git operations, and gh for GitHub issues, comments, and pull requests.',
+    '',
+    'User request:',
+    prompt,
+  ].join('\n');
 }
 
 function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEvent | null {

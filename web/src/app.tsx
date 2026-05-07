@@ -1001,9 +1001,13 @@ function UserMessageCard(props: {
             <Button size="sm" onClick={props.onSaveEdit} disabled={!props.messageDraft.trim()}>Save</Button>
           </div>
         </div>
-      ) : <MarkdownText text={message.prompt} />}
+      ) : <PlainText text={message.prompt} />}
     </Card>
   );
+}
+
+function PlainText(props: { text: string }) {
+  return <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-100">{props.text}</p>;
 }
 
 function MarkdownText(props: { text: string }) {

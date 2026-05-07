@@ -238,6 +238,20 @@ it('renders assistant markdown with copyable highlighted code blocks and without
   await waitFor(() => expect(writeText).toHaveBeenCalledWith('const ok = true;'));
 });
 
+it('renders user prompts as plain text so Slack author lines are visible', async () => {
+  mockApi({
+    messages: [messageFixture({
+      id: '00000000-0000-4000-8000-000000000123',
+      sequence: 1,
+      status: 'completed',
+      prompt: 'Current tagged Slack message:\n---\n[sid]: reply "hello"',
+    })],
+  });
+  render(<App />);
+
+  expect(await screen.findByText(/\[sid\]: reply "hello"/)).toBeInTheDocument();
+});
+
 it('shows callback delivery status and replays failed callbacks', async () => {
   const replays: string[] = [];
   mockApi({

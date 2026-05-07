@@ -11,6 +11,9 @@ This is a living backlog for product, integration, runtime, and operations work.
 - GitHub App signature verification, installation token flow, and delivery dedupe.
 - GitHub callback comments with completion summaries and PR/artifact links.
 - GitHub repository/user gating, deterministic thread mapping, untrusted prompt wrappers, branch sanitization, and provider-owned push/PR helpers.
+- Shared integration utilities for delivery dedupe, allowlists, external-thread session mapping, processed-item filtering, prompt section rendering, and callback target parsing before adding the next major integration.
+- Source-agnostic received/final-response lifecycle so integrations add lightweight received signals while callback senders own exactly one final external reply.
+- Global runner/agent instruction injection for integration behavior that should not appear in chat-visible source prompts.
 - Linear integration for issue mentions, assignments, and comment follow-ups.
 - Generic webhook mapping/filter/template configuration beyond the current simple payload shape.
 
@@ -34,6 +37,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Multi-repository task support with one primary writable repo, auxiliary read-only context repos by default, and explicit multi-writable change sets when a task spans repos.
 - Prompt templates and snapshot tests for Slack/GitHub/Linear inputs.
 - Better repo resolution from Slack/GitHub/Linear context.
+- Populate `repository list` from GitHub App installation repositories instead of only `GITHUB_ALLOWED_REPOSITORIES`, while keeping the allowlist as an optional safety filter.
 - Setup/install hook observability beyond `repository_ready`.
 - Snapshot/image baking for common repos and build artifacts, with Flue startup refresh for stale or missing worktrees.
 - Upstream Flue cancellation improvement for built-in bash/tool execution.

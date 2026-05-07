@@ -193,6 +193,32 @@ describe('Slack integration', () => {
     expect(userInfoCalls.sort()).toEqual(['U111', 'U123', 'U222']);
   });
 
+  it('uses compact Slack channel context on follow-up messages', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+      infoClient: {
+        async getChannelInfo() {
+          return { ok: true, channel: { id: 'C123', name: 'engineering' } };
+        },
+        async getUserInfo() {
+          return { ok: true, user: { id: 'U123', name: 'alex' } };
+        },
+      },
+    });
+
+    const first = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> first task`, ts: '1710000000.000100' }));
+    const second = await slack.handle(slackEvent({ eventId: 'Ev2', type: 'message', text: 'follow up', ts: '1710000001.000100', threadTs: '1710000000.000100' }));
+
+    expect(first.type).toBe('accepted');
+    expect(second.type).toBe('accepted');
+    if (first.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const messages = await services.messages.list(first.session.id);
+    expect(messages[0]!.prompt).toContain('Slack channel context:\n---\nChannel: #engineering\n---');
+    expect(messages[1]!.prompt).toContain('Slack thread: #engineering');
+    expect(messages[1]!.prompt).not.toContain('Slack channel context:');
+  });
+
   it('omits Slack user names when lookup fails', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
