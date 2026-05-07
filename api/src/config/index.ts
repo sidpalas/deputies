@@ -119,6 +119,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.GITHUB_APP_PRIVATE_KEY) config.githubAppPrivateKey = normalizePrivateKey(env.GITHUB_APP_PRIVATE_KEY);
   if (env.GITHUB_WEBHOOK_SECRET) config.githubWebhookSecret = env.GITHUB_WEBHOOK_SECRET;
 
+  validateProductAuthConfig(config);
+
   if (config.slackSigningSecret && !config.unsafeAllowAllSlackIds && !hasAnySlackAllowlist(config)) {
     throw new Error('Slack allowlists are required when SLACK_SIGNING_SECRET is set. Configure SLACK_ALLOWED_TEAM_IDS, SLACK_ALLOWED_CHANNEL_IDS, or SLACK_ALLOWED_USER_IDS, or set UNSAFE_ALLOW_ALL_SLACK_IDS=true for unrestricted Slack access.');
   }
@@ -130,6 +132,23 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   }
 
   return config;
+}
+
+function validateProductAuthConfig(config: AppConfig): void {
+  if (config.apiAuthMode === 'bearer') {
+    requireApiBearerToken(config);
+    return;
+  }
+
+  if (config.apiAuthMode !== 'session') return;
+
+  requireAuthSessionSecret(config);
+  if (config.authProvider === 'static') {
+    requireStaticCredentials(config);
+    return;
+  }
+
+  requireGitHubOAuthCredentials(config);
 }
 
 function hasAnySlackAllowlist(config: Pick<AppConfig, 'slackAllowedTeamIds' | 'slackAllowedChannelIds' | 'slackAllowedUserIds'>): boolean {

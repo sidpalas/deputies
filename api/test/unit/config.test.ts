@@ -185,6 +185,53 @@ describe('loadConfig', () => {
     });
   });
 
+  it('requires bearer auth credentials at startup', () => {
+    expect(() => loadConfig({ API_AUTH_MODE: 'bearer' })).toThrow('API_BEARER_TOKEN is required');
+    expect(loadConfig({ API_AUTH_MODE: 'bearer', API_BEARER_TOKEN: 'secret' })).toMatchObject({
+      apiAuthMode: 'bearer',
+      apiBearerToken: 'secret',
+    });
+  });
+
+  it('requires static session auth credentials at startup', () => {
+    expect(() => loadConfig({ API_AUTH_MODE: 'session' })).toThrow('AUTH_SESSION_SECRET is required');
+    expect(() => loadConfig({ API_AUTH_MODE: 'session', AUTH_SESSION_SECRET: 'secret' })).toThrow('AUTH_STATIC_USERNAME and AUTH_STATIC_PASSWORD are required');
+    expect(loadConfig({
+      API_AUTH_MODE: 'session',
+      AUTH_PROVIDER: 'static',
+      AUTH_SESSION_SECRET: 'secret',
+      AUTH_STATIC_USERNAME: 'dev',
+      AUTH_STATIC_PASSWORD: 'password',
+    })).toMatchObject({
+      apiAuthMode: 'session',
+      authProvider: 'static',
+      authSessionSecret: 'secret',
+      authStaticUsername: 'dev',
+      authStaticPassword: 'password',
+    });
+  });
+
+  it('requires GitHub App session auth credentials at startup', () => {
+    expect(() => loadConfig({
+      API_AUTH_MODE: 'session',
+      AUTH_PROVIDER: 'github',
+      AUTH_SESSION_SECRET: 'secret',
+    })).toThrow('GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET are required');
+    expect(loadConfig({
+      API_AUTH_MODE: 'session',
+      AUTH_PROVIDER: 'github',
+      AUTH_SESSION_SECRET: 'secret',
+      GITHUB_APP_CLIENT_ID: 'client-id',
+      GITHUB_APP_CLIENT_SECRET: 'client-secret',
+    })).toMatchObject({
+      apiAuthMode: 'session',
+      authProvider: 'github',
+      authSessionSecret: 'secret',
+      githubAppClientId: 'client-id',
+      githubAppClientSecret: 'client-secret',
+    });
+  });
+
   it('rejects invalid ports', () => {
     expect(() => loadConfig({ PORT: 'nope' })).toThrow('PORT must be an integer');
   });
