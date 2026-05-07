@@ -24,6 +24,7 @@
     "api:test:watch": "pnpm --dir api test:watch",
     "web:dev": "pnpm --dir web dev",
     "web:build": "pnpm --dir web build",
+    "web:e2e": "pnpm --dir web e2e",
     "web:test": "pnpm --dir web test",
     "web:test:watch": "pnpm --dir web test:watch",
     "web:typecheck": "pnpm --dir web typecheck",
