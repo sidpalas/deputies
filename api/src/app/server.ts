@@ -73,7 +73,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.notFound((c) => c.json({ error: 'not_found', message: 'Route not found' }, 404));
 
-  app.get('/health', (c) => c.json({ status: 'ok', runMode: config.runMode, apiAuthMode: config.apiAuthMode }));
+  app.get('/health', (c) => c.json({ status: 'ok', runMode: config.runMode, apiAuthMode: config.apiAuthMode, sandboxProvider: config.sandboxProvider }));
 
   app.post('/auth/login', async (c) => {
     if (config.apiAuthMode !== 'session') return writeError(c, 404, 'not_found', 'Route not found');

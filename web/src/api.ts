@@ -4,6 +4,7 @@ export type Health = {
   status: 'ok';
   runMode: string;
   apiAuthMode: ApiAuthMode;
+  sandboxProvider?: string;
 };
 
 export type Session = {

@@ -79,6 +79,7 @@ Current local policy:
 - `pnpm api:test:uat` runs built-artifact UAT tests from `api/test/uat` and requires `TEST_DATABASE_URL` plus a prior `pnpm api:build`.
 - `pnpm web:test -- --run` runs the Vite/jsdom operator UI regression tests.
 - `pnpm check` runs API typecheck/tests and web typecheck/tests.
+- Real local Flue UAT is opt-in: set `RUN_REAL_LOCAL_FLUE_UAT=true`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm --dir api exec vitest run --config vitest.uat.config.ts test/uat/real-local-flue.test.ts`.
 - Real Daytona/Flue UAT is opt-in: set `RUN_REAL_DAYTONA_FLUE_UAT=true`, `DAYTONA_API_KEY`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm api:test:uat`.
 - `docker compose up -d postgres` starts local Postgres and creates both `flue` and `flue_test`.
 - Integration tests apply migrations to `flue_test` and truncate app tables between tests.

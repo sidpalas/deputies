@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, SyntheticEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Archive, Check, ChevronDown, Copy, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, RotateCcw, X } from 'lucide-react';
+import { AlertTriangle, Archive, Check, ChevronDown, Copy, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, RotateCcw, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -586,6 +586,7 @@ export function App() {
         )}
 
         <section className="min-h-0 min-w-0 overflow-hidden">
+          {health?.sandboxProvider === 'local' ? <LocalSandboxWarning /> : null}
           {isCreatingThread || !selectedSession ? (
               <NewThreadPanel
                 canCallApi={canCallApi}
@@ -666,6 +667,19 @@ export function App() {
         </>
       )}
     </main>
+  );
+}
+
+function LocalSandboxWarning() {
+  return (
+    <div className="border-b border-amber-700/70 bg-amber-950/35 px-3 py-2 text-sm text-amber-100 md:px-8 xl:px-20" role="alert">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+        <p>
+          <strong>Local sandbox mode is not a security boundary.</strong> Commands run on this machine in a temporary workspace. Use it only for trusted local development.
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -954,8 +968,8 @@ function ChatPanel(props: {
             ))}
             {response ? (
             <Card className="p-3">
-              <h3 className="mb-1 text-xs font-medium text-slate-400">Deputy response</h3>
-              <MarkdownText text={response} />
+              <h3 className="mb-1 text-xs font-medium text-slate-400">{activeRun ? 'Deputy progress' : 'Deputy response'}</h3>
+              <MarkdownText text={formatAssistantDisplayText(response)} />
             </Card>
           ) : null}
             <Diagnostics events={groupDiagnostics} />
@@ -1246,6 +1260,12 @@ function buildAssistantText(events: AgentEvent[]): Record<string, string> {
   }
 
   return outputByMessageId;
+}
+
+function formatAssistantDisplayText(text: string): string {
+  return text
+    .replace(/([.!?])(?=[A-Z])/g, '$1 ')
+    .replace(/:(?=[A-Z][a-z])/g, ': ');
 }
 
 type MessageGroup = {

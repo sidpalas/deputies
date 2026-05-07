@@ -7,6 +7,7 @@ The system must support multiple sandbox providers without changing session, mes
 Initial providers may include:
 
 - `fake`: deterministic tests.
+- `local`: local development with host subprocess execution in a temp workspace. This is convenient for getting started but is not a security sandbox. Commands inherit a minimal environment and discover executables through an allowlisted `.deputies-bin` path; configure `LOCAL_SANDBOX_ALLOWED_COMMANDS` to replace the built-in development allowlist.
 - `local-docker`: local development and CI smoke tests.
 - `daytona`: hosted persistent development sandboxes.
 - `kubernetes`: pods/jobs inside a cluster.

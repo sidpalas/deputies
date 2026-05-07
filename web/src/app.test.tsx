@@ -22,6 +22,7 @@ type MockApiOptions = {
   onReplayCallback?: (callbackId: string) => void;
   onStreamOpen?: (push: StreamEventPusher) => void;
   authMode?: 'none' | 'bearer' | 'session';
+  sandboxProvider?: string;
   currentUser?: { username: string } | null;
   logins?: Array<{ username: string; password: string }>;
 };
@@ -183,6 +184,33 @@ it('shows a jump control instead of autoscrolling after the user scrolls up', as
   expect(scrollIntoView).toHaveBeenCalledWith({ block: 'end', behavior: 'smooth' });
 });
 
+it('labels active streamed text as progress and separates obvious sentence boundaries', async () => {
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000131', sequence: 1, status: 'processing', prompt: 'inspect env' })],
+    events: [
+      eventFixture({ sequence: 1, type: 'agent_text_delta', runId: '00000000-0000-4000-8000-000000000231', messageId: '00000000-0000-4000-8000-000000000131', payload: { text: 'Checking environment.Found Node:System:Ready' } }),
+    ],
+  });
+  render(<App />);
+
+  expect(await screen.findByText('Deputy progress')).toBeInTheDocument();
+  expect(screen.queryByText('Deputy response')).not.toBeInTheDocument();
+  expect(screen.getByText('Checking environment. Found Node: System: Ready')).toBeInTheDocument();
+});
+
+it('labels completed assistant text as a response', async () => {
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000132', sequence: 1, status: 'completed', prompt: 'inspect env' })],
+    events: [
+      eventFixture({ sequence: 1, type: 'agent_text_delta', runId: '00000000-0000-4000-8000-000000000232', messageId: '00000000-0000-4000-8000-000000000132', payload: { text: 'Done.' } }),
+    ],
+  });
+  render(<App />);
+
+  expect(await screen.findByText('Deputy response')).toBeInTheDocument();
+  expect(screen.queryByText('Deputy progress')).not.toBeInTheDocument();
+});
+
 it('shows run diagnostics for a single-message response', async () => {
   mockApi({
     messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000120', sequence: 1, status: 'completed', prompt: 'single message' })],
@@ -306,6 +334,14 @@ it('keeps the new-session page selected after archiving and refreshing', async (
   expect(screen.queryByText('This session is archived.')).not.toBeInTheDocument();
 });
 
+it('warns when running in local sandbox mode', async () => {
+  mockApi({ sandboxProvider: 'local' });
+  render(<App />);
+
+  expect(await screen.findByText('Local sandbox mode is not a security boundary.')).toBeInTheDocument();
+  expect(screen.getByText(/Commands run on this machine/)).toBeInTheDocument();
+});
+
 function mockApi(options: MockApiOptions = {}) {
   let currentSession = { ...session, ...options.sessionOverride };
   let currentUser = options.currentUser;
@@ -315,7 +351,7 @@ function mockApi(options: MockApiOptions = {}) {
     const method = init?.method ?? 'GET';
 
     if (url.pathname === '/health') {
-      return jsonResponse({ status: 'ok', runMode: 'all', apiAuthMode: options.authMode ?? 'none' });
+      return jsonResponse({ status: 'ok', runMode: 'all', apiAuthMode: options.authMode ?? 'none', sandboxProvider: options.sandboxProvider ?? 'fake' });
     }
 
     if (url.pathname === '/auth/me') {

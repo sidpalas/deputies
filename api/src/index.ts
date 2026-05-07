@@ -17,6 +17,7 @@ import { FlueRunner } from './runner-flue/runner.js';
 import { PostgresFlueSessionStore } from './runner-flue/session-store.js';
 import { DaytonaSandboxProvider } from './sandbox/daytona.js';
 import { FakeSandboxProvider } from './sandbox/fake.js';
+import { LocalSandboxProvider } from './sandbox/local.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
 import type { SandboxProvider } from './sandbox/types.js';
 import { MemoryStore } from './store/memory.js';
@@ -116,6 +117,9 @@ installProcessShutdownHandlers(new AppLifecycle(lifecycleOptions));
 
 function createSandboxProvider(): SandboxProvider {
   if (config.sandboxProvider === 'fake') return new FakeSandboxProvider();
+  if (config.sandboxProvider === 'local') {
+    return new LocalSandboxProvider(config.localSandboxAllowedCommands.length ? { allowedCommands: config.localSandboxAllowedCommands } : {});
+  }
   if (config.sandboxProvider === 'daytona') {
     const options = {
       apiKey: requireDaytonaApiKey(config),

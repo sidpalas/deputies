@@ -1,6 +1,6 @@
 export type RunMode = 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue';
-export type SandboxProviderKind = 'fake' | 'local-docker' | 'daytona' | 'kubernetes' | 'ecs';
+export type SandboxProviderKind = 'fake' | 'local' | 'local-docker' | 'daytona' | 'kubernetes' | 'ecs';
 export type AppStoreKind = 'memory' | 'postgres';
 export type ApiAuthMode = 'none' | 'bearer' | 'session';
 
@@ -14,6 +14,7 @@ export type AppConfig = {
   runMode: RunMode;
   runner: RunnerKind;
   sandboxProvider: SandboxProviderKind;
+  localSandboxAllowedCommands: string[];
   appStore: AppStoreKind;
   apiAuthMode: ApiAuthMode;
   apiBearerToken?: string;
@@ -60,9 +61,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     runner: parseEnum(env.RUNNER, ['fake', 'flue'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'local-docker', 'daytona', 'kubernetes', 'ecs'],
+      ['fake', 'local', 'local-docker', 'daytona', 'kubernetes', 'ecs'],
       'fake',
     ),
+    localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
     appStore: parseEnum(env.APP_STORE, ['memory', 'postgres'], 'memory'),
     apiAuthMode: parseEnum(env.API_AUTH_MODE, ['none', 'bearer', 'session'], 'none'),
     authCookieSecure: parseBoolean(env.AUTH_COOKIE_SECURE, false, 'AUTH_COOKIE_SECURE'),
