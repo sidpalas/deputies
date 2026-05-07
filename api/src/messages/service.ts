@@ -9,6 +9,10 @@ export type EnqueueMessageInput = {
   context?: Record<string, unknown>;
 };
 
+export type RecordTranscriptEntryInput = EnqueueMessageInput & {
+  status?: 'cancelled' | 'completed';
+};
+
 export class MessageService {
   constructor(
     private readonly store: AppStore,
@@ -61,6 +65,41 @@ export class MessageService {
 
   async list(sessionId: string): Promise<MessageRecord[]> {
     return this.store.getMessages(sessionId);
+  }
+
+  async recordTranscriptEntry(input: RecordTranscriptEntryInput): Promise<MessageRecord> {
+    const session = await this.store.getSession(input.sessionId);
+    if (!session) throw new MessageServiceError('not_found', `Session not found: ${input.sessionId}`);
+
+    const sequence = await this.store.nextMessageSequence(input.sessionId);
+    const record: MessageRecord = {
+      id: randomUUID(),
+      sessionId: input.sessionId,
+      sequence,
+      status: input.status ?? 'cancelled',
+      prompt: input.prompt,
+      createdAt: new Date(),
+    };
+    if (input.source) record.source = input.source;
+    if (input.context) record.context = input.context;
+
+    const message = await this.store.createMessage(record);
+    await this.events.append({
+      sessionId: input.sessionId,
+      messageId: message.id,
+      type: 'message_created',
+      payload: { sequence: message.sequence, source: message.source ?? null, transcriptOnly: true },
+    });
+    if (message.status === 'cancelled') {
+      await this.events.append({
+        sessionId: input.sessionId,
+        messageId: message.id,
+        type: 'message_cancelled',
+        payload: { sequence: message.sequence, transcriptOnly: true },
+      });
+    }
+
+    return message;
   }
 
   async updatePending(input: { sessionId: string; messageId: string; prompt: string }): Promise<MessageRecord> {

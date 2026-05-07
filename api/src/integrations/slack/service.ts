@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
 import type { AppStore, MessageRecord, SessionRecord } from '../../store/types.js';
+import { archivedIgnoredTranscriptPrompt, archivedRecoveryTranscriptPrompt, archivedRecoveryWorkPrompt, archivedSessionNotice, archivedSessionRecoveredNotice, includesArchivedSessionRecoveryPhrase, isArchivedSessionRecoveryOnly, unprocessedArchivedTranscriptMessages } from '../archive.js';
 import type { SlackInfoClient, SlackReactionClient, SlackReplyClient, SlackThreadClient } from './client.js';
 import { renderSlackPrompt, slackSessionTitle, type SlackThreadContext } from './prompts.js';
 import type { SlackAcceptedEvent, SlackEventEnvelope, SlackPromptMetadata, SlackThreadMessage } from './types.js';
@@ -21,6 +22,7 @@ export type HandleSlackEventResult =
   | { ok: true; type: 'challenge'; challenge: string }
   | { ok: true; type: 'ignored'; reason: string }
   | { ok: true; type: 'duplicate' }
+  | { ok: true; type: 'recovered'; session: SessionRecord }
   | { ok: true; type: 'accepted'; session: SessionRecord; message: MessageRecord };
 
 export class SlackIntegrationService {
@@ -63,11 +65,28 @@ export class SlackIntegrationService {
     }
 
     const threadId = slackExternalThreadId(accepted);
-    const session = await this.getOrCreateSession(threadId, accepted);
+    let session = await this.getOrCreateSession(threadId, accepted);
     if (session.status === 'archived') {
-      await this.store.markIntegrationDeliveryProcessed({ source: 'slack', dedupeKey: accepted.eventId, processedAt: new Date() });
-      await this.postArchivedSessionNotice(accepted);
-      return { ok: true, type: 'ignored', reason: 'session_archived' };
+      if (includesArchivedSessionRecoveryPhrase(accepted.text)) {
+        session = await this.sessions.unarchive(session.id);
+        const archivedMessages = unprocessedArchivedTranscriptMessages(await this.store.getMessages(session.id), 'slack');
+        if (archivedMessages.length) {
+          const message = await this.enqueueArchivedRecoveryWork(session, accepted, archivedMessages);
+          await this.store.markIntegrationDeliveryProcessed({ source: 'slack', dedupeKey: accepted.eventId, processedAt: new Date() });
+          return { ok: true, type: 'accepted', session, message };
+        }
+        if (isArchivedSessionRecoveryOnly(accepted.text)) {
+          await this.recordRecoveryTranscriptEntries(session.id, accepted);
+          await this.store.markIntegrationDeliveryProcessed({ source: 'slack', dedupeKey: accepted.eventId, processedAt: new Date() });
+          await this.postRecoveryAcknowledgement(accepted);
+          return { ok: true, type: 'recovered', session };
+        }
+      } else {
+        await this.recordArchivedTranscriptEntries(session.id, accepted);
+        await this.store.markIntegrationDeliveryProcessed({ source: 'slack', dedupeKey: accepted.eventId, processedAt: new Date() });
+        await this.postArchivedSessionNotice(accepted);
+        return { ok: true, type: 'ignored', reason: 'session_archived' };
+      }
     }
 
     await this.addReceivedReaction(accepted);
@@ -121,12 +140,78 @@ export class SlackIntegrationService {
       const response = await this.options.replyClient.postThreadReply({
         channel: event.channel,
         threadTs: event.threadTs,
-        text: 'This Deputies session is archived, so I did not queue your message. Restore the session in Deputies before replying here again.',
+        text: archivedSessionNotice(),
       });
       if (!response.ok) console.warn(`Slack archived-session notice failed: ${response.error ?? 'unknown_error'}`);
     } catch (error) {
       console.warn(error instanceof Error ? error.message : error);
     }
+  }
+
+  private async postRecoveryAcknowledgement(event: SlackAcceptedEvent): Promise<void> {
+    if (!this.options.replyClient) return;
+    try {
+      const response = await this.options.replyClient.postThreadReply({
+        channel: event.channel,
+        threadTs: event.threadTs,
+        text: archivedSessionRecoveredNotice(),
+      });
+      if (!response.ok) console.warn(`Slack recovery acknowledgement failed: ${response.error ?? 'unknown_error'}`);
+    } catch (error) {
+      console.warn(error instanceof Error ? error.message : error);
+    }
+  }
+
+  private async recordArchivedTranscriptEntries(sessionId: string, event: SlackAcceptedEvent): Promise<void> {
+    await this.messages.recordTranscriptEntry({
+      sessionId,
+      prompt: archivedIgnoredTranscriptPrompt(event.text),
+      source: 'slack',
+      context: {
+        source: 'slack',
+        transcriptOnly: true,
+        slack: { teamId: event.teamId, channel: event.channel, user: event.user, ts: event.ts, threadTs: event.threadTs, eventId: event.eventId, type: event.type },
+      },
+    });
+    await this.messages.recordTranscriptEntry({
+      sessionId,
+      prompt: archivedSessionNotice(),
+      source: 'slack_notice',
+      context: { source: 'slack', transcriptOnly: true, notice: { type: 'archived_session' } },
+    });
+  }
+
+  private async recordRecoveryTranscriptEntries(sessionId: string, event: SlackAcceptedEvent): Promise<void> {
+    await this.messages.recordTranscriptEntry({
+      sessionId,
+      prompt: archivedRecoveryTranscriptPrompt(event.text),
+      source: 'slack',
+      context: {
+        source: 'slack',
+        transcriptOnly: true,
+        slack: { teamId: event.teamId, channel: event.channel, user: event.user, ts: event.ts, threadTs: event.threadTs, eventId: event.eventId, type: event.type },
+      },
+    });
+    await this.messages.recordTranscriptEntry({
+      sessionId,
+      prompt: archivedSessionRecoveredNotice(),
+      source: 'slack_notice',
+      context: { source: 'slack', transcriptOnly: true, notice: { type: 'session_recovered' } },
+    });
+  }
+
+  private async enqueueArchivedRecoveryWork(session: SessionRecord, event: SlackAcceptedEvent, archivedMessages: MessageRecord[]): Promise<MessageRecord> {
+    return this.messages.enqueue({
+      sessionId: session.id,
+      prompt: archivedRecoveryWorkPrompt({ sourceLabel: 'Slack', archivedMessages, recoveryText: event.text }),
+      source: 'slack',
+      context: {
+        source: 'slack',
+        includedArchivedMessageIds: archivedMessages.map((message) => message.id),
+        slack: { teamId: event.teamId, channel: event.channel, user: event.user, ts: event.ts, threadTs: event.threadTs, eventId: event.eventId, type: event.type, includedThreadTs: [] },
+        callback: { type: 'slack', channel: event.channel, threadTs: event.threadTs, messageTs: event.ts },
+      },
+    });
   }
 
   private async fetchThreadContext(session: SessionRecord, event: SlackAcceptedEvent): Promise<SlackThreadContext> {

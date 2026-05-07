@@ -407,9 +407,75 @@ describe('Slack integration', () => {
     const reply = await slack.handle(slackEvent({ eventId: 'Ev2', type: 'message', text: 'follow up', ts: '1710000001.000100', threadTs: '1710000000.000100' }));
 
     expect(reply).toMatchObject({ type: 'ignored', reason: 'session_archived' });
-    await expect(services.messages.list(first.session.id)).resolves.toHaveLength(1);
+    const messages = await services.messages.list(first.session.id);
+    expect(messages).toHaveLength(3);
+    expect(messages[1]).toMatchObject({ source: 'slack', status: 'cancelled', prompt: expect.stringContaining('Not queued') });
+    expect(messages[2]).toMatchObject({ source: 'slack_notice', status: 'cancelled', prompt: expect.stringContaining('unarchive and proceed') });
     expect(reactions).toEqual([{ channel: 'C123', timestamp: '1710000000.000100', name: 'eyes' }]);
-    expect(replies).toEqual([{ channel: 'C123', threadTs: '1710000000.000100', text: expect.stringContaining('session is archived') }]);
+    expect(replies).toEqual([{ channel: 'C123', threadTs: '1710000000.000100', text: expect.stringContaining('unarchive and proceed') }]);
+  });
+
+  it('unarchives Slack thread sessions without starting a run for phrase-only recovery', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const replies: Array<{ channel: string; threadTs: string; text: string }> = [];
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+      replyClient: {
+        async postThreadReply(input) {
+          replies.push(input);
+          return { ok: true, ts: '1710000002.000100' };
+        },
+      },
+    });
+    const first = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> do work`, ts: '1710000000.000100' }));
+    if (first.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    await services.sessions.archive(first.session.id);
+
+    const restored = await slack.handle(slackEvent({ eventId: 'Ev2', type: 'message', text: 'unarchive and proceed', ts: '1710000001.000100', threadTs: '1710000000.000100' }));
+
+    expect(restored.type).toBe('recovered');
+    await expect(services.sessions.get(first.session.id)).resolves.toMatchObject({ status: 'idle' });
+    const messages = await services.messages.list(first.session.id);
+    expect(messages).toHaveLength(3);
+    expect(messages[1]).toMatchObject({ source: 'slack', status: 'cancelled', prompt: expect.stringContaining('No agent run was started') });
+    expect(messages[2]).toMatchObject({ source: 'slack_notice', status: 'cancelled', prompt: expect.stringContaining('Unarchived and ready') });
+    expect(replies).toEqual([{ channel: 'C123', threadTs: '1710000000.000100', text: expect.stringContaining('Unarchived and ready') }]);
+  });
+
+  it('queues Slack recovery messages that include additional instructions', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+    const first = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> do work`, ts: '1710000000.000100' }));
+    if (first.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    await services.sessions.archive(first.session.id);
+
+    const restored = await slack.handle(slackEvent({ eventId: 'Ev2', type: 'message', text: 'unarchive and proceed then summarize the thread', ts: '1710000001.000100', threadTs: '1710000000.000100' }));
+
+    expect(restored.type).toBe('accepted');
+    const messages = await services.messages.list(first.session.id);
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({ source: 'slack', status: 'pending' });
+  });
+
+  it('queues archived Slack instructions when users recover with the phrase', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+    const first = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> do work`, ts: '1710000000.000100' }));
+    if (first.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    await services.sessions.archive(first.session.id);
+
+    await slack.handle(slackEvent({ eventId: 'Ev2', type: 'message', text: 'please summarize the thread', ts: '1710000001.000100', threadTs: '1710000000.000100' }));
+    const recovered = await slack.handle(slackEvent({ eventId: 'Ev3', type: 'message', text: 'unarchive and proceed', ts: '1710000002.000100', threadTs: '1710000000.000100' }));
+
+    expect(recovered.type).toBe('accepted');
+    const messages = await services.messages.list(first.session.id);
+    expect(messages).toHaveLength(4);
+    expect(messages[3]).toMatchObject({ source: 'slack', status: 'pending' });
+    expect(messages[3]!.prompt).toContain('please summarize the thread');
+    expect(messages[3]!.prompt).toContain('Slack archived-session recovery');
+    expect(messages[3]!.context?.includedArchivedMessageIds).toEqual([messages[1]!.id]);
   });
 
   it('handles signed Slack webhook challenges through the API route', async () => {

@@ -10,6 +10,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - GitHub integration for issue comments, PR comments, and review comments.
 - GitHub App signature verification, installation token flow, and delivery dedupe.
 - GitHub callback comments with completion summaries and PR/artifact links.
+- Preview URL detection and surfacing from sandbox/deployment output, including final callback links for Slack/GitHub and context-panel artifacts in the web UI.
 - GitHub repository/user gating, deterministic thread mapping, untrusted prompt wrappers, branch sanitization, and provider-owned push/PR helpers.
 - Shared integration utilities for delivery dedupe, allowlists, external-thread session mapping, processed-item filtering, prompt section rendering, and callback target parsing before adding the next major integration.
 - Source-agnostic received/final-response lifecycle so integrations add lightweight received signals while callback senders own exactly one final external reply.
@@ -25,6 +26,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Session list pagination and server-side search.
 - Pin/favorite sessions.
 - Better run and sandbox status in the context panel.
+- Preview URL cards in the context panel, with source, expiry/status, and quick-open/copy actions.
 - Surface sandbox cleanup events and failures more clearly.
 - Show callback delivery status per session/message.
 - Improve archived-session browsing and bulk cleanup.
@@ -40,6 +42,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Better repo resolution from Slack/GitHub/Linear context.
 - Populate `repository list` from GitHub App installation repositories instead of only `GITHUB_ALLOWED_REPOSITORIES`, while keeping the allowlist as an optional safety filter.
 - Setup/install hook observability beyond `repository_ready`.
+- Preview URL artifact emission from agent tools and sandbox processes, with normalization for common local/dev-server/deployment URL patterns.
 - Snapshot/image baking for common repos and build artifacts, with Flue startup refresh for stale or missing worktrees.
 - Upstream Flue cancellation improvement for built-in bash/tool execution.
 

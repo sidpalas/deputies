@@ -24,6 +24,7 @@ export type Message = {
   status: string;
   prompt: string;
   createdAt: string;
+  source?: string;
   context?: Record<string, unknown>;
 };
 

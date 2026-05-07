@@ -2,6 +2,7 @@ import { AppLifecycle, installProcessShutdownHandlers, type CloseableResource } 
 import { createServer, createServices } from './app/server.js';
 import { HttpCompletionCallbackSender, type CompletionCallbackSender } from './callbacks/service.js';
 import { loadConfig, requireDatabaseUrl, requireDaytonaApiKey, requireFlueModel, requireGitHubAppCredentials } from './config/index.js';
+import { GitHubArchivedSessionNotifier } from './integrations/github/archived-session-notifier.js';
 import { GitHubCompletionCallbackSender } from './integrations/github/callback-sender.js';
 import { GitHubClient } from './integrations/github/client.js';
 import { GitHubIssueContextFetcher } from './integrations/github/issue-context-fetcher.js';
@@ -34,6 +35,7 @@ const githubRepositoryAccess = githubClient ? createGitHubRepositoryAccess(githu
 if (githubClient && githubRepositoryAccess) {
   services.githubReactionSender = new GitHubReactionSender(githubClient, githubRepositoryAccess);
   services.githubIssueContextFetcher = new GitHubIssueContextFetcher(githubClient, githubRepositoryAccess);
+  services.githubArchivedSessionNotifier = new GitHubArchivedSessionNotifier(githubClient, githubRepositoryAccess);
 }
 const resources: CloseableResource[] = [];
 let server: ReturnType<typeof createServer> | undefined;

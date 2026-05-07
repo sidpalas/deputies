@@ -280,6 +280,35 @@ it('renders user prompts as plain text so Slack author lines are visible', async
   expect(await screen.findByText(/\[sid\]: reply "hello"/)).toBeInTheDocument();
 });
 
+it('labels transcript-only integration entries as not queued', async () => {
+  mockApi({
+    messages: [
+      messageFixture({
+        id: '00000000-0000-4000-8000-000000000124',
+        sequence: 1,
+        status: 'cancelled',
+        source: 'github',
+        context: { transcriptOnly: true },
+        prompt: '@Deputies testing archived\n\n[Not queued: this Deputies session was archived.]',
+      }),
+      messageFixture({
+        id: '00000000-0000-4000-8000-000000000125',
+        sequence: 2,
+        status: 'cancelled',
+        source: 'github_notice',
+        context: { transcriptOnly: true },
+        prompt: 'This Deputies session is archived, so I did not queue your message. Reply `unarchive and proceed` to restore the session and queue your reply.',
+      }),
+    ],
+  });
+  render(<App />);
+
+  expect(await screen.findByText('GitHub comment 1')).toBeInTheDocument();
+  expect(screen.getByText('GitHub notice 2')).toBeInTheDocument();
+  expect(screen.getAllByText('not queued')).toHaveLength(2);
+  expect(screen.getByText(/unarchive and proceed/)).toBeInTheDocument();
+});
+
 it('shows callback delivery status and replays failed callbacks', async () => {
   const replays: string[] = [];
   mockApi({
@@ -443,7 +472,7 @@ function mockApi(options: MockApiOptions = {}) {
   });
 }
 
-function messageFixture(input: { id: string; sequence: number; status: string; prompt: string }) {
+function messageFixture(input: { id: string; sequence: number; status: string; prompt: string; source?: string; context?: Record<string, unknown> }) {
   return {
     ...input,
     sessionId: session.id,

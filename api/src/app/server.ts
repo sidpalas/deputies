@@ -10,6 +10,7 @@ import { CallbackService, CallbackServiceError } from '../callbacks/service.js';
 import { requireAuthSessionSecret, requireSlackSigningSecret, requireStaticCredentials, type AppConfig } from '../config/index.js';
 import { EventService } from '../events/service.js';
 import { GenericWebhookError, GenericWebhookService } from '../integrations/generic-webhook/service.js';
+import { type GitHubArchivedSessionNotifier } from '../integrations/github/archived-session-notifier.js';
 import { verifyGitHubWebhookSignature } from '../integrations/github/webhook-auth.js';
 import { GitHubWebhookService } from '../integrations/github/webhook-service.js';
 import { type GitHubIssueContextFetcher } from '../integrations/github/issue-context-fetcher.js';
@@ -40,6 +41,7 @@ export type AppServices = {
   sandboxCleanup?: SandboxCleanupService;
   githubReactionSender?: Pick<GitHubReactionSender, 'addEyes'>;
   githubIssueContextFetcher?: Pick<GitHubIssueContextFetcher, 'listIssueComments'>;
+  githubArchivedSessionNotifier?: Pick<GitHubArchivedSessionNotifier, 'postNotice' | 'postRecoveryAcknowledgement'>;
 };
 
 export function createServices(store: AppStore = new MemoryStore(), options: { sandboxProvider?: SandboxProvider } = {}): AppServices {
@@ -211,6 +213,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       triggerHandles: config.githubTriggerHandles,
       ...(services.githubReactionSender ? { reactionSender: services.githubReactionSender } : {}),
       ...(services.githubIssueContextFetcher ? { issueContextFetcher: services.githubIssueContextFetcher } : {}),
+      ...(services.githubArchivedSessionNotifier ? { archivedSessionNotifier: services.githubArchivedSessionNotifier } : {}),
     }).handle({ headers, payload });
     return c.json({ ok: true, type: result.type, ...('reason' in result ? { reason: result.reason } : {}) }, result.type === 'accepted' ? 202 : 200);
   });

@@ -193,6 +193,98 @@ describe('GitHub webhook integration', () => {
     expect(duplicate).toEqual({ ok: true, type: 'duplicate' });
   });
 
+  it('posts a GitHub archived-session notice and ignores the message', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const notices: unknown[] = [];
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+      archivedSessionNotifier: {
+        async postNotice(input) {
+          notices.push(input);
+        },
+        async postRecoveryAcknowledgement() {},
+      },
+    });
+    const first = await github.handle({ headers: { deliveryId: 'delivery-1', event: 'issues' }, payload: issuePayload({}) });
+    if (first.type !== 'accepted') throw new Error('Expected accepted GitHub event');
+    await services.sessions.archive(first.session.id);
+
+    const ignored = await github.handle({ headers: { deliveryId: 'delivery-2', event: 'issue_comment' }, payload: issueCommentPayload({ body: '@deputies follow up' }) });
+
+    expect(ignored).toEqual({ ok: true, type: 'ignored', reason: 'session_archived' });
+    const messages = await services.messages.list(first.session.id);
+    expect(messages).toHaveLength(3);
+    expect(messages[1]).toMatchObject({ source: 'github', status: 'cancelled', prompt: expect.stringContaining('Not queued') });
+    expect(messages[2]).toMatchObject({ source: 'github_notice', status: 'cancelled', prompt: expect.stringContaining('unarchive and proceed') });
+    expect(notices).toEqual([{ owner: 'acme', repo: 'widget', issueNumber: 42 }]);
+  });
+
+  it('unarchives GitHub sessions without starting a run for phrase-only recovery', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const notices: unknown[] = [];
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+      triggerHandles: ['deputies'],
+      archivedSessionNotifier: {
+        async postNotice(input) {
+          notices.push(input);
+        },
+        async postRecoveryAcknowledgement(input) {
+          notices.push({ recovery: input });
+        },
+      },
+    });
+    const first = await github.handle({ headers: { deliveryId: 'delivery-1', event: 'issues' }, payload: issuePayload({ title: '@deputies fix this' }) });
+    if (first.type !== 'accepted') throw new Error('Expected accepted GitHub event');
+    await services.sessions.archive(first.session.id);
+
+    const restored = await github.handle({ headers: { deliveryId: 'delivery-2', event: 'issue_comment' }, payload: issueCommentPayload({ body: 'unarchive and proceed' }) });
+
+    expect(restored.type).toBe('recovered');
+    await expect(services.sessions.get(first.session.id)).resolves.toMatchObject({ status: 'idle' });
+    const messages = await services.messages.list(first.session.id);
+    expect(messages).toHaveLength(3);
+    expect(messages[1]).toMatchObject({ source: 'github', status: 'cancelled', prompt: expect.stringContaining('No agent run was started') });
+    expect(messages[2]).toMatchObject({ source: 'github_notice', status: 'cancelled', prompt: expect.stringContaining('Unarchived and ready') });
+    expect(notices).toEqual([{ recovery: { owner: 'acme', repo: 'widget', issueNumber: 42 } }]);
+  });
+
+  it('queues GitHub recovery comments that include additional instructions', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, { triggerHandles: ['deputies'] });
+    const first = await github.handle({ headers: { deliveryId: 'delivery-1', event: 'issues' }, payload: issuePayload({ title: '@deputies fix this' }) });
+    if (first.type !== 'accepted') throw new Error('Expected accepted GitHub event');
+    await services.sessions.archive(first.session.id);
+
+    const restored = await github.handle({ headers: { deliveryId: 'delivery-2', event: 'issue_comment' }, payload: issueCommentPayload({ body: '@Deputies unarchive and proceed then summarize the PR' }) });
+
+    expect(restored.type).toBe('accepted');
+    const messages = await services.messages.list(first.session.id);
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({ source: 'github', status: 'pending' });
+  });
+
+  it('queues archived GitHub instructions when users recover with the phrase', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, { triggerHandles: ['deputies'] });
+    const first = await github.handle({ headers: { deliveryId: 'delivery-1', event: 'issues' }, payload: issuePayload({ title: '@deputies fix this' }) });
+    if (first.type !== 'accepted') throw new Error('Expected accepted GitHub event');
+    await services.sessions.archive(first.session.id);
+
+    await github.handle({ headers: { deliveryId: 'delivery-2', event: 'issue_comment' }, payload: issueCommentPayload({ body: '@Deputies please summarize the PR' }) });
+    const recovered = await github.handle({ headers: { deliveryId: 'delivery-3', event: 'issue_comment' }, payload: issueCommentPayload({ body: '@Deputies unarchive and proceed', commentId: 100 }) });
+
+    expect(recovered.type).toBe('accepted');
+    const messages = await services.messages.list(first.session.id);
+    expect(messages).toHaveLength(4);
+    expect(messages[3]).toMatchObject({ source: 'github', status: 'pending' });
+    expect(messages[3]!.prompt).toContain('@Deputies please summarize the PR');
+    expect(messages[3]!.prompt).toContain('GitHub archived-session recovery');
+    expect(messages[3]!.context?.includedArchivedMessageIds).toEqual([messages[1]!.id]);
+  });
+
   it('requires configured trigger handles in GitHub event text', async () => {
     const store = new MemoryStore();
     const services = createServices(store);

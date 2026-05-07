@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
 import type { AppStore, MessageRecord, SessionRecord } from '../../store/types.js';
+import { archivedIgnoredTranscriptPrompt, archivedRecoveryTranscriptPrompt, archivedRecoveryWorkPrompt, archivedSessionNotice, archivedSessionRecoveredNotice, includesArchivedSessionRecoveryPhrase, isArchivedSessionRecoveryOnly, unprocessedArchivedTranscriptMessages } from '../archive.js';
+import type { GitHubArchivedSessionNotifier } from './archived-session-notifier.js';
 import type { GitHubIssueContextFetcher, GitHubIssueThreadComment } from './issue-context-fetcher.js';
 import type { GitHubReactionSender, GitHubReactionTarget } from './reaction-sender.js';
 
@@ -16,11 +18,13 @@ export type GitHubWebhookServiceOptions = {
   triggerHandles?: string[];
   reactionSender?: Pick<GitHubReactionSender, 'addEyes'>;
   issueContextFetcher?: Pick<GitHubIssueContextFetcher, 'listIssueComments'>;
+  archivedSessionNotifier?: Pick<GitHubArchivedSessionNotifier, 'postNotice' | 'postRecoveryAcknowledgement'>;
 };
 
 export type GitHubWebhookResult =
   | { ok: true; type: 'ignored'; reason: string }
   | { ok: true; type: 'duplicate' }
+  | { ok: true; type: 'recovered'; session: SessionRecord }
   | { ok: true; type: 'accepted'; session: SessionRecord; message: MessageRecord };
 
 type GitHubRepositoryPayload = {
@@ -142,10 +146,28 @@ export class GitHubWebhookService {
     await this.addReceivedReaction(accepted);
 
     const threadId = githubExternalThreadId(accepted);
-    const session = await this.getOrCreateSession(threadId, accepted);
+    let session = await this.getOrCreateSession(threadId, accepted);
     if (session.status === 'archived') {
-      await this.store.markIntegrationDeliveryProcessed({ source: 'github', dedupeKey: accepted.deliveryId, processedAt: new Date() });
-      return { ok: true, type: 'ignored', reason: 'session_archived' };
+      if (includesArchivedSessionRecoveryPhrase(githubEventText(accepted))) {
+        session = await this.sessions.unarchive(session.id);
+        const archivedMessages = unprocessedArchivedTranscriptMessages(await this.store.getMessages(session.id), 'github');
+        if (archivedMessages.length) {
+          const message = await this.enqueueArchivedRecoveryWork(session, accepted, archivedMessages);
+          await this.store.markIntegrationDeliveryProcessed({ source: 'github', dedupeKey: accepted.deliveryId, processedAt: new Date() });
+          return { ok: true, type: 'accepted', session, message };
+        }
+        if (isArchivedSessionRecoveryOnly(currentGitHubMessageText(accepted))) {
+          await this.recordRecoveryTranscriptEntries(session.id, accepted);
+          await this.store.markIntegrationDeliveryProcessed({ source: 'github', dedupeKey: accepted.deliveryId, processedAt: new Date() });
+          await this.postRecoveryAcknowledgement(accepted);
+          return { ok: true, type: 'recovered', session };
+        }
+      } else {
+        await this.recordArchivedTranscriptEntries(session.id, accepted);
+        await this.store.markIntegrationDeliveryProcessed({ source: 'github', dedupeKey: accepted.deliveryId, processedAt: new Date() });
+        await this.postArchivedSessionNotice(accepted);
+        return { ok: true, type: 'ignored', reason: 'session_archived' };
+      }
     }
     const existingMessageCount = (await this.store.getMessages(session.id)).length;
     const threadContext = await this.fetchThreadContext(session, accepted);
@@ -203,6 +225,7 @@ export class GitHubWebhookService {
 
   private triggerFailure(event: AcceptedGitHubEvent): string | null {
     if (!this.options.triggerHandles?.length) return null;
+    if (includesArchivedSessionRecoveryPhrase(githubEventText(event))) return null;
     return eventMentionsTrigger(event, this.options.triggerHandles) ? null : 'missing_trigger_handle';
   }
 
@@ -215,6 +238,108 @@ export class GitHubWebhookService {
     } catch (error) {
       console.warn(error instanceof Error ? error.message : error);
     }
+  }
+
+  private async postArchivedSessionNotice(event: AcceptedGitHubEvent): Promise<void> {
+    if (!this.options.archivedSessionNotifier) return;
+    try {
+      await this.options.archivedSessionNotifier.postNotice({ owner: event.owner, repo: event.repo, issueNumber: event.number });
+    } catch (error) {
+      console.warn(error instanceof Error ? error.message : error);
+    }
+  }
+
+  private async postRecoveryAcknowledgement(event: AcceptedGitHubEvent): Promise<void> {
+    if (!this.options.archivedSessionNotifier) return;
+    try {
+      await this.options.archivedSessionNotifier.postRecoveryAcknowledgement({ owner: event.owner, repo: event.repo, issueNumber: event.number });
+    } catch (error) {
+      console.warn(error instanceof Error ? error.message : error);
+    }
+  }
+
+  private async recordArchivedTranscriptEntries(sessionId: string, event: AcceptedGitHubEvent): Promise<void> {
+    await this.messages.recordTranscriptEntry({
+      sessionId,
+      prompt: archivedIgnoredTranscriptPrompt(currentGitHubMessageText(event)),
+      source: 'github',
+      context: {
+        source: 'github',
+        transcriptOnly: true,
+        repository: { provider: 'github', owner: event.owner, repo: event.repo },
+        github: {
+          event: event.event,
+          action: event.action,
+          deliveryId: event.deliveryId,
+          owner: event.owner,
+          repo: event.repo,
+          number: event.number,
+          itemType: event.itemType,
+          ...(event.commentId ? { commentId: event.commentId } : {}),
+        },
+      },
+    });
+    await this.messages.recordTranscriptEntry({
+      sessionId,
+      prompt: archivedSessionNotice(),
+      source: 'github_notice',
+      context: {
+        source: 'github',
+        transcriptOnly: true,
+        repository: { provider: 'github', owner: event.owner, repo: event.repo },
+        notice: { type: 'archived_session', owner: event.owner, repo: event.repo, issueNumber: event.number },
+      },
+    });
+  }
+
+  private async recordRecoveryTranscriptEntries(sessionId: string, event: AcceptedGitHubEvent): Promise<void> {
+    await this.messages.recordTranscriptEntry({
+      sessionId,
+      prompt: archivedRecoveryTranscriptPrompt(currentGitHubMessageText(event)),
+      source: 'github',
+      context: {
+        source: 'github',
+        transcriptOnly: true,
+        repository: { provider: 'github', owner: event.owner, repo: event.repo },
+        github: { event: event.event, action: event.action, deliveryId: event.deliveryId, owner: event.owner, repo: event.repo, number: event.number, itemType: event.itemType, ...(event.commentId ? { commentId: event.commentId } : {}) },
+      },
+    });
+    await this.messages.recordTranscriptEntry({
+      sessionId,
+      prompt: archivedSessionRecoveredNotice(),
+      source: 'github_notice',
+      context: {
+        source: 'github',
+        transcriptOnly: true,
+        repository: { provider: 'github', owner: event.owner, repo: event.repo },
+        notice: { type: 'session_recovered', owner: event.owner, repo: event.repo, issueNumber: event.number },
+      },
+    });
+  }
+
+  private async enqueueArchivedRecoveryWork(session: SessionRecord, event: AcceptedGitHubEvent, archivedMessages: MessageRecord[]): Promise<MessageRecord> {
+    return this.messages.enqueue({
+      sessionId: session.id,
+      prompt: archivedRecoveryWorkPrompt({ sourceLabel: 'GitHub', archivedMessages, recoveryText: currentGitHubMessageText(event) }),
+      source: 'github',
+      context: {
+        source: 'github',
+        includedArchivedMessageIds: archivedMessages.map((message) => message.id),
+        repository: { provider: 'github', owner: event.owner, repo: event.repo },
+        github: {
+          event: event.event,
+          action: event.action,
+          deliveryId: event.deliveryId,
+          owner: event.owner,
+          repo: event.repo,
+          number: event.number,
+          itemType: event.itemType,
+          ...(event.commentId ? { commentId: event.commentId } : {}),
+          includedCommentIds: [],
+        },
+        callback: { type: 'github', owner: event.owner, repo: event.repo, issueNumber: event.number },
+      },
+    });
   }
 
   private async fetchThreadContext(session: SessionRecord, event: AcceptedGitHubEvent): Promise<GitHubThreadContext> {
@@ -373,8 +498,6 @@ function renderGitHubPrompt(event: AcceptedGitHubEvent, threadContext: GitHubThr
   const lines = ['GitHub webhook context:', '---'];
   if (options.includeFullThreadContext) {
     lines.push(
-      'GitHub event received.',
-      '',
       `Event: ${eventType}`,
       `Repository: ${event.owner}/${event.repo}`,
       `${event.itemType} #${event.number}: ${event.title ?? '(no title)'}`,
@@ -480,12 +603,20 @@ function isAllowed(value: string, allowlist: string[] | undefined): boolean {
 }
 
 function eventMentionsTrigger(event: AcceptedGitHubEvent, handles: string[]): boolean {
-  const text = [event.title, event.body, event.commentBody, event.reviewBody].filter((value): value is string => Boolean(value)).join('\n').toLowerCase();
+  const text = githubEventText(event).toLowerCase();
   if (!text) return false;
   return handles.some((handle) => {
     const normalized = handle.trim().toLowerCase().replace(/^@/, '');
     return Boolean(normalized) && text.includes(`@${normalized}`);
   });
+}
+
+function githubEventText(event: AcceptedGitHubEvent): string {
+  return [event.title, event.body, event.commentBody, event.reviewBody].filter((value): value is string => Boolean(value)).join('\n');
+}
+
+function currentGitHubMessageText(event: AcceptedGitHubEvent): string {
+  return event.commentBody ?? event.reviewBody ?? event.body ?? '(no body)';
 }
 
 function githubCommentIdsFromMessage(message: MessageRecord): number[] {

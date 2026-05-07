@@ -1007,7 +1007,7 @@ function UserMessageCard(props: {
   return (
     <Card className="border-sky-500/70 bg-sky-950/30 p-3" role="article" aria-label={`Message ${message.sequence}`}>
       <div className="mb-1 flex items-center justify-between gap-2">
-        <h3 className="text-xs font-medium text-slate-400">Message {message.sequence} <Badge className={statusTextClass(message.status)}>{message.status === 'pending' ? 'queued' : message.status}</Badge></h3>
+        <h3 className="text-xs font-medium text-slate-400">{messageLabel(message)} <Badge className={statusTextClass(message.status)}>{messageStatusLabel(message)}</Badge></h3>
         {message.status === 'pending' && props.editingMessageId !== message.id ? (
           <div className="flex gap-1">
             <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onEditMessage(message)}>Edit</Button>
@@ -1027,6 +1027,19 @@ function UserMessageCard(props: {
       ) : <PlainText text={message.prompt} />}
     </Card>
   );
+}
+
+function messageLabel(message: Message): string {
+  if (message.source === 'github_notice') return `GitHub notice ${message.sequence}`;
+  if (message.source === 'slack_notice') return `Slack notice ${message.sequence}`;
+  if (message.context?.transcriptOnly && message.source === 'github') return `GitHub comment ${message.sequence}`;
+  if (message.context?.transcriptOnly && message.source === 'slack') return `Slack message ${message.sequence}`;
+  return `Message ${message.sequence}`;
+}
+
+function messageStatusLabel(message: Message): string {
+  if (message.context?.transcriptOnly && message.status === 'cancelled') return 'not queued';
+  return message.status === 'pending' ? 'queued' : message.status;
 }
 
 function PlainText(props: { text: string }) {
