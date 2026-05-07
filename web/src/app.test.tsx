@@ -9,6 +9,23 @@ const session = {
   updatedAt: '2026-05-05T12:00:00.000Z',
 };
 
+type StreamEventPusher = (event: unknown) => void;
+
+type MockApiOptions = {
+  submittedPrompts?: string[];
+  messages?: unknown[];
+  events?: unknown[];
+  sessions?: unknown[];
+  callbacks?: unknown[];
+  sessionOverride?: Partial<typeof session>;
+  onCancelRun?: () => void;
+  onReplayCallback?: (callbackId: string) => void;
+  onStreamOpen?: (push: StreamEventPusher) => void;
+  authMode?: 'none' | 'bearer' | 'session';
+  currentUser?: { username: string } | null;
+  logins?: Array<{ username: string; password: string }>;
+};
+
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
@@ -137,6 +154,35 @@ it('keeps a cancelled middle message inline with its surrounding batch', async (
   expect(screen.getAllByText(/Diagnostics/)).toHaveLength(1);
 });
 
+it('shows a jump control instead of autoscrolling after the user scrolls up', async () => {
+  let pushStreamEvent: StreamEventPusher = () => undefined;
+  const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView);
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000130', sequence: 1, status: 'processing', prompt: 'long running work' })],
+    onStreamOpen: (push) => {
+      pushStreamEvent = push;
+    },
+  });
+  render(<App />);
+
+  const messageLog = await screen.findByRole('log', { name: 'Session messages' });
+  Object.defineProperties(messageLog, {
+    clientHeight: { configurable: true, value: 500 },
+    scrollHeight: { configurable: true, value: 2000 },
+    scrollTop: { configurable: true, value: 0 },
+  });
+  fireEvent.scroll(messageLog);
+  scrollIntoView.mockClear();
+
+  pushStreamEvent(eventFixture({ sequence: 1, type: 'agent_text_delta', messageId: '00000000-0000-4000-8000-000000000130', payload: { text: 'streaming diagnostics' } }));
+
+  const jump = await screen.findByRole('button', { name: /Jump to latest/ });
+  expect(scrollIntoView).not.toHaveBeenCalled();
+
+  fireEvent.click(jump);
+  expect(scrollIntoView).toHaveBeenCalledWith({ block: 'end', behavior: 'smooth' });
+});
+
 it('shows run diagnostics for a single-message response', async () => {
   mockApi({
     messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000120', sequence: 1, status: 'completed', prompt: 'single message' })],
@@ -246,7 +292,7 @@ it('keeps the new-session page selected after archiving and refreshing', async (
   expect(screen.queryByText('This session is archived.')).not.toBeInTheDocument();
 });
 
-function mockApi(options: { submittedPrompts?: string[]; messages?: unknown[]; events?: unknown[]; sessions?: unknown[]; callbacks?: unknown[]; sessionOverride?: Partial<typeof session>; onCancelRun?: () => void; onReplayCallback?: (callbackId: string) => void; authMode?: 'none' | 'bearer' | 'session'; currentUser?: { username: string } | null; logins?: Array<{ username: string; password: string }> } = {}) {
+function mockApi(options: MockApiOptions = {}) {
   let currentSession = { ...session, ...options.sessionOverride };
   let currentUser = options.currentUser;
   let callbacks = options.callbacks ?? [];
@@ -333,7 +379,14 @@ function mockApi(options: { submittedPrompts?: string[]; messages?: unknown[]; e
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/events/stream`) {
-      return new Response(new ReadableStream(), { status: 200 });
+      return new Response(new ReadableStream({
+        start(controller) {
+          const pushStreamEvent: StreamEventPusher = (event) => {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+          };
+          options.onStreamOpen?.(pushStreamEvent);
+        },
+      }), { status: 200 });
     }
 
     return jsonResponse({ error: 'not_found', message: 'Not found' }, 404);

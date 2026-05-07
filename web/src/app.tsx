@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, SyntheticEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, KeyboardEvent, SyntheticEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Archive, Check, ChevronDown, Copy, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, RotateCcw, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -45,9 +45,14 @@ const tokenStorageKey = 'dev-deputies-api-token';
 const selectedSessionStorageKey = 'dev-deputies-selected-session-id';
 const newSessionSelectedStorageKey = 'dev-deputies-new-session-selected';
 const archivedSessionsOpenStorageKey = 'dev-deputies-archived-sessions-open';
+const threadAutoFollowThreshold = 160;
 
 function loadStoredToken(): string {
   return localStorage.getItem(tokenStorageKey) ?? '';
+}
+
+function isThreadNearBottom(container: HTMLElement): boolean {
+  return container.scrollHeight - container.scrollTop - container.clientHeight <= threadAutoFollowThreshold;
 }
 
 export function App() {
@@ -80,9 +85,12 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const eventCursor = useRef(0);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
+  const threadAutoFollowRef = useRef(true);
+  const autoScrolledSessionId = useRef('');
 
   const bearerAuthRequired = health?.apiAuthMode === 'bearer';
   const sessionAuthRequired = health?.apiAuthMode === 'session';
@@ -131,12 +139,23 @@ export function App() {
     refreshSessionDetail(selectedSessionId);
   }, [selectedSessionId, canCallApi, token]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const container = threadScrollRef.current;
-    if (!container) return;
-    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    if (distanceFromBottom > 160) return;
-    threadEndRef.current?.scrollIntoView({ block: 'end' });
+    if (!container || !selectedSessionId) return;
+
+    if (autoScrolledSessionId.current !== selectedSessionId) {
+      autoScrolledSessionId.current = selectedSessionId;
+      setThreadAutoFollowEnabled(true);
+      scrollThreadToBottom();
+      return;
+    }
+
+    if (threadAutoFollowRef.current || isThreadNearBottom(container)) {
+      scrollThreadToBottom();
+      return;
+    }
+
+    setShowJumpToLatest(true);
   }, [selectedSessionId, messages.length, events.length]);
 
   useEffect(() => {
@@ -264,6 +283,7 @@ export function App() {
         ...(repositoryInput ? { repository: repositoryInput } : {}),
       });
       setMessages((current) => [...current, message]);
+      setThreadAutoFollowEnabled(true);
       setPrompt('');
       await refreshSessions();
       await refreshSessionDetail(selectedSessionId);
@@ -418,11 +438,32 @@ export function App() {
   }
 
   function selectSession(sessionId: string) {
+    autoScrolledSessionId.current = '';
     localStorage.setItem(selectedSessionStorageKey, sessionId);
     localStorage.removeItem(newSessionSelectedStorageKey);
     setSelectedSessionId(sessionId);
     setIsCreatingThread(false);
     setSidebarOpen(false);
+  }
+
+  function setThreadAutoFollowEnabled(enabled: boolean) {
+    threadAutoFollowRef.current = enabled;
+    if (enabled) setShowJumpToLatest(false);
+  }
+
+  function handleThreadScroll() {
+    const container = threadScrollRef.current;
+    if (!container) return;
+    setThreadAutoFollowEnabled(isThreadNearBottom(container));
+  }
+
+  function jumpToLatestThreadActivity() {
+    setThreadAutoFollowEnabled(true);
+    scrollThreadToBottom('smooth');
+  }
+
+  function scrollThreadToBottom(behavior: ScrollBehavior = 'auto') {
+    threadEndRef.current?.scrollIntoView({ block: 'end', behavior });
   }
 
   function toggleSidebar() {
@@ -569,20 +610,27 @@ export function App() {
               />
               <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_20rem]">
                 <section className="flex min-h-0 min-w-0 flex-col px-3 pt-4 md:px-8 xl:px-20">
-                  <div className="min-h-0 flex-1 overflow-auto pb-4" ref={threadScrollRef}>
-                    <ChatPanel
-                      editingMessageId={editingMessageId}
-                      events={events}
-                      messageDraft={messageDraft}
-                      messages={messages}
-                      onCancelEdit={() => finishEditingMessage(true)}
-                      onCancelQueuedMessage={cancelQueuedMessage}
-                      onCancelRun={cancelRun}
-                      onEditMessage={startEditingMessage}
-                      onMessageDraftChange={setMessageDraft}
-                      onSaveEdit={saveMessageEdit}
-                    />
-                    <div ref={threadEndRef} />
+                  <div className="relative min-h-0 flex-1">
+                    <div className="h-full overflow-auto pb-4" ref={threadScrollRef} onScroll={handleThreadScroll} role="log" aria-label="Session messages">
+                      <ChatPanel
+                        editingMessageId={editingMessageId}
+                        events={events}
+                        messageDraft={messageDraft}
+                        messages={messages}
+                        onCancelEdit={() => finishEditingMessage(true)}
+                        onCancelQueuedMessage={cancelQueuedMessage}
+                        onCancelRun={cancelRun}
+                        onEditMessage={startEditingMessage}
+                        onMessageDraftChange={setMessageDraft}
+                        onSaveEdit={saveMessageEdit}
+                      />
+                      <div ref={threadEndRef} />
+                    </div>
+                    {showJumpToLatest ? (
+                      <Button className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 shadow-xl" type="button" variant="secondary" onClick={jumpToLatestThreadActivity}>
+                        <ChevronDown className="h-4 w-4" /> Jump to latest
+                      </Button>
+                    ) : null}
                   </div>
                   {selectedSessionArchived ? <ArchivedSessionNotice onRestore={restoreSelectedSession} /> : null}
                   <form className="shrink-0 bg-slate-950/95 py-3" onSubmit={handleSendMessage}>
