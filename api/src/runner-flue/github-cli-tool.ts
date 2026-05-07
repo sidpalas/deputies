@@ -84,7 +84,15 @@ function validateArgs(value: unknown): string[] {
   if ((command === 'repo' || command === 'gist') && args[1] === 'clone') {
     throw new Error(`gh ${command} clone is not available through this tool`);
   }
+  if (command === 'api' && isGitDatabaseApiRoute(args[1])) {
+    throw new Error('GitHub Git Database API routes are not available through gh. Use sandbox git commands and the authenticated git tool for branch/object pushes.');
+  }
   return args;
+}
+
+function isGitDatabaseApiRoute(route: string | undefined): boolean {
+  if (!route) return false;
+  return /^repos\/[^/]+\/[^/]+\/git(?:\/|$)/.test(route.replace(/^\/+/, ''));
 }
 
 function createGitHubCliEnv(access: GitHubRepositoryAccess, configDir: string): Record<string, string> {

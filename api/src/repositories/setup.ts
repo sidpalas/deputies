@@ -63,6 +63,8 @@ function repositorySetupCommand(access: GitHubRepositoryAccess, workspacePath: s
     'else',
     `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone -- ${quoteShell(access.cloneUrl)} ${quoteShell(workspacePath)}`,
     'fi',
+    `git -C ${quoteShell(workspacePath)} config user.name 'Dev Deputies'`,
+    `git -C ${quoteShell(workspacePath)} config user.email 'dev-deputies@users.noreply.github.com'`,
   ].join('\n');
 }
 

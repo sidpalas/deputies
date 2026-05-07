@@ -34,6 +34,14 @@ describe('authenticated git Flue tool', () => {
     await expect(tool.execute({ args: ['-c', 'http.extraHeader=bad', 'push'] })).rejects.toThrow('explicit subcommand');
   });
 
+  it('rejects risky push options and refspecs', async () => {
+    const tool = createGitTool({ agentRef: {}, repository: repositoryServices({}) });
+
+    await expect(tool.execute({ args: ['push', '--force', 'origin', 'main'] })).rejects.toThrow('not available');
+    await expect(tool.execute({ args: ['push', 'origin', '+main'] })).rejects.toThrow('force refspecs');
+    await expect(tool.execute({ args: ['push', 'origin', ':old-branch'] })).rejects.toThrow('delete refspecs');
+  });
+
   it('requires a prepared repository', async () => {
     const services = repositoryServices({});
     delete services.state.prepared;

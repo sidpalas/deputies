@@ -31,6 +31,7 @@ describe('GitHub CLI Flue tool', () => {
     await expect(tool.execute({ args: ['auth', 'token'] })).rejects.toThrow('gh auth is not available');
     await expect(tool.execute({ args: ['repo', 'clone', 'manaflow-ai/manaflow'] })).rejects.toThrow('gh repo clone is not available');
     await expect(tool.execute({ args: ['gh', 'issue', 'list'] })).rejects.toThrow('omit the gh executable name');
+    await expect(tool.execute({ args: ['api', 'repos/manaflow-ai/manaflow/git/refs/heads/main'] })).rejects.toThrow('GitHub Git Database API routes');
   });
 
   it('requires an active repository', async () => {

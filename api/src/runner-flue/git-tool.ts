@@ -64,7 +64,20 @@ function validateArgs(value: unknown): string[] {
 
   if (args[0] === 'git') throw new Error('Pass git arguments only; omit the git executable name');
   if (args[0]!.startsWith('-')) throw new Error('git command must be an explicit subcommand, not a top-level flag');
+  if (args[0] === 'push') validatePushArgs(args);
   return args;
+}
+
+function validatePushArgs(args: string[]): void {
+  for (const arg of args.slice(1)) {
+    if (arg === '--force' || arg === '-f' || arg === '--force-with-lease' || arg === '--mirror' || arg === '--delete') {
+      throw new Error(`git push option ${arg} is not available through this tool`);
+    }
+    if (arg.startsWith('+')) throw new Error('git push force refspecs are not available through this tool');
+    if (/^:[^/]/.test(arg) || /^refs\/heads\/[^:]+:$/.test(arg)) {
+      throw new Error('git push delete refspecs are not available through this tool');
+    }
+  }
 }
 
 function gitCommand(args: string[]): string {

@@ -73,6 +73,8 @@ describe('repository Flue tool', () => {
     expect(result).toContain('Workspace path: /workspace/manaflow');
     expect(shells[0]?.cwd).toBe('/workspace');
     expect(shells[0]?.command).toContain('git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone');
+    expect(shells[0]?.command).toContain("git -C '/workspace/manaflow' config user.name 'Dev Deputies'");
+    expect(shells[0]?.command).toContain("git -C '/workspace/manaflow' config user.email 'dev-deputies@users.noreply.github.com'");
     expect(shells[0]?.command).not.toContain('ghs_secret_token');
     expect(shells[0]?.env).toEqual({
       GITHUB_AUTH_HEADER: `Authorization: Basic ${Buffer.from('x-access-token:ghs_secret_token').toString('base64')}`,
