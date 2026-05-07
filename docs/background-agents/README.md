@@ -82,10 +82,14 @@ The current scaffold has implemented the portable control-plane foundation:
 - Flue live event normalization for text deltas, tools, commands, and tasks.
 - Artifact persistence, session artifact reads, and generic HTTP completion callbacks.
 - Separate Vite React operator UI scaffold.
+- Opt-in real local Flue and real Daytona/Flue UAT paths with credentials.
+- Slack and GitHub webhook integrations with external thread reuse, callback delivery, and archived-session recovery.
+- GitHub App repository access with guarded `repository`, `gh`, and authenticated `git` tools.
 
 The following MVP pieces are still planned:
 
-- real Daytona/Flue UAT with credentials.
+- contract schemas for public API responses and normalized events.
+- production deployment guides and release/migration runbooks.
 
 ## MVP Target
 
@@ -100,4 +104,4 @@ The first complete version should support:
 - SSE event streaming with cursor replay.
 - UAT suite against the built app artifact.
 
-GitHub, Slack, and Linear should be added after the core session/message/worker loop is proven.
+Slack and GitHub are implemented for the current MVP path. Linear remains a future integration after the core product loop and operational hardening are production-ready.

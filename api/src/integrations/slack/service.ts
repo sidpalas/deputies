@@ -1,8 +1,19 @@
-import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
 import type { AppStore, MessageRecord, SessionRecord } from '../../store/types.js';
-import { archivedIgnoredTranscriptPrompt, archivedRecoveryTranscriptPrompt, archivedRecoveryWorkPrompt, archivedSessionNotice, archivedSessionRecoveredNotice, includesArchivedSessionRecoveryPhrase, isArchivedSessionRecoveryOnly, unprocessedArchivedTranscriptMessages } from '../archive.js';
+import {
+  archivedIgnoredTranscriptPrompt,
+  archivedRecoveryTranscriptPrompt,
+  archivedRecoveryWorkPrompt,
+  archivedSessionNotice,
+  archivedSessionRecoveredNotice,
+  includesArchivedSessionRecoveryPhrase,
+  isArchivedSessionRecoveryOnly,
+  unprocessedArchivedTranscriptMessages,
+} from '../archive.js';
+import { boundPriorContext } from '../prompt-bounds.js';
+import { getOrCreateExternalThreadSession, markIntegrationDeliveryFailed, markIntegrationDeliveryProcessed, receiveIntegrationDelivery } from '../shared-utils.js';
+import { slackCallbackTarget } from './callback-target.js';
 import type { SlackInfoClient, SlackReactionClient, SlackReplyClient, SlackThreadClient } from './client.js';
 import { renderSlackPrompt, slackSessionTitle, type SlackThreadContext } from './prompts.js';
 import type { SlackAcceptedEvent, SlackEventEnvelope, SlackPromptMetadata, SlackThreadMessage } from './types.js';
@@ -44,21 +55,18 @@ export class SlackIntegrationService {
     const accepted = this.parseAcceptedEvent(payload);
     if (!accepted) return { ok: true, type: 'ignored', reason: 'unsupported_event' };
 
-    const delivery = await this.store.createIntegrationDelivery({
-      id: randomUUID(),
+    const received = await receiveIntegrationDelivery(this.store, {
       source: 'slack',
       dedupeKey: accepted.eventId,
-      receivedAt: new Date(),
       metadata: { teamId: accepted.teamId, channel: accepted.channel, threadTs: accepted.threadTs, eventType: accepted.type },
     });
-    if (!delivery) return { ok: true, type: 'duplicate' };
+    if (!received) return { ok: true, type: 'duplicate' };
 
     const authorizationFailure = this.authorizationFailure(accepted);
     if (authorizationFailure) {
-      await this.store.markIntegrationDeliveryFailed({
+      await markIntegrationDeliveryFailed(this.store, {
         source: 'slack',
         dedupeKey: accepted.eventId,
-        failedAt: new Date(),
         error: authorizationFailure,
       });
       return { ok: true, type: 'ignored', reason: authorizationFailure };
@@ -72,18 +80,18 @@ export class SlackIntegrationService {
         const archivedMessages = unprocessedArchivedTranscriptMessages(await this.store.getMessages(session.id), 'slack');
         if (archivedMessages.length) {
           const message = await this.enqueueArchivedRecoveryWork(session, accepted, archivedMessages);
-          await this.store.markIntegrationDeliveryProcessed({ source: 'slack', dedupeKey: accepted.eventId, processedAt: new Date() });
+          await markIntegrationDeliveryProcessed(this.store, { source: 'slack', dedupeKey: accepted.eventId });
           return { ok: true, type: 'accepted', session, message };
         }
         if (isArchivedSessionRecoveryOnly(accepted.text)) {
           await this.recordRecoveryTranscriptEntries(session.id, accepted);
-          await this.store.markIntegrationDeliveryProcessed({ source: 'slack', dedupeKey: accepted.eventId, processedAt: new Date() });
+          await markIntegrationDeliveryProcessed(this.store, { source: 'slack', dedupeKey: accepted.eventId });
           await this.postRecoveryAcknowledgement(accepted);
           return { ok: true, type: 'recovered', session };
         }
       } else {
         await this.recordArchivedTranscriptEntries(session.id, accepted);
-        await this.store.markIntegrationDeliveryProcessed({ source: 'slack', dedupeKey: accepted.eventId, processedAt: new Date() });
+        await markIntegrationDeliveryProcessed(this.store, { source: 'slack', dedupeKey: accepted.eventId });
         await this.postArchivedSessionNotice(accepted);
         return { ok: true, type: 'ignored', reason: 'session_archived' };
       }
@@ -91,12 +99,13 @@ export class SlackIntegrationService {
 
     await this.addReceivedReaction(accepted);
     const threadContext = accepted.type === 'app_mention' ? await this.fetchThreadContext(session, accepted) : { messages: [] };
-    const promptMetadata = await this.fetchPromptMetadata(accepted, threadContext.messages);
+    const promptThreadContext = { ...threadContext, messages: boundPriorContext(threadContext.messages) };
+    const promptMetadata = await this.fetchPromptMetadata(accepted, promptThreadContext.messages);
     const includeChannelContext = (await this.store.getMessages(session.id)).length === 0;
 
     const message = await this.messages.enqueue({
       sessionId: session.id,
-      prompt: renderSlackPrompt(accepted, threadContext, promptMetadata, { includeChannelContext }),
+      prompt: renderSlackPrompt(accepted, promptThreadContext, promptMetadata, { includeChannelContext }),
       source: 'slack',
       context: {
         source: 'slack',
@@ -108,13 +117,13 @@ export class SlackIntegrationService {
           threadTs: accepted.threadTs,
           eventId: accepted.eventId,
           type: accepted.type,
-          includedThreadTs: threadContext.messages.map((message) => message.ts),
+          includedThreadTs: promptThreadContext.messages.map((message) => message.ts),
         },
-        callback: { type: 'slack', channel: accepted.channel, threadTs: accepted.threadTs, messageTs: accepted.ts },
+        callback: slackCallbackTarget({ channel: accepted.channel, threadTs: accepted.threadTs, messageTs: accepted.ts }),
       },
     });
 
-    await this.store.markIntegrationDeliveryProcessed({ source: 'slack', dedupeKey: accepted.eventId, processedAt: new Date() });
+    await markIntegrationDeliveryProcessed(this.store, { source: 'slack', dedupeKey: accepted.eventId });
     return { ok: true, type: 'accepted', session, message };
   }
 
@@ -209,7 +218,7 @@ export class SlackIntegrationService {
         source: 'slack',
         includedArchivedMessageIds: archivedMessages.map((message) => message.id),
         slack: { teamId: event.teamId, channel: event.channel, user: event.user, ts: event.ts, threadTs: event.threadTs, eventId: event.eventId, type: event.type, includedThreadTs: [] },
-        callback: { type: 'slack', channel: event.channel, threadTs: event.threadTs, messageTs: event.ts },
+        callback: slackCallbackTarget({ channel: event.channel, threadTs: event.threadTs, messageTs: event.ts }),
       },
     });
   }
@@ -299,22 +308,12 @@ export class SlackIntegrationService {
   }
 
   private async getOrCreateSession(threadId: string, event: SlackAcceptedEvent): Promise<SessionRecord> {
-    const existingThread = await this.store.getExternalThread('slack', threadId);
-    if (existingThread) {
-      const session = await this.sessions.get(existingThread.sessionId);
-      if (session) return session;
-    }
-
-    const session = await this.sessions.create({ title: slackSessionTitle(event) });
-    await this.store.createExternalThread({
-      id: randomUUID(),
+    return getOrCreateExternalThreadSession(this.store, this.sessions, {
       source: 'slack',
       externalId: threadId,
-      sessionId: session.id,
       metadata: { teamId: event.teamId, channel: event.channel, threadTs: event.threadTs },
-      now: new Date(),
+      title: slackSessionTitle(event),
     });
-    return session;
   }
 }
 

@@ -1,9 +1,20 @@
-import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
 import type { AppStore, MessageRecord, SessionRecord } from '../../store/types.js';
-import { archivedIgnoredTranscriptPrompt, archivedRecoveryTranscriptPrompt, archivedRecoveryWorkPrompt, archivedSessionNotice, archivedSessionRecoveredNotice, includesArchivedSessionRecoveryPhrase, isArchivedSessionRecoveryOnly, unprocessedArchivedTranscriptMessages } from '../archive.js';
+import {
+  archivedIgnoredTranscriptPrompt,
+  archivedRecoveryTranscriptPrompt,
+  archivedRecoveryWorkPrompt,
+  archivedSessionNotice,
+  archivedSessionRecoveredNotice,
+  includesArchivedSessionRecoveryPhrase,
+  isArchivedSessionRecoveryOnly,
+  unprocessedArchivedTranscriptMessages,
+} from '../archive.js';
+import { boundPriorContext, boundPromptText } from '../prompt-bounds.js';
+import { getOrCreateExternalThreadSession, markIntegrationDeliveryFailed, markIntegrationDeliveryProcessed, receiveIntegrationDelivery } from '../shared-utils.js';
 import type { GitHubArchivedSessionNotifier } from './archived-session-notifier.js';
+import { githubCallbackTarget } from './callback-target.js';
 import type { GitHubIssueContextFetcher, GitHubIssueThreadComment } from './issue-context-fetcher.js';
 import type { GitHubReactionSender, GitHubReactionTarget } from './reaction-sender.js';
 
@@ -122,24 +133,22 @@ export class GitHubWebhookService {
     const accepted = parseAcceptedEvent(input.headers, input.payload as GitHubWebhookPayload);
     if (!accepted) return { ok: true, type: 'ignored', reason: 'unsupported_event' };
 
-    const delivery = await this.store.createIntegrationDelivery({
-      id: randomUUID(),
+    const received = await receiveIntegrationDelivery(this.store, {
       source: 'github',
       dedupeKey: accepted.deliveryId,
-      receivedAt: new Date(),
       metadata: { event: accepted.event, action: accepted.action, owner: accepted.owner, repo: accepted.repo, number: accepted.number },
     });
-    if (!delivery) return { ok: true, type: 'duplicate' };
+    if (!received) return { ok: true, type: 'duplicate' };
 
     const authorizationFailure = this.authorizationFailure(accepted);
     if (authorizationFailure) {
-      await this.store.markIntegrationDeliveryFailed({ source: 'github', dedupeKey: accepted.deliveryId, failedAt: new Date(), error: authorizationFailure });
+      await markIntegrationDeliveryFailed(this.store, { source: 'github', dedupeKey: accepted.deliveryId, error: authorizationFailure });
       return { ok: true, type: 'ignored', reason: authorizationFailure };
     }
 
     const triggerFailure = this.triggerFailure(accepted);
     if (triggerFailure) {
-      await this.store.markIntegrationDeliveryFailed({ source: 'github', dedupeKey: accepted.deliveryId, failedAt: new Date(), error: triggerFailure });
+      await markIntegrationDeliveryFailed(this.store, { source: 'github', dedupeKey: accepted.deliveryId, error: triggerFailure });
       return { ok: true, type: 'ignored', reason: triggerFailure };
     }
 
@@ -153,28 +162,29 @@ export class GitHubWebhookService {
         const archivedMessages = unprocessedArchivedTranscriptMessages(await this.store.getMessages(session.id), 'github');
         if (archivedMessages.length) {
           const message = await this.enqueueArchivedRecoveryWork(session, accepted, archivedMessages);
-          await this.store.markIntegrationDeliveryProcessed({ source: 'github', dedupeKey: accepted.deliveryId, processedAt: new Date() });
+          await markIntegrationDeliveryProcessed(this.store, { source: 'github', dedupeKey: accepted.deliveryId });
           return { ok: true, type: 'accepted', session, message };
         }
         if (isArchivedSessionRecoveryOnly(currentGitHubMessageText(accepted))) {
           await this.recordRecoveryTranscriptEntries(session.id, accepted);
-          await this.store.markIntegrationDeliveryProcessed({ source: 'github', dedupeKey: accepted.deliveryId, processedAt: new Date() });
+          await markIntegrationDeliveryProcessed(this.store, { source: 'github', dedupeKey: accepted.deliveryId });
           await this.postRecoveryAcknowledgement(accepted);
           return { ok: true, type: 'recovered', session };
         }
       } else {
         await this.recordArchivedTranscriptEntries(session.id, accepted);
-        await this.store.markIntegrationDeliveryProcessed({ source: 'github', dedupeKey: accepted.deliveryId, processedAt: new Date() });
+        await markIntegrationDeliveryProcessed(this.store, { source: 'github', dedupeKey: accepted.deliveryId });
         await this.postArchivedSessionNotice(accepted);
         return { ok: true, type: 'ignored', reason: 'session_archived' };
       }
     }
     const existingMessageCount = (await this.store.getMessages(session.id)).length;
     const threadContext = await this.fetchThreadContext(session, accepted);
+    const promptThreadContext = { ...threadContext, comments: boundPriorContext(threadContext.comments) };
 
     const message = await this.messages.enqueue({
       sessionId: session.id,
-      prompt: renderGitHubPrompt(accepted, threadContext, { includeFullThreadContext: existingMessageCount === 0 }),
+      prompt: renderGitHubPrompt(accepted, promptThreadContext, { includeFullThreadContext: existingMessageCount === 0 }),
       source: 'github',
       context: {
         source: 'github',
@@ -188,33 +198,23 @@ export class GitHubWebhookService {
           number: accepted.number,
           itemType: accepted.itemType,
           ...(accepted.commentId ? { commentId: accepted.commentId } : {}),
-          includedCommentIds: threadContext.comments.map((comment) => comment.id),
+          includedCommentIds: promptThreadContext.comments.map((comment) => comment.id),
         },
-        callback: { type: 'github', owner: accepted.owner, repo: accepted.repo, issueNumber: accepted.number },
+        callback: githubCallbackTarget({ owner: accepted.owner, repo: accepted.repo, issueNumber: accepted.number }),
       },
     });
 
-    await this.store.markIntegrationDeliveryProcessed({ source: 'github', dedupeKey: accepted.deliveryId, processedAt: new Date() });
+    await markIntegrationDeliveryProcessed(this.store, { source: 'github', dedupeKey: accepted.deliveryId });
     return { ok: true, type: 'accepted', session, message };
   }
 
   private async getOrCreateSession(threadId: string, event: AcceptedGitHubEvent): Promise<SessionRecord> {
-    const existingThread = await this.store.getExternalThread('github', threadId);
-    if (existingThread) {
-      const session = await this.sessions.get(existingThread.sessionId);
-      if (session) return session;
-    }
-
-    const session = await this.sessions.create({ title: githubSessionTitle(event) });
-    await this.store.createExternalThread({
-      id: randomUUID(),
+    return getOrCreateExternalThreadSession(this.store, this.sessions, {
       source: 'github',
       externalId: threadId,
-      sessionId: session.id,
       metadata: { owner: event.owner, repo: event.repo, number: event.number, itemType: event.itemType },
-      now: new Date(),
+      title: githubSessionTitle(event),
     });
-    return session;
   }
 
   private authorizationFailure(event: AcceptedGitHubEvent): string | null {
@@ -337,7 +337,7 @@ export class GitHubWebhookService {
           ...(event.commentId ? { commentId: event.commentId } : {}),
           includedCommentIds: [],
         },
-        callback: { type: 'github', owner: event.owner, repo: event.repo, issueNumber: event.number },
+        callback: githubCallbackTarget({ owner: event.owner, repo: event.repo, issueNumber: event.number }),
       },
     });
   }
@@ -511,14 +511,14 @@ function renderGitHubPrompt(event: AcceptedGitHubEvent, threadContext: GitHubThr
     if (event.headRef || event.baseRef) lines.push(`Branch: ${event.headRef ?? 'unknown'} -> ${event.baseRef ?? 'unknown'}`);
     if (event.headSha) lines.push(`Head SHA: ${event.headSha}`);
     if (event.labels.length) lines.push(`Labels: ${event.labels.join(', ')}`);
-    if (event.body) lines.push('', 'Description:', event.body);
+    if (event.body) lines.push('', 'Description:', boundPromptText(event.body));
   }
   lines.push('---', '');
 
   if (threadContext.comments.length) {
     lines.push('Prior unprocessed GitHub comments:', '---');
     for (const comment of threadContext.comments) {
-      lines.push('', `[${comment.author ?? 'github-user'}${comment.createdAt ? ` at ${comment.createdAt}` : ''}]:`, comment.body || '(empty comment)');
+      lines.push('', `[${comment.author ?? 'github-user'}${comment.createdAt ? ` at ${comment.createdAt}` : ''}]:`, comment.body ? boundPromptText(comment.body) : '(empty comment)');
     }
     lines.push('---', '');
   } else if (threadContext.unavailableReason) {
@@ -528,13 +528,13 @@ function renderGitHubPrompt(event: AcceptedGitHubEvent, threadContext: GitHubThr
   }
 
   lines.push('Current tagged GitHub message:', '---');
-  if (event.commentBody) lines.push(`[${event.actor ?? 'github-user'}]: ${event.commentBody}`);
-  else if (event.reviewBody) lines.push(`[${event.actor ?? 'github-user'}]: ${event.reviewBody}`);
-  else if (event.body) lines.push(`[${event.actor ?? 'github-user'}]: ${event.body}`);
+  if (event.commentBody) lines.push(`[${event.actor ?? 'github-user'}]: ${boundPromptText(event.commentBody)}`);
+  else if (event.reviewBody) lines.push(`[${event.actor ?? 'github-user'}]: ${boundPromptText(event.reviewBody)}`);
+  else if (event.body) lines.push(`[${event.actor ?? 'github-user'}]: ${boundPromptText(event.body)}`);
   else lines.push(`[${event.actor ?? 'github-user'}]: (no body)`);
   if (event.reviewState) lines.push(`Review state: ${event.reviewState}`);
   if (event.path) lines.push(`File: ${event.path}`);
-  if (event.diffHunk) lines.push('', 'Diff context:', event.diffHunk);
+  if (event.diffHunk) lines.push('', 'Diff context:', boundPromptText(event.diffHunk));
   return lines.join('\n');
 }
 

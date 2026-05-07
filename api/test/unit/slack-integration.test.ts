@@ -1,6 +1,7 @@
 import type { Server } from 'node:http';
 import { createServer, createServices } from '../../src/app/server.js';
 import { loadConfig } from '../../src/config/index.js';
+import { maxPriorContextItems, maxPromptTextCharacters } from '../../src/integrations/prompt-bounds.js';
 import { createSlackSignature, verifySlackSignature } from '../../src/integrations/slack/auth.js';
 import { SlackIntegrationService } from '../../src/integrations/slack/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
@@ -343,6 +344,38 @@ describe('Slack integration', () => {
     expect(messages[1]!.prompt).not.toContain('jumped over the fox');
     expect(messages[1]!.prompt).not.toContain('summarize this thread');
     expect(messages[1]!.prompt).toContain('what do you see now?');
+  });
+
+  it('bounds rendered Slack thread context and stored included timestamps', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const longCurrentTail = 'current tail should be omitted';
+    const longPriorTail = 'prior tail should be omitted';
+    const priorMessages = Array.from({ length: maxPriorContextItems + 2 }, (_, index) => ({
+      user: 'U123',
+      text: index === maxPriorContextItems + 1 ? `${'p'.repeat(maxPromptTextCharacters + 20)}${longPriorTail}` : `prior-${index + 1}`,
+      ts: `${1710000000 + index}.000100`,
+    }));
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+      threadClient: {
+        async getThreadReplies() {
+          return { ok: true, messages: [...priorMessages, { user: 'U123', text: `<@${botUserId}> ${'c'.repeat(maxPromptTextCharacters + 20)}${longCurrentTail}`, ts: '1710000030.000100' }] };
+        },
+      },
+    });
+
+    const accepted = await slack.handle(slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> ${'c'.repeat(maxPromptTextCharacters + 20)}${longCurrentTail}`, ts: '1710000030.000100', threadTs: '1710000000.000100' }));
+
+    expect(accepted.type).toBe('accepted');
+    if (accepted.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    const messages = await services.messages.list(accepted.session.id);
+    expect(messages[0]!.prompt).not.toContain('[user]: prior-1\n');
+    expect(messages[0]!.prompt).not.toContain('[user]: prior-2\n');
+    expect(messages[0]!.prompt).toContain('prior-3');
+    expect(messages[0]!.prompt).toContain('[truncated]');
+    expect(messages[0]!.prompt).not.toContain(longPriorTail);
+    expect(messages[0]!.prompt).not.toContain(longCurrentTail);
+    expect(messages[0]!.context?.slack).toMatchObject({ includedThreadTs: priorMessages.slice(-maxPriorContextItems).map((message) => message.ts) });
   });
 
   it('deduplicates Slack event deliveries and ignores bot messages', async () => {

@@ -6,12 +6,11 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 - Slack start/queued status acknowledgement beyond reaction-only progress.
 - Slack direct-message support.
-- GitHub App push, branch, and PR operations using fresh installation access.
-- GitHub integration for issue comments, PR comments, and review comments.
-- GitHub App signature verification, installation token flow, and delivery dedupe.
-- GitHub callback comments with completion summaries and PR/artifact links.
+- GitHub provider-owned push, branch, and PR helper operations using fresh installation access, sanitized branch names, and verified PR artifacts.
 - Preview URL detection and surfacing from sandbox/deployment output, including final callback links for Slack/GitHub and context-panel artifacts in the web UI.
-- GitHub repository/user gating, deterministic thread mapping, untrusted prompt wrappers, branch sanitization, and provider-owned push/PR helpers.
+- GitHub collaborator permission gating in addition to the current repository, user, org, and trigger-phrase gates.
+- GitHub label-based triggers for teams that want non-mention workflows.
+- GitHub final callback links for PR/artifact URLs after provider-owned PR helpers exist.
 - Shared integration utilities for delivery dedupe, allowlists, external-thread session mapping, processed-item filtering, prompt section rendering, and callback target parsing before adding the next major integration.
 - Source-agnostic received/final-response lifecycle so integrations add lightweight received signals while callback senders own exactly one final external reply.
 - Global runner/agent instruction injection for integration behavior that should not appear in chat-visible source prompts.
@@ -69,7 +68,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 ## Testing
 
 - Emulate-backed Slack callback tests in regular CI if reliable.
-- Emulate-backed GitHub integration tests.
+- Emulate-backed GitHub integration tests once the GitHub App JWT emulator caveat is resolved upstream.
 - Real-provider smoke tests for Daytona on a schedule.
 - Load profiles for session listing, event replay, SSE fanout, and worker throughput.
 - Contract schemas for public API responses and normalized events.

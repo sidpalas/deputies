@@ -70,7 +70,7 @@ Slack, GitHub, and the web UI now exercise the same product loop from different 
 - Received/progress signals and final replies are separate. Slack/GitHub use reactions for received state; callback senders own final replies. Agent tools should not post final Slack/GitHub replies directly.
 - Follow-up prompts should be compact. The first message can include full channel/issue/PR metadata; later messages should include only a compact event/thread identity, unseen prior context, and the current tagged request.
 - Prompt text from integrations should be Markdown-safe in the web UI. Source prompts are rendered as plain text; assistant responses remain Markdown.
-- Public integrations should fail closed: webhook secret/signature checks, source-specific allowlists, and explicit trigger gating where applicable.
+- Public integrations should fail closed: webhook secret/signature checks, source-specific allowlists, and explicit trigger-phrase gating where applicable.
 - Context de-duplication is a platform concern. Slack tracks timestamps; GitHub tracks comment IDs. Future integrations should record source item IDs in message context so prior context is not repeated.
 
 Shared utilities worth extracting before the next major integration:
@@ -158,9 +158,9 @@ else:
 
 ## GitHub Integration
 
-GitHub App runtime access should be implemented before inbound GitHub webhooks are treated as production-ready. The webhook path creates sessions and comments, but repo-scoped agent work also needs short-lived installation credentials for clone, fetch, push, branch, PR, and status/comment operations.
+GitHub App runtime access exists for webhook-created and manually selected repository work. The service mints short-lived installation credentials for clone/fetch and guarded runtime GitHub operations. Provider-owned branch push and PR helper operations remain future work.
 
-Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, signed inbound GitHub webhooks, webhook sender/repo-owner allowlists, GitHub completion comments, Flue-runner repository refresh from message repository context, a dynamic `repository` tool for status/list/set/prepare actions, a dynamic `gh` tool for authenticated GitHub CLI/API operations against the active repository, and a dynamic `git` tool for authenticated git network operations inside the prepared sandbox repository. The worker only ensures a sandbox exists. When a run starts with repository context, Flue still performs pre-prompt clone/fetch and starts in the repository `cwd`. When no repository context exists, agents can choose an allowlisted repo with `repository set`, prepare it with `repository prepare`, and then use absolute paths in the returned workspace. PR helper operations are still future work.
+Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, signed inbound GitHub webhooks, webhook sender/repo-owner allowlists, trigger-phrase gating, GitHub completion comments, Flue-runner repository refresh from message repository context, a dynamic `repository` tool for status/list/set/prepare actions, a dynamic `gh` tool for authenticated GitHub CLI/API operations against the active repository, and a dynamic `git` tool for authenticated git network operations inside the prepared sandbox repository. The worker only ensures a sandbox exists. When a run starts with repository context, Flue performs pre-prompt clone/fetch and starts in the repository `cwd`. When no repository context exists, agents can choose an allowlisted repo with `repository set`, prepare it with `repository prepare`, and then use absolute paths in the returned workspace. PR helper operations are still future work.
 
 `GITHUB_API_BASE_URL` and `GITHUB_CLONE_BASE_URL` are intentionally separate. The API base points at GitHub's REST API or an emulator; the clone base points at the git remote host used for clone/fetch/push. Defaults are `https://api.github.com` and `https://github.com`.
 
@@ -177,7 +177,7 @@ Credential handling:
 - `repository_ready` events contain repository identity, workspace path, and expiry metadata only.
 - GitHub webhook allowlists fail closed when `GITHUB_WEBHOOK_SECRET` is set. Configure `GITHUB_ALLOWED_USERS` or `GITHUB_ALLOWED_ORGANIZATIONS`, or explicitly set `UNSAFE_ALLOW_ALL_GITHUB_USERS_AND_ORGS=true` for unrestricted GitHub webhook access.
 - `GITHUB_ALLOWED_USERS` and `GITHUB_ALLOWED_ORGANIZATIONS` gate inbound webhooks. Empty means unrestricted for that dimension only after at least one webhook allowlist exists, or after unsafe allow-all is enabled. Configured lists are matched case-insensitively. Non-matching deliveries are recorded as failed integration deliveries and no session/message is created.
-- `GITHUB_TRIGGER_PHRASES` requires issue/PR/comment/review text to include one configured activation phrase, such as `/deputies`, `deputies:`, `@deputies`, or an org team mention like `@acme/deputies`. Bare values like `deputies` match `@deputies`, `/deputies`, and `deputies:`.
+- `GITHUB_TRIGGER_PHRASES` replaces trigger handles. Issue/PR/comment/review text must include one configured activation phrase, such as `/deputies`, `deputies:`, `@deputies`, or an org team mention like `@acme/deputies`. Bare values like `deputies` match `@deputies`, `/deputies`, and `deputies:`.
 
 The intended runtime model is snapshot-friendly: Daytona images/snapshots may pre-bake common repos and build artifacts, but every Flue run still refreshes or repairs the requested repository as its first sandbox shell step so reused/stale sandboxes get current code and fresh credentials.
 
@@ -223,6 +223,7 @@ Current webhook triggers:
 Planned webhook gating refinements:
 
 - Add label-based triggers for teams that want non-mention workflows.
+- Add collaborator permission checks requiring `write`, `maintain`, or `admin` when explicit user/org allowlists are not sufficient.
 - Fetch richer issue/PR context when needed.
 
 Inbound responsibilities:
@@ -232,7 +233,8 @@ Inbound responsibilities:
 - Ignore irrelevant events, bot loops, and non-allowlisted actors/repo owners.
 - Resolve repo, issue, PR, comment, and actor.
 - Fetch issue/PR comments and include only comments not already represented in prior Deputies messages for that GitHub thread. The current triggering comment is excluded because it is rendered separately.
-- Render GitHub context with Slack-style section labels and separators; rely on webhook auth, repo/user/org allowlists, and trigger-handle gating for authorization.
+- Render GitHub context with Slack-style section labels and separators; rely on webhook auth, repo/user/org allowlists, and trigger-phrase gating for authorization.
+- If a webhook maps to an archived session, acknowledge it without creating a message and, when GitHub comments are configured, post a recovery comment telling the user to restore the session or start a new thread.
 
 External thread IDs:
 
@@ -250,15 +252,22 @@ Reaction/callback responsibilities:
 - Post PR URL when an artifact is created.
 - Avoid noisy tool-level updates unless explicitly enabled.
 
+Archived-session behavior:
+
+- Slack and GitHub mapped follow-ups do not reactivate archived sessions.
+- The inbound webhook is acknowledged and ignored for queueing.
+- If the source callback client is configured, the integration posts a short recovery notice in the external thread.
+- Restoring the product session allows later mapped follow-ups to enqueue normally.
+
 Testing should use `vercel-labs/emulate` GitHub service where possible:
 
 - Seed users, org, repo, issue, PR, GitHub App installation.
 - Send realistic webhooks to the app.
 - Assert sessions/messages are created.
-- Assert comments or PRs are created in the emulated GitHub API.
+- Assert comments are created in the emulated GitHub API. Assert PRs after provider-owned PR helpers exist.
 - Assert duplicate deliveries are ignored.
 
-Current emulator caveat: published `emulate@0.5.0` rejects valid GitHub App JWTs during installation token minting because of upstream issue [vercel-labs/emulate#96](https://github.com/vercel-labs/emulate/issues/96). The GitHub emulator token-flow test is committed but hard-skipped until a fixed emulate release is available. Real-provider smoke coverage is opt-in:
+Current emulator caveat: published `emulate@0.5.0` rejects valid GitHub App JWTs during installation token minting because of upstream issue [vercel-labs/emulate#96](https://github.com/vercel-labs/emulate/issues/96). GitHub emulator tests that require App installation tokens are hard-skipped until a fixed emulate release is available. Real-provider smoke coverage is opt-in:
 
 ```sh
 RUN_REAL_GITHUB_APP_UAT=true pnpm --dir api exec vitest run --config vitest.uat.config.ts test/uat/real-github-app.test.ts
@@ -298,7 +307,7 @@ Normalize raw GitHub payloads into a small internal event shape before session/m
 - Resolve repository as `{ provider: 'github', owner, repo }` and attach it to message context so the Flue runner startup step can clone/fetch it inside the sandbox before the agent prompt.
 - Ignore bot/self comments to avoid loops.
 - Enforce `GITHUB_ALLOWED_REPOSITORIES` before any API fetch or session creation.
-- Add caller gating after repo allowlist: either explicit allowed GitHub users or collaborator permission check requiring `write`, `maintain`, or `admin`.
+- Add caller gating after repo allowlist: explicit allowed GitHub users/orgs exist; collaborator permission checks requiring `write`, `maintain`, or `admin` remain open.
 - Add best-effort `eyes` reaction for accepted comments/review comments after gating succeeds.
 
 Acceptance criteria:
@@ -407,9 +416,9 @@ Acceptance criteria:
 
 Add focused unit tests first, then emulator-backed integration tests.
 
-- Unit-test webhook signature verification, delivery dedupe, normalization, repo extraction, permission gating decisions, prompt wrappers, and branch sanitization.
+- Unit-test webhook signature verification, delivery dedupe, normalization, repo extraction, trigger-phrase gating, permission gating decisions, prompt wrappers, and branch sanitization.
 - Use fake GitHub clients for token, permission, comment, branch, push, and PR flows.
-- Add opt-in emulator tests that seed GitHub users/repos/issues/PRs/installations, send webhooks, process worker runs, and assert comments/PRs in the emulator once `emulate` has a fixed GitHub App JWT verification release.
+- Add opt-in emulator tests that seed GitHub users/repos/issues/PRs/installations, send webhooks, process worker runs, and assert comments in the emulator once `emulate` has a fixed GitHub App JWT verification release. Add PR assertions after provider-owned PR helpers exist.
 - Keep real GitHub App and real GitHub + Daytona smoke tests opt-in and skipped by default.
 - Add regression tests proving token strings are absent from events, messages, artifacts, callback payloads, and logs under controlled fakes.
 

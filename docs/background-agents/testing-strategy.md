@@ -90,6 +90,7 @@ Current local policy:
 - Architecture fitness tests currently run with unit tests and enforce Flue SDK isolation, integration-to-runner separation, and store-to-domain-service separation.
 - API tests exercise the Hono app through the Node adapter so middleware, routing, JSON responses, and SSE behavior remain covered as transport internals change.
 - Slack unit/API tests cover request signature verification, URL verification challenge handling, dedupe, bot-message ignore, app mention session creation, thread follow-up session reuse, allowlist authorization, archived-session handling, prior-thread context fetching/deduping, Slack text entity decoding, readable channel/user prompt metadata, and prompt fallback behavior when Slack scopes are missing.
+- GitHub unit/API tests cover webhook signature verification, delivery dedupe, event normalization, repository/user/org allowlists, trigger-phrase gating, archived-session recovery comments, bounded context fetching, completion callback comments, runtime installation token handling, repository prepare/list/set behavior, and guarded `gh`/`git` tool behavior.
 - API hardening tests cover invalid JSON and oversized request bodies.
 - Lifecycle unit tests cover worker-loop stop behavior and idempotent resource shutdown.
 - API tests cover auth modes, session-cookie login/logout, archive/restore behavior, queued-message edit/cancel/pause/resume, active-run cancellation, callback/artifact persistence, sandbox stop/destroy cleanup, and worker batching.
@@ -160,11 +161,12 @@ afterEach(() => {
 
 GitHub emulator tests:
 
-- GitHub App installation token flow.
+- GitHub App installation token flow after the emulator accepts valid App JWTs.
 - Issue comment mention creates message.
 - PR review comment includes file/line context.
 - Completion callback posts issue/PR comment.
-- Agent-created PR artifact is reflected in emulated GitHub.
+- Agent-created PR artifact is reflected in emulated GitHub after provider-owned PR helpers exist.
+- Archived mapped thread posts a recovery comment and does not enqueue work.
 
 Slack emulator tests:
 
@@ -242,6 +244,8 @@ Acceptance tests:
 - GitHub webhook creates session and callback comment in emulator.
 - Slack webhook creates session and callback reply in emulator.
 
+Current GitHub emulator caveat: published `emulate@0.5.0` rejects valid GitHub App JWTs during installation token minting. Keep tests that require installation tokens skipped until a fixed emulate release is available, and keep real GitHub App smoke tests opt-in.
+
 UAT output contracts:
 
 - Validate JSON with schemas.
@@ -268,7 +272,7 @@ Initial suite:
 - Callback API returns 500 repeatedly.
 - Sandbox provider returns unreachable handle.
 
-Prompt injection tests should assert that prompt builders wrap external content as untrusted data.
+Prompt injection tests should assert that prompt builders separate external content from instructions and sanitize reserved wrapper markers.
 
 ## Prompt And Context Tests
 
@@ -280,7 +284,7 @@ MVP prompt tests:
 - Snapshot rendered GitHub issue prompt.
 - Snapshot rendered GitHub PR review prompt.
 - Snapshot rendered Slack thread prompt.
-- Assert untrusted content boundaries are present.
+- Assert integration context boundaries and source labels are present.
 - Assert repo, actor, source, and request are present.
 - Assert secrets and raw tokens are absent.
 

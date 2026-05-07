@@ -1,3 +1,4 @@
+import { boundPromptText } from '../prompt-bounds.js';
 import type { SlackAcceptedEvent, SlackPromptMetadata, SlackThreadMessage } from './types.js';
 
 export type SlackThreadContext = {
@@ -21,7 +22,7 @@ export function renderSlackPrompt(event: SlackAcceptedEvent, threadContext: Slac
 
   if (threadContext.messages.length) {
     parts.push('Prior unprocessed messages from the Slack thread:', '---');
-    parts.push(...threadContext.messages.map((message) => `[${message.username ?? 'user'}]: ${message.text}`));
+    parts.push(...threadContext.messages.map((message) => `[${message.username ?? 'user'}]: ${boundPromptText(message.text)}`));
     parts.push('---', '');
   } else if (threadContext.unavailableReason) {
     parts.push('Prior unprocessed messages from the Slack thread:', '---');
@@ -30,7 +31,7 @@ export function renderSlackPrompt(event: SlackAcceptedEvent, threadContext: Slac
   }
 
   parts.push('Current tagged Slack message:', '---');
-  parts.push(`[${metadata.actorName ?? 'user'}]: ${event.text}`);
+  parts.push(`[${metadata.actorName ?? 'user'}]: ${boundPromptText(event.text)}`);
 
   return parts.join('\n');
 }

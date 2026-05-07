@@ -1,5 +1,6 @@
 import { createApp, createServices } from '../../src/app/server.js';
 import { loadConfig } from '../../src/config/index.js';
+import { maxPriorContextItems, maxPromptTextCharacters } from '../../src/integrations/prompt-bounds.js';
 import { createGitHubWebhookSignature, verifyGitHubWebhookSignature } from '../../src/integrations/github/webhook-auth.js';
 import { GitHubWebhookService } from '../../src/integrations/github/webhook-service.js';
 import { GitHubCompletionCallbackSender } from '../../src/integrations/github/callback-sender.js';
@@ -134,6 +135,62 @@ describe('GitHub webhook integration', () => {
     expect(messages[1]!.prompt).not.toContain('Actor: octocat');
     expect(messages[1]!.prompt).not.toContain('Labels: bug');
     expect(messages[1]!.prompt).not.toContain('Description:\nIt fails intermittently.');
+  });
+
+  it('bounds rendered GitHub comments, bodies, and stored included IDs', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const longCurrentTail = 'current body tail should be omitted';
+    const longPriorTail = 'prior body tail should be omitted';
+    const longDescriptionTail = 'description tail should be omitted';
+    const priorComments = Array.from({ length: maxPriorContextItems + 2 }, (_, index) => ({
+      id: index + 1,
+      author: 'alice',
+      body: index === maxPriorContextItems + 1 ? `${'p'.repeat(maxPromptTextCharacters + 20)}${longPriorTail}` : `prior-comment-${index + 1}`,
+    }));
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+      issueContextFetcher: {
+        async listIssueComments() {
+          return [...priorComments, { id: 99, author: 'octocat', body: `${'c'.repeat(maxPromptTextCharacters + 20)}${longCurrentTail}` }];
+        },
+      },
+    });
+
+    const accepted = await github.handle({
+      headers: { deliveryId: 'delivery-1', event: 'issue_comment' },
+      payload: issueCommentPayload({ body: `${'c'.repeat(maxPromptTextCharacters + 20)}${longCurrentTail}`, issueBody: `${'d'.repeat(maxPromptTextCharacters + 20)}${longDescriptionTail}` }),
+    });
+
+    expect(accepted.type).toBe('accepted');
+    if (accepted.type !== 'accepted') throw new Error('Expected accepted GitHub event');
+    const messages = await services.messages.list(accepted.session.id);
+    expect(messages[0]!.prompt).not.toMatch(/\nprior-comment-1\n/);
+    expect(messages[0]!.prompt).not.toMatch(/\nprior-comment-2\n/);
+    expect(messages[0]!.prompt).toContain('prior-comment-3');
+    expect(messages[0]!.prompt).toContain('[truncated]');
+    expect(messages[0]!.prompt).not.toContain(longPriorTail);
+    expect(messages[0]!.prompt).not.toContain(longCurrentTail);
+    expect(messages[0]!.prompt).not.toContain(longDescriptionTail);
+    expect(messages[0]!.context?.github).toMatchObject({ includedCommentIds: priorComments.slice(-maxPriorContextItems).map((comment) => comment.id) });
+  });
+
+  it('bounds rendered GitHub diff context', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const longDiffTail = 'diff tail should be omitted';
+    const github = new GitHubWebhookService(store, services.sessions, services.messages);
+
+    const accepted = await github.handle({
+      headers: { deliveryId: 'delivery-1', event: 'pull_request_review_comment' },
+      payload: pullRequestReviewCommentPayload({ diffHunk: `${'@'.repeat(maxPromptTextCharacters + 20)}${longDiffTail}` }),
+    });
+
+    expect(accepted.type).toBe('accepted');
+    if (accepted.type !== 'accepted') throw new Error('Expected accepted GitHub event');
+    const messages = await services.messages.list(accepted.session.id);
+    expect(messages[0]!.prompt).toContain('Diff context:');
+    expect(messages[0]!.prompt).toContain('[truncated]');
+    expect(messages[0]!.prompt).not.toContain(longDiffTail);
   });
 
   it('adds an eyes reaction to accepted GitHub webhook subjects', async () => {
@@ -457,7 +514,7 @@ function issuePayload(input: { action?: string; owner?: string; repo?: string; s
   };
 }
 
-function issueCommentPayload(input: { body?: string; commentId?: number } = {}) {
+function issueCommentPayload(input: { body?: string; commentId?: number; issueBody?: string } = {}) {
   return {
     action: 'created',
     repository: { owner: { login: 'acme' }, name: 'widget', full_name: 'acme/widget' },
@@ -465,7 +522,7 @@ function issueCommentPayload(input: { body?: string; commentId?: number } = {}) 
     issue: {
       number: 42,
       title: 'Fix the flaky test',
-      body: 'It fails intermittently.',
+      body: input.issueBody ?? 'It fails intermittently.',
       html_url: 'https://github.com/acme/widget/issues/42',
       user: { login: 'octocat' },
       labels: [{ name: 'bug' }],
@@ -479,7 +536,7 @@ function issueCommentPayload(input: { body?: string; commentId?: number } = {}) 
   };
 }
 
-function pullRequestReviewCommentPayload() {
+function pullRequestReviewCommentPayload(input: { diffHunk?: string } = {}) {
   return {
     action: 'created',
     repository: { owner: { login: 'acme' }, name: 'widget', full_name: 'acme/widget' },
@@ -498,7 +555,7 @@ function pullRequestReviewCommentPayload() {
       html_url: 'https://github.com/acme/widget/pull/42#discussion_r100',
       user: { login: 'octocat' },
       path: 'src/app.ts',
-      diff_hunk: '@@ -1,2 +1,2 @@',
+      diff_hunk: input.diffHunk ?? '@@ -1,2 +1,2 @@',
     },
   };
 }

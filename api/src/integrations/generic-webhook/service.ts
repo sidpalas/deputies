@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
 import type { AppStore, MessageRecord, SessionRecord, WebhookSourceRecord } from '../../store/types.js';
+import { getOrCreateExternalThreadSession, markIntegrationDeliveryProcessed, receiveIntegrationDelivery } from '../shared-utils.js';
 
 export type HandleGenericWebhookInput = {
   sourceKey: string;
@@ -34,15 +34,13 @@ export class GenericWebhookService {
     }
 
     const parsed = parseWebhookPayload(input.payload);
-    const delivery = await this.store.createIntegrationDelivery({
-      id: randomUUID(),
+    const received = await receiveIntegrationDelivery(this.store, {
       source: source.key,
       dedupeKey: parsed.dedupeKey,
-      receivedAt: new Date(),
       metadata: { threadId: parsed.threadId },
     });
 
-    if (!delivery) {
+    if (!received) {
       return { accepted: true, duplicate: true };
     }
 
@@ -61,11 +59,7 @@ export class GenericWebhookService {
       },
     });
 
-    await this.store.markIntegrationDeliveryProcessed({
-      source: source.key,
-      dedupeKey: parsed.dedupeKey,
-      processedAt: new Date(),
-    });
+    await markIntegrationDeliveryProcessed(this.store, { source: source.key, dedupeKey: parsed.dedupeKey });
 
     return { accepted: true, duplicate: false, session, message };
   }
@@ -74,23 +68,12 @@ export class GenericWebhookService {
     source: WebhookSourceRecord,
     parsed: ParsedWebhookPayload,
   ): Promise<SessionRecord> {
-    const existingThread = await this.store.getExternalThread(source.key, parsed.threadId);
-    if (existingThread) {
-      const session = await this.sessions.get(existingThread.sessionId);
-      if (session) return session;
-    }
-
-    const session = await this.sessions.create(parsed.title ? { title: parsed.title } : { title: `Webhook: ${source.name}` });
-    await this.store.createExternalThread({
-      id: randomUUID(),
+    return getOrCreateExternalThreadSession(this.store, this.sessions, {
       source: source.key,
       externalId: parsed.threadId,
-      sessionId: session.id,
       metadata: { sourceName: source.name },
-      now: new Date(),
+      title: parsed.title ?? `Webhook: ${source.name}`,
     });
-
-    return session;
   }
 }
 

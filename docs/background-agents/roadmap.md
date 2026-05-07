@@ -33,12 +33,14 @@ Implemented so far:
 - Daytona sandbox idle cleanup with stop-before-destroy retention policy and advisory-lock reaper coordination.
 - Vite React operator UI with session-cookie login, session list/search, queued message editing/cancelling, active-run cancellation, archive/restore, SSE streaming, and artifact/event views.
 - GitHub App runtime access for allowlisted repositories, including real GitHub token minting, Flue-runner repository refresh, and opt-in real GitHub + Daytona clone UAT coverage.
+- GitHub webhook ingress for issue, PR, PR review comment, and PR review events with signature verification, delivery dedupe, repository/user/org allowlists, trigger-phrase gating, session mapping, bounded context fetching, received reactions, and completion comments through the callback dispatcher.
+- Agent runtime GitHub repository tooling for repository selection/preparation, authenticated `gh`, and authenticated guarded `git` operations inside prepared sandbox repositories.
 
 Still open from the early phases:
 
 - Contract schemas for public API responses and events.
 
-The next implementation phase should focus on operational polish before the next large integration: callback delivery observability/replay controls, richer UI observability for sandbox cleanup, release/migration commands, Railway/ECS/Kubernetes guidance, and contract schemas for public API/events.
+The next implementation phase should focus on operational polish and the remaining GitHub integration gaps: collaborator permission checks, label-based triggers, provider-owned branch/PR helpers, richer UI observability for sandbox cleanup, release/migration commands, Railway/ECS/Kubernetes guidance, and contract schemas for public API/events.
 
 ## Phase 0: Repository And Agent Context
 
@@ -284,7 +286,7 @@ Acceptance criteria:
 - Tokens are not persisted in events, messages, artifacts, or logs.
 - GitHub API base URLs remain configurable for emulator-backed tests.
 
-Status: initial runtime path implemented. Config parsing, GitHub App JWT signing, repository installation lookup, installation token minting, per-installation token caching, repository allowlist checks, and runner-safe repository access instructions exist with focused unit coverage. Messages can carry repository context, and the Flue runner uses a pre-prompt `session.shell` step to clone or fetch the repo inside the sandbox with command-scoped env auth. Token values are not written to events/messages/artifacts or prompt text. Opt-in real GitHub App and real GitHub + Daytona UATs verify token minting and sandbox clone/fetch. Push/branch/PR helper operations remain next.
+Status: implemented for current runtime needs. Config parsing, GitHub App JWT signing, repository installation lookup, installation token minting, per-installation token caching, repository allowlist checks, and runner-safe repository access instructions exist with focused unit coverage. Messages can carry repository context, and the Flue runner clones or fetches the repo inside the sandbox with command-scoped env auth. The agent can list/set/prepare repositories and use guarded authenticated `gh` and `git` tools for the active prepared repo. Token values are not written to events/messages/artifacts or prompt text. Opt-in real GitHub App and real GitHub + Daytona UATs verify token minting and sandbox clone/fetch. Provider-owned push/branch/PR helper operations remain next.
 
 ## Phase 9: GitHub Integration
 
@@ -295,9 +297,9 @@ Deliverables:
 - GitHub webhook route with fail-closed `X-Hub-Signature-256` verification.
 - Delivery dedupe keyed by `X-GitHub-Delivery`.
 - Normalized GitHub event shape with trigger/concurrency keys.
-- Repository/user gating using repository allowlists and collaborator permission or explicit allowed users.
+- Repository/user gating using repository allowlists, trigger phrases, and explicit allowed users/orgs; collaborator permission checks remain open.
 - Mention detection for issue comments, PR comments, and PR review comments.
-- Issue/PR context fetching with bounded prompt context and untrusted-content wrappers.
+- Issue/PR context fetching with bounded prompt context and reserved-marker sanitization.
 - GitHub callback posting through the generic callback core.
 - Provider-owned branch push and PR creation helpers with branch sanitization and redacted push specs.
 - Emulate-backed integration tests.
@@ -312,6 +314,8 @@ Acceptance criteria:
 - Push/PR creation records verified PR artifacts and never persists token material.
 
 Dependency: Phase 8.6 should exist first so GitHub-created work can clone private repositories, push branches, and create PRs through GitHub App credentials.
+
+Status: implemented for webhook-created work and completion comments. `POST /webhooks/github/events` verifies signatures, dedupes deliveries, supports issue/PR/comment/review events, gates by repository/user/org allowlists and `GITHUB_TRIGGER_PHRASES`, maps issue/PR threads to sessions, fetches bounded prior context, ignores archived mapped sessions with a recovery comment, posts best-effort received reactions, and sends completion comments through the callback dispatcher. Remaining work: collaborator permission gating, label-based triggers, provider-owned branch/PR helpers, and fuller emulator-backed coverage once GitHub App JWT handling is fixed upstream.
 
 Detailed implementation plan: see [GitHub Implementation Plan](./integrations.md#github-implementation-plan).
 
