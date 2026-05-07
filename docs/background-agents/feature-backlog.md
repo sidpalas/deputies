@@ -33,6 +33,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 ## Agent Runtime
 
 - Agent authentication to external services through MCP, CLI credentials, API tokens, and short-lived provider tokens.
+- Codex Pro subscription authentication for OpenAI Codex provider support, likely via Pi's OAuth-backed subscription auth (`~/.pi/agent/auth.json`).
 - Credential scoping and injection policy for tools, commands, MCP servers, and sandbox environments.
 - Multi-repository task support with one primary writable repo, auxiliary read-only context repos by default, and explicit multi-writable change sets when a task spans repos.
 - Prompt templates and snapshot tests for Slack/GitHub/Linear inputs.
