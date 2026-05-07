@@ -7,6 +7,45 @@ export type IntegrationDeliveryStatus = 'received' | 'processed' | 'failed';
 export type SandboxStatus = 'ready' | 'stopped' | 'unhealthy' | 'destroyed' | 'failed';
 export type CallbackDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed';
 
+export type AuthUserRecord = {
+  id: string;
+  username: string;
+  displayName?: string;
+  avatarUrl?: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type AuthAccountRecord = {
+  id: string;
+  userId: string;
+  provider: string;
+  providerAccountId: string;
+  username: string;
+  profile: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type AuthSessionRecord = {
+  id: string;
+  userId: string;
+  createdAt: Date;
+  expiresAt: Date;
+};
+
+export type UpsertAuthUserForAccountRecord = {
+  userId: string;
+  accountId: string;
+  provider: string;
+  providerAccountId: string;
+  username: string;
+  displayName?: string;
+  avatarUrl?: string;
+  profile: Record<string, unknown>;
+  now: Date;
+};
+
 export type SessionRecord = {
   id: string;
   status: SessionStatus;
@@ -211,6 +250,11 @@ export type CreateCallbackDeliveryRecord = {
 };
 
 export interface AppStore {
+  upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord>;
+  createAuthSession(record: AuthSessionRecord): Promise<AuthSessionRecord>;
+  getAuthUserBySession(input: { sessionId: string; now: Date }): Promise<AuthUserRecord | null>;
+  deleteAuthSession(sessionId: string): Promise<void>;
+
   createSession(record: CreateSessionRecord): Promise<SessionRecord>;
   getSession(id: string): Promise<SessionRecord | null>;
   listSessions(): Promise<SessionRecord[]>;

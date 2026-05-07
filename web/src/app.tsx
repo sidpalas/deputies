@@ -16,6 +16,7 @@ import {
   enqueueMessage,
   getApiBaseUrl,
   getCurrentUser,
+  githubLoginUrl,
   getHealth,
   login,
   listArtifacts,
@@ -543,7 +544,7 @@ export function App() {
     <main className="flex h-screen flex-col overflow-hidden bg-slate-950 text-slate-100">
       {error ? <div className="border-b border-red-900/60 bg-red-950/40 px-4 py-2 text-sm text-red-200">{error}</div> : null}
 
-      {startupLoading ? <StartupLoadingPanel /> : bearerAuthRequired && !token ? <BearerAuthPanel draftToken={draftToken} setDraftToken={setDraftToken} saveToken={saveToken} /> : sessionAuthRequired && !currentUser ? <SessionAuthPanel password={loginPassword} username={loginUsername} onPasswordChange={setLoginPassword} onSubmit={handleLogin} onUsernameChange={setLoginUsername} /> : (
+      {startupLoading ? <StartupLoadingPanel /> : bearerAuthRequired && !token ? <BearerAuthPanel draftToken={draftToken} setDraftToken={setDraftToken} saveToken={saveToken} /> : sessionAuthRequired && !currentUser ? <SessionAuthPanel password={loginPassword} provider={health?.authProvider ?? 'static'} username={loginUsername} onPasswordChange={setLoginPassword} onSubmit={handleLogin} onUsernameChange={setLoginUsername} /> : (
         <>
 
       {!sidebarOpen ? (
@@ -841,24 +842,34 @@ function BearerAuthPanel(props: { draftToken: string; setDraftToken: (value: str
   );
 }
 
-function SessionAuthPanel(props: { username: string; password: string; onUsernameChange: (value: string) => void; onPasswordChange: (value: string) => void; onSubmit: (event: FormEvent) => void }) {
+function SessionAuthPanel(props: { provider: 'static' | 'github'; username: string; password: string; onUsernameChange: (value: string) => void; onPasswordChange: (value: string) => void; onSubmit: (event: FormEvent) => void }) {
   return (
     <section className="grid min-h-screen place-items-center px-4">
       <Card className="w-full max-w-2xl p-5">
         <p className="text-xs font-semibold uppercase tracking-widest text-sky-300">Deputies</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-50">Sign in to Deputies.</h1>
-        <p className="mt-2 text-sm text-slate-400">Use your operator credentials. OAuth providers can plug into this same session flow later.</p>
-        <form className="mt-6 grid gap-3" onSubmit={props.onSubmit}>
-          <div>
-            <strong>Operator login</strong>
-            <p className="text-sm text-slate-400">The API will set an HTTP-only session cookie after login.</p>
+        <p className="mt-2 text-sm text-slate-400">The API will set an HTTP-only session cookie after login.</p>
+        {props.provider === 'github' ? (
+          <div className="mt-6 grid gap-3">
+            <div>
+              <strong>GitHub login</strong>
+              <p className="text-sm text-slate-400">Continue with a GitHub account allowed by this Deputies deployment.</p>
+            </div>
+            <Button className="justify-self-end" type="button" onClick={() => { window.location.href = githubLoginUrl(); }}>Continue with GitHub</Button>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <Input value={props.username} onChange={(event) => props.onUsernameChange(event.target.value)} placeholder="Username" autoComplete="username" />
-            <Input type="password" value={props.password} onChange={(event) => props.onPasswordChange(event.target.value)} placeholder="Password" autoComplete="current-password" />
-          </div>
-          <Button className="justify-self-end" type="submit" disabled={!props.username.trim() || !props.password}>Sign in</Button>
-        </form>
+        ) : (
+          <form className="mt-6 grid gap-3" onSubmit={props.onSubmit}>
+            <div>
+              <strong>Operator login</strong>
+              <p className="text-sm text-slate-400">Use the static credentials configured for this environment.</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Input value={props.username} onChange={(event) => props.onUsernameChange(event.target.value)} placeholder="Username" autoComplete="username" />
+              <Input type="password" value={props.password} onChange={(event) => props.onPasswordChange(event.target.value)} placeholder="Password" autoComplete="current-password" />
+            </div>
+            <Button className="justify-self-end" type="submit" disabled={!props.username.trim() || !props.password}>Sign in</Button>
+          </form>
+        )}
       </Card>
     </section>
   );

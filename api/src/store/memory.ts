@@ -2,6 +2,9 @@ import type { NormalizedEvent } from '../events/types.js';
 import type {
   AppStore,
   ArtifactRecord,
+  AuthAccountRecord,
+  AuthSessionRecord,
+  AuthUserRecord,
   CallbackDeliveryRecord,
   CreateArtifactRecord,
   CreateCallbackDeliveryRecord,
@@ -18,10 +21,14 @@ import type {
   RunRecord,
   SandboxRecord,
   SessionRecord,
+  UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
 
 export class MemoryStore implements AppStore {
+  private readonly authUsers = new Map<string, AuthUserRecord>();
+  private readonly authAccounts = new Map<string, AuthAccountRecord>();
+  private readonly authSessions = new Map<string, AuthSessionRecord>();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly messages = new Map<string, MessageRecord[]>();
   private readonly runs = new Map<string, RunRecord>();
@@ -32,6 +39,49 @@ export class MemoryStore implements AppStore {
   private readonly webhookSources = new Map<string, WebhookSourceRecord>();
   private readonly externalThreads = new Map<string, ExternalThreadRecord>();
   private readonly integrationDeliveries = new Map<string, IntegrationDeliveryRecord>();
+
+  async upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord> {
+    const accountKey = authAccountKey(record.provider, record.providerAccountId);
+    const existingAccount = this.authAccounts.get(accountKey);
+    const existingUser = existingAccount ? this.authUsers.get(existingAccount.userId) : undefined;
+    const user: AuthUserRecord = {
+      id: existingUser?.id ?? record.userId,
+      username: record.username,
+      createdAt: existingUser?.createdAt ?? record.now,
+      updatedAt: record.now,
+      ...(record.displayName ? { displayName: record.displayName } : {}),
+      ...(record.avatarUrl ? { avatarUrl: record.avatarUrl } : {}),
+    };
+    const account: AuthAccountRecord = {
+      id: existingAccount?.id ?? record.accountId,
+      userId: user.id,
+      provider: record.provider,
+      providerAccountId: record.providerAccountId,
+      username: record.username,
+      profile: record.profile,
+      createdAt: existingAccount?.createdAt ?? record.now,
+      updatedAt: record.now,
+    };
+
+    this.authUsers.set(user.id, user);
+    this.authAccounts.set(accountKey, account);
+    return user;
+  }
+
+  async createAuthSession(record: AuthSessionRecord): Promise<AuthSessionRecord> {
+    this.authSessions.set(record.id, record);
+    return record;
+  }
+
+  async getAuthUserBySession(input: { sessionId: string; now: Date }): Promise<AuthUserRecord | null> {
+    const session = this.authSessions.get(input.sessionId);
+    if (!session || session.expiresAt <= input.now) return null;
+    return this.authUsers.get(session.userId) ?? null;
+  }
+
+  async deleteAuthSession(sessionId: string): Promise<void> {
+    this.authSessions.delete(sessionId);
+  }
 
   async createSession(record: CreateSessionRecord): Promise<SessionRecord> {
     if (this.sessions.has(record.id)) {
@@ -531,6 +581,10 @@ export class MemoryStore implements AppStore {
     if (!existing) throw new Error(`Callback delivery does not exist: ${id}`);
     return existing;
   }
+}
+
+function authAccountKey(provider: string, providerAccountId: string): string {
+  return `${provider}:${providerAccountId}`;
 }
 
 function isActiveSandbox(sandbox: SandboxRecord): boolean {

@@ -1,13 +1,14 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Server } from 'node:http';
 import { createAdaptorServer } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
+import { FetchGitHubOAuthClient, type GitHubOAuthClient } from '../auth/github.js';
 import { apiAuthMiddleware } from '../auth/middleware.js';
-import { clearSessionCookie, createSessionCookie, readSession } from '../auth/session.js';
+import { clearSessionCookie, createSessionCookie, createSessionId, readSessionId, sessionMaxAgeSeconds, signOAuthState, verifyOAuthState } from '../auth/session.js';
 import { CallbackService, CallbackServiceError } from '../callbacks/service.js';
-import { requireAuthSessionSecret, requireSlackSigningSecret, requireStaticCredentials, type AppConfig } from '../config/index.js';
+import { requireAuthSessionSecret, requireGitHubOAuthCredentials, requireSlackSigningSecret, requireStaticCredentials, type AppConfig } from '../config/index.js';
 import { EventService } from '../events/service.js';
 import { GenericWebhookError, GenericWebhookService } from '../integrations/generic-webhook/service.js';
 import { type GitHubArchivedSessionNotifier } from '../integrations/github/archived-session-notifier.js';
@@ -25,7 +26,7 @@ import { SandboxCleanupService } from '../sandbox/service.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
-import type { AppStore } from '../store/types.js';
+import type { AppStore, AuthUserRecord } from '../store/types.js';
 
 type AppVariables = {
   requestId: string;
@@ -42,6 +43,7 @@ export type AppServices = {
   githubReactionSender?: Pick<GitHubReactionSender, 'addEyes'>;
   githubIssueContextFetcher?: Pick<GitHubIssueContextFetcher, 'listIssueComments'>;
   githubArchivedSessionNotifier?: Pick<GitHubArchivedSessionNotifier, 'postNotice' | 'postRecoveryAcknowledgement'>;
+  githubOAuthClient?: GitHubOAuthClient;
 };
 
 export function createServices(store: AppStore = new MemoryStore(), options: { sandboxProvider?: SandboxProvider } = {}): AppServices {
@@ -75,39 +77,115 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.notFound((c) => c.json({ error: 'not_found', message: 'Route not found' }, 404));
 
-  app.get('/health', (c) => c.json({ status: 'ok', runMode: config.runMode, apiAuthMode: config.apiAuthMode, sandboxProvider: config.sandboxProvider }));
+  app.get('/health', (c) => c.json({
+    status: 'ok',
+    runMode: config.runMode,
+    apiAuthMode: config.apiAuthMode,
+    authProvider: config.apiAuthMode === 'session' ? config.authProvider : undefined,
+    sandboxProvider: config.sandboxProvider,
+  }));
+
+  app.get('/auth/config', (c) => c.json({
+    apiAuthMode: config.apiAuthMode,
+    provider: config.apiAuthMode === 'session' ? config.authProvider : undefined,
+  }));
 
   app.post('/auth/login', async (c) => {
     if (config.apiAuthMode !== 'session') return writeError(c, 404, 'not_found', 'Route not found');
+    if (config.authProvider !== 'static') return writeError(c, 404, 'not_found', 'Route not found');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const username = optionalString(body.username);
     const password = optionalString(body.password);
     if (!username || !password) return writeError(c, 400, 'invalid_request', 'Expected username and password');
 
     const credentials = requireStaticCredentials(config);
-    if (username !== credentials.username || password !== credentials.password) {
+    if (!safeStringEqual(username, credentials.username) || !safeStringEqual(password, credentials.password)) {
       return writeError(c, 401, 'unauthorized', 'Invalid username or password');
     }
 
-    c.header('set-cookie', createSessionCookie({ username, secret: requireAuthSessionSecret(config), secure: config.authCookieSecure }));
-    return c.json({ user: { username } });
+    const user = await services.store.upsertAuthUserForAccount({
+      userId: randomUUID(),
+      accountId: randomUUID(),
+      provider: 'static',
+      providerAccountId: username,
+      username,
+      profile: {},
+      now: new Date(),
+    });
+    await setAuthSessionCookie(c, config, services.store, user.id);
+    return c.json({ user: serializeAuthUser(user) });
   });
 
-  app.post('/auth/logout', (c) => {
-    if (config.apiAuthMode === 'session') c.header('set-cookie', clearSessionCookie(config));
+  app.get('/auth/oauth/github/start', (c) => {
+    if (config.apiAuthMode !== 'session' || config.authProvider !== 'github') return writeError(c, 404, 'not_found', 'Route not found');
+    const { clientId } = requireGitHubOAuthCredentials(config);
+    const redirectUri = githubOAuthCallbackUrl(c, config);
+    const state = signOAuthState({ provider: 'github', exp: Math.floor(Date.now() / 1000) + 10 * 60 }, requireAuthSessionSecret(config));
+    const authorizeUrl = new URL('/login/oauth/authorize', config.githubOAuthBaseUrl);
+    authorizeUrl.searchParams.set('client_id', clientId);
+    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+    authorizeUrl.searchParams.set('state', state);
+    authorizeUrl.searchParams.set('scope', 'read:user read:org');
+    return c.redirect(authorizeUrl.toString(), 302);
+  });
+
+  app.get('/auth/oauth/github/callback', async (c) => {
+    if (config.apiAuthMode !== 'session' || config.authProvider !== 'github') return writeError(c, 404, 'not_found', 'Route not found');
+    const state = c.req.query('state');
+    const code = c.req.query('code');
+    if (!state || !verifyOAuthState(state, requireAuthSessionSecret(config)) || !code) {
+      return writeError(c, 400, 'invalid_request', 'Invalid GitHub OAuth callback');
+    }
+
+    const credentials = requireGitHubOAuthCredentials(config);
+    const client = services.githubOAuthClient ?? new FetchGitHubOAuthClient({
+      clientId: credentials.clientId,
+      clientSecret: credentials.clientSecret,
+      oauthBaseUrl: config.githubOAuthBaseUrl,
+      apiBaseUrl: config.githubApiBaseUrl,
+    });
+    const accessToken = await client.exchangeCode({ code, redirectUri: githubOAuthCallbackUrl(c, config) });
+    const githubUser = await client.getUser(accessToken);
+    const organizations = config.authGithubAllowedOrganizations.length ? await client.listOrganizations(accessToken) : [];
+    if (!isAllowedGitHubLogin(githubUser.login, organizations, config)) {
+      return writeError(c, 403, 'forbidden', 'GitHub user is not allowed');
+    }
+
+    const user = await services.store.upsertAuthUserForAccount({
+      userId: randomUUID(),
+      accountId: randomUUID(),
+      provider: 'github',
+      providerAccountId: String(githubUser.id),
+      username: githubUser.login,
+      ...(githubUser.name ? { displayName: githubUser.name } : {}),
+      ...(githubUser.avatar_url ? { avatarUrl: githubUser.avatar_url } : {}),
+      profile: { login: githubUser.login, id: githubUser.id },
+      now: new Date(),
+    });
+    await setAuthSessionCookie(c, config, services.store, user.id);
+    return c.redirect(config.authSuccessRedirectUrl ?? '/', 302);
+  });
+
+  app.post('/auth/logout', async (c) => {
+    if (config.apiAuthMode === 'session') {
+      const sessionId = readSessionId(c);
+      if (sessionId) await services.store.deleteAuthSession(sessionId);
+      c.header('set-cookie', clearSessionCookie(config));
+    }
     return c.json({ ok: true });
   });
 
-  app.get('/auth/me', (c) => {
+  app.get('/auth/me', async (c) => {
     if (config.apiAuthMode === 'none') return c.json({ user: null });
     if (config.apiAuthMode === 'bearer') return c.json({ user: null });
-    const session = readSession(c, config);
-    if (!session) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    return c.json({ user: { username: session.username } });
+    const sessionId = readSessionId(c);
+    const user = sessionId ? await services.store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
+    if (!user) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    return c.json({ user: serializeAuthUser(user) });
   });
 
-  app.use('/sessions/*', apiAuthMiddleware(config));
-  app.use('/sessions', apiAuthMiddleware(config));
+  app.use('/sessions/*', apiAuthMiddleware(config, services.store));
+  app.use('/sessions', apiAuthMiddleware(config, services.store));
 
   app.post('/sessions', async (c) => {
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
@@ -419,6 +497,46 @@ function requestIdMiddleware(): MiddlewareHandler<{ Variables: AppVariables }> {
 
 function writeError(c: Context, statusCode: number, error: string, message: string) {
   return c.json({ error, message }, statusCode as never);
+}
+
+async function setAuthSessionCookie(c: Context, config: AppConfig, store: AppStore, userId: string): Promise<void> {
+  const now = new Date();
+  const sessionId = createSessionId();
+  await store.createAuthSession({
+    id: sessionId,
+    userId,
+    createdAt: now,
+    expiresAt: new Date(now.getTime() + sessionMaxAgeSeconds * 1000),
+  });
+  c.header('set-cookie', createSessionCookie({ sessionId, secure: config.authCookieSecure }));
+}
+
+function serializeAuthUser(user: AuthUserRecord) {
+  return {
+    id: user.id,
+    username: user.username,
+    ...(user.displayName ? { displayName: user.displayName } : {}),
+    ...(user.avatarUrl ? { avatarUrl: user.avatarUrl } : {}),
+  };
+}
+
+function githubOAuthCallbackUrl(c: Context, config: AppConfig): string {
+  if (config.githubAppCallbackUrl) return config.githubAppCallbackUrl;
+  return new URL('/auth/oauth/github/callback', c.req.url).toString();
+}
+
+function isAllowedGitHubLogin(username: string, organizations: string[], config: AppConfig): boolean {
+  const allowedUsers = new Set(config.authGithubAllowedUsers.map((user) => user.toLowerCase()));
+  const allowedOrganizations = new Set(config.authGithubAllowedOrganizations.map((org) => org.toLowerCase()));
+  if (!allowedUsers.size && !allowedOrganizations.size) return true;
+  if (allowedUsers.has(username.toLowerCase())) return true;
+  return organizations.some((org) => allowedOrganizations.has(org.toLowerCase()));
+}
+
+function safeStringEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 async function writeEventStream(

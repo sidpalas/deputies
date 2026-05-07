@@ -3,6 +3,7 @@ export type RunnerKind = 'fake' | 'flue';
 export type SandboxProviderKind = 'fake' | 'local' | 'local-docker' | 'daytona' | 'kubernetes' | 'ecs';
 export type AppStoreKind = 'memory' | 'postgres';
 export type ApiAuthMode = 'none' | 'bearer' | 'session';
+export type AuthProviderKind = 'static' | 'github';
 
 export type AppConfig = {
   port: number;
@@ -18,10 +19,18 @@ export type AppConfig = {
   appStore: AppStoreKind;
   apiAuthMode: ApiAuthMode;
   apiBearerToken?: string;
+  authProvider: AuthProviderKind;
   authStaticUsername?: string;
   authStaticPassword?: string;
   authSessionSecret?: string;
   authCookieSecure: boolean;
+  authSuccessRedirectUrl?: string;
+  githubAppClientId?: string;
+  githubAppClientSecret?: string;
+  githubAppCallbackUrl?: string;
+  githubOAuthBaseUrl: string;
+  authGithubAllowedUsers: string[];
+  authGithubAllowedOrganizations: string[];
   databaseUrl?: string;
   flueSessionStore: 'postgres' | 'memory';
   flueModel?: string;
@@ -68,7 +77,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
     appStore: parseEnum(env.APP_STORE, ['memory', 'postgres'], 'memory'),
     apiAuthMode: parseEnum(env.API_AUTH_MODE, ['none', 'bearer', 'session'], 'none'),
+    authProvider: parseEnum(env.AUTH_PROVIDER, ['static', 'github'], 'static'),
     authCookieSecure: parseBoolean(env.AUTH_COOKIE_SECURE, false, 'AUTH_COOKIE_SECURE'),
+    githubOAuthBaseUrl: env.GITHUB_OAUTH_BASE_URL ?? 'https://github.com',
+    authGithubAllowedUsers: parseStringList(env.AUTH_GITHUB_ALLOWED_USERS),
+    authGithubAllowedOrganizations: parseStringList(env.AUTH_GITHUB_ALLOWED_ORGANIZATIONS),
     flueSessionStore: parseEnum(env.FLUE_SESSION_STORE, ['postgres', 'memory'], 'postgres'),
     slackApiBaseUrl: env.SLACK_API_BASE_URL ?? 'https://slack.com/api',
     unsafeAllowAllSlackIds: parseBoolean(env.UNSAFE_ALLOW_ALL_SLACK_IDS, false, 'UNSAFE_ALLOW_ALL_SLACK_IDS'),
@@ -88,6 +101,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.AUTH_STATIC_USERNAME) config.authStaticUsername = env.AUTH_STATIC_USERNAME;
   if (env.AUTH_STATIC_PASSWORD) config.authStaticPassword = env.AUTH_STATIC_PASSWORD;
   if (env.AUTH_SESSION_SECRET) config.authSessionSecret = env.AUTH_SESSION_SECRET;
+  if (env.AUTH_SUCCESS_REDIRECT_URL) config.authSuccessRedirectUrl = env.AUTH_SUCCESS_REDIRECT_URL;
+  if (env.GITHUB_APP_CLIENT_ID) config.githubAppClientId = env.GITHUB_APP_CLIENT_ID;
+  if (env.GITHUB_APP_CLIENT_SECRET) config.githubAppClientSecret = env.GITHUB_APP_CLIENT_SECRET;
+  if (env.GITHUB_APP_CALLBACK_URL) config.githubAppCallbackUrl = env.GITHUB_APP_CALLBACK_URL;
   if (env.DATABASE_URL) config.databaseUrl = env.DATABASE_URL;
   if (env.FLUE_MODEL) config.flueModel = env.FLUE_MODEL;
   if (env.FLUE_OPENAI_CODEX_AUTH_FILE) config.flueOpenaiCodexAuthFile = env.FLUE_OPENAI_CODEX_AUTH_FILE;
@@ -137,6 +154,14 @@ export function requireAuthSessionSecret(config: AppConfig): string {
   }
 
   return config.authSessionSecret;
+}
+
+export function requireGitHubOAuthCredentials(config: AppConfig): { clientId: string; clientSecret: string } {
+  if (!config.githubAppClientId || !config.githubAppClientSecret) {
+    throw new Error('GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET are required when AUTH_PROVIDER=github');
+  }
+
+  return { clientId: config.githubAppClientId, clientSecret: config.githubAppClientSecret };
 }
 
 export function requireStaticCredentials(config: AppConfig): { username: string; password: string } {

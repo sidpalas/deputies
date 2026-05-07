@@ -1,9 +1,11 @@
 export type ApiAuthMode = 'none' | 'bearer' | 'session';
+export type AuthProvider = 'static' | 'github';
 
 export type Health = {
   status: 'ok';
   runMode: string;
   apiAuthMode: ApiAuthMode;
+  authProvider?: AuthProvider;
   sandboxProvider?: string;
 };
 
@@ -75,7 +77,10 @@ export type CallbackDelivery = {
 };
 
 export type AuthUser = {
+  id: string;
   username: string;
+  displayName?: string;
+  avatarUrl?: string;
 };
 
 export class ApiError extends Error {
@@ -108,6 +113,10 @@ export async function login(input: { username: string; password: string }): Prom
     body: { username: input.username, password: input.password },
   });
   return body.user;
+}
+
+export function githubLoginUrl(): string {
+  return `${apiBaseUrl}/auth/oauth/github/start`;
 }
 
 export async function logout(): Promise<void> {

@@ -95,6 +95,52 @@ describe('core API', () => {
     expect(logout.headers.get('set-cookie')).toContain('Max-Age=0');
   });
 
+  it('supports GitHub OAuth login with allowed users', async () => {
+    await closeServer(server);
+    store = new MemoryStore();
+    server = createServer(loadConfig({
+      API_AUTH_MODE: 'session',
+      AUTH_PROVIDER: 'github',
+      AUTH_SESSION_SECRET: 'test-secret',
+      GITHUB_APP_CLIENT_ID: 'client-id',
+      GITHUB_APP_CLIENT_SECRET: 'client-secret',
+      GITHUB_OAUTH_BASE_URL: 'https://github.example',
+      AUTH_GITHUB_ALLOWED_USERS: 'octocat',
+    }), {
+      ...createServices(store),
+      githubOAuthClient: {
+        async exchangeCode(input) {
+          expect(input.code).toBe('oauth-code');
+          return 'github-access-token';
+        },
+        async getUser(accessToken) {
+          expect(accessToken).toBe('github-access-token');
+          return { id: 583231, login: 'octocat', name: 'The Octocat', avatar_url: 'https://avatars.example/octocat.png' };
+        },
+        async listOrganizations() {
+          return [];
+        },
+      },
+    });
+    baseUrl = await listen(server);
+
+    const start = await fetch(`${baseUrl}/auth/oauth/github/start`, { redirect: 'manual' });
+    expect(start.status).toBe(302);
+    const location = start.headers.get('location');
+    expect(location).toContain('https://github.example/login/oauth/authorize');
+    const state = new URL(location!).searchParams.get('state');
+    expect(state).toBeTruthy();
+
+    const callback = await fetch(`${baseUrl}/auth/oauth/github/callback?code=oauth-code&state=${encodeURIComponent(state!)}`, { redirect: 'manual' });
+    expect(callback.status).toBe(302);
+    const cookie = callback.headers.get('set-cookie');
+    expect(cookie).toContain('dev_deputies_session=');
+
+    const me = await fetch(`${baseUrl}/auth/me`, { headers: { cookie: cookie! } });
+    expect(me.status).toBe(200);
+    await expect(me.json()).resolves.toMatchObject({ user: { username: 'octocat', displayName: 'The Octocat' } });
+  });
+
   it('allows PATCH session title updates through CORS preflight', async () => {
     const response = await fetch(`${baseUrl}/sessions/00000000-0000-4000-8000-000000000001`, {
       method: 'OPTIONS',

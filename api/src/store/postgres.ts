@@ -3,6 +3,8 @@ import type { NormalizedEvent, NormalizedEventType } from '../events/types.js';
 import type {
   AppStore,
   ArtifactRecord,
+  AuthSessionRecord,
+  AuthUserRecord,
   CallbackDeliveryRecord,
   CallbackDeliveryStatus,
   CreateArtifactRecord,
@@ -24,6 +26,7 @@ import type {
   SandboxStatus,
   SessionRecord,
   SessionStatus,
+  UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
 
@@ -38,6 +41,22 @@ type SessionRow = QueryResultRow & {
 };
 
 type PgInteger = number | string;
+
+type AuthUserRow = QueryResultRow & {
+  id: string;
+  username: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type AuthSessionRow = QueryResultRow & {
+  id: string;
+  user_id: string;
+  created_at: Date;
+  expires_at: Date;
+};
 
 type MessageRow = QueryResultRow & {
   id: string;
@@ -180,6 +199,70 @@ export class PostgresStore implements AppStore {
     } finally {
       client.release();
     }
+  }
+
+  async upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const existing = await client.query<{ user_id: string }>(
+        'SELECT user_id FROM auth_accounts WHERE provider = $1 AND provider_account_id = $2',
+        [record.provider, record.providerAccountId],
+      );
+      const userId = existing.rows[0]?.user_id ?? record.userId;
+      const userResult = await client.query<AuthUserRow>(
+        `INSERT INTO auth_users (id, username, display_name, avatar_url, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $5)
+         ON CONFLICT (id) DO UPDATE
+         SET username = EXCLUDED.username,
+             display_name = EXCLUDED.display_name,
+             avatar_url = EXCLUDED.avatar_url,
+             updated_at = EXCLUDED.updated_at
+         RETURNING id, username, display_name, avatar_url, created_at, updated_at`,
+        [userId, record.username, record.displayName ?? null, record.avatarUrl ?? null, record.now],
+      );
+      await client.query(
+        `INSERT INTO auth_accounts (id, user_id, provider, provider_account_id, username, profile, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+         ON CONFLICT (provider, provider_account_id) DO UPDATE
+         SET username = EXCLUDED.username,
+             profile = EXCLUDED.profile,
+             updated_at = EXCLUDED.updated_at`,
+        [record.accountId, userId, record.provider, record.providerAccountId, record.username, record.profile, record.now],
+      );
+      await client.query('COMMIT');
+      return toAuthUser(userResult.rows[0]!);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async createAuthSession(record: AuthSessionRecord): Promise<AuthSessionRecord> {
+    const result = await this.pool.query<AuthSessionRow>(
+      `INSERT INTO auth_sessions (id, user_id, created_at, expires_at)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, user_id, created_at, expires_at`,
+      [record.id, record.userId, record.createdAt, record.expiresAt],
+    );
+    return toAuthSession(result.rows[0]!);
+  }
+
+  async getAuthUserBySession(input: { sessionId: string; now: Date }): Promise<AuthUserRecord | null> {
+    const result = await this.pool.query<AuthUserRow>(
+      `SELECT u.id, u.username, u.display_name, u.avatar_url, u.created_at, u.updated_at
+       FROM auth_sessions s
+       JOIN auth_users u ON u.id = s.user_id
+       WHERE s.id = $1 AND s.expires_at > $2`,
+      [input.sessionId, input.now],
+    );
+    return result.rows[0] ? toAuthUser(result.rows[0]) : null;
+  }
+
+  async deleteAuthSession(sessionId: string): Promise<void> {
+    await this.pool.query('DELETE FROM auth_sessions WHERE id = $1', [sessionId]);
   }
 
   async createSession(record: CreateSessionRecord): Promise<SessionRecord> {
@@ -961,6 +1044,27 @@ export class PostgresStore implements AppStore {
       client.release();
     }
   }
+}
+
+function toAuthUser(row: AuthUserRow): AuthUserRecord {
+  const user: AuthUserRecord = {
+    id: row.id,
+    username: row.username,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  if (row.display_name) user.displayName = row.display_name;
+  if (row.avatar_url) user.avatarUrl = row.avatar_url;
+  return user;
+}
+
+function toAuthSession(row: AuthSessionRow): AuthSessionRecord {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
 }
 
 function toSession(row: SessionRow): SessionRecord {
