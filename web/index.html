@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (() => {
+        const theme = localStorage.getItem('deputies-theme') || 'system';
+        const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
+        document.documentElement.classList.toggle('dark', theme === 'dark' || (theme === 'system' && prefersDark));
+      })();
+    </script>
     <title>Deputies</title>
   </head>
   <body>

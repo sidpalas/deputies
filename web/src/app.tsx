@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, SyntheticEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlertTriangle, Archive, Check, ChevronDown, Copy, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, RotateCcw, X } from 'lucide-react';
+import { AlertTriangle, Archive, Check, ChevronDown, Copy, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, RotateCcw, Sun, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -47,7 +47,9 @@ const tokenStorageKey = 'deputies-api-token';
 const selectedSessionStorageKey = 'deputies-selected-session-id';
 const newSessionSelectedStorageKey = 'deputies-new-session-selected';
 const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
+const themeStorageKey = 'deputies-theme';
 const threadAutoFollowThreshold = 160;
+type ThemePreference = 'light' | 'dark' | 'system';
 
 function loadStoredToken(): string {
   return localStorage.getItem(tokenStorageKey) ?? '';
@@ -55,6 +57,20 @@ function loadStoredToken(): string {
 
 function loadInitialSelectedSessionId(): string {
   return new URLSearchParams(window.location.search).get('session') ?? localStorage.getItem(selectedSessionStorageKey) ?? '';
+}
+
+function loadThemePreference(): ThemePreference {
+  const stored = localStorage.getItem(themeStorageKey);
+  return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+}
+
+function resolveThemePreference(theme: ThemePreference): 'light' | 'dark' {
+  if (theme !== 'system') return theme;
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyThemePreference(theme: ThemePreference) {
+  document.documentElement.classList.toggle('dark', resolveThemePreference(theme) === 'dark');
 }
 
 function isThreadNearBottom(container: HTMLElement): boolean {
@@ -87,6 +103,7 @@ export function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [threadSearch, setThreadSearch] = useState('');
   const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(() => localStorage.getItem(archivedSessionsOpenStorageKey) === 'true');
+  const [themePreference, setThemePreference] = useState<ThemePreference>(loadThemePreference);
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
@@ -110,6 +127,21 @@ export function App() {
   const filteredSessions = filterSessions(sortSessionsByLastActivity(sessions), threadSearch);
   const activeSessions = filteredSessions.filter((session) => session.status !== 'archived');
   const archivedSessions = filteredSessions.filter((session) => session.status === 'archived');
+
+  useEffect(() => {
+    applyThemePreference(themePreference);
+    localStorage.setItem(themeStorageKey, themePreference);
+
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!media) return;
+
+    const handleSystemThemeChange = () => {
+      if (themePreference === 'system') applyThemePreference(themePreference);
+    };
+
+    media.addEventListener('change', handleSystemThemeChange);
+    return () => media.removeEventListener('change', handleSystemThemeChange);
+  }, [themePreference]);
 
   useEffect(() => {
     setTitleDraft(selectedSession?.title ?? '');
@@ -573,8 +605,8 @@ export function App() {
   }
 
   return (
-    <main className="flex h-screen flex-col overflow-hidden bg-slate-950 text-slate-100">
-      {error ? <div className="border-b border-red-900/60 bg-red-950/40 px-4 py-2 text-sm text-red-200">{error}</div> : null}
+    <main className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+      {error ? <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div> : null}
 
       {startupLoading ? <StartupLoadingPanel /> : bearerAuthRequired && !token ? <BearerAuthPanel draftToken={draftToken} setDraftToken={setDraftToken} saveToken={saveToken} /> : sessionAuthRequired && !currentUser ? <SessionAuthPanel password={loginPassword} provider={health?.authProvider ?? 'static'} username={loginUsername} onPasswordChange={setLoginPassword} onSubmit={handleLogin} onUsernameChange={setLoginUsername} /> : (
         <>
@@ -587,15 +619,15 @@ export function App() {
 
       <section className={cn('grid min-h-0 flex-1 grid-cols-1', sidebarCollapsed ? 'md:grid-cols-[3.75rem_minmax(0,1fr)]' : 'md:grid-cols-[18rem_minmax(0,1fr)]')}>
         {sidebarCollapsed ? (
-          <aside className="hidden min-h-0 border-r border-slate-800 bg-slate-950/95 p-3 md:flex">
-            <Button className="h-9 w-9 p-0 text-slate-400 hover:text-slate-100" variant="ghost" size="icon" onClick={expandSidebar} aria-label="Expand sessions" title="Expand sessions">
+          <aside className="hidden min-h-0 border-r border-border bg-card/95 p-3 md:flex">
+            <Button className="h-9 w-9 p-0 text-muted-foreground hover:text-foreground" variant="ghost" size="icon" onClick={expandSidebar} aria-label="Expand sessions" title="Expand sessions">
               <PanelLeftOpen className="h-4 w-4" />
             </Button>
           </aside>
         ) : (
           <aside
             className={cn(
-              'fixed left-2 top-2 z-40 hidden h-[calc(100vh-1rem)] min-h-0 w-[min(22rem,calc(100vw-1rem))] overflow-hidden rounded-lg border border-slate-800 bg-slate-950 p-3 shadow-2xl md:static md:z-auto md:block md:h-full md:w-auto md:rounded-none md:border-y-0 md:border-l-0 md:shadow-none',
+              'fixed left-2 top-2 z-40 hidden h-[calc(100vh-1rem)] min-h-0 w-[min(22rem,calc(100vw-1rem))] overflow-hidden rounded-lg border border-border bg-card p-3 shadow-2xl md:static md:z-auto md:block md:h-full md:w-auto md:rounded-none md:border-y-0 md:border-l-0 md:shadow-none',
               sidebarOpen && 'block',
             )}
           >
@@ -618,6 +650,8 @@ export function App() {
               onSearch={setThreadSearch}
               onSelect={selectSession}
               onSignOut={signOut}
+              onThemeChange={setThemePreference}
+              themePreference={themePreference}
               onUnarchive={unarchiveFromList}
             />
           </aside>
@@ -674,8 +708,8 @@ export function App() {
                     ) : null}
                   </div>
                   {selectedSessionArchived ? <ArchivedSessionNotice onRestore={restoreSelectedSession} /> : null}
-                  <form className="shrink-0 bg-slate-950/95 py-3" onSubmit={handleSendMessage}>
-                    <Card className="overflow-hidden border-slate-700 bg-slate-900/70">
+                  <form className="shrink-0 bg-background/95 py-3" onSubmit={handleSendMessage}>
+                    <Card className="overflow-hidden bg-card/90">
                       <Textarea
                         className="min-h-28 border-0 bg-transparent focus:ring-0"
                         value={prompt}
@@ -684,9 +718,9 @@ export function App() {
                         placeholder={selectedSessionArchived ? 'Restore this archived session before sending new work.' : 'Ask your deputy to investigate, change code, or follow up...'}
                         disabled={selectedSessionArchived}
                       />
-                      <div className="flex flex-wrap items-center gap-2 border-t border-slate-800 px-3 py-2 text-xs text-slate-500">
+                      <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
                         <Input
-                          className="h-8 min-w-0 flex-1 border-slate-800 bg-slate-950/70 text-xs min-[480px]:max-w-80"
+                          className="h-8 min-w-0 flex-1 text-xs min-[480px]:max-w-80"
                           value={repository}
                           onChange={(event) => setRepository(event.target.value)}
                           placeholder={selectedRepository ? 'Override repo...' : 'GitHub repo, e.g. owner/repo'}
@@ -725,13 +759,13 @@ function clearSessionSearchParam() {
 
 function LocalSandboxWarning() {
   return (
-    <div className="border-b border-amber-700/70 bg-amber-950/35 px-3 py-2 text-sm text-amber-100 md:px-8 xl:px-20" role="alert">
+    <div className="border-b border-warning/50 bg-warning/15 px-3 py-2 text-sm text-warning-foreground dark:text-warning md:px-8 xl:px-20" role="alert">
       <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <p>
           <strong>Local sandbox mode is not a security boundary.</strong> Commands run on the API/worker host runtime in a temporary workspace. Use it only for trusted local development.
         </p>
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" aria-hidden="true" />
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
       </div>
     </div>
   );
@@ -747,6 +781,7 @@ function ThreadSidebar(props: {
   loading: boolean;
   search: string;
   selectedSessionId: string;
+  themePreference: ThemePreference;
   token: string;
   onArchive: (sessionId: string) => void;
   onArchivedSessionsOpenChange: (open: boolean) => void;
@@ -756,6 +791,7 @@ function ThreadSidebar(props: {
   onSearch: (value: string) => void;
   onSelect: (sessionId: string) => void;
   onSignOut: () => void;
+  onThemeChange: (value: ThemePreference) => void;
   onUnarchive: (sessionId: string) => void;
 }) {
   const searching = Boolean(props.search.trim());
@@ -790,20 +826,51 @@ function ThreadSidebar(props: {
           {props.activeSessions.map((session) => (
             <SessionButton key={session.id} session={session} selected={session.id === props.selectedSessionId} onArchive={props.onArchive} onSelect={props.onSelect} />
           ))}
-          {!props.activeSessions.length ? <p className="px-2 py-3 text-sm text-slate-500">{props.search ? 'No matching active sessions.' : 'No active sessions.'}</p> : null}
+          {!props.activeSessions.length ? <p className="px-2 py-3 text-sm text-muted-foreground">{props.search ? 'No matching active sessions.' : 'No active sessions.'}</p> : null}
         </div>
         {props.archivedSessions.length || searching ? (
-          <details className="mt-4 border-t border-slate-800 pt-3" open={searching || props.archivedSessionsOpen} onToggle={handleArchivedToggle}>
-            <summary className="flex cursor-pointer items-center gap-1 text-sm font-medium text-slate-400"><ChevronDown className="h-4 w-4" /> Archived · {props.archivedSessions.length}</summary>
+          <details className="mt-4 border-t border-border pt-3" open={searching || props.archivedSessionsOpen} onToggle={handleArchivedToggle}>
+            <summary className="flex cursor-pointer items-center gap-1 text-sm font-medium text-muted-foreground"><ChevronDown className="h-4 w-4" /> Archived · {props.archivedSessions.length}</summary>
             {props.archivedSessions.length ? (
               <div className="mt-2 grid min-w-0 gap-1 opacity-80">
                 {props.archivedSessions.map((session) => <SessionButton key={session.id} session={session} selected={session.id === props.selectedSessionId} onSelect={props.onSelect} onUnarchive={props.onUnarchive} />)}
               </div>
-            ) : <p className="px-2 py-3 text-sm text-slate-500">No matching archived sessions.</p>}
+            ) : <p className="px-2 py-3 text-sm text-muted-foreground">No matching archived sessions.</p>}
           </details>
         ) : null}
       </div>
+      <ThemeToggle preference={props.themePreference} onChange={props.onThemeChange} />
       <ApiStatusFooter authRequired={props.authRequired} health={props.health} token={props.token} onSignOut={props.onSignOut} />
+    </div>
+  );
+}
+
+function ThemeToggle(props: { preference: ThemePreference; onChange: (value: ThemePreference) => void }) {
+  const options: { value: ThemePreference; label: string; icon: typeof Monitor }[] = [
+    { value: 'system', label: 'System theme', icon: Monitor },
+    { value: 'light', label: 'Light theme', icon: Sun },
+    { value: 'dark', label: 'Dark theme', icon: Moon },
+  ];
+
+  return (
+    <div className="mt-3 grid grid-cols-3 gap-1 rounded-md border border-border bg-muted/60 p-1" aria-label="Theme preference">
+      {options.map((option) => {
+        const Icon = option.icon;
+        const active = props.preference === option.value;
+        return (
+          <button
+            className={cn('inline-flex h-8 items-center justify-center rounded border border-transparent text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground', active && 'border-border bg-card text-foreground shadow-sm')}
+            key={option.value}
+            type="button"
+            onClick={() => props.onChange(option.value)}
+            aria-label={option.label}
+            aria-pressed={active}
+            title={option.label}
+          >
+            <Icon className="h-4 w-4" />
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -813,7 +880,7 @@ function StartupLoadingPanel() {
     <section className="grid min-h-screen place-items-center px-4">
       <Card className="max-w-lg p-6 text-center">
         <h2 className="text-lg font-semibold">Loading Deputies</h2>
-        <p className="mt-2 text-sm text-slate-400">Restoring your session and workspace.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Restoring your session and workspace.</p>
       </Card>
     </section>
   );
@@ -821,10 +888,10 @@ function StartupLoadingPanel() {
 
 function ApiStatusFooter(props: { authRequired: boolean; health: Health | null; token: string; onSignOut: () => void }) {
   return (
-    <div className="mt-3 shrink-0 border-t border-slate-800 pt-3 text-left text-xs text-slate-500">
+    <div className="mt-3 shrink-0 border-t border-border pt-3 text-left text-xs text-muted-foreground">
       <div className="flex items-center gap-2">
-        <span className={cn('h-2 w-2 rounded-full', props.health?.status === 'ok' ? 'bg-emerald-400' : 'bg-orange-400')} />
-        <strong className="text-slate-300">{props.health ? `API ${props.health.status}` : 'Checking API'}</strong>
+        <span className={cn('h-2 w-2 rounded-full', props.health?.status === 'ok' ? 'bg-success' : 'bg-warning')} />
+        <strong className="text-foreground">{props.health ? `API ${props.health.status}` : 'Checking API'}</strong>
       </div>
       <p className="mt-1 truncate">{getApiBaseUrl()}</p>
       {props.health ? <p>{props.health.runMode} mode · auth {props.health.apiAuthMode}</p> : null}
@@ -841,10 +908,10 @@ function SessionButton(props: {
   onUnarchive?: (sessionId: string) => void;
 }) {
   return (
-    <div className={cn('group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-transparent p-2 hover:bg-slate-900', props.selected && 'border-sky-400 bg-sky-950/30')}>
+    <div className={cn('group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-transparent p-2 hover:bg-accent', props.selected && 'border-primary bg-primary/15')}>
       <button className="block min-w-0 flex-1 overflow-hidden bg-transparent p-0 text-left" type="button" onClick={() => props.onSelect(props.session.id)}>
-        <strong className="block w-full truncate text-sm font-medium text-slate-100">{props.session.title || 'Untitled session'}</strong>
-        <span className="block w-full truncate text-xs text-slate-500"><span className={statusTextClass(props.session.status)}>{props.session.status}</span> · {formatDate(props.session.updatedAt)}</span>
+        <strong className="block w-full truncate text-sm font-medium text-foreground">{props.session.title || 'Untitled session'}</strong>
+        <span className="block w-full truncate text-xs text-muted-foreground"><span className={statusTextClass(props.session.status)}>{props.session.status}</span> · {formatDate(props.session.updatedAt)}</span>
       </button>
       {props.onArchive ? <Button className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" variant="ghost" size="sm" onClick={() => props.onArchive?.(props.session.id)} aria-label="Archive session" title="Archive session"><Archive className="h-3.5 w-3.5" /></Button> : null}
       {props.onUnarchive ? <Button className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" variant="ghost" size="sm" onClick={() => props.onUnarchive?.(props.session.id)} aria-label="Restore session" title="Restore session"><RotateCcw className="h-3.5 w-3.5" /></Button> : null}
@@ -854,10 +921,10 @@ function SessionButton(props: {
 
 function ArchivedSessionNotice(props: { onRestore: () => void }) {
   return (
-    <Card className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3 border-amber-700/60 bg-amber-950/20 p-3">
+    <Card className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3 border-warning/50 bg-warning/10 p-3">
       <div>
-        <p className="text-sm font-medium text-amber-100">This session is archived.</p>
-        <p className="text-xs text-amber-200/70">Restore it before sending a new message.</p>
+        <p className="text-sm font-medium text-warning-foreground dark:text-warning">This session is archived.</p>
+        <p className="text-xs text-warning-foreground/80 dark:text-warning/80">Restore it before sending a new message.</p>
       </div>
       <Button type="button" variant="secondary" onClick={props.onRestore}><RotateCcw className="h-4 w-4" /> Restore session</Button>
     </Card>
@@ -868,13 +935,13 @@ function BearerAuthPanel(props: { draftToken: string; setDraftToken: (value: str
   return (
     <section className="grid min-h-screen place-items-center px-4">
       <Card className="w-full max-w-2xl p-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-sky-300">Deputies</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-50">Engineering agents for delegated work.</h1>
-        <p className="mt-2 text-sm text-slate-400">Assign follow-ups, watch the work trail, and inspect the results.</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">Engineering agents for delegated work.</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Assign follow-ups, watch the work trail, and inspect the results.</p>
         <form className="mt-6 grid gap-3" onSubmit={props.saveToken}>
           <div>
             <strong>API token required</strong>
-            <p className="text-sm text-slate-400">Enter the backend bearer token. It stays in this browser's local storage.</p>
+            <p className="text-sm text-muted-foreground">Enter the backend bearer token. It stays in this browser's local storage.</p>
           </div>
           <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
             <Input type="password" value={props.draftToken} onChange={(event) => props.setDraftToken(event.target.value)} placeholder="Bearer token" />
@@ -890,14 +957,14 @@ function SessionAuthPanel(props: { provider: 'static' | 'github'; username: stri
   return (
     <section className="grid min-h-screen place-items-center px-4">
       <Card className="w-full max-w-2xl p-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-sky-300">Deputies</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-50">Sign in to Deputies.</h1>
-        <p className="mt-2 text-sm text-slate-400">The API will set an HTTP-only session cookie after login.</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">Sign in to Deputies.</h1>
+        <p className="mt-2 text-sm text-muted-foreground">The API will set an HTTP-only session cookie after login.</p>
         {props.provider === 'github' ? (
           <div className="mt-6 grid gap-3">
             <div>
               <strong>GitHub login</strong>
-              <p className="text-sm text-slate-400">Continue with a GitHub account allowed by this Deputies deployment.</p>
+              <p className="text-sm text-muted-foreground">Continue with a GitHub account allowed by this Deputies deployment.</p>
             </div>
             <Button className="justify-self-end" type="button" onClick={() => { window.location.href = githubLoginUrl(); }}>Continue with GitHub</Button>
           </div>
@@ -905,7 +972,7 @@ function SessionAuthPanel(props: { provider: 'static' | 'github'; username: stri
           <form className="mt-6 grid gap-3" onSubmit={props.onSubmit}>
             <div>
               <strong>Operator login</strong>
-              <p className="text-sm text-slate-400">Use the static credentials configured for this environment.</p>
+              <p className="text-sm text-muted-foreground">Use the static credentials configured for this environment.</p>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <Input value={props.username} onChange={(event) => props.onUsernameChange(event.target.value)} placeholder="Username" autoComplete="username" />
@@ -931,9 +998,9 @@ function NewThreadPanel(props: {
   return (
     <section className="grid min-h-screen place-items-center px-4">
       <Card className="w-full max-w-2xl p-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-sky-300">Deputies</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-50">Engineering agents for delegated work.</h1>
-        <p className="mt-2 text-sm text-slate-400">Assign follow-ups, watch the work trail, and inspect the results.</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">Engineering agents for delegated work.</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Assign follow-ups, watch the work trail, and inspect the results.</p>
         <h2 className="mt-6 text-xl font-semibold">What needs doing?</h2>
         <form className="mt-4 grid gap-3" onSubmit={props.onSubmit}>
           <Input value={props.repository} onChange={(event) => props.onRepositoryChange(event.target.value)} placeholder="GitHub repository, e.g. owner/repo or https://github.com/owner/repo" disabled={!props.canCallApi} />
@@ -956,9 +1023,9 @@ function ThreadHeader(props: {
   onUpdateTitle: (event: FormEvent) => void;
 }) {
   return (
-    <section className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-b border-slate-800 bg-slate-950/95 px-4 py-3 backdrop-blur">
+    <section className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
       <div className="min-w-0 overflow-hidden">
-        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Session</p>
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Session</p>
         {props.editingTitle ? (
           <form className="mt-1 flex flex-wrap items-center gap-2" onSubmit={props.onUpdateTitle}>
             <Input className="max-w-xl" value={props.titleDraft} onChange={(event) => props.onTitleDraftChange(event.target.value)} autoFocus />
@@ -967,11 +1034,11 @@ function ThreadHeader(props: {
           </form>
         ) : (
           <div className="mt-1 flex min-w-0 items-center gap-1">
-            <h2 className="min-w-0 truncate text-base font-semibold text-slate-50">{props.selectedSession.title || 'Untitled session'}</h2>
+            <h2 className="min-w-0 truncate text-base font-semibold text-foreground">{props.selectedSession.title || 'Untitled session'}</h2>
             <Button className="h-7 w-7 shrink-0 p-0" type="button" variant="ghost" size="icon" onClick={props.onEditTitle} aria-label="Edit title" title="Edit title"><Pencil className="h-3.5 w-3.5" /></Button>
           </div>
         )}
-        <p className="mt-1 hidden truncate text-xs text-slate-500 sm:block">{props.selectedSession.id}</p>
+        <p className="mt-1 hidden truncate text-xs text-muted-foreground sm:block">{props.selectedSession.id}</p>
       </div>
       <div className="grid min-h-9 shrink-0 grid-cols-[auto_auto] items-center justify-items-end gap-2 justify-self-end">
         <Badge className={cn('col-start-1', statusTextClass(props.selectedSession.status))}>{props.selectedSession.status}</Badge>
@@ -1010,7 +1077,7 @@ function ChatPanel(props: {
             <div className="grid min-w-0 gap-2" key={group.key}>
             {group.messages.length > 1 ? (
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-medium uppercase tracking-widest text-slate-500">Queued batch · {group.messages.filter((message) => message.status !== 'cancelled').length} active messages</p>
+                <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Queued batch · {group.messages.filter((message) => message.status !== 'cancelled').length} active messages</p>
                 {activeRun ? <CancelRunButton cancelling={cancellingRun} onCancelRun={props.onCancelRun} /> : null}
               </div>
             ) : null}
@@ -1032,7 +1099,7 @@ function ChatPanel(props: {
             ))}
             {response ? (
             <Card className="p-3">
-              <h3 className="mb-1 text-xs font-medium text-slate-400">{activeRun ? 'Deputy progress' : 'Deputy response'}</h3>
+              <h3 className="mb-1 text-xs font-medium text-muted-foreground">{activeRun ? 'Deputy progress' : 'Deputy response'}</h3>
               <MarkdownText text={formatAssistantDisplayText(response)} />
             </Card>
           ) : null}
@@ -1040,7 +1107,7 @@ function ChatPanel(props: {
           </div>
         );
       })}
-      {!props.messages.length ? <p className="text-sm text-slate-500">No messages yet.</p> : null}
+      {!props.messages.length ? <p className="text-sm text-muted-foreground">No messages yet.</p> : null}
     </section>
   );
 }
@@ -1060,9 +1127,9 @@ function UserMessageCard(props: {
 }) {
   const { message } = props;
   return (
-    <Card className="border-sky-500/70 bg-sky-950/30 p-3" role="article" aria-label={`Message ${message.sequence}`}>
+    <Card className="border-primary/50 bg-primary/10 p-3" role="article" aria-label={`Message ${message.sequence}`}>
       <div className="mb-1 flex items-center justify-between gap-2">
-        <h3 className="text-xs font-medium text-slate-400">{messageLabel(message)} <Badge className={statusTextClass(message.status)}>{messageStatusLabel(message)}</Badge></h3>
+        <h3 className="text-xs font-medium text-muted-foreground">{messageLabel(message)} <Badge className={statusTextClass(message.status)}>{messageStatusLabel(message)}</Badge></h3>
         {message.status === 'pending' && props.editingMessageId !== message.id ? (
           <div className="flex gap-1">
             <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onEditMessage(message)}>Edit</Button>
@@ -1098,7 +1165,7 @@ function messageStatusLabel(message: Message): string {
 }
 
 function PlainText(props: { text: string }) {
-  return <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-100">{props.text}</p>;
+  return <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{props.text}</p>;
 }
 
 function MarkdownText(props: { text: string }) {
@@ -1106,27 +1173,27 @@ function MarkdownText(props: { text: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        a: ({ className, ...props }) => <a className={cn('text-sky-300 underline decoration-sky-500/60 underline-offset-2 hover:text-sky-200', className)} target="_blank" rel="noreferrer" {...props} />,
-        blockquote: ({ className, ...props }) => <blockquote className={cn('border-l-2 border-slate-700 pl-3 text-slate-300', className)} {...props} />,
+        a: ({ className, ...props }) => <a className={cn('text-primary underline decoration-primary/60 underline-offset-2 hover:text-primary/80', className)} target="_blank" rel="noreferrer" {...props} />,
+        blockquote: ({ className, ...props }) => <blockquote className={cn('border-l-2 border-border pl-3 text-muted-foreground', className)} {...props} />,
         code: ({ children, className, ...props }) => {
           const code = String(children).replace(/\n$/, '');
           const language = className?.match(/language-(\S+)/)?.[1];
           if (language || String(children).includes('\n')) return <HighlightedCode code={code} {...(language ? { language } : {})} />;
-          return <code className={cn('rounded border border-slate-700/70 bg-slate-950 px-1.5 py-0.5 font-mono text-[0.85em] text-cyan-100 shadow-sm', className)} {...props}>{children}</code>;
+          return <code className={cn('rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground shadow-sm', className)} {...props}>{children}</code>;
         },
-        h1: ({ className, ...props }) => <h1 className={cn('mt-4 text-xl font-semibold text-slate-50 first:mt-0', className)} {...props} />,
-        h2: ({ className, ...props }) => <h2 className={cn('mt-4 text-lg font-semibold text-slate-50 first:mt-0', className)} {...props} />,
-        h3: ({ className, ...props }) => <h3 className={cn('mt-3 text-base font-semibold text-slate-50 first:mt-0', className)} {...props} />,
-        hr: ({ className, ...props }) => <hr className={cn('border-slate-800', className)} {...props} />,
+        h1: ({ className, ...props }) => <h1 className={cn('mt-4 text-xl font-semibold text-foreground first:mt-0', className)} {...props} />,
+        h2: ({ className, ...props }) => <h2 className={cn('mt-4 text-lg font-semibold text-foreground first:mt-0', className)} {...props} />,
+        h3: ({ className, ...props }) => <h3 className={cn('mt-3 text-base font-semibold text-foreground first:mt-0', className)} {...props} />,
+        hr: ({ className, ...props }) => <hr className={cn('border-border', className)} {...props} />,
         li: ({ className, ...props }) => <li className={cn('pl-1', className)} {...props} />,
         ol: ({ className, ...props }) => <ol className={cn('list-decimal space-y-1 pl-5', className)} {...props} />,
-        p: ({ className, ...props }) => <p className={cn('whitespace-pre-wrap text-sm leading-6 text-slate-100', className)} {...props} />,
+        p: ({ className, ...props }) => <p className={cn('whitespace-pre-wrap text-sm leading-6 text-foreground', className)} {...props} />,
         pre: ({ children }) => <>{children}</>,
         table: ({ className, ...props }) => <table className={cn('w-full border-collapse text-sm', className)} {...props} />,
-        tbody: ({ className, ...props }) => <tbody className={cn('divide-y divide-slate-800', className)} {...props} />,
-        td: ({ className, ...props }) => <td className={cn('border border-slate-800 px-2 py-1 align-top text-slate-100', className)} {...props} />,
-        th: ({ className, ...props }) => <th className={cn('border border-slate-800 px-2 py-1 text-left font-medium text-slate-200', className)} {...props} />,
-        thead: ({ className, ...props }) => <thead className={cn('bg-slate-900/80', className)} {...props} />,
+        tbody: ({ className, ...props }) => <tbody className={cn('divide-y divide-border', className)} {...props} />,
+        td: ({ className, ...props }) => <td className={cn('border border-border px-2 py-1 align-top text-foreground', className)} {...props} />,
+        th: ({ className, ...props }) => <th className={cn('border border-border px-2 py-1 text-left font-medium text-foreground', className)} {...props} />,
+        thead: ({ className, ...props }) => <thead className={cn('bg-muted/80', className)} {...props} />,
         ul: ({ className, ...props }) => <ul className={cn('list-disc space-y-1 pl-5', className)} {...props} />,
       }}
     >
@@ -1161,11 +1228,11 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
   }
 
   return (
-    <figure className="my-3 min-w-0 overflow-hidden rounded-lg border border-slate-700/80 bg-slate-950 shadow-[0_12px_32px_rgba(2,6,23,0.35)]">
+    <figure className="my-3 min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-[0_12px_32px_rgb(0_0_0_/_0.18)]">
       {props.chrome !== false ? (
-        <figcaption className="flex items-center justify-between border-b border-slate-800 bg-slate-900/90 px-3 py-1.5 text-[0.7rem] font-medium uppercase tracking-widest text-slate-400">
+        <figcaption className="flex items-center justify-between border-b border-border bg-muted/80 px-3 py-1.5 text-[0.7rem] font-medium uppercase tracking-widest text-muted-foreground">
           <span>{props.language ?? 'text'}</span>
-          <button className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[0.65rem] text-slate-300 transition hover:border-slate-500 hover:text-slate-100" type="button" onClick={copyCode} aria-label="Copy code">
+          <button className="inline-flex items-center gap-1 rounded border border-border bg-background px-2 py-1 text-[0.65rem] text-muted-foreground transition hover:text-foreground" type="button" onClick={copyCode} aria-label="Copy code">
             {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
             {copied ? 'Copied' : 'Copy'}
           </button>
@@ -1174,7 +1241,7 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
       {html ? (
         <div className={cn('highlighted-code overflow-auto text-sm leading-6', props.wrap && 'highlighted-code-wrap')} dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
-        <pre className={cn('overflow-auto p-3 text-sm leading-6 text-slate-100', props.wrap && 'whitespace-pre-wrap break-words')}><code>{props.code}</code></pre>
+        <pre className={cn('overflow-auto p-3 text-sm leading-6 text-foreground', props.wrap && 'whitespace-pre-wrap break-words')}><code>{props.code}</code></pre>
       )}
     </figure>
   );
@@ -1197,19 +1264,19 @@ function Diagnostics(props: { events: AgentEvent[] }) {
   if (!props.events.length) return null;
 
   return (
-    <details className="min-w-0 rounded-md border border-slate-800 bg-slate-950/30 p-2" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary className="cursor-pointer text-sm text-slate-400">Diagnostics · {props.events.length} events</summary>
+    <details className="min-w-0 rounded-md border border-border bg-muted/30 p-2" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="cursor-pointer text-sm text-muted-foreground">Diagnostics · {props.events.length} events</summary>
       <div className="mt-2 grid min-w-0 gap-2">
         {props.events.map((event) => (
-          <article className="min-w-0 rounded-md border border-slate-800 bg-slate-950/60 p-2" key={`${event.sessionId}-${event.sequence}`}>
-            <span className="text-xs text-slate-500">#{event.sequence} · {formatDate(event.createdAt)}</span>
-            <strong className="mt-1 block text-sm font-medium text-slate-200">{event.type}</strong>
+          <article className="min-w-0 rounded-md border border-border bg-card/80 p-2" key={`${event.sessionId}-${event.sequence}`}>
+            <span className="text-xs text-muted-foreground">#{event.sequence} · {formatDate(event.createdAt)}</span>
+            <strong className="mt-1 block text-sm font-medium text-foreground">{event.type}</strong>
             <div className="max-h-44 min-w-0 overflow-auto text-xs [&_figure]:my-2 [&_figure]:shadow-none [&_.highlighted-code]:text-xs">
               <JsonPayload value={event.payload} />
             </div>
           </article>
         ))}
-        <Button className="justify-self-start border-slate-700 bg-slate-900/80 px-2 text-slate-200 hover:bg-slate-800" type="button" variant="secondary" size="sm" onClick={() => setOpen(false)}>Collapse diagnostics</Button>
+        <Button className="justify-self-start px-2" type="button" variant="secondary" size="sm" onClick={() => setOpen(false)}>Collapse diagnostics</Button>
       </div>
     </details>
   );
@@ -1217,8 +1284,8 @@ function Diagnostics(props: { events: AgentEvent[] }) {
 
 function MobileContextPanel(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
   return (
-    <details className="mb-5 rounded-md border border-slate-800 bg-slate-950/70 shadow-sm lg:hidden">
-      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-200">Context</summary>
+    <details className="mb-5 rounded-md border border-border bg-card/90 shadow-sm lg:hidden">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-foreground">Context</summary>
       <ContextPanelContent {...props} />
     </details>
   );
@@ -1226,7 +1293,7 @@ function MobileContextPanel(props: { repository: string | null; artifacts: Artif
 
 function DesktopContextPanel(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
   return (
-    <aside className="hidden min-h-0 overflow-auto border-l border-slate-800 bg-slate-950/40 p-4 lg:block">
+    <aside className="hidden min-h-0 overflow-auto border-l border-border bg-card/50 p-4 lg:block">
       <h2 className="text-sm font-semibold">Context</h2>
       <ContextPanelContent {...props} />
     </aside>
@@ -1236,54 +1303,54 @@ function DesktopContextPanel(props: { repository: string | null; artifacts: Arti
 function ContextPanelContent(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
   return (
     <div className="p-4 pt-0 lg:p-0 lg:pt-0">
-      <div className="mt-3 border-b border-slate-800 pb-3 text-sm text-slate-400">
-        <strong className="block font-medium text-slate-200">Repository</strong>
+      <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
+        <strong className="block font-medium text-foreground">Repository</strong>
         {props.repository ? (
           <>
-            <a className="mt-1 block break-all text-sky-300" href={`https://github.com/${props.repository}`} target="_blank" rel="noreferrer">{props.repository}</a>
+            <a className="mt-1 block break-all text-primary" href={`https://github.com/${props.repository}`} target="_blank" rel="noreferrer">{props.repository}</a>
             <span className="mt-1 block text-xs">Follow-ups inherit this repo. Enter another repo in the composer to switch.</span>
           </>
         ) : (
           <span className="mt-1 block">No repository selected.</span>
         )}
       </div>
-      <div className="mt-3 border-b border-slate-800 pb-3 text-sm text-slate-400">
-        <strong className="block font-medium text-slate-200">Artifacts</strong>
+      <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
+        <strong className="block font-medium text-foreground">Artifacts</strong>
         <span>Outputs and links created by the deputy appear here.</span>
       </div>
       <div className="mt-3 grid gap-2">
         {props.artifacts.map((artifact) => (
           <Card className="p-3" key={artifact.id}>
-            <span className="text-xs text-slate-500">{artifact.type} · {formatDate(artifact.createdAt)}</span>
+            <span className="text-xs text-muted-foreground">{artifact.type} · {formatDate(artifact.createdAt)}</span>
             <strong className="mt-1 block text-sm font-medium">{artifact.title || artifact.url || artifact.id}</strong>
-            {artifact.url ? <a className="mt-1 block text-sm text-sky-300" href={artifact.url} target="_blank" rel="noreferrer">Open artifact</a> : null}
+            {artifact.url ? <a className="mt-1 block text-sm text-primary" href={artifact.url} target="_blank" rel="noreferrer">Open artifact</a> : null}
             <div className="max-h-44 min-w-0 overflow-auto text-xs [&_figure]:my-2 [&_figure]:shadow-none [&_.highlighted-code]:text-xs">
               <JsonPayload value={artifact.payload} />
             </div>
           </Card>
         ))}
-        {!props.artifacts.length ? <p className="text-sm text-slate-500">No artifacts yet.</p> : null}
+        {!props.artifacts.length ? <p className="text-sm text-muted-foreground">No artifacts yet.</p> : null}
       </div>
-      <div className="mt-6 border-b border-slate-800 pb-3 text-sm text-slate-400">
-        <strong className="block font-medium text-slate-200">Callbacks</strong>
+      <div className="mt-6 border-b border-border pb-3 text-sm text-muted-foreground">
+        <strong className="block font-medium text-foreground">Callbacks</strong>
         <span>Delivery status for Slack and webhook completion replies.</span>
       </div>
       <div className="mt-3 grid gap-2">
         {props.callbacks.map((callback) => (
-          <details className="group rounded-md border border-slate-800 bg-slate-950/40 text-xs text-slate-400" key={callback.id}>
+          <details className="group rounded-md border border-border bg-card/70 text-xs text-muted-foreground" key={callback.id}>
             <summary className="grid cursor-pointer list-none grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 [&::-webkit-details-marker]:hidden">
-              <ChevronDown className="h-3.5 w-3.5 -rotate-90 text-slate-500 transition-transform group-open:rotate-0" aria-hidden="true" />
-              <span className="min-w-0 truncate text-slate-500">{callback.targetType} · {formatDate(callback.updatedAt)}</span>
+              <ChevronDown className="h-3.5 w-3.5 -rotate-90 text-muted-foreground transition-transform group-open:rotate-0" aria-hidden="true" />
+              <span className="min-w-0 truncate text-muted-foreground">{callback.targetType} · {formatDate(callback.updatedAt)}</span>
               <Badge className={statusTextClass(callback.status)}>{callback.status}</Badge>
             </summary>
-            <div className="border-t border-slate-800 px-3 py-2">
+            <div className="border-t border-border px-3 py-2">
               <dl className="grid gap-1">
                 <div>Type: {callbackEventLabel(callback.eventType)}</div>
                 <div>Attempts: {callback.attempts}/{callback.maxAttempts}</div>
                 {callback.nextAttemptAt ? <div>Next retry: {formatDate(callback.nextAttemptAt)}</div> : null}
                 {callback.lastAttemptAt ? <div>Last attempt: {formatDate(callback.lastAttemptAt)}</div> : null}
                 {callback.deliveredAt ? <div>Delivered: {formatDate(callback.deliveredAt)}</div> : null}
-                {callback.lastError ? <div className="text-red-300">Last error: {callback.lastError}</div> : null}
+                {callback.lastError ? <div className="text-destructive">Last error: {callback.lastError}</div> : null}
                 <div className="truncate">ID: {callback.id}</div>
               </dl>
               {callback.status === 'failed' ? (
@@ -1294,7 +1361,7 @@ function ContextPanelContent(props: { repository: string | null; artifacts: Arti
             </div>
           </details>
         ))}
-        {!props.callbacks.length ? <p className="text-sm text-slate-500">No callbacks yet.</p> : null}
+        {!props.callbacks.length ? <p className="text-sm text-muted-foreground">No callbacks yet.</p> : null}
       </div>
     </div>
   );
@@ -1465,12 +1532,12 @@ function fuzzyScore(value: string, query: string): number | null {
 }
 
 function statusTextClass(status: string): string {
-  if (['completed', 'ready', 'ok'].includes(status)) return 'text-emerald-300';
-  if (['active', 'processing', 'running', 'starting', 'cancelling'].includes(status)) return 'text-cyan-300';
-  if (['pending', 'queued', 'created', 'stopped'].includes(status)) return 'text-amber-300';
-  if (['failed', 'cancelled', 'unhealthy', 'destroyed', 'missing'].includes(status)) return 'text-red-300';
-  if (status === 'idle' || status === 'archived') return 'text-slate-400';
-  return 'text-slate-300';
+  if (['completed', 'ready', 'ok'].includes(status)) return 'text-success';
+  if (['active', 'processing', 'running', 'starting', 'cancelling'].includes(status)) return 'text-info';
+  if (['pending', 'queued', 'created', 'stopped'].includes(status)) return 'text-warning';
+  if (['failed', 'cancelled', 'unhealthy', 'destroyed', 'missing'].includes(status)) return 'text-destructive';
+  if (status === 'idle' || status === 'archived') return 'text-muted-foreground';
+  return 'text-foreground';
 }
 
 function submitOnEnter(event: KeyboardEvent<HTMLTextAreaElement>): void {
