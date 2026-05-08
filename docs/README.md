@@ -17,6 +17,15 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Prior Art](./prior-art.md): comparison with Open-Inspect/background-agents and Open SWE, including what to adopt or avoid.
 - [Roadmap](./roadmap.md): phased implementation sequence and acceptance criteria.
 
+## Repository Layout
+
+- `apps/`: independently runnable and deployable applications/services.
+- `apps/api/`: Node/Hono control-plane API, worker runtime, integrations, stores, and sandbox providers.
+- `apps/web/`: Vite React operator UI.
+- `packages/`: reusable libraries shared by apps. It is intentionally empty until shared code is extracted.
+- `deploy/`: deployment and local runtime configuration.
+- `docs/`: architecture and product documentation.
+
 ## Core Principles
 
 1. Flue is the agent runtime, not the whole product.

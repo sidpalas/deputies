@@ -1,6 +1,6 @@
 # Web UI
 
-The operator UI is a separate Vite React app in `web/`. It is intentionally independent from the Hono API process so it can be deployed later as static assets behind a CDN.
+The operator UI is a separate Vite React app in `apps/web/`. It is intentionally independent from the Hono API process so it can be deployed later as static assets behind a CDN.
 
 ## Local Development
 
@@ -88,4 +88,4 @@ The web app builds to static assets:
 pnpm web:build
 ```
 
-Deploy `web/dist` to a CDN/static host and set `VITE_API_BASE_URL` to the public API origin at build time. Also set the API service's `WEB_BASE_URL` to the deployed web UI URL so the API allows that origin for credentialed CORS requests and uses it for integration session links. Do not bake bearer tokens, static passwords, or session secrets into the web build.
+Deploy `apps/web/dist` to a CDN/static host and set `VITE_API_BASE_URL` to the public API origin at build time. Also set the API service's `WEB_BASE_URL` to the deployed web UI URL so the API allows that origin for credentialed CORS requests and uses it for integration session links. Do not bake bearer tokens, static passwords, or session secrets into the web build.

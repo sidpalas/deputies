@@ -2,6 +2,11 @@
 
 This directory contains deployment-specific configuration for running Deputies outside local development.
 
+Deployable source lives under `apps/`:
+
+- `apps/api/`: API and worker service.
+- `apps/web/`: static web UI build.
+
 Use one subdirectory per deployment target or infrastructure provider, for example:
 
 - `railway/`

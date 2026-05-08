@@ -193,7 +193,7 @@ UAT tests:
 
 ## Current Implementation Notes
 
-- `api/src/runner-flue/session-store.ts` implements Flue's `SessionStore` interface with Postgres.
+- `apps/api/src/runner-flue/session-store.ts` implements Flue's `SessionStore` interface with Postgres.
 - `save`, `load`, and `delete` use the exact opaque store key provided by Flue.
 - `RealFlueAgentFactory` uses the configured session store as both `defaultStore` and `persist`.
 - During cancellation, `FlueRunner` snapshots and restores the active Flue session to avoid persisting partial aborted turns.

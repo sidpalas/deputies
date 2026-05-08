@@ -169,7 +169,7 @@ This has practical consequences:
 - Tests should verify contracts at module boundaries so agents can safely change internals without widening context.
 
 ```txt
-api/src/
+apps/api/src/
   app/
   auth/
   callbacks/
@@ -190,7 +190,9 @@ api/src/
   repositories/
   store/
 
-web/
+apps/web/
+
+packages/
 
 docs/
 ```
@@ -238,9 +240,9 @@ runner-flue -> api/app/integrations
 store -> domain services
 ```
 
-`api/src/index.ts` is the composition root exception. It is allowed to wire concrete stores, runners, sandboxes, and integrations because process startup is where configuration is translated into concrete dependencies. Other API/app modules must depend on service contracts instead of runner implementations.
+`apps/api/src/index.ts` is the composition root exception. It is allowed to wire concrete stores, runners, sandboxes, and integrations because process startup is where configuration is translated into concrete dependencies. Other API/app modules must depend on service contracts instead of runner implementations.
 
-Only `runner-flue` should import `@flue/sdk`. This keeps Flue replaceable and makes tests easier. Provider SDKs should stay in provider-specific adapters, such as `api/src/sandbox/daytona.ts` for `@daytona/sdk`. Store implementations may import shared data types, but must not import session/message/event service classes.
+Only `runner-flue` should import `@flue/sdk`. This keeps Flue replaceable and makes tests easier. Provider SDKs should stay in provider-specific adapters, such as `apps/api/src/sandbox/daytona.ts` for `@daytona/sdk`. Store implementations may import shared data types, but must not import session/message/event service classes.
 
 The HTTP transport uses Hono on Node via `@hono/node-server`. This keeps the API layer lightweight while giving us middleware hooks for auth, request IDs, CORS, body limits, and route grouping as integrations grow.
 

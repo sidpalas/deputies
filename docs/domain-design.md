@@ -75,11 +75,11 @@ Invariants:
 Modules:
 
 ```txt
-api/src/sessions
-api/src/messages
-api/src/runs
-api/src/events
-api/src/artifacts
+apps/api/src/sessions
+apps/api/src/messages
+apps/api/src/runs
+apps/api/src/events
+apps/api/src/artifacts
 ```
 
 ### Sandbox Context
@@ -103,7 +103,7 @@ Invariants:
 Modules:
 
 ```txt
-api/src/sandbox
+apps/api/src/sandbox
 ```
 
 ### Runner Context
@@ -128,8 +128,8 @@ Invariants:
 Modules:
 
 ```txt
-api/src/runner
-api/src/runner-flue
+apps/api/src/runner
+apps/api/src/runner-flue
 ```
 
 ### Integration Context
@@ -154,9 +154,9 @@ Invariants:
 Modules:
 
 ```txt
-api/src/integrations
-api/src/integrations/prompt-bounds.ts
-api/src/integrations/slack/prompts.ts
+apps/api/src/integrations
+apps/api/src/integrations/prompt-bounds.ts
+apps/api/src/integrations/slack/prompts.ts
 ```
 
 ### Persistence Context
@@ -180,7 +180,7 @@ Invariants:
 Modules:
 
 ```txt
-api/src/store
+apps/api/src/store
 ```
 
 ## Aggregate Boundaries
@@ -242,17 +242,17 @@ Do not let external payload shapes leak into core session/message/run services.
 The current code already follows this direction:
 
 ```txt
-api/src/sessions/service.ts     # session domain operations
-api/src/messages/service.ts     # message queue operations
-api/src/events/service.ts       # append/replay events
-api/src/store/types.ts          # persistence port
-api/src/store/memory.ts         # deterministic test/local adapter
-api/src/store/postgres.ts       # durable product state adapter
-api/src/db/migrations           # SQL migrations
-api/src/runner/types.ts         # runner port
-api/src/worker/service.ts       # durable work coordinator
-api/src/runner-flue             # Flue runner adapter
-api/src/sandbox/types.ts        # sandbox provider port
+apps/api/src/sessions/service.ts     # session domain operations
+apps/api/src/messages/service.ts     # message queue operations
+apps/api/src/events/service.ts       # append/replay events
+apps/api/src/store/types.ts          # persistence port
+apps/api/src/store/memory.ts         # deterministic test/local adapter
+apps/api/src/store/postgres.ts       # durable product state adapter
+apps/api/src/db/migrations           # SQL migrations
+apps/api/src/runner/types.ts         # runner port
+apps/api/src/worker/service.ts       # durable work coordinator
+apps/api/src/runner-flue             # Flue runner adapter
+apps/api/src/sandbox/types.ts        # sandbox provider port
 ```
 
 This is intentionally not full DDD ceremony. It is enough structure to keep agents from collapsing the design into route handlers plus SQL.

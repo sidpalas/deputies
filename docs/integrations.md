@@ -253,8 +253,8 @@ Testing should use `vercel-labs/emulate` GitHub service where possible:
 Current emulator caveat: published `emulate@0.5.0` rejects valid GitHub App JWTs during installation token minting because of upstream issue [vercel-labs/emulate#96](https://github.com/vercel-labs/emulate/issues/96). GitHub emulator tests that require App installation tokens are hard-skipped until a fixed emulate release is available. Real-provider smoke coverage is opt-in:
 
 ```sh
-RUN_REAL_GITHUB_APP_UAT=true API_AUTH_MODE=none GITHUB_APP_ID=... GITHUB_APP_PRIVATE_KEY=... GITHUB_ALLOWED_REPOSITORIES=owner/repo pnpm --dir api exec vitest run --config vitest.uat.config.ts test/uat/real-github-app.test.ts
-RUN_REAL_GITHUB_DAYTONA_UAT=true API_AUTH_MODE=none GITHUB_APP_ID=... GITHUB_APP_PRIVATE_KEY=... GITHUB_ALLOWED_REPOSITORIES=owner/repo DAYTONA_API_KEY=... pnpm --dir api exec vitest run --config vitest.uat.config.ts test/uat/real-github-app.test.ts
+RUN_REAL_GITHUB_APP_UAT=true API_AUTH_MODE=none GITHUB_APP_ID=... GITHUB_APP_PRIVATE_KEY=... GITHUB_ALLOWED_REPOSITORIES=owner/repo pnpm --dir apps/api exec vitest run --config vitest.uat.config.ts test/uat/real-github-app.test.ts
+RUN_REAL_GITHUB_DAYTONA_UAT=true API_AUTH_MODE=none GITHUB_APP_ID=... GITHUB_APP_PRIVATE_KEY=... GITHUB_ALLOWED_REPOSITORIES=owner/repo DAYTONA_API_KEY=... pnpm --dir apps/api exec vitest run --config vitest.uat.config.ts test/uat/real-github-app.test.ts
 ```
 
 The first UAT mints a real installation token and performs a non-mutating local `git ls-remote`. The second creates a real Daytona sandbox and verifies the Flue-runner startup path clones/fetches the repository inside the sandbox.
@@ -471,7 +471,7 @@ Current implementation:
 - Prompts use Slack channel/user names when `SLACK_BOT_TOKEN` has `channels:read` or `groups:read` for channel lookup and `users:read` for user lookup; raw Slack IDs remain in message context only.
 - Running Slack-originated work gets a best-effort `:hourglass_flowing_sand:` reaction through the Slack progress notifier plugin.
 - Completed Slack replies get a best-effort `:white_check_mark:` reaction through the Slack callback sender.
-- `api/src/integrations/slack` owns Slack auth, types, prompts, client helpers, and service orchestration. It must not import runners, sandboxes, or Flue.
+- `apps/api/src/integrations/slack` owns Slack auth, types, prompts, client helpers, and service orchestration. It must not import runners, sandboxes, or Flue.
 
 Local HTTPS emulation:
 
@@ -546,7 +546,7 @@ Current implementation:
 
 - Completion callbacks are enqueued during worker finalization instead of requiring immediate delivery to complete the run.
 - The worker dispatches due callbacks when no session message is available to claim.
-- Callback sender plugins keep concrete integration clients out of callback core. Slack provides `SlackCompletionCallbackSender` from `api/src/integrations/slack`.
+- Callback sender plugins keep concrete integration clients out of callback core. Slack provides `SlackCompletionCallbackSender` from `apps/api/src/integrations/slack`.
 - Retry uses exponential backoff with jitter and terminal failure after `max_attempts`.
 - Session-scoped API/UI controls show HTTP, Slack, and GitHub callback delivery status and can requeue failed deliveries for manual replay without re-running the agent task.
 
@@ -581,4 +581,4 @@ Required sections:
 - Relevant context.
 - Clear labels and `---` separators for external comments/bodies.
 
-Prompt builders live in source-specific integration modules such as `api/src/integrations/slack/prompts.ts` and `api/src/integrations/github/webhook-service.ts`, with shared prompt-bound helpers in `api/src/integrations/prompt-bounds.ts`. A top-level `api/src/prompts` module remains a future extraction if prompt reuse grows.
+Prompt builders live in source-specific integration modules such as `apps/api/src/integrations/slack/prompts.ts` and `apps/api/src/integrations/github/webhook-service.ts`, with shared prompt-bound helpers in `apps/api/src/integrations/prompt-bounds.ts`. A top-level `apps/api/src/prompts` module remains a future extraction if prompt reuse grows.
