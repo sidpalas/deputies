@@ -8,8 +8,8 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "db:up": "docker compose up -d postgres",
-    "db:down": "docker compose down",
+    "db:up": "docker compose -f deploy/local/docker-compose.yml up -d postgres",
+    "db:down": "docker compose -f deploy/local/docker-compose.yml down",
     "auth:login:openai-codex": "pnpm --dir apps/api auth:login:openai-codex",
     "api:db:migrate": "pnpm --dir apps/api db:migrate",
     "api:dev": "pnpm --dir apps/api dev",

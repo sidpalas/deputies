@@ -82,7 +82,7 @@ Current local policy:
 - `pnpm check` runs API typecheck/tests and web typecheck/jsdom tests; it does not run Playwright E2E tests.
 - Real local Flue UAT is opt-in: set `RUN_REAL_LOCAL_FLUE_UAT=true`, `API_AUTH_MODE=none`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm --dir apps/api exec vitest run --config vitest.uat.config.ts test/uat/real-local-flue.test.ts`.
 - Real Daytona/Flue UAT is opt-in: build first and set `RUN_REAL_DAYTONA_FLUE_UAT=true`, `API_AUTH_MODE=none`, `TEST_DATABASE_URL`, `DAYTONA_API_KEY`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm api:test:uat`.
-- `docker compose up -d postgres` starts local Postgres and creates both `flue` and `flue_test`.
+- `pnpm db:up` starts local Postgres from `deploy/local/docker-compose.yml` and creates both `flue` and `flue_test`.
 - Integration tests apply migrations to `flue_test` and truncate app tables between tests.
 - Do not run `api:test:integration` and `api:test:uat` concurrently against the same `TEST_DATABASE_URL`; both suites reset shared tables.
 - Do not run `api:test:load` concurrently with integration or UAT tests against the same `TEST_DATABASE_URL`; it also resets shared tables.
