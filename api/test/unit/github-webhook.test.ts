@@ -238,6 +238,32 @@ describe('GitHub webhook integration', () => {
     expect(await store.listSessions()).toHaveLength(0);
   });
 
+  it('ignores GitHub webhooks from repositories outside the repository allowlist', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+      allowedRepositories: ['acme/allowed', 'other/*'],
+    });
+
+    const wrongRepo = await github.handle({
+      headers: { deliveryId: 'delivery-1', event: 'issues' },
+      payload: issuePayload({ repo: 'widget' }),
+    });
+    const exactRepo = await github.handle({
+      headers: { deliveryId: 'delivery-2', event: 'issues' },
+      payload: issuePayload({ repo: 'allowed' }),
+    });
+    const wildcardRepo = await github.handle({
+      headers: { deliveryId: 'delivery-3', event: 'issues' },
+      payload: issuePayload({ owner: 'other', repo: 'widget' }),
+    });
+
+    expect(wrongRepo).toEqual({ ok: true, type: 'ignored', reason: 'unauthorized_repository' });
+    expect(exactRepo.type).toBe('accepted');
+    expect(wildcardRepo.type).toBe('accepted');
+    expect(await store.listSessions()).toHaveLength(2);
+  });
+
   it('dedupes GitHub webhook deliveries', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -373,6 +399,26 @@ describe('GitHub webhook integration', () => {
     expect(await store.listSessions()).toHaveLength(1);
   });
 
+  it('requires trigger phrases in current GitHub comments rather than stale issue text', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+      triggerPhrases: ['/deputies'],
+    });
+
+    const staleIssueTag = await github.handle({
+      headers: { deliveryId: 'delivery-1', event: 'issue_comment' },
+      payload: issueCommentPayload({ issueBody: '/deputies was requested earlier', body: 'ordinary follow-up' }),
+    });
+    const currentCommentTag = await github.handle({
+      headers: { deliveryId: 'delivery-2', event: 'issue_comment' },
+      payload: issueCommentPayload({ issueBody: '/deputies was requested earlier', body: '/deputies ordinary follow-up' }),
+    });
+
+    expect(staleIssueTag).toEqual({ ok: true, type: 'ignored', reason: 'missing_trigger_phrase' });
+    expect(currentCommentTag.type).toBe('accepted');
+  });
+
   it('accepts slash, text, and team-style GitHub trigger phrases', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -387,6 +433,22 @@ describe('GitHub webhook integration', () => {
     expect(slash.type).toBe('accepted');
     expect(text.type).toBe('accepted');
     expect(team.type).toBe('accepted');
+  });
+
+  it('does not match explicit GitHub trigger phrase substrings', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+      triggerPhrases: ['@deputies', '/deputies'],
+    });
+
+    const mentionSubstring = await github.handle({ headers: { deliveryId: 'delivery-1', event: 'issue_comment' }, payload: issueCommentPayload({ body: '@deputieship is not a trigger' }) });
+    const slashSubstring = await github.handle({ headers: { deliveryId: 'delivery-2', event: 'issue_comment' }, payload: issueCommentPayload({ body: '/deputieship is not a trigger' }) });
+    const exact = await github.handle({ headers: { deliveryId: 'delivery-3', event: 'issue_comment' }, payload: issueCommentPayload({ body: '@deputies please check' }) });
+
+    expect(mentionSubstring).toEqual({ ok: true, type: 'ignored', reason: 'missing_trigger_phrase' });
+    expect(slashSubstring).toEqual({ ok: true, type: 'ignored', reason: 'missing_trigger_phrase' });
+    expect(exact.type).toBe('accepted');
   });
 
   it('accepts PR review comments and submitted PR reviews', async () => {
@@ -451,6 +513,7 @@ describe('GitHub webhook integration', () => {
 
   it('does not post acknowledgement-only GitHub completion comments', async () => {
     const comments: unknown[] = [];
+    let accessCalls = 0;
     const sender = new GitHubCompletionCallbackSender({
       async createIssueComment(input) {
         comments.push(input);
@@ -458,6 +521,7 @@ describe('GitHub webhook integration', () => {
       },
     }, {
       async getRepositoryAccess() {
+        accessCalls += 1;
         return { auth: { token: 'ghs_token' } };
       },
     });
@@ -472,6 +536,7 @@ describe('GitHub webhook integration', () => {
     });
 
     expect(comments).toEqual([]);
+    expect(accessCalls).toBe(0);
   });
 
   it('posts meaningful GitHub completion comments only', async () => {

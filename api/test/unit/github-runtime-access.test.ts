@@ -33,7 +33,30 @@ describe('GitHub App runtime access', () => {
     expect(first).toMatchObject({ provider: 'github', owner: 'acme', repo: 'widget', cloneUrl: 'https://github.com/acme/widget.git', auth: { type: 'bearer', token: 'installation-token-1' } });
     expect(second.auth.token).toBe('installation-token-1');
     expect(client.installationLookups).toEqual(['acme/widget']);
-    expect(client.tokenRequests).toEqual([9001]);
+    expect(client.tokenRequests).toEqual([{ installationId: 9001, repositories: ['widget'] }]);
+  });
+
+  it('scopes cached installation tokens to the selected repository', async () => {
+    const client = new FakeGitHubClient();
+    const service = new GitHubRepositoryAccessService({
+      appId: '12345',
+      privateKey: testPrivateKey(),
+      client: client as unknown as GitHubClient,
+      allowedRepositories: ['acme/*'],
+      now: () => new Date('2026-05-06T12:00:00.000Z'),
+    });
+
+    const first = await service.getRepositoryAccess({ owner: 'acme', repo: 'widget' });
+    const second = await service.getRepositoryAccess({ owner: 'acme', repo: 'api' });
+    const third = await service.getRepositoryAccess({ owner: 'acme', repo: 'widget' });
+
+    expect(first.auth.token).toBe('installation-token-1');
+    expect(second.auth.token).toBe('installation-token-2');
+    expect(third.auth.token).toBe('installation-token-1');
+    expect(client.tokenRequests).toEqual([
+      { installationId: 9001, repositories: ['widget'] },
+      { installationId: 9001, repositories: ['api'] },
+    ]);
   });
 
   it('uses a custom clone base URL when configured', async () => {
@@ -65,7 +88,10 @@ describe('GitHub App runtime access', () => {
 
     expect(refreshed.auth.token).toBe('installation-token-2');
     expect(client.installationLookups).toEqual(['acme/widget']);
-    expect(client.tokenRequests).toEqual([9001, 9001]);
+    expect(client.tokenRequests).toEqual([
+      { installationId: 9001, repositories: ['widget'] },
+      { installationId: 9001, repositories: ['widget'] },
+    ]);
   });
 
   it('rejects repositories outside the allowlist', async () => {
@@ -82,7 +108,7 @@ describe('GitHub App runtime access', () => {
 
 class FakeGitHubClient {
   readonly installationLookups: string[] = [];
-  readonly tokenRequests: number[] = [];
+  readonly tokenRequests: Array<{ installationId: number; repositories?: string[] }> = [];
 
   async getRepositoryInstallation(input: { owner: string; repo: string; appJwt: string }): Promise<{ id: number }> {
     expect(input.appJwt.split('.')).toHaveLength(3);
@@ -90,9 +116,9 @@ class FakeGitHubClient {
     return { id: 9001 };
   }
 
-  async createInstallationAccessToken(input: { installationId: number; appJwt: string }): Promise<{ token: string; expiresAt: Date }> {
+  async createInstallationAccessToken(input: { installationId: number; appJwt: string; repositories?: string[] }): Promise<{ token: string; expiresAt: Date }> {
     expect(input.appJwt.split('.')).toHaveLength(3);
-    this.tokenRequests.push(input.installationId);
+    this.tokenRequests.push({ installationId: input.installationId, ...(input.repositories ? { repositories: input.repositories } : {}) });
     return { token: `installation-token-${this.tokenRequests.length}`, expiresAt: new Date('2026-05-06T13:00:00.000Z') };
   }
 }

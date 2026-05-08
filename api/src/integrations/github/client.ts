@@ -19,10 +19,11 @@ export class GitHubClient {
     return { id: body.id };
   }
 
-  async createInstallationAccessToken(input: { installationId: number; appJwt: string }): Promise<{ token: string; expiresAt: Date }> {
+  async createInstallationAccessToken(input: { installationId: number; appJwt: string; repositories?: string[] }): Promise<{ token: string; expiresAt: Date }> {
     const body = await this.request<{ token?: string; expires_at?: string }>(`/app/installations/${input.installationId}/access_tokens`, {
       method: 'POST',
       token: input.appJwt,
+      ...(input.repositories?.length ? { json: { repositories: input.repositories } } : {}),
     });
     if (typeof body.token !== 'string' || !body.token) throw new Error('GitHub installation token response is missing token');
     if (typeof body.expires_at !== 'string' || !body.expires_at) throw new Error('GitHub installation token response is missing expires_at');

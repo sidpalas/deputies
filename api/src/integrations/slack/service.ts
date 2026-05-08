@@ -74,6 +74,10 @@ export class SlackIntegrationService {
     }
 
     const threadId = slackExternalThreadId(accepted);
+    if (accepted.type === 'message' && !(await this.store.getExternalThread('slack', threadId))) {
+      await markIntegrationDeliveryFailed(this.store, { source: 'slack', dedupeKey: accepted.eventId, error: 'unmapped_thread' });
+      return { ok: true, type: 'ignored', reason: 'unmapped_thread' };
+    }
     let session = await this.getOrCreateSession(threadId, accepted);
     if (session.status === 'archived') {
       if (includesArchivedSessionRecoveryPhrase(accepted.text)) {

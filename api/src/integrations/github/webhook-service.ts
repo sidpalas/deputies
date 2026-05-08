@@ -17,6 +17,7 @@ import type { GitHubArchivedSessionNotifier } from './archived-session-notifier.
 import { githubCallbackTarget } from './callback-target.js';
 import type { GitHubIssueContextFetcher, GitHubIssueThreadComment } from './issue-context-fetcher.js';
 import type { GitHubReactionSender, GitHubReactionTarget } from './reaction-sender.js';
+import { isRepositoryAllowed } from './repository-access.js';
 
 export type GitHubWebhookHeaders = {
   deliveryId?: string;
@@ -26,6 +27,7 @@ export type GitHubWebhookHeaders = {
 export type GitHubWebhookServiceOptions = {
   allowedUsers?: string[];
   allowedOrganizations?: string[];
+  allowedRepositories?: string[];
   triggerPhrases?: string[];
   reactionSender?: Pick<GitHubReactionSender, 'addEyes'>;
   issueContextFetcher?: Pick<GitHubIssueContextFetcher, 'listIssueComments'>;
@@ -227,6 +229,7 @@ export class GitHubWebhookService {
 
   private authorizationFailure(event: AcceptedGitHubEvent): string | null {
     if (!isAllowed(event.owner, this.options.allowedOrganizations)) return 'unauthorized_repository_owner';
+    if (!isRepositoryAllowed({ owner: event.owner, repo: event.repo }, this.options.allowedRepositories)) return 'unauthorized_repository';
     if (!event.actor || !isAllowed(event.actor, this.options.allowedUsers)) return 'unauthorized_user';
     return null;
   }
@@ -623,7 +626,7 @@ function isAllowed(value: string, allowlist: string[] | undefined): boolean {
 }
 
 function eventMatchesTrigger(event: AcceptedGitHubEvent, phrases: string[]): boolean {
-  const text = githubEventText(event).toLowerCase();
+  const text = triggerSearchText(event).toLowerCase();
   if (!text) return false;
   return phrases.some((phrase) => triggerPhraseMatches(text, phrase));
 }
@@ -631,8 +634,8 @@ function eventMatchesTrigger(event: AcceptedGitHubEvent, phrases: string[]): boo
 function triggerPhraseMatches(text: string, phrase: string): boolean {
   const normalized = phrase.trim().toLowerCase();
   if (!normalized) return false;
-  if (normalized.startsWith('@') || normalized.startsWith('/') || normalized.endsWith(':')) return text.includes(normalized);
-  if (normalized.includes('/')) return text.includes(`@${normalized}`) || text.includes(normalized);
+  if (normalized.startsWith('@') || normalized.startsWith('/') || normalized.endsWith(':')) return phraseBoundaryMatches(text, normalized);
+  if (normalized.includes('/')) return phraseBoundaryMatches(text, `@${normalized}`) || phraseBoundaryMatches(text, normalized);
   return text.includes(`@${normalized}`) || text.includes(`/${normalized}`) || text.includes(`${normalized}:`) || phraseBoundaryMatches(text, normalized);
 }
 
@@ -646,6 +649,11 @@ function escapeRegExp(value: string): string {
 
 function githubEventText(event: AcceptedGitHubEvent): string {
   return [event.title, event.body, event.commentBody, event.reviewBody].filter((value): value is string => Boolean(value)).join('\n');
+}
+
+function triggerSearchText(event: AcceptedGitHubEvent): string {
+  if (event.commentBody || event.reviewBody) return [event.commentBody, event.reviewBody].filter((value): value is string => Boolean(value)).join('\n');
+  return [event.title, event.body].filter((value): value is string => Boolean(value)).join('\n');
 }
 
 function currentGitHubMessageText(event: AcceptedGitHubEvent): string {

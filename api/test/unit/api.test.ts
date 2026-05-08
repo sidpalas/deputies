@@ -152,6 +152,20 @@ describe('core API', () => {
 
     expect(response.status).toBe(204);
     expect(response.headers.get('access-control-allow-methods')).toContain('PATCH');
+    expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:5173');
+  });
+
+  it('does not grant credentialed CORS access to untrusted origins', async () => {
+    const response = await fetch(`${baseUrl}/sessions`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://evil.example',
+        'access-control-request-method': 'GET',
+      },
+    });
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
   });
 
   it('creates a session, enqueues a message, and replays events', async () => {

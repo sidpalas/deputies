@@ -131,6 +131,23 @@ describe('Slack integration', () => {
     ]);
   });
 
+  it('ignores Slack thread messages that are not mapped to an existing session', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+
+    const ignored = await slack.handle(slackEvent({
+      eventId: 'Ev1',
+      type: 'message',
+      text: 'ordinary thread reply without bot mention',
+      ts: '1710000001.000100',
+      threadTs: '1710000000.000100',
+    }));
+
+    expect(ignored).toEqual({ ok: true, type: 'ignored', reason: 'unmapped_thread' });
+    expect(await store.listSessions()).toHaveLength(0);
+  });
+
   it('does not fail accepted Slack events when adding the received reaction fails', async () => {
     const store = new MemoryStore();
     const services = createServices(store);

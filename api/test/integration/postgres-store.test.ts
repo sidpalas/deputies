@@ -190,6 +190,21 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(completed.messages.map((message) => message.status)).toEqual(['completed', 'completed']);
   });
 
+  it('does not claim pending messages for archived sessions', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Postgres archived queue' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'do not run' });
+    await services.sessions.archive(session.id);
+
+    await expect(store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-0000000009a1',
+      runnerType: 'fake',
+      leaseOwner: 'worker-1',
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      now: new Date(),
+    })).resolves.toBeNull();
+  });
+
   it('keeps cancelling postgres run batches active until finalized', async () => {
     const services = createServices(store);
     const session = await services.sessions.create({ title: 'Postgres cancel' });

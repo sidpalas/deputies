@@ -66,7 +66,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   const app = new Hono<{ Variables: AppVariables }>();
 
   app.use('*', requestIdMiddleware());
-  app.use('*', cors({ origin: (origin) => origin, credentials: true, allowHeaders: ['authorization', 'content-type', 'x-request-id'], allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'] }));
+  app.use('*', cors({ origin: allowedCorsOrigin(config), credentials: true, allowHeaders: ['authorization', 'content-type', 'x-request-id'], allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'] }));
 
   app.onError((error, c) => {
     if (error instanceof HttpRequestError) {
@@ -290,6 +290,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     const result = await new GitHubWebhookService(services.store, services.sessions, services.messages, {
       allowedUsers: config.githubAllowedUsers,
       allowedOrganizations: config.githubAllowedOrganizations,
+      allowedRepositories: config.githubAllowedRepositories,
       triggerPhrases: config.githubTriggerPhrases,
       ...(services.githubReactionSender ? { reactionSender: services.githubReactionSender } : {}),
       ...(services.githubIssueContextFetcher ? { issueContextFetcher: services.githubIssueContextFetcher } : {}),
@@ -496,6 +497,12 @@ function requestIdMiddleware(): MiddlewareHandler<{ Variables: AppVariables }> {
     c.set('requestId', c.req.header('x-request-id') ?? randomUUID());
     await next();
   };
+}
+
+function allowedCorsOrigin(config: AppConfig): (origin: string) => string | undefined {
+  const allowed = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
+  if (config.webBaseUrl) allowed.add(new URL(config.webBaseUrl).origin);
+  return (origin) => (allowed.has(origin) ? origin : undefined);
 }
 
 function writeError(c: Context, statusCode: number, error: string, message: string) {

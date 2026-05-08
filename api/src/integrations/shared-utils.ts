@@ -45,14 +45,17 @@ export async function getOrCreateExternalThreadSession(
     if (session) return session;
   }
 
-  const session = await sessions.create({ title: input.title });
-  await store.createExternalThread({
+  const createdSession = await sessions.create({ title: input.title });
+  const thread = await store.createExternalThread({
     id: randomUUID(),
     source: input.source,
     externalId: input.externalId,
-    sessionId: session.id,
+    sessionId: createdSession.id,
     metadata: input.metadata,
     now: new Date(),
   });
-  return session;
+  if (thread.sessionId === createdSession.id) return createdSession;
+
+  const winningSession = await sessions.get(thread.sessionId);
+  return winningSession ?? createdSession;
 }

@@ -175,6 +175,8 @@ type IntegrationDeliveryRow = QueryResultRow & {
   metadata: Record<string, unknown>;
 };
 
+const staleCallbackSendingMs = 15 * 60_000;
+
 export class PostgresStore implements AppStore {
   private readonly pool: Pool;
 
@@ -404,10 +406,11 @@ export class PostgresStore implements AppStore {
     return this.transaction(async (client) => {
       const candidate = await client.query<MessageRow>(
         `SELECT m.id, m.session_id, m.sequence, m.status, m.prompt, m.source, m.context, m.created_at
-         FROM messages m
-         JOIN sessions s ON s.id = m.session_id
-         WHERE m.status = 'pending'
-           AND s.queue_paused_at IS NULL
+          FROM messages m
+          JOIN sessions s ON s.id = m.session_id
+          WHERE m.status = 'pending'
+            AND s.status <> 'archived'
+            AND s.queue_paused_at IS NULL
            AND NOT EXISTS (
              SELECT 1 FROM runs r
              WHERE r.session_id = m.session_id
@@ -762,16 +765,17 @@ export class PostgresStore implements AppStore {
 
   async claimDueCallbackDeliveries(input: { now: Date; limit: number }): Promise<CallbackDeliveryRecord[]> {
     return this.transaction(async (client) => {
+      const staleSendingBefore = new Date(input.now.getTime() - staleCallbackSendingMs);
       const due = await client.query<CallbackDeliveryRow>(
         `SELECT id, session_id, run_id, message_id, target_type, target, status, event_type, payload, attempts, max_attempts, last_error, created_at, updated_at, next_attempt_at, last_attempt_at, delivered_at
-         FROM callback_deliveries
-         WHERE status = 'pending'
-           AND (next_attempt_at IS NULL OR next_attempt_at <= $1)
-           AND attempts < max_attempts
+          FROM callback_deliveries
+          WHERE (status = 'pending' OR (status = 'sending' AND last_attempt_at IS NOT NULL AND last_attempt_at <= $3))
+            AND (next_attempt_at IS NULL OR next_attempt_at <= $1)
+            AND attempts < max_attempts
          ORDER BY next_attempt_at ASC NULLS FIRST, created_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT $2`,
-        [input.now, input.limit],
+        [input.now, input.limit, staleSendingBefore],
       );
       if (!due.rows.length) return [];
 
@@ -1020,7 +1024,10 @@ export class PostgresStore implements AppStore {
         [messageIds, status],
       );
 
-      await client.query('UPDATE sessions SET status = $2, updated_at = $3 WHERE id = $1', [
+      await client.query(`UPDATE sessions
+        SET status = CASE WHEN status = 'archived' THEN 'archived' ELSE $2 END,
+            updated_at = $3
+        WHERE id = $1`, [
         run.session_id,
         status === 'failed' ? 'failed' : 'idle',
         finishedAt,

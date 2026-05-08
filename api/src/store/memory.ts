@@ -25,6 +25,8 @@ import type {
   WebhookSourceRecord,
 } from './types.js';
 
+const staleCallbackSendingMs = 15 * 60_000;
+
 export class MemoryStore implements AppStore {
   private readonly authUsers = new Map<string, AuthUserRecord>();
   private readonly authAccounts = new Map<string, AuthAccountRecord>();
@@ -177,7 +179,8 @@ export class MemoryStore implements AppStore {
     now: Date;
   }): Promise<ClaimedMessageBatch | null> {
     for (const [sessionId, sessionMessages] of this.messages) {
-      if (this.sessions.get(sessionId)?.queuePausedAt) continue;
+      const currentSession = this.sessions.get(sessionId);
+      if (currentSession?.queuePausedAt || currentSession?.status === 'archived') continue;
       if (this.hasActiveRun(sessionId, input.now)) continue;
 
       const pendingMessages = sessionMessages.filter((candidate) => candidate.status === 'pending').sort((a, b) => a.sequence - b.sequence);
@@ -381,8 +384,9 @@ export class MemoryStore implements AppStore {
   }
 
   async claimDueCallbackDeliveries(input: { now: Date; limit: number }): Promise<CallbackDeliveryRecord[]> {
+    const staleSendingBefore = new Date(input.now.getTime() - staleCallbackSendingMs);
     const due = Array.from(this.callbacks.values())
-      .filter((delivery) => delivery.status === 'pending')
+      .filter((delivery) => delivery.status === 'pending' || isStaleSendingCallback(delivery, staleSendingBefore))
       .filter((delivery) => !delivery.nextAttemptAt || delivery.nextAttemptAt <= input.now)
       .filter((delivery) => delivery.attempts < delivery.maxAttempts)
       .sort((a, b) => (a.nextAttemptAt?.getTime() ?? a.createdAt.getTime()) - (b.nextAttemptAt?.getTime() ?? b.createdAt.getTime()))
@@ -571,7 +575,7 @@ export class MemoryStore implements AppStore {
 
     const session = this.sessions.get(run.sessionId);
     if (!session) throw new Error(`Session does not exist: ${run.sessionId}`);
-    this.sessions.set(run.sessionId, { ...session, status: status === 'failed' ? 'failed' : 'idle', updatedAt: finishedAt });
+    this.sessions.set(run.sessionId, { ...session, status: session.status === 'archived' ? 'archived' : status === 'failed' ? 'failed' : 'idle', updatedAt: finishedAt });
 
     return { messages: terminalMessages, run: terminalRun };
   }
@@ -585,6 +589,11 @@ export class MemoryStore implements AppStore {
 
 function authAccountKey(provider: string, providerAccountId: string): string {
   return `${provider}:${providerAccountId}`;
+}
+
+function isStaleSendingCallback(delivery: CallbackDeliveryRecord, staleSendingBefore: Date): boolean {
+  const lastAttemptAt = delivery.lastAttemptAt;
+  return delivery.status === 'sending' && lastAttemptAt !== undefined && lastAttemptAt <= staleSendingBefore;
 }
 
 function isActiveSandbox(sandbox: SandboxRecord): boolean {

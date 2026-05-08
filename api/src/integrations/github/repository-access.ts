@@ -15,7 +15,7 @@ export class GitHubRepositoryAccessService {
   private readonly allowedRepositories: string[];
   private readonly cloneBaseUrl: string;
   private readonly now: () => Date;
-  private readonly tokensByInstallation = new Map<number, GitHubInstallationToken>();
+  private readonly tokensByRepository = new Map<string, GitHubInstallationToken>();
   private readonly installationsByRepository = new Map<string, number>();
 
   constructor(private readonly options: GitHubRepositoryAccessServiceOptions) {
@@ -27,7 +27,7 @@ export class GitHubRepositoryAccessService {
   async getRepositoryAccess(repository: GitHubRepository): Promise<GitHubRepositoryAccess> {
     this.assertAllowed(repository);
     const installationId = await this.getInstallationId(repository);
-    const token = await this.getInstallationToken(installationId);
+    const token = await this.getInstallationToken(installationId, repository);
     return {
       provider: 'github',
       owner: repository.owner,
@@ -54,12 +54,13 @@ export class GitHubRepositoryAccessService {
     return installation.id;
   }
 
-  private async getInstallationToken(installationId: number): Promise<GitHubInstallationToken> {
-    const cached = this.tokensByInstallation.get(installationId);
+  private async getInstallationToken(installationId: number, repository: GitHubRepository): Promise<GitHubInstallationToken> {
+    const key = repositoryKey(repository).toLowerCase();
+    const cached = this.tokensByRepository.get(key);
     if (cached && cached.expiresAt.getTime() - this.now().getTime() > 60_000) return cached;
-    const token = await this.options.client.createInstallationAccessToken({ installationId, appJwt: this.createAppJwt() });
+    const token = await this.options.client.createInstallationAccessToken({ installationId, appJwt: this.createAppJwt(), repositories: [repository.repo] });
     const record = { ...token, installationId };
-    this.tokensByInstallation.set(installationId, record);
+    this.tokensByRepository.set(key, record);
     return record;
   }
 
@@ -70,7 +71,7 @@ export class GitHubRepositoryAccessService {
   private assertAllowed(repository: GitHubRepository): void {
     if (!this.allowedRepositories.length) return;
     const key = repositoryKey(repository).toLowerCase();
-    const allowed = this.allowedRepositories.some((pattern) => repositoryPatternMatches(pattern, key));
+    const allowed = isRepositoryAllowed(repository, this.allowedRepositories);
     if (!allowed) throw new GitHubRepositoryAccessError('unauthorized_repository', `GitHub repository is not allowed: ${repository.owner}/${repository.repo}`);
   }
 }
@@ -86,6 +87,12 @@ export class GitHubRepositoryAccessError extends Error {
 
 function repositoryKey(repository: GitHubRepository): string {
   return `${repository.owner}/${repository.repo}`;
+}
+
+export function isRepositoryAllowed(repository: GitHubRepository, allowedRepositories: string[] | undefined): boolean {
+  if (!allowedRepositories?.length) return true;
+  const key = repositoryKey(repository).toLowerCase();
+  return allowedRepositories.some((pattern) => repositoryPatternMatches(pattern, key));
 }
 
 function repositoryPatternMatches(pattern: string, repositoryKey: string): boolean {
