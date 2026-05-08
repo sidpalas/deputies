@@ -94,6 +94,7 @@ export class ApiError extends Error {
 }
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:3583').replace(/\/$/, '');
+const requestTimeoutMs = 15_000;
 
 export function getApiBaseUrl(): string {
   return apiBaseUrl;
@@ -266,7 +267,7 @@ export async function streamGlobalEvents(input: {
   signal: AbortSignal;
   onEvent: (event: AgentEvent) => void;
 }): Promise<void> {
-  await streamEventResponse(`/events/stream?after=${input.after}`, input);
+  await streamEventResponse(`/events/stream?after=${input.after}&replay=false`, input);
 }
 
 async function streamEventResponse(
@@ -306,9 +307,12 @@ async function streamEventResponse(
 }
 
 async function request<T>(path: string, options: { method?: string; token?: string; body?: unknown } = {}): Promise<T> {
+  const abort = new AbortController();
+  const timeout = window.setTimeout(() => abort.abort(), requestTimeoutMs);
   const requestInit: RequestInit = {
     method: options.method ?? 'GET',
     credentials: 'include',
+    signal: abort.signal,
     headers: {
       ...authHeaders(options.token ?? ''),
       ...(options.body ? { 'content-type': 'application/json' } : {}),
@@ -316,7 +320,15 @@ async function request<T>(path: string, options: { method?: string; token?: stri
   };
   if (options.body) requestInit.body = JSON.stringify(options.body);
 
-  const response = await fetch(`${apiBaseUrl}${path}`, requestInit);
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}${path}`, requestInit);
+  } catch (error) {
+    if (abort.signal.aborted) throw new ApiError(0, `Request timed out: ${path}`);
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => undefined);

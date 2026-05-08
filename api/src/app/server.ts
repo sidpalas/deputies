@@ -209,7 +209,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/events/stream', async (c) => {
     const after = parseCursor(c.req.query('after') ?? c.req.header('last-event-id') ?? null) ?? 0;
-    return writeGlobalEventStream(c, services, after);
+    return writeGlobalEventStream(c, services, after, c.req.query('replay') !== 'false');
   });
 
   app.post('/webhooks/generic/:sourceKey', async (c) => {
@@ -580,11 +580,13 @@ async function writeGlobalEventStream(
   c: Context,
   services: AppServices,
   afterId: number,
+  replay: boolean,
 ): Promise<Response> {
   return writeEventStream(c, {
     after: afterId,
     id: (event) => event.id,
     list: () => services.events.listAll(afterId),
+    replay,
     subscribe: (writeEvent) => services.events.subscribeAll(writeEvent),
   });
 }
@@ -595,6 +597,7 @@ async function writeEventStream(
     after: number;
     id: (event: Awaited<ReturnType<EventService['listAll']>>[number]) => number;
     list: () => Promise<Awaited<ReturnType<EventService['listAll']>>>;
+    replay?: boolean;
     subscribe: (writeEvent: (event: Awaited<ReturnType<EventService['listAll']>>[number]) => void) => () => void;
   },
 ): Promise<Response> {
@@ -630,8 +633,10 @@ async function writeEventStream(
   void (async () => {
     try {
       await write(': connected\n\n');
-      for (const event of await options.list()) {
-        writeEvent(event);
+      if (options.replay !== false) {
+        for (const event of await options.list()) {
+          writeEvent(event);
+        }
       }
     } catch {
       clearInterval(heartbeat);

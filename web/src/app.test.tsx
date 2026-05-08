@@ -192,10 +192,12 @@ it('keeps a cancelled middle message inline with its surrounding batch', async (
 
 it('shows a jump control instead of autoscrolling after the user scrolls up', async () => {
   let pushStreamEvent: StreamEventPusher = () => undefined;
+  let streamOpen = false;
   const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView);
   mockApi({
     messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000130', sequence: 1, status: 'processing', prompt: 'long running work' })],
     onStreamOpen: (push) => {
+      streamOpen = true;
       pushStreamEvent = push;
     },
   });
@@ -210,6 +212,7 @@ it('shows a jump control instead of autoscrolling after the user scrolls up', as
   fireEvent.scroll(messageLog);
   scrollIntoView.mockClear();
 
+  await waitFor(() => expect(streamOpen).toBe(true));
   pushStreamEvent(eventFixture({ sequence: 1, type: 'agent_text_delta', messageId: '00000000-0000-4000-8000-000000000130', payload: { text: 'streaming diagnostics' } }));
 
   const jump = await screen.findByRole('button', { name: /Jump to latest/ });

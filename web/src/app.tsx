@@ -107,6 +107,8 @@ export function App() {
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  const [detailLoadedSessionId, setDetailLoadedSessionId] = useState('');
+  const [healthChecked, setHealthChecked] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const eventCursor = useRef(0);
@@ -118,7 +120,7 @@ export function App() {
 
   const bearerAuthRequired = health?.apiAuthMode === 'bearer';
   const sessionAuthRequired = health?.apiAuthMode === 'session';
-  const waitingForAuth = !health || (sessionAuthRequired && !authChecked);
+  const waitingForAuth = !healthChecked || (health && sessionAuthRequired && !authChecked);
   const canCallApi = Boolean(health) && (!bearerAuthRequired || Boolean(token)) && (!sessionAuthRequired || Boolean(currentUser));
   const startupLoading = waitingForAuth || (canCallApi && !sessionsLoaded);
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
@@ -151,7 +153,8 @@ export function App() {
   useEffect(() => {
     getHealth()
       .then(setHealth)
-      .catch((err: unknown) => setError(errorMessage(err)));
+      .catch((err: unknown) => setError(errorMessage(err)))
+      .finally(() => setHealthChecked(true));
   }, []);
 
   useEffect(() => {
@@ -175,6 +178,7 @@ export function App() {
 
   useEffect(() => {
     if (!selectedSessionId || !canCallApi) return;
+    setDetailLoadedSessionId('');
     refreshSessionDetail(selectedSessionId);
   }, [selectedSessionId, canCallApi, token]);
 
@@ -198,7 +202,7 @@ export function App() {
   }, [selectedSessionId, messages.length, events.length]);
 
   useEffect(() => {
-    if (!selectedSessionId || !canCallApi) return;
+    if (!selectedSessionId || !canCallApi || detailLoadedSessionId !== selectedSessionId) return;
 
     const abort = new AbortController();
     streamEvents({
@@ -223,7 +227,7 @@ export function App() {
     });
 
     return () => abort.abort();
-  }, [selectedSessionId, canCallApi, token]);
+  }, [selectedSessionId, detailLoadedSessionId, canCallApi, token]);
 
   useEffect(() => {
     if (!canCallApi || !sessionsLoaded) return;
@@ -283,6 +287,7 @@ export function App() {
       setEvents(nextEvents);
       setArtifacts(nextArtifacts);
       setCallbacks(nextCallbacks);
+      setDetailLoadedSessionId(sessionId);
     } catch (err) {
       handleApiError(err);
     }
