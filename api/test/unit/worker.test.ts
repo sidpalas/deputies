@@ -477,9 +477,9 @@ class TextRunner implements Runner {
   constructor(private readonly text: string) {}
 
   async run(input: RunnerInput): Promise<RunnerResult> {
-    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: {}, createdAt: new Date() });
+    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: { runner: 'test' }, createdAt: new Date() });
     await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'agent_text_delta', payload: { text: this.text }, createdAt: new Date() });
-    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_completed', payload: {}, createdAt: new Date() });
+    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_completed', payload: { runner: 'test' }, createdAt: new Date() });
     return { text: this.text };
   }
 }
@@ -489,8 +489,8 @@ class CaptureRunner implements Runner {
 
   async run(input: RunnerInput): Promise<RunnerResult> {
     this.inputs.push(input);
-    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: {}, createdAt: new Date() });
-    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_completed', payload: {}, createdAt: new Date() });
+    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: { runner: 'test' }, createdAt: new Date() });
+    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_completed', payload: { runner: 'test' }, createdAt: new Date() });
     return { text: 'captured' };
   }
 }
@@ -512,7 +512,7 @@ class BlockingRunner implements Runner {
 
   async run(input: RunnerInput): Promise<RunnerResult> {
     this.started = true;
-    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: {}, createdAt: new Date() });
+    await input.emit({ sessionId: input.sessionId, runId: input.runId, messageId: input.messageId, type: 'run_started', payload: { runner: 'test' }, createdAt: new Date() });
     input.signal?.addEventListener('abort', () => {
       this.aborted = true;
       this.abortRun();

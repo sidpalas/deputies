@@ -1,5 +1,5 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
-import type { NormalizedEvent, NormalizedEventType } from '../events/types.js';
+import type { NormalizedEvent, NormalizedEventPayload, NormalizedEventType } from '../events/types.js';
 import type {
   AppStore,
   ArtifactRecord,
@@ -1108,13 +1108,13 @@ function toMessage(row: MessageRow): MessageRecord {
 }
 
 function toEvent(row: EventRow): NormalizedEvent & { sequence: number } {
-  const event: NormalizedEvent & { sequence: number } = {
+  const event = {
     sessionId: row.session_id,
     sequence: Number(row.sequence),
     type: row.type,
-    payload: row.payload,
+    payload: row.payload as NormalizedEventPayload,
     createdAt: row.created_at,
-  };
+  } as NormalizedEvent & { sequence: number };
   if (row.run_id) event.runId = row.run_id;
   if (row.message_id) event.messageId = row.message_id;
   return event;

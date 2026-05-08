@@ -1,11 +1,102 @@
-export type NormalizedEvent = {
+type EmptyEventPayload = Record<string, never>;
+
+export type NormalizedEvent<T extends NormalizedEventType = NormalizedEventType> = T extends NormalizedEventType ? {
   sessionId: string;
   runId?: string;
   messageId?: string;
   sequence?: number;
-  type: NormalizedEventType;
-  payload: Record<string, unknown>;
+  type: T;
+  payload: NormalizedEventPayload<T>;
   createdAt: Date;
+} : never;
+
+export type NormalizedEventPayload<T extends NormalizedEventType = NormalizedEventType> = NormalizedEventPayloadMap[T];
+
+export type NormalizedEventPayloadMap = {
+  session_created: { title: string | null };
+  session_archived: EmptyEventPayload;
+  session_unarchived: EmptyEventPayload;
+  session_updated: { title: string | null; context?: Record<string, unknown> | null };
+  session_queue_paused: EmptyEventPayload;
+  session_queue_resumed: EmptyEventPayload;
+  message_created: { sequence: number; source: string | null; transcriptOnly?: true };
+  message_updated: { sequence: number };
+  message_cancelled: { sequence: number; transcriptOnly?: true };
+  message_started: { sequences: number[]; batchSize: number };
+  run_started: { runner: string };
+  sandbox_starting: { provider: string };
+  sandbox_ready: { provider: string; providerSandboxId: string; created: boolean; workspacePath: string };
+  sandbox_destroyed: SandboxLifecyclePayload;
+  sandbox_destroy_failed: SandboxLifecyclePayload & { error: string };
+  sandbox_stopped: SandboxLifecyclePayload;
+  sandbox_stop_failed: SandboxLifecyclePayload & { error: string };
+  repository_ready: { provider: string; owner: string; repo: string; workspacePath: string; expiresAt: string };
+  agent_text_delta: { text: string; flueSessionId?: string | undefined };
+  agent_response_final: { text: string };
+  tool_started: ToolStartedPayload;
+  tool_finished: ToolFinishedPayload;
+  artifact_created: { artifact: ArtifactPayload };
+  run_completed: { runner: string };
+  run_failed: { error: string; recovered?: true };
+  run_cancel_requested: { sequences: number[]; batchSize: number };
+  run_cancelled: { sequences: number[]; batchSize: number };
+  message_completed: { sequence: number };
+  message_failed: { error: string };
+  callback_sent: CallbackPayload;
+  callback_retry_scheduled: CallbackPayload & { error: string; nextAttemptAt?: string };
+  callback_failed: CallbackPayload & { error: string; nextAttemptAt?: string };
+  callback_replay_requested: CallbackPayload;
+};
+
+type SandboxLifecyclePayload = {
+  reason: string;
+  provider: string;
+  providerSandboxId: string;
+};
+
+type ToolStartedPayload = {
+  toolName: string;
+  toolCallId?: string | undefined;
+  command?: string;
+  args?: unknown;
+  flueSessionId?: string | undefined;
+  taskId?: string | undefined;
+  prompt?: string | undefined;
+  role?: string | undefined;
+  cwd?: string | undefined;
+  parentSessionId?: string | undefined;
+};
+
+type ToolFinishedPayload = {
+  toolName: string;
+  toolCallId?: string | undefined;
+  isError?: boolean | undefined;
+  result?: unknown;
+  flueSessionId?: string | undefined;
+  command?: string | undefined;
+  exitCode?: number | undefined;
+  taskId?: string | undefined;
+  parentSessionId?: string | undefined;
+  error?: unknown;
+};
+
+type ArtifactPayload = {
+  id: string;
+  sessionId: string;
+  runId?: string;
+  messageId?: string;
+  type: string;
+  createdAt: Date;
+  title?: string;
+  url?: string;
+  storageKey?: string;
+  payload: Record<string, unknown>;
+};
+
+type CallbackPayload = {
+  deliveryId: string;
+  targetType: string;
+  attempts: number;
 };
 
 export type NormalizedEventType =
@@ -42,3 +133,9 @@ export type NormalizedEventType =
   | 'callback_retry_scheduled'
   | 'callback_failed'
   | 'callback_replay_requested';
+
+export type NormalizedEmptyEventType =
+  | 'session_archived'
+  | 'session_unarchived'
+  | 'session_queue_paused'
+  | 'session_queue_resumed';

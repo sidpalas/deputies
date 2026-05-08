@@ -1,38 +1,41 @@
-import type { NormalizedEvent, NormalizedEventType } from './types.js';
+import type { NormalizedEmptyEventType, NormalizedEvent, NormalizedEventPayload, NormalizedEventType } from './types.js';
 import type { EventStore } from '../store/types.js';
 
-type PersistedEvent = NormalizedEvent & { sequence: number };
+type PersistedEvent<T extends NormalizedEventType = NormalizedEventType> = NormalizedEvent<T> & { sequence: number };
 type EventSubscriber = (event: PersistedEvent) => void;
 
-export type AppendEventInput = {
+type AppendEventBase<T extends NormalizedEventType> = {
   sessionId: string;
-  type: NormalizedEventType;
-  payload?: Record<string, unknown>;
+  type: T;
   runId?: string;
   messageId?: string;
 };
+
+export type AppendEventInput<T extends NormalizedEventType = NormalizedEventType> = AppendEventBase<T> & (
+  [T] extends [NormalizedEmptyEventType] ? { payload?: NormalizedEventPayload<T> } : { payload: NormalizedEventPayload<T> }
+);
 
 export class EventService {
   private readonly subscribers = new Map<string, Set<EventSubscriber>>();
 
   constructor(private readonly store: EventStore) {}
 
-  async append(input: AppendEventInput): Promise<PersistedEvent> {
+  async append<T extends NormalizedEventType>(input: AppendEventInput<T>): Promise<PersistedEvent<T>> {
     const sequence = await this.store.nextEventSequence(input.sessionId);
-    const event: NormalizedEvent & { sequence: number } = {
+    const event = {
       sessionId: input.sessionId,
       sequence,
       type: input.type,
-      payload: input.payload ?? {},
+      payload: (input.payload ?? {}) as NormalizedEventPayload<T>,
       createdAt: new Date(),
-    };
+    } as NormalizedEvent<T> & { sequence: number };
 
     if (input.runId) event.runId = input.runId;
     if (input.messageId) event.messageId = input.messageId;
 
     const persisted = await this.store.appendEvent(event);
     this.publish(persisted);
-    return persisted;
+    return persisted as PersistedEvent<T>;
   }
 
   async list(sessionId: string, afterSequence?: number) {
