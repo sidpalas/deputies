@@ -95,6 +95,7 @@ export class ApiError extends Error {
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:3583').replace(/\/$/, '');
 const requestTimeoutMs = 15_000;
+const requestRetryDelayMs = 250;
 
 export function getApiBaseUrl(): string {
   return apiBaseUrl;
@@ -307,11 +308,29 @@ async function streamEventResponse(
 }
 
 async function request<T>(path: string, options: { method?: string; token?: string; body?: unknown } = {}): Promise<T> {
+  const method = options.method ?? 'GET';
+  const attempts = method === 'GET' ? 2 : 1;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await requestOnce<T>(path, { ...options, method });
+    } catch (error) {
+      const retryableTimeout = error instanceof ApiError && error.status === 0 && attempt < attempts;
+      if (!retryableTimeout) throw error;
+      await delay(requestRetryDelayMs);
+    }
+  }
+
+  throw new ApiError(0, `Request failed: ${path}`);
+}
+
+async function requestOnce<T>(path: string, options: { method: string; token?: string; body?: unknown }): Promise<T> {
   const abort = new AbortController();
   const timeout = window.setTimeout(() => abort.abort(), requestTimeoutMs);
   const requestInit: RequestInit = {
-    method: options.method ?? 'GET',
+    method: options.method,
     credentials: 'include',
+    cache: 'no-store',
     signal: abort.signal,
     headers: {
       ...authHeaders(options.token ?? ''),
@@ -337,6 +356,10 @@ async function request<T>(path: string, options: { method?: string; token?: stri
   }
 
   return (await response.json()) as T;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function authHeaders(token: string): Record<string, string> {

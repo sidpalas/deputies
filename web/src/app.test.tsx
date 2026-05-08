@@ -31,6 +31,7 @@ type MockApiOptions = {
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
+  setVisibilityState('visible');
 });
 
 it('submits composer text on Enter and preserves Shift Enter for newlines', async () => {
@@ -220,6 +221,32 @@ it('shows a jump control instead of autoscrolling after the user scrolls up', as
 
   fireEvent.click(jump);
   expect(scrollIntoView).toHaveBeenCalledWith({ block: 'end', behavior: 'smooth' });
+});
+
+it('does not hold SSE streams while the page is hidden', async () => {
+  let streamOpenCount = 0;
+  let globalStreamOpenCount = 0;
+  setVisibilityState('hidden');
+  mockApi({
+    onStreamOpen: () => {
+      streamOpenCount += 1;
+    },
+    onGlobalStreamOpen: () => {
+      globalStreamOpenCount += 1;
+    },
+  });
+  render(<App />);
+
+  await screen.findByRole('log', { name: 'Session messages' });
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  expect(streamOpenCount).toBe(0);
+  expect(globalStreamOpenCount).toBe(0);
+
+  setVisibilityState('visible');
+  document.dispatchEvent(new Event('visibilitychange'));
+
+  await waitFor(() => expect(streamOpenCount).toBe(1));
+  await waitFor(() => expect(globalStreamOpenCount).toBe(1));
 });
 
 it('labels active streamed text as progress and separates obvious sentence boundaries', async () => {
@@ -548,6 +575,10 @@ function callbackFixture(input: { id: string; status: string; attempts: number; 
     createdAt: '2026-05-05T12:03:00.000Z',
     updatedAt: '2026-05-05T12:03:00.000Z',
   };
+}
+
+function setVisibilityState(value: DocumentVisibilityState) {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value });
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

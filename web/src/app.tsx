@@ -73,6 +73,10 @@ function applyThemePreference(theme: ThemePreference) {
   document.documentElement.classList.toggle('dark', resolveThemePreference(theme) === 'dark');
 }
 
+function isPageVisible(): boolean {
+  return document.visibilityState !== 'hidden';
+}
+
 function isThreadNearBottom(container: HTMLElement): boolean {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= threadAutoFollowThreshold;
 }
@@ -110,6 +114,7 @@ export function App() {
   const [detailLoadedSessionId, setDetailLoadedSessionId] = useState('');
   const [healthChecked, setHealthChecked] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  const [pageVisible, setPageVisible] = useState(isPageVisible);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const eventCursor = useRef(0);
   const globalEventCursor = useRef(0);
@@ -149,6 +154,12 @@ export function App() {
     setTitleDraft(selectedSession?.title ?? '');
     setEditingTitle(false);
   }, [selectedSession?.id, selectedSession?.title]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => setPageVisible(isPageVisible());
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   useEffect(() => {
     getHealth()
@@ -202,7 +213,7 @@ export function App() {
   }, [selectedSessionId, messages.length, events.length]);
 
   useEffect(() => {
-    if (!selectedSessionId || !canCallApi || detailLoadedSessionId !== selectedSessionId) return;
+    if (!pageVisible || !selectedSessionId || !canCallApi || detailLoadedSessionId !== selectedSessionId) return;
 
     const abort = new AbortController();
     streamEvents({
@@ -227,10 +238,10 @@ export function App() {
     });
 
     return () => abort.abort();
-  }, [selectedSessionId, detailLoadedSessionId, canCallApi, token]);
+  }, [pageVisible, selectedSessionId, detailLoadedSessionId, canCallApi, token]);
 
   useEffect(() => {
-    if (!canCallApi || !sessionsLoaded) return;
+    if (!pageVisible || !canCallApi || !sessionsLoaded) return;
 
     const abort = new AbortController();
     streamGlobalEvents({
@@ -248,7 +259,7 @@ export function App() {
     });
 
     return () => abort.abort();
-  }, [canCallApi, sessionsLoaded, token]);
+  }, [pageVisible, canCallApi, sessionsLoaded, token]);
 
   async function refreshSessions() {
     setLoading(true);
