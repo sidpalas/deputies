@@ -12,6 +12,11 @@ const eventTypes = new Set([
   'run_started',
   'sandbox_starting',
   'sandbox_ready',
+  'sandbox_destroyed',
+  'sandbox_destroy_failed',
+  'sandbox_stopped',
+  'sandbox_stop_failed',
+  'repository_ready',
   'agent_text_delta',
   'agent_response_final',
   'tool_started',
@@ -139,6 +144,7 @@ export function expectCallbackResponse(value: unknown): asserts value is { callb
 function expectNormalizedEvent(value: unknown): void {
   expect(isRecord(value)).toBe(true);
   if (!isRecord(value)) return;
+  expect(typeof value.id).toBe('number');
   expect(typeof value.sessionId).toBe('string');
   expect(typeof value.sequence).toBe('number');
   expect(eventTypes.has(String(value.type))).toBe(true);

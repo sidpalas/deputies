@@ -508,6 +508,29 @@ describe('core API', () => {
     await expect(nextEvent).resolves.toMatchObject({ type: 'message_created', sequence: 2 });
   });
 
+  it('lists and streams global events for cross-session discovery', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Global stream session' });
+    expect(createSession.status).toBe(201);
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const globalEventsResponse = await fetch(`${baseUrl}/events`);
+    expect(globalEventsResponse.status).toBe(200);
+    const globalEventsBody = await globalEventsResponse.json();
+    expectEventsResponse(globalEventsBody);
+    expect(globalEventsBody.events).toMatchObject([{ type: 'session_created', sessionId: session.id, id: 1 }]);
+
+    const abort = new AbortController();
+    const streamResponse = await fetch(`${baseUrl}/events/stream?after=1`, { signal: abort.signal });
+    expect(streamResponse.status).toBe(200);
+    expect(streamResponse.headers.get('content-type')).toContain('text/event-stream');
+
+    const nextEvent = readNextSseEvent(streamResponse, abort);
+    const createMessage = await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'global stream this' });
+    expect(createMessage.status).toBe(202);
+
+    await expect(nextEvent).resolves.toMatchObject({ type: 'message_created', sessionId: session.id, id: 2 });
+  });
+
   it('returns 404 when enqueueing a message for a missing session', async () => {
     const response = await postJson(`${baseUrl}/sessions/missing/messages`, { prompt: 'hello' });
 
@@ -632,7 +655,7 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
-async function readNextSseEvent(response: Response, abort: AbortController): Promise<{ type: string; sequence: number }> {
+async function readNextSseEvent(response: Response, abort: AbortController): Promise<{ id: number; type: string; sequence: number }> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Expected response body');
 
@@ -656,7 +679,7 @@ async function readNextSseEvent(response: Response, abort: AbortController): Pro
         ?.slice('data: '.length);
       if (!data) continue;
 
-      return JSON.parse(data) as { type: string; sequence: number };
+      return JSON.parse(data) as { id: number; type: string; sequence: number };
     }
   } finally {
     abort.abort();

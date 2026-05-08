@@ -315,9 +315,12 @@ export interface CallbackStore {
 
 export interface EventStore {
   nextEventSequence(sessionId: string): Promise<number>;
-  appendEvent(event: NormalizedEvent & { sequence: number }): Promise<NormalizedEvent & { sequence: number }>;
-  getEvents(sessionId: string, afterSequence?: number): Promise<Array<NormalizedEvent & { sequence: number }>>;
+  appendEvent(event: NormalizedEvent & { sequence: number }): Promise<EventRecord>;
+  getEvents(sessionId: string, afterSequence?: number): Promise<EventRecord[]>;
+  listEvents(afterId?: number): Promise<EventRecord[]>;
 }
+
+export type EventRecord = NormalizedEvent & { id: number; sequence: number };
 
 export interface AppStore extends SessionStore, MessageStore, RunStore, SandboxStore, CallbackStore, EventStore {
   upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord>;

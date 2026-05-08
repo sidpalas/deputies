@@ -1,7 +1,28 @@
 import type { NormalizedEmptyEventType, NormalizedEvent, NormalizedEventPayload, NormalizedEventType } from './types.js';
-import type { EventStore } from '../store/types.js';
+import type { EventRecord, EventStore } from '../store/types.js';
 
-type PersistedEvent<T extends NormalizedEventType = NormalizedEventType> = NormalizedEvent<T> & { sequence: number };
+const globalEventTypes = new Set<NormalizedEventType>([
+  'session_created',
+  'session_updated',
+  'session_archived',
+  'session_unarchived',
+  'session_queue_paused',
+  'session_queue_resumed',
+  'message_created',
+  'message_started',
+  'message_completed',
+  'message_failed',
+  'message_cancelled',
+  'run_started',
+  'run_completed',
+  'run_failed',
+  'run_cancel_requested',
+  'run_cancelled',
+  'artifact_created',
+  'callback_failed',
+]);
+
+type PersistedEvent<T extends NormalizedEventType = NormalizedEventType> = EventRecord & NormalizedEvent<T>;
 type EventSubscriber = (event: PersistedEvent) => void;
 
 type AppendEventBase<T extends NormalizedEventType> = {
@@ -17,6 +38,7 @@ export type AppendEventInput<T extends NormalizedEventType = NormalizedEventType
 
 export class EventService {
   private readonly subscribers = new Map<string, Set<EventSubscriber>>();
+  private readonly globalSubscribers = new Set<EventSubscriber>();
 
   constructor(private readonly store: EventStore) {}
 
@@ -42,6 +64,14 @@ export class EventService {
     return this.store.getEvents(sessionId, afterSequence);
   }
 
+  async listAll(afterId?: number): Promise<EventRecord[]> {
+    return (await this.store.listEvents(afterId)).filter(isGlobalEvent);
+  }
+
+  publishExternal(event: EventRecord): void {
+    this.publish(event);
+  }
+
   subscribe(sessionId: string, subscriber: EventSubscriber): () => void {
     const sessionSubscribers = this.subscribers.get(sessionId) ?? new Set<EventSubscriber>();
     sessionSubscribers.add(subscriber);
@@ -53,9 +83,25 @@ export class EventService {
     };
   }
 
+  subscribeAll(subscriber: EventSubscriber): () => void {
+    this.globalSubscribers.add(subscriber);
+    return () => {
+      this.globalSubscribers.delete(subscriber);
+    };
+  }
+
   private publish(event: PersistedEvent): void {
+    if (isGlobalEvent(event)) {
+      for (const subscriber of this.globalSubscribers) {
+        subscriber(event);
+      }
+    }
     for (const subscriber of this.subscribers.get(event.sessionId) ?? []) {
       subscriber(event);
     }
   }
+}
+
+function isGlobalEvent(event: Pick<EventRecord, 'type'>): boolean {
+  return globalEventTypes.has(event.type);
 }

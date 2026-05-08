@@ -186,6 +186,8 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.use('/sessions/*', apiAuthMiddleware(config, services.store));
   app.use('/sessions', apiAuthMiddleware(config, services.store));
+  app.use('/events/*', apiAuthMiddleware(config, services.store));
+  app.use('/events', apiAuthMiddleware(config, services.store));
 
   app.post('/sessions', async (c) => {
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
@@ -197,6 +199,17 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.get('/sessions', async (c) => {
     const sessions = await services.sessions.list();
     return c.json({ sessions });
+  });
+
+  app.get('/events', async (c) => {
+    const after = parseCursor(c.req.query('after') ?? null);
+    const events = await services.events.listAll(after);
+    return c.json({ events });
+  });
+
+  app.get('/events/stream', async (c) => {
+    const after = parseCursor(c.req.query('after') ?? c.req.header('last-event-id') ?? null) ?? 0;
+    return writeGlobalEventStream(c, services, after);
   });
 
   app.post('/webhooks/generic/:sourceKey', async (c) => {
@@ -481,8 +494,8 @@ export function createApp(config: AppConfig, services = createServices()) {
     const session = await services.sessions.get(sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
-    const after = parseCursor(c.req.query('after') ?? null) ?? 0;
-    return writeEventStream(c, services, sessionId, after);
+    const after = parseCursor(c.req.query('after') ?? c.req.header('last-event-id') ?? null) ?? 0;
+    return writeSessionEventStream(c, services, sessionId, after);
   });
 
   return app;
@@ -549,30 +562,61 @@ function safeStringEqual(a: string, b: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-async function writeEventStream(
+async function writeSessionEventStream(
   c: Context,
   services: AppServices,
   sessionId: string,
   afterSequence: number,
 ): Promise<Response> {
+  return writeEventStream(c, {
+    after: afterSequence,
+    id: (event) => event.sequence,
+    list: () => services.events.list(sessionId, afterSequence),
+    subscribe: (writeEvent) => services.events.subscribe(sessionId, writeEvent),
+  });
+}
+
+async function writeGlobalEventStream(
+  c: Context,
+  services: AppServices,
+  afterId: number,
+): Promise<Response> {
+  return writeEventStream(c, {
+    after: afterId,
+    id: (event) => event.id,
+    list: () => services.events.listAll(afterId),
+    subscribe: (writeEvent) => services.events.subscribeAll(writeEvent),
+  });
+}
+
+async function writeEventStream(
+  c: Context,
+  options: {
+    after: number;
+    id: (event: Awaited<ReturnType<EventService['listAll']>>[number]) => number;
+    list: () => Promise<Awaited<ReturnType<EventService['listAll']>>>;
+    subscribe: (writeEvent: (event: Awaited<ReturnType<EventService['listAll']>>[number]) => void) => () => void;
+  },
+): Promise<Response> {
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
-  let cursor = afterSequence;
+  let cursor = options.after;
 
   const write = async (chunk: string) => {
     await writer.write(encoder.encode(chunk));
   };
   const writeEvent = (event: Awaited<ReturnType<EventService['list']>>[number]) => {
-    if (event.sequence <= cursor) return;
-    cursor = event.sequence;
-    write(`id: ${event.sequence}\n`)
+    const eventId = options.id(event);
+    if (eventId <= cursor) return;
+    cursor = eventId;
+    write(`id: ${eventId}\n`)
       .then(() => write(`event: ${event.type}\n`))
       .then(() => write(`data: ${JSON.stringify(event)}\n\n`))
       .catch(() => {});
   };
 
-  const unsubscribe = services.events.subscribe(sessionId, writeEvent);
+  const unsubscribe = options.subscribe(writeEvent);
   const heartbeat = setInterval(() => {
     write(': keep-alive\n\n').catch(() => {});
   }, 15_000);
@@ -586,7 +630,7 @@ async function writeEventStream(
   void (async () => {
     try {
       await write(': connected\n\n');
-      for (const event of await services.events.list(sessionId, afterSequence)) {
+      for (const event of await options.list()) {
         writeEvent(event);
       }
     } catch {

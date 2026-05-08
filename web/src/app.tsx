@@ -29,6 +29,7 @@ import {
   replayCallback,
   resumeQueue,
   streamEvents,
+  streamGlobalEvents,
   unarchiveSession,
   updateMessage,
   updateSession,
@@ -92,6 +93,7 @@ export function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const eventCursor = useRef(0);
+  const globalEventCursor = useRef(0);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const threadAutoFollowRef = useRef(true);
@@ -191,6 +193,27 @@ export function App() {
     return () => abort.abort();
   }, [selectedSessionId, canCallApi, token]);
 
+  useEffect(() => {
+    if (!canCallApi || !sessionsLoaded) return;
+
+    const abort = new AbortController();
+    streamGlobalEvents({
+      after: globalEventCursor.current,
+      token,
+      signal: abort.signal,
+      onEvent: (event) => {
+        if (typeof event.id === 'number') globalEventCursor.current = Math.max(globalEventCursor.current, event.id);
+        if (shouldRefreshSessions(event.type)) refreshSessions().catch(() => undefined);
+      },
+    }).catch((err: unknown) => {
+      if (!abort.signal.aborted) {
+        refreshSessions().catch(() => undefined);
+      }
+    });
+
+    return () => abort.abort();
+  }, [canCallApi, sessionsLoaded, token]);
+
   async function refreshSessions() {
     setLoading(true);
     setError('');
@@ -207,6 +230,7 @@ export function App() {
         return next;
       });
     } catch (err) {
+      setSessionsLoaded(true);
       handleApiError(err);
     } finally {
       setLoading(false);
@@ -1283,6 +1307,10 @@ function upsertEvent(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
 
 function shouldRefreshSessionDetail(eventType: string): boolean {
   return new Set(['message_created', 'message_started', 'message_completed', 'message_failed', 'message_cancelled', 'run_cancel_requested', 'run_cancelled', 'artifact_created', 'callback_sent', 'callback_retry_scheduled', 'callback_failed', 'callback_replay_requested']).has(eventType);
+}
+
+function shouldRefreshSessions(eventType: string): boolean {
+  return new Set(['session_created', 'session_updated', 'session_archived', 'session_unarchived', 'session_queue_paused', 'session_queue_resumed', 'message_created', 'message_completed', 'message_failed', 'message_cancelled', 'run_failed', 'run_cancelled']).has(eventType);
 }
 
 function callbackEventLabel(eventType: string): string {

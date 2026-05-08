@@ -43,6 +43,9 @@ let workerLoop: ReturnType<typeof startWorkerLoop> | undefined;
 let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
 
 if ('close' in store && typeof store.close === 'function') resources.push(store as CloseableResource);
+if (store instanceof PostgresStore && (config.runMode === 'all' || config.runMode === 'api')) {
+  resources.unshift(await store.listenEvents((event) => services.events.publishExternal(event)));
+}
 
 if (config.runMode === 'all' || config.runMode === 'api') {
   server = createServer(config, services);

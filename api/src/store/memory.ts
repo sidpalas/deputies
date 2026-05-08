@@ -12,6 +12,7 @@ import type {
   CreateWebhookSourceRecord,
   ExternalThreadRecord,
   IntegrationDeliveryRecord,
+  EventRecord,
   CreateMessageRecord,
   CreateSessionRecord,
   ClaimedMessage,
@@ -34,7 +35,8 @@ export class MemoryStore implements AppStore {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly messages = new Map<string, MessageRecord[]>();
   private readonly runs = new Map<string, RunRecord>();
-  private readonly events = new Map<string, Array<NormalizedEvent & { sequence: number }>>();
+  private readonly events = new Map<string, EventRecord[]>();
+  private nextEventId = 1;
   private readonly sandboxes = new Map<string, SandboxRecord>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly callbacks = new Map<string, CallbackDeliveryRecord>();
@@ -453,18 +455,26 @@ export class MemoryStore implements AppStore {
 
   async appendEvent(
     event: NormalizedEvent & { sequence: number },
-  ): Promise<NormalizedEvent & { sequence: number }> {
+  ): Promise<EventRecord> {
+    const record = { ...event, id: this.nextEventId++ };
     const sessionEvents = this.events.get(event.sessionId) ?? [];
-    sessionEvents.push(event);
+    sessionEvents.push(record);
     this.events.set(event.sessionId, sessionEvents);
-    return event;
+    return record;
   }
 
   async getEvents(
     sessionId: string,
     afterSequence = 0,
-  ): Promise<Array<NormalizedEvent & { sequence: number }>> {
+  ): Promise<EventRecord[]> {
     return (this.events.get(sessionId) ?? []).filter((event) => event.sequence > afterSequence);
+  }
+
+  async listEvents(afterId = 0): Promise<EventRecord[]> {
+    return [...this.events.values()]
+      .flat()
+      .filter((event) => event.id > afterId)
+      .sort((left, right) => left.id - right.id);
   }
 
   async createWebhookSource(record: CreateWebhookSourceRecord): Promise<WebhookSourceRecord> {

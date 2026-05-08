@@ -37,6 +37,7 @@ export type RepositoryInput = {
 };
 
 export type AgentEvent = {
+  id?: number;
   sessionId: string;
   sequence: number;
   type: string;
@@ -256,7 +257,27 @@ export async function streamEvents(input: {
   signal: AbortSignal;
   onEvent: (event: AgentEvent) => void;
 }): Promise<void> {
-  const response = await fetch(`${apiBaseUrl}/sessions/${input.sessionId}/events/stream?after=${input.after}`, {
+  await streamEventResponse(`/sessions/${input.sessionId}/events/stream?after=${input.after}`, input);
+}
+
+export async function streamGlobalEvents(input: {
+  after: number;
+  token: string;
+  signal: AbortSignal;
+  onEvent: (event: AgentEvent) => void;
+}): Promise<void> {
+  await streamEventResponse(`/events/stream?after=${input.after}`, input);
+}
+
+async function streamEventResponse(
+  path: string,
+  input: {
+    token: string;
+    signal: AbortSignal;
+    onEvent: (event: AgentEvent) => void;
+  },
+): Promise<void> {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
     headers: authHeaders(input.token),
     credentials: 'include',
     signal: input.signal,

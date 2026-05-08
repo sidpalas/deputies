@@ -15,6 +15,7 @@ import type {
   CreateSandboxRecord,
   CreateSessionRecord,
   CreateWebhookSourceRecord,
+  EventRecord,
   ExternalThreadRecord,
   IntegrationDeliveryRecord,
   MessageRecord,
@@ -70,6 +71,7 @@ type MessageRow = QueryResultRow & {
 };
 
 type EventRow = QueryResultRow & {
+  id: PgInteger;
   session_id: string;
   run_id: string | null;
   message_id: string | null;
@@ -176,6 +178,11 @@ type IntegrationDeliveryRow = QueryResultRow & {
 };
 
 const staleCallbackSendingMs = 15 * 60_000;
+const eventNotificationChannel = 'app_events';
+
+export type PostgresEventListener = {
+  close(): Promise<void>;
+};
 
 export class PostgresStore implements AppStore {
   private readonly pool: Pool;
@@ -186,6 +193,35 @@ export class PostgresStore implements AppStore {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  async listenEvents(onEvent: (event: EventRecord) => void): Promise<PostgresEventListener> {
+    const client = await this.pool.connect();
+    let closed = false;
+    const handleNotification = (message: { channel: string; payload?: string | undefined }) => {
+      if (message.channel !== eventNotificationChannel || !message.payload) return;
+      void this.eventFromNotification(message.payload)
+        .then((event) => {
+          if (!closed && event) onEvent(event);
+        })
+        .catch(() => {});
+    };
+
+    client.on('notification', handleNotification);
+    await client.query(`LISTEN ${eventNotificationChannel}`);
+
+    return {
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        client.off('notification', handleNotification);
+        try {
+          await client.query(`UNLISTEN ${eventNotificationChannel}`);
+        } finally {
+          client.release();
+        }
+      },
+    };
   }
 
   async withAdvisoryLock<T>(lockId: number, fn: () => Promise<T>): Promise<T | null> {
@@ -831,11 +867,16 @@ export class PostgresStore implements AppStore {
     return this.nextSequence(sessionId, 'events');
   }
 
-  async appendEvent(event: NormalizedEvent & { sequence: number }): Promise<NormalizedEvent & { sequence: number }> {
+  async appendEvent(event: NormalizedEvent & { sequence: number }): Promise<EventRecord> {
     const result = await this.pool.query<EventRow>(
-      `INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING session_id, run_id, message_id, sequence, type, payload, created_at`,
+      `WITH inserted AS (
+         INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, session_id, run_id, message_id, sequence, type, payload, created_at
+       )
+       SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at,
+              pg_notify($8, json_build_object('id', id)::text)
+       FROM inserted`,
       [
         event.sessionId,
         event.runId ?? null,
@@ -844,19 +885,32 @@ export class PostgresStore implements AppStore {
         event.type,
         event.payload,
         event.createdAt,
+        eventNotificationChannel,
       ],
     );
 
     return toEvent(result.rows[0]!);
   }
 
-  async getEvents(sessionId: string, afterSequence = 0): Promise<Array<NormalizedEvent & { sequence: number }>> {
+  async getEvents(sessionId: string, afterSequence = 0): Promise<EventRecord[]> {
     const result = await this.pool.query<EventRow>(
-      `SELECT session_id, run_id, message_id, sequence, type, payload, created_at
+      `SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at
        FROM events
        WHERE session_id = $1 AND sequence > $2
        ORDER BY sequence ASC`,
       [sessionId, afterSequence],
+    );
+
+    return result.rows.map(toEvent);
+  }
+
+  async listEvents(afterId = 0): Promise<EventRecord[]> {
+    const result = await this.pool.query<EventRow>(
+      `SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at
+       FROM events
+       WHERE id > $1
+       ORDER BY id ASC`,
+      [afterId],
     );
 
     return result.rows.map(toEvent);
@@ -979,6 +1033,24 @@ export class PostgresStore implements AppStore {
     );
 
     return Number(result.rows[0]!.sequence);
+  }
+
+  private async eventFromNotification(payload: string): Promise<EventRecord | null> {
+    let id: unknown;
+    try {
+      id = (JSON.parse(payload) as { id?: unknown }).id;
+    } catch {
+      return null;
+    }
+    if (typeof id !== 'number' && typeof id !== 'string') return null;
+
+    const result = await this.pool.query<EventRow>(
+      `SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at
+       FROM events
+       WHERE id = $1`,
+      [id],
+    );
+    return result.rows[0] ? toEvent(result.rows[0]) : null;
   }
 
   private async finishRun(
@@ -1107,14 +1179,15 @@ function toMessage(row: MessageRow): MessageRecord {
   return record;
 }
 
-function toEvent(row: EventRow): NormalizedEvent & { sequence: number } {
+function toEvent(row: EventRow): EventRecord {
   const event = {
+    id: Number(row.id),
     sessionId: row.session_id,
     sequence: Number(row.sequence),
     type: row.type,
     payload: row.payload as NormalizedEventPayload,
     createdAt: row.created_at,
-  } as NormalizedEvent & { sequence: number };
+  } as EventRecord;
   if (row.run_id) event.runId = row.run_id;
   if (row.message_id) event.messageId = row.message_id;
   return event;

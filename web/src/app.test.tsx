@@ -21,6 +21,7 @@ type MockApiOptions = {
   onCancelRun?: () => void;
   onReplayCallback?: (callbackId: string) => void;
   onStreamOpen?: (push: StreamEventPusher) => void;
+  onGlobalStreamOpen?: (push: StreamEventPusher) => void;
   authMode?: 'none' | 'bearer' | 'session';
   sandboxProvider?: string;
   currentUser?: { username: string } | null;
@@ -59,6 +60,40 @@ it('keeps sidebar reachable after mobile open, hide, and reopen actions', async 
   fireEvent.click(screen.getByRole('button', { name: 'Open sessions' }));
 
   expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeInTheDocument();
+});
+
+it('refreshes sessions when the global event stream reports an external session', async () => {
+  const externalSession = {
+    id: '00000000-0000-4000-8000-000000000099',
+    status: 'idle',
+    title: 'Slack thread',
+    createdAt: '2026-05-05T12:05:00.000Z',
+    updatedAt: '2026-05-05T12:05:00.000Z',
+  };
+  const sessions = [session];
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    sessions,
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findAllByText('Existing session')).not.toHaveLength(0);
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+
+  sessions.push(externalSession);
+  pushGlobalEvent?.({
+    id: 2,
+    sessionId: externalSession.id,
+    sequence: 1,
+    type: 'session_created',
+    payload: { title: externalSession.title },
+    createdAt: externalSession.createdAt,
+  });
+
+  expect(await screen.findByText('Slack thread')).toBeInTheDocument();
 });
 
 it('shows and calls cancel task on the active message', async () => {
@@ -464,6 +499,17 @@ function mockApi(options: MockApiOptions = {}) {
             controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
           };
           options.onStreamOpen?.(pushStreamEvent);
+        },
+      }), { status: 200 });
+    }
+
+    if (url.pathname === '/events/stream') {
+      return new Response(new ReadableStream({
+        start(controller) {
+          const pushStreamEvent: StreamEventPusher = (event) => {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+          };
+          options.onGlobalStreamOpen?.(pushStreamEvent);
         },
       }), { status: 200 });
     }
