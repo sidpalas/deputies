@@ -17,3 +17,15 @@ run = "pnpm typecheck"
 [tasks.check]
 description = "Run typecheck and tests"
 depends = ["typecheck", "test"]
+
+[tasks.deploy-api]
+description = "Deploy the API service to Railway"
+run = "railway up --service api --detach -m 'deploy api'"
+
+[tasks.deploy-web]
+description = "Deploy the web service to Railway"
+run = "railway up --service web --detach -m 'deploy web'"
+
+[tasks.deploy]
+description = "Deploy API and web services to Railway"
+depends = ["deploy-api", "deploy-web"]
