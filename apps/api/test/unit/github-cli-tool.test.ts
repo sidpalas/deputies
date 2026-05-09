@@ -25,6 +25,110 @@ describe('GitHub CLI Flue tool', () => {
     expect(calls[0]?.env.GH_CONFIG_DIR).toContain('deputies-gh-');
   });
 
+  it('creates pull requests through the GitHub API', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ html_url: 'https://github.com/manaflow-ai/manaflow/pull/7' }), { status: 201 });
+    };
+    const tool = createGitHubCliTool(repositoryServices(), { fetchImpl });
+
+    const result = await tool.execute({ args: ['pr', 'create', '--title', 'Add feature', '--body', 'Details', '--head', 'sp/feature', '--base', 'main', '--draft'] });
+
+    expect(result).toBe('exitCode: 0\nstdout:\nhttps://github.com/manaflow-ai/manaflow/pull/7');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe('https://api.github.com/repos/manaflow-ai/manaflow/pulls');
+    expect(requests[0]?.init.method).toBe('POST');
+    expect(requests[0]?.init.headers).toMatchObject({ authorization: 'Bearer ghs_secret_token' });
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
+      title: 'Add feature',
+      body: 'Details',
+      head: 'sp/feature',
+      base: 'main',
+      draft: true,
+    });
+  });
+
+  it('creates pull requests with fill/defaults from the prepared repository', async () => {
+    const services = repositoryServices();
+    services.state.prepared = {
+      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
+      access,
+      workspacePath: '/workspace/manaflow',
+    };
+    services.agentRef.current = {
+      shell: async (command: string) => {
+        if (command === 'git log -1 --pretty=format:%s%n%n%b') return { exitCode: 0, stdout: 'Filled title\n\nFilled body', stderr: '' };
+        if (command === 'git branch --show-current') return { exitCode: 0, stdout: 'sp/filled\n', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: 'unexpected command' };
+      },
+    } as never;
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/repos/manaflow-ai/manaflow') && init?.method === 'GET') {
+        return new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ html_url: 'https://github.com/manaflow-ai/manaflow/pull/8' }), { status: 201 });
+    };
+    const tool = createGitHubCliTool(services, { fetchImpl });
+
+    const result = await tool.execute({ args: ['pr', 'create', '--fill'] });
+
+    expect(result).toContain('/pull/8');
+  });
+
+  it('updates pull requests through the GitHub API', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ html_url: 'https://github.com/manaflow-ai/manaflow/pull/7', number: 7 }), { status: 200 });
+    };
+    const tool = createGitHubCliTool(repositoryServices(), { fetchImpl });
+
+    const result = await tool.execute({ args: ['pr', 'edit', '7', '--title', 'Updated', '--body', 'New body', '--base', 'develop', '--state', 'open', '--no-maintainer-edit'] });
+
+    expect(result).toBe('exitCode: 0\nstdout:\nhttps://github.com/manaflow-ai/manaflow/pull/7');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe('https://api.github.com/repos/manaflow-ai/manaflow/pulls/7');
+    expect(requests[0]?.init.method).toBe('PATCH');
+    expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
+      title: 'Updated',
+      body: 'New body',
+      base: 'develop',
+      state: 'open',
+      maintainer_can_modify: false,
+    });
+  });
+
+  it('edits pull requests by resolving the prepared repository branch', async () => {
+    const services = repositoryServices();
+    services.state.prepared = {
+      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
+      access,
+      workspacePath: '/workspace/manaflow',
+    };
+    services.agentRef.current = {
+      shell: async (command: string) => {
+        if (command === 'git branch --show-current') return { exitCode: 0, stdout: 'sp/edit\n', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: 'unexpected command' };
+      },
+    } as never;
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init: init ?? {} });
+      if (String(url).includes('/pulls?')) {
+        return new Response(JSON.stringify([{ number: 9 }]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ html_url: 'https://github.com/manaflow-ai/manaflow/pull/9', number: 9 }), { status: 200 });
+    };
+    const tool = createGitHubCliTool(services, { fetchImpl });
+
+    const result = await tool.execute({ args: ['pr', 'edit', '--title', 'Branch update'] });
+
+    expect(result).toContain('/pull/9');
+    expect(requests[0]?.url).toBe('https://api.github.com/repos/manaflow-ai/manaflow/pulls?head=manaflow-ai%3Asp%2Fedit&state=all&per_page=1');
+    expect(requests[1]?.url).toBe('https://api.github.com/repos/manaflow-ai/manaflow/pulls/9');
+  });
+
   it('rejects auth and clone escape-hatch commands', async () => {
     const tool = createGitHubCliTool(repositoryServices(), { runner: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
 

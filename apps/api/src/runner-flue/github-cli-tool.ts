@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolDef } from '@flue/sdk';
 import type { GitHubRepositoryAccess } from '../repositories/setup.js';
-import { resolveActiveRepositoryAccess, type RepositoryToolServices } from './repository-tool.js';
+import { getPreparedRepository, resolveActiveRepositoryAccess, type RepositoryToolServices } from './repository-tool.js';
 
 const BLOCKED_COMMANDS = new Set(['alias', 'auth', 'config', 'extension']);
 const MAX_ARGS = 64;
@@ -25,13 +25,13 @@ export type GitHubCliResult = {
 
 export function createGitHubCliTool(
   repository: RepositoryToolServices,
-  options: { runner?: GitHubCliRunner } = {},
+  options: { runner?: GitHubCliRunner; fetchImpl?: typeof fetch } = {},
 ): ToolDef {
   return {
     name: 'gh',
     description:
       'Run authenticated GitHub CLI/API operations for the active session repository. Use repository status/list/set first if no repository is active. The command is executed by trusted backend code with a short-lived GitHub App installation token. ' +
-      'Pass only gh arguments, not the "gh" executable name.',
+      'Pull request creation and updates are supported with gh pr create and gh pr edit using direct GitHub API calls. Pass only gh arguments, not the "gh" executable name.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -42,13 +42,19 @@ export function createGitHubCliTool(
           minItems: 1,
           maxItems: MAX_ARGS,
           items: { type: 'string', maxLength: MAX_ARG_LENGTH },
-          description: 'Arguments to pass to gh, for example ["issue", "create", "--title", "Test", "--body", "..."]',
+          description: 'Arguments to pass to gh, for example ["issue", "create", "--title", "Test", "--body", "..."], ["pr", "create", "--title", "Test", "--body", "...", "--head", "branch", "--base", "main"], or ["pr", "edit", "7", "--title", "Updated"]',
         },
       },
     },
     async execute(params, signal) {
       const args = validateArgs(params.args);
       const access = await resolveActiveRepositoryAccess(repository);
+      if (isPullRequestCreateCommand(args)) {
+        return createPullRequest(repository, access, args, options.fetchImpl ?? fetch);
+      }
+      if (isPullRequestUpdateCommand(args)) {
+        return updatePullRequest(repository, access, args, options.fetchImpl ?? fetch);
+      }
       const configDir = await mkdtemp(join(tmpdir(), 'deputies-gh-'));
       try {
         const runner = options.runner ?? runGitHubCli;
@@ -91,6 +97,283 @@ function validateArgs(value: unknown): string[] {
     throw new Error('GitHub Git Database API routes are not available through gh. Use sandbox git commands and the authenticated git tool for branch/object pushes.');
   }
   return args;
+}
+
+function isPullRequestCreateCommand(args: string[]): boolean {
+  return args[0] === 'pr' && args[1] === 'create';
+}
+
+function isPullRequestUpdateCommand(args: string[]): boolean {
+  return args[0] === 'pr' && args[1] === 'edit';
+}
+
+async function createPullRequest(
+  repository: RepositoryToolServices,
+  access: GitHubRepositoryAccess,
+  args: string[],
+  fetchImpl: typeof fetch,
+): Promise<string> {
+  const input = await parsePullRequestCreateInput(repository, access, args, fetchImpl);
+  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls`, {
+    method: 'POST',
+    headers: {
+      accept: 'application/vnd.github+json',
+      authorization: `Bearer ${access.auth.token}`,
+      'content-type': 'application/json',
+      'x-github-api-version': '2022-11-28',
+    },
+    body: JSON.stringify(input),
+  });
+  const body = await response.json().catch(() => ({})) as { html_url?: string; number?: number; message?: string };
+  if (!response.ok) {
+    throw new Error(redactSecrets(`GitHub API POST /repos/${access.owner}/${access.repo}/pulls failed with ${response.status}: ${body.message ?? 'unknown_error'}`, access.auth.token));
+  }
+  const url = typeof body.html_url === 'string' ? body.html_url : `https://github.com/${access.owner}/${access.repo}/pull/${body.number ?? ''}`;
+  return formatResult({ exitCode: 0, stdout: url, stderr: '' }, access.auth.token);
+}
+
+type PullRequestCreateInput = {
+  title: string;
+  body: string;
+  head: string;
+  base: string;
+  draft?: boolean;
+};
+
+async function parsePullRequestCreateInput(
+  repository: RepositoryToolServices,
+  access: GitHubRepositoryAccess,
+  args: string[],
+  fetchImpl: typeof fetch,
+): Promise<PullRequestCreateInput> {
+  let title = '';
+  let body = '';
+  let head = '';
+  let base = '';
+  let draft = false;
+  let fill = false;
+
+  for (let index = 2; index < args.length; index += 1) {
+    const arg = args[index]!;
+    switch (arg) {
+      case '--title':
+      case '-t':
+        title = nextPullRequestArg(args, ++index, arg);
+        break;
+      case '--body':
+      case '-b':
+        body = nextPullRequestArg(args, ++index, arg);
+        break;
+      case '--head':
+      case '-H':
+        head = nextPullRequestArg(args, ++index, arg);
+        break;
+      case '--base':
+      case '-B':
+        base = nextPullRequestArg(args, ++index, arg);
+        break;
+      case '--repo':
+      case '-R':
+        // The active repository selected through the repository tool is authoritative.
+        nextPullRequestArg(args, ++index, arg);
+        break;
+      case '--draft':
+        draft = true;
+        break;
+      case '--fill':
+      case '--fill-first':
+      case '--fill-verbose':
+        fill = true;
+        break;
+      default:
+        throw new Error(`gh pr create option ${arg} is not supported by this tool. Supported options: --title, --body, --head, --base, --draft, --fill.`);
+    }
+  }
+
+  if (fill && (!title || !body)) {
+    const commit = await readPreparedRepositoryCommit(repository);
+    if (!title) title = commit.title;
+    if (!body) body = commit.body;
+  }
+  if (!head) head = await readPreparedRepositoryBranch(repository);
+  if (!base) base = await fetchDefaultBranch(access, fetchImpl);
+  if (!title.trim()) throw new Error('gh pr create requires --title (or --fill from a prepared repository)');
+  if (!head.trim()) throw new Error('gh pr create requires --head or a current branch in a prepared repository');
+  if (!base.trim()) throw new Error('gh pr create requires --base or a repository default branch');
+
+  return { title, body, head, base, ...(draft ? { draft } : {}) };
+}
+
+function nextPullRequestArg(args: string[], index: number, flag: string): string {
+  const value = args[index];
+  if (!value || value.startsWith('-')) throw new Error(`gh pr option ${flag} requires a value`);
+  return value;
+}
+
+async function readPreparedRepositoryBranch(repository: RepositoryToolServices): Promise<string> {
+  const prepared = getPreparedRepository(repository);
+  const agent = repository.agentRef.current;
+  if (!agent?.shell) throw new Error('gh pr create cannot infer --head before the sandbox agent is ready');
+  const result = await agent.shell('git branch --show-current', { cwd: prepared.workspacePath, timeout: 30 });
+  if (result.exitCode !== 0) throw new Error(`gh pr create could not infer --head: ${result.stderr || result.stdout}`);
+  return result.stdout.trim();
+}
+
+async function readPreparedRepositoryCommit(repository: RepositoryToolServices): Promise<{ title: string; body: string }> {
+  const prepared = getPreparedRepository(repository);
+  const agent = repository.agentRef.current;
+  if (!agent?.shell) throw new Error('gh pr create cannot use --fill before the sandbox agent is ready');
+  const result = await agent.shell('git log -1 --pretty=format:%s%n%n%b', { cwd: prepared.workspacePath, timeout: 30 });
+  if (result.exitCode !== 0) throw new Error(`gh pr create --fill failed: ${result.stderr || result.stdout}`);
+  const [title = '', ...body] = result.stdout.trim().split('\n');
+  return { title: title.trim(), body: body.join('\n').trim() };
+}
+
+async function fetchDefaultBranch(access: GitHubRepositoryAccess, fetchImpl: typeof fetch): Promise<string> {
+  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}`, {
+    method: 'GET',
+    headers: {
+      accept: 'application/vnd.github+json',
+      authorization: `Bearer ${access.auth.token}`,
+      'x-github-api-version': '2022-11-28',
+    },
+  });
+  const body = await response.json().catch(() => ({})) as { default_branch?: string; message?: string };
+  if (!response.ok) throw new Error(redactSecrets(`GitHub API GET /repos/${access.owner}/${access.repo} failed with ${response.status}: ${body.message ?? 'unknown_error'}`, access.auth.token));
+  return typeof body.default_branch === 'string' ? body.default_branch : '';
+}
+
+async function updatePullRequest(
+  repository: RepositoryToolServices,
+  access: GitHubRepositoryAccess,
+  args: string[],
+  fetchImpl: typeof fetch,
+): Promise<string> {
+  const parsed = await parsePullRequestUpdateInput(repository, access, args, fetchImpl);
+  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls/${parsed.number}`, {
+    method: 'PATCH',
+    headers: {
+      accept: 'application/vnd.github+json',
+      authorization: `Bearer ${access.auth.token}`,
+      'content-type': 'application/json',
+      'x-github-api-version': '2022-11-28',
+    },
+    body: JSON.stringify(parsed.input),
+  });
+  const body = await response.json().catch(() => ({})) as { html_url?: string; number?: number; message?: string };
+  if (!response.ok) {
+    throw new Error(redactSecrets(`GitHub API PATCH /repos/${access.owner}/${access.repo}/pulls/${parsed.number} failed with ${response.status}: ${body.message ?? 'unknown_error'}`, access.auth.token));
+  }
+  const url = typeof body.html_url === 'string' ? body.html_url : `https://github.com/${access.owner}/${access.repo}/pull/${body.number ?? parsed.number}`;
+  return formatResult({ exitCode: 0, stdout: url, stderr: '' }, access.auth.token);
+}
+
+type PullRequestUpdateInput = {
+  title?: string;
+  body?: string;
+  base?: string;
+  state?: 'open' | 'closed';
+  maintainer_can_modify?: boolean;
+};
+
+async function parsePullRequestUpdateInput(
+  repository: RepositoryToolServices,
+  access: GitHubRepositoryAccess,
+  args: string[],
+  fetchImpl: typeof fetch,
+): Promise<{ number: number; input: PullRequestUpdateInput }> {
+  let selector = '';
+  const input: PullRequestUpdateInput = {};
+
+  for (let index = 2; index < args.length; index += 1) {
+    const arg = args[index]!;
+    switch (arg) {
+      case '--title':
+      case '-t':
+        input.title = nextPullRequestArg(args, ++index, arg);
+        break;
+      case '--body':
+      case '-b':
+        input.body = nextPullRequestArg(args, ++index, arg);
+        break;
+      case '--base':
+      case '-B':
+        input.base = nextPullRequestArg(args, ++index, arg);
+        break;
+      case '--state': {
+        const state = nextPullRequestArg(args, ++index, arg);
+        if (state !== 'open' && state !== 'closed') throw new Error('gh pr edit --state must be either open or closed');
+        input.state = state;
+        break;
+      }
+      case '--maintainer-edit':
+        input.maintainer_can_modify = true;
+        break;
+      case '--no-maintainer-edit':
+        input.maintainer_can_modify = false;
+        break;
+      case '--repo':
+      case '-R':
+        // The active repository selected through the repository tool is authoritative.
+        nextPullRequestArg(args, ++index, arg);
+        break;
+      default:
+        if (arg.startsWith('-')) {
+          throw new Error(`gh pr ${args[1]} option ${arg} is not supported by this tool. Supported options: --title, --body, --base, --state, --maintainer-edit, --no-maintainer-edit.`);
+        }
+        if (selector) throw new Error(`gh pr ${args[1]} accepts at most one PR selector`);
+        selector = arg;
+    }
+  }
+
+  if (!Object.keys(input).length) throw new Error(`gh pr ${args[1]} requires at least one update option`);
+  const number = await resolvePullRequestNumber(repository, access, selector, fetchImpl);
+  return { number, input };
+}
+
+async function resolvePullRequestNumber(
+  repository: RepositoryToolServices,
+  access: GitHubRepositoryAccess,
+  selector: string,
+  fetchImpl: typeof fetch,
+): Promise<number> {
+  const parsed = parsePullRequestNumber(selector);
+  if (parsed) return parsed;
+  const branch = selector || await readPreparedRepositoryBranch(repository);
+  if (!branch) throw new Error('gh pr edit requires a PR number, URL, branch, or a current branch in a prepared repository');
+  return fetchPullRequestNumberForBranch(access, branch, fetchImpl);
+}
+
+function parsePullRequestNumber(selector: string): number | null {
+  if (!selector) return null;
+  if (/^\d+$/.test(selector)) return Number(selector);
+  const match = /\/pull\/(\d+)(?:\b|$)/.exec(selector);
+  return match ? Number(match[1]) : null;
+}
+
+async function fetchPullRequestNumberForBranch(access: GitHubRepositoryAccess, branch: string, fetchImpl: typeof fetch): Promise<number> {
+  const query = new URLSearchParams({ head: `${access.owner}:${branch}`, state: 'all', per_page: '1' });
+  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls?${query.toString()}`, {
+    method: 'GET',
+    headers: {
+      accept: 'application/vnd.github+json',
+      authorization: `Bearer ${access.auth.token}`,
+      'x-github-api-version': '2022-11-28',
+    },
+  });
+  const body = await response.json().catch(() => ([])) as Array<{ number?: number }> | { message?: string };
+  if (!response.ok) {
+    const message = Array.isArray(body) ? 'unknown_error' : body.message ?? 'unknown_error';
+    throw new Error(redactSecrets(`GitHub API GET /repos/${access.owner}/${access.repo}/pulls failed with ${response.status}: ${message}`, access.auth.token));
+  }
+  if (!Array.isArray(body) || typeof body[0]?.number !== 'number') throw new Error(`No pull request found for branch ${branch}`);
+  return body[0].number;
+}
+
+function githubApiBaseUrl(access: GitHubRepositoryAccess): string {
+  const host = parseCloneHost(access.cloneUrl);
+  if (host && host !== 'github.com') return `https://${host}/api/v3`;
+  return 'https://api.github.com';
 }
 
 function isDirectCommentCommand(args: string[]): boolean {
