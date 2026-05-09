@@ -236,6 +236,11 @@ export function App() {
   const detailLoadedSessionIdRef = useRef(detailLoadedSessionId);
   const createSessionInFlightRef = useRef(false);
   const sendMessageInFlightRef = useRef(false);
+  const sessionsRefreshTimerRef = useRef<number | null>(null);
+  const sessionsRefreshInFlightRef = useRef(false);
+  const sessionsRefreshQueuedRef = useRef(false);
+  const detailRefreshInFlightRef = useRef<string | null>(null);
+  const detailRefreshQueuedSessionIdRef = useRef<string | null>(null);
 
   const bearerAuthRequired = health?.apiAuthMode === 'bearer';
   const sessionAuthRequired = health?.apiAuthMode === 'session';
@@ -254,6 +259,12 @@ export function App() {
     }, startupConnectionDelayMs);
     return () => window.clearTimeout(timeout);
   }, [startupLoading, connectionStatus.state]);
+
+  useEffect(() => {
+    return () => {
+      if (sessionsRefreshTimerRef.current !== null) window.clearTimeout(sessionsRefreshTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     applyThemePreference(themePreference);
@@ -417,11 +428,11 @@ export function App() {
           }
         }
 
-        if (shouldRefreshSessions(event.type)) refreshSessions().catch(() => undefined);
+        if (shouldRefreshSessions(event.type)) scheduleSessionsRefresh();
       },
     }).catch((err: unknown) => {
       if (!abort.signal.aborted) {
-        refreshSessions().catch(() => undefined);
+        scheduleSessionsRefresh(0);
         setConnectionStatus({ state: 'reconnecting', message: errorMessage(err) });
       }
     });
@@ -429,7 +440,21 @@ export function App() {
     return () => abort.abort();
   }, [pageVisible, canCallApi, sessionsLoaded, token]);
 
+  function scheduleSessionsRefresh(delayMs = 300) {
+    if (sessionsRefreshTimerRef.current !== null) window.clearTimeout(sessionsRefreshTimerRef.current);
+    sessionsRefreshTimerRef.current = window.setTimeout(() => {
+      sessionsRefreshTimerRef.current = null;
+      refreshSessions().catch(() => undefined);
+    }, delayMs);
+  }
+
   async function refreshSessions() {
+    if (sessionsRefreshInFlightRef.current) {
+      sessionsRefreshQueuedRef.current = true;
+      return;
+    }
+
+    sessionsRefreshInFlightRef.current = true;
     setLoading(true);
     setError('');
     try {
@@ -449,6 +474,11 @@ export function App() {
       handleApiError(err);
     } finally {
       setLoading(false);
+      sessionsRefreshInFlightRef.current = false;
+      if (sessionsRefreshQueuedRef.current) {
+        sessionsRefreshQueuedRef.current = false;
+        scheduleSessionsRefresh(0);
+      }
     }
   }
 
@@ -473,14 +503,31 @@ export function App() {
   }
 
   async function refreshMessagesArtifactsAndCallbacks(sessionId: string) {
-    const [nextMessages, nextArtifacts, nextCallbacks] = await Promise.all([
-      listMessages(sessionId, token),
-      listArtifacts(sessionId, token),
-      listCallbacks(sessionId, token),
-    ]);
-    setMessages(nextMessages);
-    setArtifacts(nextArtifacts);
-    setCallbacks(nextCallbacks);
+    if (detailRefreshInFlightRef.current) {
+      detailRefreshQueuedSessionIdRef.current = sessionId;
+      return;
+    }
+
+    detailRefreshInFlightRef.current = sessionId;
+    try {
+      const [nextMessages, nextArtifacts, nextCallbacks] = await Promise.all([
+        listMessages(sessionId, token),
+        listArtifacts(sessionId, token),
+        listCallbacks(sessionId, token),
+      ]);
+      if (selectedSessionIdRef.current === sessionId) {
+        setMessages(nextMessages);
+        setArtifacts(nextArtifacts);
+        setCallbacks(nextCallbacks);
+      }
+    } finally {
+      detailRefreshInFlightRef.current = null;
+      const queuedSessionId = detailRefreshQueuedSessionIdRef.current;
+      detailRefreshQueuedSessionIdRef.current = null;
+      if (queuedSessionId && queuedSessionId === selectedSessionIdRef.current) {
+        refreshMessagesArtifactsAndCallbacks(queuedSessionId).catch(() => undefined);
+      }
+    }
   }
 
   async function handleCreateThread(event: FormEvent) {
