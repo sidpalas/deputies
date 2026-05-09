@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, SyntheticEvent, WheelEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { FormEvent, KeyboardEvent, SyntheticEvent, WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Archive, Check, ChevronDown, Copy, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, RotateCcw, Sun, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -242,10 +242,10 @@ export function App() {
   const waitingForAuth = !healthChecked || (health && sessionAuthRequired && !authChecked);
   const canCallApi = Boolean(health) && (!bearerAuthRequired || Boolean(token)) && (!sessionAuthRequired || Boolean(currentUser));
   const startupLoading = waitingForAuth || (canCallApi && !sessionsLoaded);
-  const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
+  const selectedSession = useMemo(() => sessions.find((session) => session.id === selectedSessionId) ?? null, [sessions, selectedSessionId]);
   const selectedRepository = repositoryLabel(selectedSession?.context?.repository);
   const selectedSessionArchived = selectedSession?.status === 'archived';
-  const sortedSessions = sortSessionsByLastActivity(sessions);
+  const sortedSessions = useMemo(() => sortSessionsByLastActivity(sessions), [sessions]);
 
   useEffect(() => {
     if (!startupLoading || connectionStatus.state !== 'ok') return;
@@ -732,7 +732,7 @@ export function App() {
 
   function collapseSidebar() {
     setSidebarOpen(false);
-    setSidebarCollapsed(true);
+    setSidebarCollapsed(isDesktopViewport());
   }
 
   function expandSidebar() {
@@ -944,6 +944,11 @@ function clearSessionSearchParam() {
   window.history.replaceState({}, '', url);
 }
 
+function isDesktopViewport(): boolean {
+  if (typeof window.matchMedia === 'function') return window.matchMedia('(min-width: 768px)').matches;
+  return window.innerWidth >= 768;
+}
+
 function LocalSandboxWarning() {
   return (
     <div className="border-b border-warning/50 bg-warning/15 px-3 py-2 text-sm text-warning-foreground dark:text-warning md:px-8 xl:px-20" role="alert">
@@ -999,9 +1004,9 @@ type ThreadSidebarProps = {
 
 function ThreadSidebar(props: ThreadSidebarProps) {
   const [search, setSearch] = useState('');
-  const filteredSessions = filterSessions(props.sessions, search);
-  const activeSessions = filteredSessions.filter((session) => session.status !== 'archived');
-  const archivedSessions = filteredSessions.filter((session) => session.status === 'archived');
+  const filteredSessions = useMemo(() => filterSessions(props.sessions, search), [props.sessions, search]);
+  const activeSessions = useMemo(() => filteredSessions.filter((session) => session.status !== 'archived'), [filteredSessions]);
+  const archivedSessions = useMemo(() => filteredSessions.filter((session) => session.status === 'archived'), [filteredSessions]);
   const searching = Boolean(search.trim());
 
   function handleArchivedToggle(event: SyntheticEvent<HTMLDetailsElement>) {
