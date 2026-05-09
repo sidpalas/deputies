@@ -32,17 +32,19 @@ describe('GitHub CLI Flue tool', () => {
       return new Response(JSON.stringify({ html_url: 'https://github.com/manaflow-ai/manaflow/pull/7' }), { status: 201 });
     };
     const tool = createGitHubCliTool(repositoryServices(), { fetchImpl });
+    const abort = new AbortController();
 
-    const result = await tool.execute({ args: ['pr', 'create', '--title', 'Add feature', '--body', 'Details', '--head', 'sp/feature', '--base', 'main', '--draft'] });
+    const result = await tool.execute({ args: ['pr', 'create', '--title', 'Add feature', '--body', '- Details', '--head', 'sp/feature', '--base', 'main', '--draft'] }, abort.signal);
 
     expect(result).toBe('exitCode: 0\nstdout:\nhttps://github.com/manaflow-ai/manaflow/pull/7');
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe('https://api.github.com/repos/manaflow-ai/manaflow/pulls');
     expect(requests[0]?.init.method).toBe('POST');
+    expect(requests[0]?.init.signal).toBe(abort.signal);
     expect(requests[0]?.init.headers).toMatchObject({ authorization: 'Bearer ghs_secret_token' });
     expect(JSON.parse(String(requests[0]?.init.body))).toEqual({
       title: 'Add feature',
-      body: 'Details',
+      body: '- Details',
       head: 'sp/feature',
       base: 'main',
       draft: true,
@@ -121,12 +123,15 @@ describe('GitHub CLI Flue tool', () => {
       return new Response(JSON.stringify({ html_url: 'https://github.com/manaflow-ai/manaflow/pull/9', number: 9 }), { status: 200 });
     };
     const tool = createGitHubCliTool(services, { fetchImpl });
+    const abort = new AbortController();
 
-    const result = await tool.execute({ args: ['pr', 'edit', '--title', 'Branch update'] });
+    const result = await tool.execute({ args: ['pr', 'edit', '--title', 'Branch update'] }, abort.signal);
 
     expect(result).toContain('/pull/9');
     expect(requests[0]?.url).toBe('https://api.github.com/repos/manaflow-ai/manaflow/pulls?head=manaflow-ai%3Asp%2Fedit&state=all&per_page=1');
+    expect(requests[0]?.init.signal).toBe(abort.signal);
     expect(requests[1]?.url).toBe('https://api.github.com/repos/manaflow-ai/manaflow/pulls/9');
+    expect(requests[1]?.init.signal).toBe(abort.signal);
   });
 
   it('rejects auth and clone escape-hatch commands', async () => {

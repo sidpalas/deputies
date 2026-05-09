@@ -50,10 +50,10 @@ export function createGitHubCliTool(
       const args = validateArgs(params.args);
       const access = await resolveActiveRepositoryAccess(repository);
       if (isPullRequestCreateCommand(args)) {
-        return createPullRequest(repository, access, args, options.fetchImpl ?? fetch);
+        return createPullRequest(repository, access, args, options.fetchImpl ?? fetch, signal);
       }
       if (isPullRequestUpdateCommand(args)) {
-        return updatePullRequest(repository, access, args, options.fetchImpl ?? fetch);
+        return updatePullRequest(repository, access, args, options.fetchImpl ?? fetch, signal);
       }
       const configDir = await mkdtemp(join(tmpdir(), 'deputies-gh-'));
       try {
@@ -112,9 +112,10 @@ async function createPullRequest(
   access: GitHubRepositoryAccess,
   args: string[],
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<string> {
-  const input = await parsePullRequestCreateInput(repository, access, args, fetchImpl);
-  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls`, {
+  const input = await parsePullRequestCreateInput(repository, access, args, fetchImpl, signal);
+  const init: RequestInit = {
     method: 'POST',
     headers: {
       accept: 'application/vnd.github+json',
@@ -123,7 +124,9 @@ async function createPullRequest(
       'x-github-api-version': '2022-11-28',
     },
     body: JSON.stringify(input),
-  });
+  };
+  if (signal) init.signal = signal;
+  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls`, init);
   const body = await response.json().catch(() => ({})) as { html_url?: string; number?: number; message?: string };
   if (!response.ok) {
     throw new Error(redactSecrets(`GitHub API POST /repos/${access.owner}/${access.repo}/pulls failed with ${response.status}: ${body.message ?? 'unknown_error'}`, access.auth.token));
@@ -145,6 +148,7 @@ async function parsePullRequestCreateInput(
   access: GitHubRepositoryAccess,
   args: string[],
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<PullRequestCreateInput> {
   let title = '';
   let body = '';
@@ -196,7 +200,7 @@ async function parsePullRequestCreateInput(
     if (!body) body = commit.body;
   }
   if (!head) head = await readPreparedRepositoryBranch(repository);
-  if (!base) base = await fetchDefaultBranch(access, fetchImpl);
+  if (!base) base = await fetchDefaultBranch(access, fetchImpl, signal);
   if (!title.trim()) throw new Error('gh pr create requires --title (or --fill from a prepared repository)');
   if (!head.trim()) throw new Error('gh pr create requires --head or a current branch in a prepared repository');
   if (!base.trim()) throw new Error('gh pr create requires --base or a repository default branch');
@@ -206,7 +210,7 @@ async function parsePullRequestCreateInput(
 
 function nextPullRequestArg(args: string[], index: number, flag: string): string {
   const value = args[index];
-  if (!value || value.startsWith('-')) throw new Error(`gh pr option ${flag} requires a value`);
+  if (value === undefined) throw new Error(`gh pr option ${flag} requires a value`);
   return value;
 }
 
@@ -229,15 +233,17 @@ async function readPreparedRepositoryCommit(repository: RepositoryToolServices):
   return { title: title.trim(), body: body.join('\n').trim() };
 }
 
-async function fetchDefaultBranch(access: GitHubRepositoryAccess, fetchImpl: typeof fetch): Promise<string> {
-  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}`, {
+async function fetchDefaultBranch(access: GitHubRepositoryAccess, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<string> {
+  const init: RequestInit = {
     method: 'GET',
     headers: {
       accept: 'application/vnd.github+json',
       authorization: `Bearer ${access.auth.token}`,
       'x-github-api-version': '2022-11-28',
     },
-  });
+  };
+  if (signal) init.signal = signal;
+  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}`, init);
   const body = await response.json().catch(() => ({})) as { default_branch?: string; message?: string };
   if (!response.ok) throw new Error(redactSecrets(`GitHub API GET /repos/${access.owner}/${access.repo} failed with ${response.status}: ${body.message ?? 'unknown_error'}`, access.auth.token));
   return typeof body.default_branch === 'string' ? body.default_branch : '';
@@ -248,9 +254,10 @@ async function updatePullRequest(
   access: GitHubRepositoryAccess,
   args: string[],
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<string> {
-  const parsed = await parsePullRequestUpdateInput(repository, access, args, fetchImpl);
-  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls/${parsed.number}`, {
+  const parsed = await parsePullRequestUpdateInput(repository, access, args, fetchImpl, signal);
+  const init: RequestInit = {
     method: 'PATCH',
     headers: {
       accept: 'application/vnd.github+json',
@@ -259,7 +266,9 @@ async function updatePullRequest(
       'x-github-api-version': '2022-11-28',
     },
     body: JSON.stringify(parsed.input),
-  });
+  };
+  if (signal) init.signal = signal;
+  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls/${parsed.number}`, init);
   const body = await response.json().catch(() => ({})) as { html_url?: string; number?: number; message?: string };
   if (!response.ok) {
     throw new Error(redactSecrets(`GitHub API PATCH /repos/${access.owner}/${access.repo}/pulls/${parsed.number} failed with ${response.status}: ${body.message ?? 'unknown_error'}`, access.auth.token));
@@ -281,6 +290,7 @@ async function parsePullRequestUpdateInput(
   access: GitHubRepositoryAccess,
   args: string[],
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<{ number: number; input: PullRequestUpdateInput }> {
   let selector = '';
   const input: PullRequestUpdateInput = {};
@@ -327,7 +337,7 @@ async function parsePullRequestUpdateInput(
   }
 
   if (!Object.keys(input).length) throw new Error(`gh pr ${args[1]} requires at least one update option`);
-  const number = await resolvePullRequestNumber(repository, access, selector, fetchImpl);
+  const number = await resolvePullRequestNumber(repository, access, selector, fetchImpl, signal);
   return { number, input };
 }
 
@@ -336,12 +346,13 @@ async function resolvePullRequestNumber(
   access: GitHubRepositoryAccess,
   selector: string,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<number> {
   const parsed = parsePullRequestNumber(selector);
   if (parsed) return parsed;
   const branch = selector || await readPreparedRepositoryBranch(repository);
   if (!branch) throw new Error('gh pr edit requires a PR number, URL, branch, or a current branch in a prepared repository');
-  return fetchPullRequestNumberForBranch(access, branch, fetchImpl);
+  return fetchPullRequestNumberForBranch(access, branch, fetchImpl, signal);
 }
 
 function parsePullRequestNumber(selector: string): number | null {
@@ -351,16 +362,18 @@ function parsePullRequestNumber(selector: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-async function fetchPullRequestNumberForBranch(access: GitHubRepositoryAccess, branch: string, fetchImpl: typeof fetch): Promise<number> {
+async function fetchPullRequestNumberForBranch(access: GitHubRepositoryAccess, branch: string, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<number> {
   const query = new URLSearchParams({ head: `${access.owner}:${branch}`, state: 'all', per_page: '1' });
-  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls?${query.toString()}`, {
+  const init: RequestInit = {
     method: 'GET',
     headers: {
       accept: 'application/vnd.github+json',
       authorization: `Bearer ${access.auth.token}`,
       'x-github-api-version': '2022-11-28',
     },
-  });
+  };
+  if (signal) init.signal = signal;
+  const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls?${query.toString()}`, init);
   const body = await response.json().catch(() => ([])) as Array<{ number?: number }> | { message?: string };
   if (!response.ok) {
     const message = Array.isArray(body) ? 'unknown_error' : body.message ?? 'unknown_error';
