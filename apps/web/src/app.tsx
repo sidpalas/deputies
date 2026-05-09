@@ -190,6 +190,8 @@ export function App() {
   const autoScrolledSessionId = useRef('');
   const selectedSessionIdRef = useRef(selectedSessionId);
   const detailLoadedSessionIdRef = useRef(detailLoadedSessionId);
+  const createSessionInFlightRef = useRef(false);
+  const sendMessageInFlightRef = useRef(false);
 
   const bearerAuthRequired = health?.apiAuthMode === 'bearer';
   const sessionAuthRequired = health?.apiAuthMode === 'session';
@@ -442,7 +444,8 @@ export function App() {
   async function handleCreateThread(event: FormEvent) {
     event.preventDefault();
     const firstPrompt = newThreadPrompt.trim();
-    if (!firstPrompt) return;
+    if (createSessionInFlightRef.current || !firstPrompt) return;
+    createSessionInFlightRef.current = true;
     setLoading(true);
     setError('');
     try {
@@ -468,12 +471,14 @@ export function App() {
       handleApiError(err);
     } finally {
       setLoading(false);
+      createSessionInFlightRef.current = false;
     }
   }
 
   async function handleSendMessage(event: FormEvent) {
     event.preventDefault();
-    if (!selectedSessionId || selectedSessionArchived || !prompt.trim()) return;
+    if (sendMessageInFlightRef.current || !selectedSessionId || selectedSessionArchived || !prompt.trim()) return;
+    sendMessageInFlightRef.current = true;
     setError('');
     try {
       const repositoryInput = repository.trim();
@@ -490,6 +495,8 @@ export function App() {
       await refreshSessionDetail(selectedSessionId);
     } catch (err) {
       handleApiError(err);
+    } finally {
+      sendMessageInFlightRef.current = false;
     }
   }
 
@@ -626,6 +633,7 @@ export function App() {
 
   function startNewThread() {
     setSidebarCollapsed(false);
+    setSidebarOpen(false);
     localStorage.removeItem(selectedSessionStorageKey);
     clearSessionSearchParam();
     localStorage.setItem(newSessionSelectedStorageKey, 'true');
