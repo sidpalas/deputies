@@ -51,8 +51,10 @@ const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
 const themeStorageKey = 'deputies-theme';
 const threadAutoFollowThreshold = 160;
 const startupConnectionDelayMs = 3_000;
+const wakeRecoveryThresholdMs = 5_000;
 const liveConnectionMessage = 'Live updates connected.';
 const connectionLimitHint = 'If you have Deputies open in several windows, browser connection limits may block API requests.';
+const wakeRecoveryMessage = 'Reconnecting after your computer was asleep or offline.';
 type ThemePreference = 'light' | 'dark' | 'system';
 type ConnectionState = 'ok' | 'delayed' | 'reconnecting';
 
@@ -107,9 +109,19 @@ function startupDelayedConnectionStatus(): ConnectionStatus {
   return { state: 'delayed', message: 'Still waiting for the API to respond.' };
 }
 
+function wakeRecoveryConnectionStatus(): ConnectionStatus {
+  return { state: 'reconnecting', message: wakeRecoveryMessage };
+}
+
 function connectionStatusTitle(status: ConnectionStatus): string {
+  if (isWakeRecoveryStatus(status)) return 'Reconnecting after sleep.';
   if (status.state === 'reconnecting') return 'Realtime updates are reconnecting.';
   return 'Connection delayed.';
+}
+
+function connectionStatusHint(status: ConnectionStatus): string {
+  if (isWakeRecoveryStatus(status)) return 'We will retry automatically as your network comes back online.';
+  return `${connectionLimitHint} Close inactive windows or keep one visible tab active.`;
 }
 
 function connectionStatusLabel(status: ConnectionStatus): string {
@@ -126,6 +138,10 @@ function isStreamConnectionOk(event: Event): boolean {
 function connectionDelayedMessage(event: Event): string {
   const detail = event instanceof CustomEvent ? event.detail as ApiConnectionDelayedDetail : undefined;
   return typeof detail?.message === 'string' ? detail.message : 'API requests are taking longer than expected.';
+}
+
+function isWakeRecoveryStatus(status: ConnectionStatus): boolean {
+  return status.state === 'reconnecting' && status.message === wakeRecoveryMessage;
 }
 
 export function App() {
@@ -166,6 +182,8 @@ export function App() {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const eventCursor = useRef(0);
   const globalEventCursor = useRef(0);
+  const lastBackgroundedAt = useRef<number | null>(null);
+  const wakeRecoveryActive = useRef(false);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const threadAutoFollowRef = useRef(true);
@@ -216,14 +234,22 @@ export function App() {
   useEffect(() => {
     const handleConnectionOk = (event: Event) => {
       setConnectionStatus((current) => {
+        if (isWakeRecoveryStatus(current)) {
+          wakeRecoveryActive.current = false;
+          return initialConnectionStatus();
+        }
         if (current.state === 'reconnecting' && !isStreamConnectionOk(event)) return current;
+        wakeRecoveryActive.current = false;
         return initialConnectionStatus();
       });
     };
     const handleConnectionDelayed = (event: Event) => {
-      setConnectionStatus({
-        state: 'delayed',
-        message: connectionDelayedMessage(event),
+      setConnectionStatus((current) => {
+        if (wakeRecoveryActive.current && isWakeRecoveryStatus(current)) return current;
+        return {
+          state: 'delayed',
+          message: connectionDelayedMessage(event),
+        };
       });
     };
     window.addEventListener(apiConnectionOkEvent, handleConnectionOk);
@@ -240,10 +266,41 @@ export function App() {
   }, [selectedSession?.id, selectedSession?.title]);
 
   useEffect(() => {
-    const handleVisibilityChange = () => setPageVisible(isPageVisible());
+    const markWakeRecovery = () => {
+      wakeRecoveryActive.current = true;
+      setConnectionStatus(wakeRecoveryConnectionStatus());
+    };
+    const handlePageMayResume = () => {
+      if (isPageVisible()) {
+        const backgroundedAt = lastBackgroundedAt.current;
+        if (backgroundedAt && Date.now() - backgroundedAt >= wakeRecoveryThresholdMs) markWakeRecovery();
+        lastBackgroundedAt.current = null;
+      } else {
+        lastBackgroundedAt.current = Date.now();
+      }
+      setPageVisible(isPageVisible());
+    };
+    let lastTick = Date.now();
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      if (isPageVisible() && now - lastTick >= wakeRecoveryThresholdMs) markWakeRecovery();
+      lastTick = now;
+    }, 1_000);
+    const handleVisibilityChange = handlePageMayResume;
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('online', markWakeRecovery);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', markWakeRecovery);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!pageVisible || !canCallApi || !isWakeRecoveryStatus(connectionStatus)) return;
+    refreshSessions().catch(() => undefined);
+    if (selectedSessionId) refreshSessionDetail(selectedSessionId).catch(() => undefined);
+  }, [pageVisible, canCallApi, selectedSessionId, token, connectionStatus.state, connectionStatus.message]);
 
   useEffect(() => {
     getHealth()
@@ -866,7 +923,7 @@ function ConnectionStatusBanner(props: ConnectionStatusBannerProps) {
       <div className="flex flex-wrap items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
         <p className="min-w-0 flex-1">
-          <strong>{connectionStatusTitle(props.status)}</strong> {props.status.message} {connectionLimitHint} Close inactive windows or keep one visible tab active.
+          <strong>{connectionStatusTitle(props.status)}</strong> {props.status.message} {connectionStatusHint(props.status)}
         </p>
       </div>
     </div>
@@ -993,7 +1050,7 @@ function StartupLoadingPanel(props: StartupLoadingPanelProps) {
         {props.connectionStatus.state !== 'ok' ? (
           <div className="mt-4 rounded-md border border-warning/50 bg-warning/10 p-3 text-left text-sm text-warning-foreground dark:text-warning" role="status">
             <strong>{connectionStatusTitle(props.connectionStatus)}</strong>
-            <p className="mt-1">{props.connectionStatus.message} {connectionLimitHint}</p>
+            <p className="mt-1">{props.connectionStatus.message} {connectionStatusHint(props.connectionStatus)}</p>
           </div>
         ) : null}
       </Card>

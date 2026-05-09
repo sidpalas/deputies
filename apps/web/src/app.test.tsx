@@ -24,6 +24,7 @@ type MockApiOptions = {
   onGlobalStreamOpen?: (push: StreamEventPusher) => void;
   globalStreamStatus?: number;
   hangSessions?: boolean;
+  hangSessionsAfterFirst?: boolean;
   authMode?: 'none' | 'bearer' | 'session';
   sandboxProvider?: string;
   currentUser?: { username: string } | null;
@@ -265,6 +266,25 @@ it('shows startup connection guidance before request timeout', async () => {
   expect(screen.getByText(/several windows/)).toBeInTheDocument();
 });
 
+it('uses a reconnecting wake state instead of generic slow request guidance after sleep', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  mockApi({ hangSessionsAfterFirst: true });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+
+  setVisibilityState('hidden');
+  fireEvent(document, new Event('visibilitychange'));
+  vi.advanceTimersByTime(6_000);
+  setVisibilityState('visible');
+  fireEvent(document, new Event('visibilitychange'));
+  fireEvent(window, new CustomEvent('deputies:api-connection-delayed', { detail: { message: 'Request timed out: /sessions' } }));
+
+  const banner = (await screen.findByText('Reconnecting after sleep.')).closest('[role="status"]');
+  expect(banner).toHaveTextContent('We will retry automatically');
+  expect(banner).not.toHaveTextContent('several windows');
+});
+
 it('labels active streamed text as progress and separates obvious sentence boundaries', async () => {
   mockApi({
     messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000131', sequence: 1, status: 'processing', prompt: 'inspect env' })],
@@ -456,8 +476,9 @@ function mockApi(options: MockApiOptions = {}) {
   let currentSession = { ...session, ...options.sessionOverride };
   let currentUser = options.currentUser;
   let callbacks = options.callbacks ?? [];
+  let sessionsRequestCount = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
     const method = init?.method ?? 'GET';
 
     if (url.pathname === '/health') {
@@ -481,7 +502,9 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === '/sessions' && method === 'GET') {
+      sessionsRequestCount += 1;
       if (options.hangSessions) return new Promise<Response>(() => undefined);
+      if (options.hangSessionsAfterFirst && sessionsRequestCount > 1) return new Promise<Response>(() => undefined);
       return jsonResponse({ sessions: options.sessions ?? [currentSession] });
     }
 
