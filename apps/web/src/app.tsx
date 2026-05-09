@@ -625,6 +625,7 @@ export function App() {
   }
 
   function startNewThread() {
+    setSidebarOpen(false);
     setSidebarCollapsed(false);
     localStorage.removeItem(selectedSessionStorageKey);
     clearSessionSearchParam();
