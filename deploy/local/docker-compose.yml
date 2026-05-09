@@ -1,6 +1,57 @@
 name: deputies
 
 services:
+  api:
+    image: deputies-api
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - ../../.env.local
+    environment:
+      PORT: 3583
+      FLUE_OPENAI_CODEX_AUTH_FILE: /run/secrets/openai-codex-auth.json
+      DATABASE_URL: postgres://flue:flue@postgres:5432/flue
+      TEST_DATABASE_URL: postgres://flue:flue@postgres:5432/flue_test
+      AUTH_SUCCESS_REDIRECT_URL: http://localhost:5173
+      WEB_BASE_URL: http://localhost:5173
+      GITHUB_APP_CALLBACK_URL: http://localhost:3583/auth/oauth/github/callback
+    ports:
+      - "3583:3583"
+    depends_on:
+      api-migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ${HOME}/.pi/agent/auth.json:/run/secrets/openai-codex-auth.json
+
+  api-migrate:
+    image: deputies-api
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - ../../.env.local
+    environment:
+      DATABASE_URL: postgres://flue:flue@postgres:5432/flue
+    command: ["node", "apps/api/dist/db/migrate.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    image: deputies-web
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:3583
+    environment:
+      PORT: 5173
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
   postgres:
     image: postgres:17-alpine
     environment:

@@ -149,7 +149,11 @@ async function createRunner(): Promise<Runner> {
     model,
   };
   if (model.startsWith('openai-codex/')) {
-    const { apiKey } = await loadOpenAICodexApiKey(config.flueOpenaiCodexAuthFile);
+    const codexAuth = {};
+    if (config.flueOpenaiCodexAuthFile) Object.assign(codexAuth, { authFile: config.flueOpenaiCodexAuthFile });
+    if (config.flueOpenaiCodexAuthJson) Object.assign(codexAuth, { authJson: config.flueOpenaiCodexAuthJson });
+    if (config.flueOpenaiCodexAuthBase64) Object.assign(codexAuth, { authBase64: config.flueOpenaiCodexAuthBase64 });
+    const { apiKey } = await loadOpenAICodexApiKey(codexAuth);
     options.providers = { 'openai-codex': { apiKey } };
   }
   if (config.flueSessionStore === 'postgres') {

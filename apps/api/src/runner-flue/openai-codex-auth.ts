@@ -10,11 +10,23 @@ export type OpenAICodexAuthResult = {
   authFile: string;
 };
 
-export async function loadOpenAICodexApiKey(authFile = defaultOpenAICodexAuthFile()): Promise<OpenAICodexAuthResult> {
-  const auth = await readAuthFile(authFile);
+export type OpenAICodexAuthOptions = {
+  authFile?: string;
+  authJson?: string;
+  authBase64?: string;
+};
+
+export async function loadOpenAICodexApiKey(options: OpenAICodexAuthOptions | string = {}): Promise<OpenAICodexAuthResult> {
+  const { authFile = defaultOpenAICodexAuthFile(), authJson, authBase64 } = typeof options === 'string' ? { authFile: options } : options;
+  const auth = authBase64
+    ? parseAuthFile(Buffer.from(authBase64, 'base64').toString('utf8'), 'FLUE_OPENAI_CODEX_AUTH_BASE64')
+    : authJson
+      ? parseAuthFile(authJson, 'FLUE_OPENAI_CODEX_AUTH_JSON')
+      : await readAuthFile(authFile);
   const result = await getOAuthApiKey(openAICodexProvider, auth as Record<string, OAuthCredentials>);
   if (!result) {
-    throw new Error(`Missing ${openAICodexProvider} OAuth credentials in ${authFile}. Run pnpm --dir apps/api auth:login:openai-codex first.`);
+    const source = authBase64 ? 'FLUE_OPENAI_CODEX_AUTH_BASE64' : authJson ? 'FLUE_OPENAI_CODEX_AUTH_JSON' : authFile;
+    throw new Error(`Missing ${openAICodexProvider} OAuth credentials in ${source}. Run pnpm --dir apps/api auth:login:openai-codex first.`);
   }
 
   await writeOpenAICodexAuthFile(authFile, auth, result.newCredentials);

@@ -38,4 +38,50 @@ describe('loadOpenAICodexApiKey', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('loads Codex OAuth credentials from an environment JSON value', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'deputies-codex-auth-'));
+    const authFile = join(dir, 'auth.json');
+    const authJson = JSON.stringify({
+      'openai-codex': {
+        type: 'oauth',
+        access: 'codex-access-token',
+        refresh: 'codex-refresh-token',
+        expires: Date.now() + 60_000,
+      },
+    });
+
+    try {
+      await expect(loadOpenAICodexApiKey({ authFile, authJson })).resolves.toEqual({
+        apiKey: 'codex-access-token',
+        authFile,
+      });
+      await expect(readFile(authFile, 'utf8')).resolves.toContain('"type": "oauth"');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads Codex OAuth credentials from an environment base64 value', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'deputies-codex-auth-'));
+    const authFile = join(dir, 'auth.json');
+    const authBase64 = Buffer.from(JSON.stringify({
+      'openai-codex': {
+        type: 'oauth',
+        access: 'codex-access-token',
+        refresh: 'codex-refresh-token',
+        expires: Date.now() + 60_000,
+      },
+    })).toString('base64');
+
+    try {
+      await expect(loadOpenAICodexApiKey({ authFile, authBase64 })).resolves.toEqual({
+        apiKey: 'codex-access-token',
+        authFile,
+      });
+      await expect(readFile(authFile, 'utf8')).resolves.toContain('"type": "oauth"');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

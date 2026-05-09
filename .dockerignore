@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+node_modules
+**/node_modules
+**/dist
+**/.vite
+**/coverage
+**/test-results
+**/playwright-report
+.DS_Store
+npm-debug.log*
+pnpm-debug.log*
