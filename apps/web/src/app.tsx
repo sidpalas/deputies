@@ -632,6 +632,7 @@ export function App() {
   }
 
   function startNewThread() {
+    setSidebarOpen(false);
     setSidebarCollapsed(false);
     setSidebarOpen(false);
     localStorage.removeItem(selectedSessionStorageKey);
@@ -761,9 +762,14 @@ export function App() {
         <>
 
       {!sidebarOpen ? (
-        <Button className="fixed left-3 top-3 z-30 h-9 w-9 p-0 shadow-xl md:hidden" variant="secondary" size="icon" onClick={expandSidebar} aria-label="Open sessions" title="Open sessions">
-          <PanelLeftOpen className="h-4 w-4" />
-        </Button>
+        <div className="fixed left-3 top-3 z-30 flex gap-2 md:hidden">
+          <Button className="h-9 w-9 p-0 shadow-xl" variant="secondary" size="icon" onClick={expandSidebar} aria-label="Open sessions" title="Open sessions">
+            <PanelLeftOpen className="h-4 w-4" />
+          </Button>
+          <Button className="h-9 w-9 p-0 shadow-xl" variant="secondary" size="icon" onClick={startNewThread} aria-label="New session" title="New session" disabled={!canCallApi}>
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
       ) : null}
 
       <section className={cn('grid min-h-0 flex-1 grid-cols-1', sidebarCollapsed ? 'md:grid-cols-[3.75rem_minmax(0,1fr)]' : 'md:grid-cols-[18rem_minmax(0,1fr)]')}>
