@@ -32,7 +32,7 @@ external webhook
   -> resolve external thread mapping
   -> create or find session
   -> append message
-  -> return 202 Accepted
+  -> acknowledge the webhook with the source-specific success status
   -> worker executes message later
   -> received/progress notifiers add lightweight source-specific signals
   -> callback dispatcher posts final completion callbacks
@@ -231,7 +231,7 @@ Reaction/callback responsibilities:
 - Post completion comments when configured.
 - Skip GitHub completion comments that are only webhook acknowledgement text; the received `eyes` reaction is the acknowledgement.
 - Post start/failure comments when configured later.
-- Post PR URL when an artifact is created.
+- Post PR URLs/artifact links when provider-owned PR helpers are implemented.
 - Avoid noisy tool-level updates unless explicitly enabled.
 
 Archived-session behavior:
@@ -259,13 +259,13 @@ RUN_REAL_GITHUB_DAYTONA_UAT=true API_AUTH_MODE=none GITHUB_APP_ID=... GITHUB_APP
 
 The first UAT mints a real installation token and performs a non-mutating local `git ls-remote`. The second creates a real Daytona sandbox and verifies the Flue-runner startup path clones/fetches the repository inside the sandbox.
 
-### GitHub Implementation Plan
+### GitHub Current Design And Remaining Work
 
-This plan combines the strongest patterns from Background Agents/Open Inspect and Open SWE while preserving this service's boundaries: integrations normalize external events, workers own sandbox lifecycle, Flue owns runner startup shell setup, and GitHub-specific API/push/PR details stay in GitHub adapters.
+This section combines the strongest patterns from Background Agents/Open Inspect and Open SWE while preserving this service's boundaries: integrations normalize external events, workers own sandbox lifecycle, Flue owns runner startup shell setup, and GitHub-specific API/push/PR details stay in GitHub adapters. Some webhook, repository-access, callback, and testing items are already implemented; provider-owned branch/PR helpers and richer permission checks remain future work.
 
 #### 1. Webhook ingress and dedupe
 
-Implement public `POST /webhooks/github/events` before adding any GitHub-created work to production.
+The public `POST /webhooks/github/events` route is implemented. It should continue to:
 
 - Read the raw request body and verify `X-Hub-Signature-256` with HMAC SHA-256 against `GITHUB_WEBHOOK_SECRET`.
 - Fail closed when the webhook secret is missing or the signature is invalid.

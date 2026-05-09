@@ -4,12 +4,17 @@ The operator UI is a separate Vite React app in `apps/web/`. It is intentionally
 
 ## Local Development
 
-Run the API and web app separately:
+With the default `.env.example` settings, start Postgres, run migrations, then run the API and web app separately:
 
 ```sh
-pnpm api:dev
+cp .env.example .env.local # if needed
+pnpm db:up
+set -a; . ./.env.local; set +a; pnpm api:db:migrate
+set -a; . ./.env.local; set +a; pnpm api:dev
 pnpm web:dev
 ```
+
+For quick UI experiments that do not need durable state, you can instead run the API with `APP_STORE=memory`.
 
 The web app uses same-origin API requests by default. In Vite dev mode, `apps/web/vite.config.ts` proxies `/health`, `/auth`, `/sessions`, `/events`, and `/webhooks` to the API at `VITE_API_PROXY_TARGET` or `http://localhost:3583`.
 
