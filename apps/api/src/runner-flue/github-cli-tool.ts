@@ -115,17 +115,7 @@ async function createPullRequest(
   signal?: AbortSignal,
 ): Promise<string> {
   const input = await parsePullRequestCreateInput(repository, access, args, fetchImpl, signal);
-  const init: RequestInit = {
-    method: 'POST',
-    headers: {
-      accept: 'application/vnd.github+json',
-      authorization: `Bearer ${access.auth.token}`,
-      'content-type': 'application/json',
-      'x-github-api-version': '2022-11-28',
-    },
-    body: JSON.stringify(input),
-  };
-  if (signal) init.signal = signal;
+  const init = createGitHubApiRequestInit(access, { method: 'POST', body: input, signal });
   const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls`, init);
   const body = await response.json().catch(() => ({})) as { html_url?: string; number?: number; message?: string };
   if (!response.ok) {
@@ -234,15 +224,7 @@ async function readPreparedRepositoryCommit(repository: RepositoryToolServices):
 }
 
 async function fetchDefaultBranch(access: GitHubRepositoryAccess, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<string> {
-  const init: RequestInit = {
-    method: 'GET',
-    headers: {
-      accept: 'application/vnd.github+json',
-      authorization: `Bearer ${access.auth.token}`,
-      'x-github-api-version': '2022-11-28',
-    },
-  };
-  if (signal) init.signal = signal;
+  const init = createGitHubApiRequestInit(access, { method: 'GET', signal });
   const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}`, init);
   const body = await response.json().catch(() => ({})) as { default_branch?: string; message?: string };
   if (!response.ok) throw new Error(redactSecrets(`GitHub API GET /repos/${access.owner}/${access.repo} failed with ${response.status}: ${body.message ?? 'unknown_error'}`, access.auth.token));
@@ -257,17 +239,7 @@ async function updatePullRequest(
   signal?: AbortSignal,
 ): Promise<string> {
   const parsed = await parsePullRequestUpdateInput(repository, access, args, fetchImpl, signal);
-  const init: RequestInit = {
-    method: 'PATCH',
-    headers: {
-      accept: 'application/vnd.github+json',
-      authorization: `Bearer ${access.auth.token}`,
-      'content-type': 'application/json',
-      'x-github-api-version': '2022-11-28',
-    },
-    body: JSON.stringify(parsed.input),
-  };
-  if (signal) init.signal = signal;
+  const init = createGitHubApiRequestInit(access, { method: 'PATCH', body: parsed.input, signal });
   const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls/${parsed.number}`, init);
   const body = await response.json().catch(() => ({})) as { html_url?: string; number?: number; message?: string };
   if (!response.ok) {
@@ -364,15 +336,7 @@ function parsePullRequestNumber(selector: string): number | null {
 
 async function fetchPullRequestNumberForBranch(access: GitHubRepositoryAccess, branch: string, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<number> {
   const query = new URLSearchParams({ head: `${access.owner}:${branch}`, state: 'all', per_page: '1' });
-  const init: RequestInit = {
-    method: 'GET',
-    headers: {
-      accept: 'application/vnd.github+json',
-      authorization: `Bearer ${access.auth.token}`,
-      'x-github-api-version': '2022-11-28',
-    },
-  };
-  if (signal) init.signal = signal;
+  const init = createGitHubApiRequestInit(access, { method: 'GET', signal });
   const response = await fetchImpl(`${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls?${query.toString()}`, init);
   const body = await response.json().catch(() => ([])) as Array<{ number?: number }> | { message?: string };
   if (!response.ok) {
@@ -381,6 +345,26 @@ async function fetchPullRequestNumberForBranch(access: GitHubRepositoryAccess, b
   }
   if (!Array.isArray(body) || typeof body[0]?.number !== 'number') throw new Error(`No pull request found for branch ${branch}`);
   return body[0].number;
+}
+
+function createGitHubApiRequestInit(
+  access: GitHubRepositoryAccess,
+  options: { method: 'GET' | 'POST' | 'PATCH'; body?: unknown; signal?: AbortSignal | undefined },
+): RequestInit {
+  const headers: Record<string, string> = {
+    accept: 'application/vnd.github+json',
+    authorization: `Bearer ${access.auth.token}`,
+    'x-github-api-version': '2022-11-28',
+  };
+  const init: RequestInit = { method: options.method, headers };
+
+  if (options.body !== undefined) {
+    headers['content-type'] = 'application/json';
+    init.body = JSON.stringify(options.body);
+  }
+  if (options.signal) init.signal = options.signal;
+
+  return init;
 }
 
 function githubApiBaseUrl(access: GitHubRepositoryAccess): string {
