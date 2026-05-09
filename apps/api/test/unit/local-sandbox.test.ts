@@ -124,7 +124,7 @@ describe('LocalSandboxProvider', () => {
 
     expect(result.exitCode).toBe(0);
     await expect(sandbox.fs?.readFile('manaflow/README.md')).resolves.toBe('hello local git\n');
-    await expect(sandbox.exec({ command: 'git config user.name', cwd: setup!.workspacePath })).resolves.toMatchObject({ stdout: 'Deputies\n' });
+    await expect(sandbox.exec({ command: 'git config user.name', cwd: setup!.workspacePath })).resolves.toMatchObject({ stdout: 'DevDeputies\n' });
     await expect(sandbox.exec({ command: 'git remote get-url origin', cwd: setup!.workspacePath })).resolves.toMatchObject({ stdout: `${remotePath}\n` });
     expect(`${result.stdout}\n${result.stderr}`).not.toContain('ghs_secret_token');
   });
