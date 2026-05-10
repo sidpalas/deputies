@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, ReactNode, SyntheticEvent, WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, KeyboardEvent, SyntheticEvent, WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Archive, Check, ChevronDown, Copy, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, RotateCcw, Sun, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -868,6 +868,13 @@ export function App() {
       {startupLoading ? <StartupLoadingPanel connectionStatus={connectionStatus} /> : bearerAuthRequired && !token ? <BearerAuthPanel draftToken={draftToken} setDraftToken={setDraftToken} saveToken={saveToken} /> : sessionAuthRequired && !currentUser ? <SessionAuthPanel password={loginPassword} provider={health?.authProvider ?? 'static'} username={loginUsername} onPasswordChange={setLoginPassword} onSubmit={handleLogin} onUsernameChange={setLoginUsername} /> : (
         <>
 
+      {!sidebarOpen ? (
+        <div className="flex shrink-0 items-center justify-between border-b border-border bg-background/95 px-3 py-2 backdrop-blur md:hidden">
+          <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Deputies</span>
+          <MobileSessionActions canCallApi={canCallApi} onNewThread={startNewThread} onOpenSidebar={expandSidebar} />
+        </div>
+      ) : null}
+
       <section className={cn('grid min-h-0 flex-1 grid-cols-1', sidebarCollapsed ? 'md:grid-cols-[3.75rem_minmax(0,1fr)]' : 'md:grid-cols-[18rem_minmax(0,1fr)]')}>
         {sidebarCollapsed ? (
           <aside className="hidden min-h-0 border-r border-border bg-card/95 p-3 md:flex">
@@ -913,7 +920,6 @@ export function App() {
               <NewThreadPanel
                 canCallApi={canCallApi}
                 loading={loading}
-                mobileActions={<MobileSessionActions canCallApi={canCallApi} onNewThread={startNewThread} onOpenSidebar={expandSidebar} />}
                 prompt={newThreadPrompt}
                 repository={newThreadRepository}
                 onPromptChange={setNewThreadPrompt}
@@ -924,7 +930,6 @@ export function App() {
             <section className="flex h-full min-h-0 flex-col">
               <ThreadHeader
                 editingTitle={editingTitle}
-                mobileActions={<MobileSessionActions canCallApi={canCallApi} onNewThread={startNewThread} onOpenSidebar={expandSidebar} />}
                 selectedSession={selectedSession}
                 titleDraft={titleDraft}
                 onArchive={handleArchiveSession}
@@ -1286,7 +1291,6 @@ function MobileSessionActions(props: {
 function NewThreadPanel(props: {
   canCallApi: boolean;
   loading: boolean;
-  mobileActions?: ReactNode;
   prompt: string;
   repository: string;
   onPromptChange: (value: string) => void;
@@ -1296,7 +1300,6 @@ function NewThreadPanel(props: {
   return (
     <section className="grid min-h-screen place-items-center px-4">
       <Card className="w-full max-w-2xl p-5">
-        {props.mobileActions ? <div className="mb-4 flex md:hidden">{props.mobileActions}</div> : null}
         <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">Engineering agents for delegated work.</h1>
         <p className="mt-2 text-sm text-muted-foreground">Assign follow-ups, watch the work trail, and inspect the results.</p>
@@ -1354,7 +1357,6 @@ function MessageComposer(props: {
 
 function ThreadHeader(props: {
   editingTitle: boolean;
-  mobileActions?: ReactNode;
   selectedSession: Session;
   titleDraft: string;
   onArchive: () => void;
@@ -1364,8 +1366,7 @@ function ThreadHeader(props: {
   onUpdateTitle: (event: FormEvent) => void;
 }) {
   return (
-    <section className="sticky top-0 z-20 grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:grid-cols-[minmax(0,1fr)_auto]">
-      {props.mobileActions ? <div className="md:hidden">{props.mobileActions}</div> : null}
+    <section className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
       <div className="min-w-0 overflow-hidden">
         <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Session</p>
         {props.editingTitle ? (
