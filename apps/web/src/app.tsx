@@ -1203,8 +1203,8 @@ function SessionButton(props: {
         <strong className="block w-full truncate text-sm font-medium text-foreground">{props.session.title || 'Untitled session'}</strong>
         <span className="block w-full truncate text-xs text-muted-foreground"><span className={statusTextClass(props.session.status)}>{props.session.status}</span> · {formatDate(props.session.updatedAt)}</span>
       </button>
-      {props.onArchive ? <Button className="h-8 w-8 shrink-0 p-0 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100" variant="ghost" size="icon" onClick={() => props.onArchive?.(props.session.id)} aria-label="Archive session" title="Archive session"><Archive className="h-3.5 w-3.5" /></Button> : null}
-      {props.onUnarchive ? <Button className="h-8 w-8 shrink-0 p-0 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100" variant="ghost" size="icon" onClick={() => props.onUnarchive?.(props.session.id)} aria-label="Restore session" title="Restore session"><RotateCcw className="h-3.5 w-3.5" /></Button> : null}
+      {props.onArchive ? <Button className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100" variant="ghost" size="sm" onClick={() => props.onArchive?.(props.session.id)} aria-label="Archive session" title="Archive session"><Archive className="h-3.5 w-3.5" /></Button> : null}
+      {props.onUnarchive ? <Button className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100" variant="ghost" size="sm" onClick={() => props.onUnarchive?.(props.session.id)} aria-label="Restore session" title="Restore session"><RotateCcw className="h-3.5 w-3.5" /></Button> : null}
     </div>
   );
 }
