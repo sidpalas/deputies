@@ -637,10 +637,12 @@ export function App() {
   async function handleArchiveSession() {
     if (!selectedSessionId) return;
     setError('');
+    const rollback = archiveOptimistically(selectedSessionId);
     try {
       const session = await archiveSession({ sessionId: selectedSessionId, token });
       applyArchivedSession(session);
     } catch (err) {
+      if (rollback) restoreArchiveRollback(rollback);
       handleApiError(err);
     }
   }
@@ -818,6 +820,47 @@ export function App() {
     setSidebarOpen(true);
   }
 
+  type ArchiveRollback = {
+    artifacts: Artifact[];
+    callbacks: CallbackDelivery[];
+    events: AgentEvent[];
+    isCreatingThread: boolean;
+    messages: Message[];
+    selectedSessionId: string;
+    session: Session;
+  };
+
+  function archiveOptimistically(sessionId: string): ArchiveRollback | null {
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (!session) return null;
+    const rollback = {
+      artifacts,
+      callbacks,
+      events,
+      isCreatingThread,
+      messages,
+      selectedSessionId,
+      session,
+    };
+    applyArchivedSession({ ...session, status: 'archived' });
+    return rollback;
+  }
+
+  function restoreArchiveRollback(rollback: ArchiveRollback) {
+    setSessions((current) => current.map((candidate) => (candidate.id === rollback.session.id ? rollback.session : candidate)));
+    if (rollback.selectedSessionId === rollback.session.id) {
+      localStorage.setItem(selectedSessionStorageKey, rollback.selectedSessionId);
+      setSessionSearchParam(rollback.selectedSessionId);
+      localStorage.removeItem(newSessionSelectedStorageKey);
+      setSelectedSessionId(rollback.selectedSessionId);
+      setIsCreatingThread(rollback.isCreatingThread);
+      setMessages(rollback.messages);
+      setEvents(rollback.events);
+      setArtifacts(rollback.artifacts);
+      setCallbacks(rollback.callbacks);
+    }
+  }
+
   function applyArchivedSession(session: Session) {
     setSessions((current) => current.map((candidate) => (candidate.id === session.id ? session : candidate)));
     if (selectedSessionId === session.id) {
@@ -836,10 +879,12 @@ export function App() {
 
   async function archiveFromList(sessionId: string) {
     setError('');
+    const rollback = archiveOptimistically(sessionId);
     try {
       const session = await archiveSession({ sessionId, token });
       applyArchivedSession(session);
     } catch (err) {
+      if (rollback) restoreArchiveRollback(rollback);
       handleApiError(err);
     }
   }

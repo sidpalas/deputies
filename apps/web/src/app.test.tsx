@@ -30,6 +30,7 @@ type MockApiOptions = {
   onGlobalStreamOpen?: (push: StreamEventPusher) => void;
   onListSessions?: (count: number) => void;
   globalStreamStatus?: number;
+  hangArchive?: boolean;
   hangSessions?: boolean;
   hangSessionsAfterFirst?: boolean;
   authMode?: 'none' | 'bearer' | 'session';
@@ -152,6 +153,19 @@ it('uses an icon-only archive action in the session header', async () => {
 
   const archiveButton = within(header as HTMLElement).getByRole('button', { name: 'Archive session' });
   expect(archiveButton).toHaveTextContent('');
+});
+
+it('archives the selected session before waiting for the archive request', async () => {
+  mockApi({ hangArchive: true });
+  render(<App />);
+
+  const heading = await screen.findByRole('heading', { name: 'Existing session' });
+  const header = heading.closest('section');
+  fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Archive session' }));
+
+  expect(screen.getByText('What needs doing?')).toBeInTheDocument();
+  expect(localStorage.getItem('deputies-selected-session-id')).toBeNull();
+  expect(localStorage.getItem('deputies-new-session-selected')).toBe('true');
 });
 
 it('refreshes sessions when the global event stream reports an external session', async () => {
@@ -770,6 +784,7 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/archive` && method === 'POST') {
+      if (options.hangArchive) return new Promise<Response>(() => undefined);
       currentSession = { ...currentSession, status: 'archived' };
       return jsonResponse({ session: currentSession });
     }
