@@ -125,6 +125,34 @@ it('keeps fixed new-session action reachable from a selected session on mobile',
   expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
 });
 
+it('keeps the sidebar archive action exposed on mobile', async () => {
+  mockApi();
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Open sessions' }));
+  const sessionRow = screen.getByRole('button', { name: /Existing session/ }).closest('div');
+  expect(sessionRow).toBeInTheDocument();
+
+  const archiveButton = within(sessionRow as HTMLElement).getByRole('button', { name: 'Archive session' });
+  expect(archiveButton).not.toHaveClass('opacity-0');
+  expect(archiveButton).toHaveClass('md:opacity-0');
+
+  fireEvent.click(archiveButton);
+  expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
+});
+
+it('uses an icon-only archive action in the session header', async () => {
+  mockApi();
+  render(<App />);
+
+  const heading = await screen.findByRole('heading', { name: 'Existing session' });
+  const header = heading.closest('section');
+  expect(header).toBeInTheDocument();
+
+  const archiveButton = within(header as HTMLElement).getByRole('button', { name: 'Archive session' });
+  expect(archiveButton).toHaveTextContent('');
+});
+
 it('refreshes sessions when the global event stream reports an external session', async () => {
   const externalSession = {
     id: '00000000-0000-4000-8000-000000000099',
@@ -641,7 +669,7 @@ it('keeps the new-session page selected after archiving and refreshing', async (
   mockApi();
   const first = render(<App />);
 
-  fireEvent.click(await screen.findByRole('button', { name: 'Archive' }));
+  fireEvent.click((await screen.findAllByRole('button', { name: 'Archive session' }))[0]!);
 
   expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
   expect(localStorage.getItem('deputies-selected-session-id')).toBeNull();
