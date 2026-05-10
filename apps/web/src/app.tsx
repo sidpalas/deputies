@@ -924,12 +924,14 @@ export function App() {
             ) : (
             <section className="flex h-full min-h-0 flex-col">
               <ThreadHeader
+                canCallApi={canCallApi}
                 editingTitle={editingTitle}
                 selectedSession={selectedSession}
                 titleDraft={titleDraft}
                 onArchive={handleArchiveSession}
                 onCancelTitle={() => setEditingTitle(false)}
                 onEditTitle={() => setEditingTitle(true)}
+                onNewThread={startNewThread}
                 onTitleDraftChange={setTitleDraft}
                 onUpdateTitle={handleUpdateTitle}
               />
@@ -1334,12 +1336,14 @@ function MessageComposer(props: {
 }
 
 function ThreadHeader(props: {
+  canCallApi: boolean;
   editingTitle: boolean;
   selectedSession: Session;
   titleDraft: string;
   onArchive: () => void;
   onCancelTitle: () => void;
   onEditTitle: () => void;
+  onNewThread: () => void;
   onTitleDraftChange: (value: string) => void;
   onUpdateTitle: (event: FormEvent) => void;
 }) {
@@ -1364,6 +1368,7 @@ function ThreadHeader(props: {
       <div className="grid min-h-9 shrink-0 grid-cols-[auto_auto] items-center justify-items-end gap-2 justify-self-end">
         <Badge className={cn('col-start-1', statusTextClass(props.selectedSession.status))}>{props.selectedSession.status}</Badge>
         <div className="col-start-2 flex min-w-28 justify-end gap-2">
+          <Button className="md:hidden" type="button" variant="secondary" onClick={props.onNewThread} disabled={!props.canCallApi} aria-label="Start new session" title="Start new session"><Plus className="h-4 w-4" /> New</Button>
           {props.selectedSession.status !== 'archived' ? <Button type="button" variant="secondary" onClick={props.onArchive}><Archive className="h-4 w-4" /> Archive</Button> : null}
         </div>
       </div>

@@ -67,6 +67,22 @@ it('keeps sidebar reachable after mobile open, hide, and reopen actions', async 
   expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeInTheDocument();
 });
 
+it('keeps new-session reachable from a selected session on mobile', async () => {
+  mockApi();
+  render(<App />);
+
+  fireEvent.click((await screen.findAllByRole('button', { name: 'New session' }))[0]!);
+  expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open sessions' }));
+  fireEvent.click(screen.getByText('Existing session'));
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start new session' }));
+
+  expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
+});
+
 it('refreshes sessions when the global event stream reports an external session', async () => {
   const externalSession = {
     id: '00000000-0000-4000-8000-000000000099',
