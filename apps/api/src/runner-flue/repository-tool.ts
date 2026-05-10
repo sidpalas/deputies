@@ -1,5 +1,5 @@
 import type { ToolDef } from '@flue/sdk';
-import type { GitHubRepository, GitHubRepositoryAccess, RepositoryAccessProvider } from '../repositories/setup.js';
+import { repositorySetupCommand, type GitHubRepository, type GitHubRepositoryAccess, type RepositoryAccessProvider } from '../repositories/setup.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 import type { RunnerInput } from '../runner/types.js';
 import type { AgentRef } from './git-tool.js';
@@ -167,21 +167,6 @@ function parseRepositoryValue(value: unknown): (GitHubRepository & { provider: '
   return provider === 'github' && owner && repo ? { provider, owner, repo } : null;
 }
 
-function repositorySetupCommand(access: GitHubRepositoryAccess, workspacePath: string): string {
-  return [
-    'set -eu',
-    `mkdir -p ${quoteShell(parentPath(workspacePath))}`,
-    `if [ -d ${quoteShell(joinPath(workspacePath, '.git'))} ]; then`,
-    `  git -C ${quoteShell(workspacePath)} remote set-url origin ${quoteShell(access.cloneUrl)}`,
-    `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" -C ${quoteShell(workspacePath)} fetch --prune origin`,
-    'else',
-    `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone -- ${quoteShell(access.cloneUrl)} ${quoteShell(workspacePath)}`,
-    'fi',
-    `git -C ${quoteShell(workspacePath)} config user.name 'DevDeputies'`,
-    `git -C ${quoteShell(workspacePath)} config user.email 'devdeputies@users.noreply.github.com'`,
-  ].join('\n');
-}
-
 function gitAuthHeader(token: string): string {
   const credentials = Buffer.from(`x-access-token:${token}`).toString('base64');
   return `Authorization: Basic ${credentials}`;
@@ -189,13 +174,4 @@ function gitAuthHeader(token: string): string {
 
 function joinPath(base: string, child: string): string {
   return `${base.replace(/\/+$/, '')}/${child.replace(/^\/+/, '')}`;
-}
-
-function parentPath(path: string): string {
-  const index = path.lastIndexOf('/');
-  return index <= 0 ? '/' : path.slice(0, index);
-}
-
-function quoteShell(value: string): string {
-  return `'${value.replace(/'/g, `'\''`)}'`;
 }
