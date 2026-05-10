@@ -22,6 +22,7 @@ type MockApiOptions = {
   onReplayCallback?: (callbackId: string) => void;
   onStreamOpen?: (push: StreamEventPusher) => void;
   onGlobalStreamOpen?: (push: StreamEventPusher) => void;
+  onListSessions?: (count: number) => void;
   globalStreamStatus?: number;
   hangSessions?: boolean;
   hangSessionsAfterFirst?: boolean;
@@ -67,18 +68,17 @@ it('keeps sidebar reachable after mobile open, hide, and reopen actions', async 
   expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeInTheDocument();
 });
 
-it('keeps new-session reachable from a selected session on mobile', async () => {
+it('keeps fixed new-session action reachable from a selected session on mobile', async () => {
   mockApi();
   render(<App />);
 
-  fireEvent.click((await screen.findAllByRole('button', { name: 'New session' }))[0]!);
-  expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
+  expect(await screen.findAllByRole('button', { name: 'New session' })).not.toHaveLength(0);
 
   fireEvent.click(screen.getByRole('button', { name: 'Open sessions' }));
-  fireEvent.click(screen.getByText('Existing session'));
+  fireEvent.click(screen.getByRole('button', { name: /Existing session/ }));
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('button', { name: 'Start new session' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'New session' })[0]!);
 
   expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
 });
@@ -115,6 +115,36 @@ it('refreshes sessions when the global event stream reports an external session'
   });
 
   expect(await screen.findByText('Slack thread')).toBeInTheDocument();
+});
+
+it('coalesces rapid global session refresh events into one sessions request', async () => {
+  const sessions = [session];
+  let sessionsRequestCount = 0;
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    sessions,
+    onListSessions: (count) => {
+      sessionsRequestCount = count;
+    },
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findAllByText('Existing session')).not.toHaveLength(0);
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+  expect(sessionsRequestCount).toBe(1);
+
+  sessions.push({ ...session, id: '00000000-0000-4000-8000-000000000098', title: 'Coalesced session' });
+  pushGlobalEvent?.(eventFixture({ id: 2, sequence: 1, type: 'session_created', payload: {} }));
+  pushGlobalEvent?.(eventFixture({ id: 3, sequence: 2, type: 'session_updated', payload: {} }));
+  pushGlobalEvent?.(eventFixture({ id: 4, sequence: 3, type: 'message_completed', payload: {} }));
+
+  await waitFor(() => expect(sessionsRequestCount).toBe(2));
+  await new Promise((resolve) => window.setTimeout(resolve, 350));
+  expect(sessionsRequestCount).toBe(2);
+  expect(await screen.findByText('Coalesced session')).toBeInTheDocument();
 });
 
 it('shows and calls cancel task on the active message', async () => {
@@ -620,6 +650,7 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === '/sessions' && method === 'GET') {
       sessionsRequestCount += 1;
+      options.onListSessions?.(sessionsRequestCount);
       if (options.hangSessions) return new Promise<Response>(() => undefined);
       if (options.hangSessionsAfterFirst && sessionsRequestCount > 1) return new Promise<Response>(() => undefined);
       return jsonResponse({ sessions: options.sessions ?? [currentSession] });
