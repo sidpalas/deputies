@@ -1512,8 +1512,8 @@ function MarkdownText(props: { text: string }) {
         code: ({ children, className, ...props }) => {
           const code = String(children).replace(/\n$/, '');
           const language = className?.match(/language-(\S+)/)?.[1];
-          if (language || String(children).includes('\n')) return <HighlightedCode code={code} {...(language ? { language } : {})} />;
-          return <code className={cn('rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground shadow-sm', className)} {...props}>{children}</code>;
+          if (language || String(children).includes('\n')) return <HighlightedCode code={code} wrap {...(language ? { language } : {})} />;
+          return <code className={cn('rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground shadow-sm break-words', className)} {...props}>{children}</code>;
         },
         h1: ({ className, ...props }) => <h1 className={cn('mt-4 text-xl font-semibold text-foreground first:mt-0', className)} {...props} />,
         h2: ({ className, ...props }) => <h2 className={cn('mt-4 text-lg font-semibold text-foreground first:mt-0', className)} {...props} />,
@@ -1610,9 +1610,9 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
         </figcaption>
       ) : null}
       {html ? (
-        <div className={cn('highlighted-code overflow-auto text-sm leading-6', props.wrap && 'highlighted-code-wrap')} dangerouslySetInnerHTML={{ __html: html }} />
+        <div className={cn('highlighted-code text-sm leading-6', props.wrap ? 'highlighted-code-wrap overflow-hidden' : 'overflow-auto')} dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
-        <pre className={cn('overflow-auto p-3 text-sm leading-6 text-foreground', props.wrap && 'whitespace-pre-wrap break-words')}><code>{props.code}</code></pre>
+        <pre className={cn('p-3 text-sm leading-6 text-foreground', props.wrap ? 'overflow-hidden whitespace-pre-wrap break-words' : 'overflow-auto')}><code>{props.code}</code></pre>
       )}
     </figure>
   );
