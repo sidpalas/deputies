@@ -277,22 +277,34 @@ function buildBatchContext(messages: ClaimedMessageBatch['messages']): Record<st
 }
 
 export type WorkerLoopHandle = {
+  wake(): void;
   stop(): Promise<void>;
 };
 
 export function startWorkerLoop(worker: Pick<WorkerService, 'processNext'>, pollIntervalMs = 1_000): WorkerLoopHandle {
   let stopped = false;
   let inFlight: Promise<void> | null = null;
+  let pendingWake = false;
 
   const poll = () => {
-    if (stopped || inFlight) return;
-    inFlight = worker.processNext()
-      .then(() => {})
+    if (stopped) return;
+    if (inFlight) {
+      pendingWake = true;
+      return;
+    }
+    pendingWake = false;
+    inFlight = (async () => {
+      let processed = false;
+      do {
+        processed = await worker.processNext();
+      } while (!stopped && processed);
+    })()
       .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : error);
+        console.error(error instanceof Error ? error.message : error);
       })
       .finally(() => {
         inFlight = null;
+        if (pendingWake) poll();
       });
   };
 
@@ -300,6 +312,9 @@ export function startWorkerLoop(worker: Pick<WorkerService, 'processNext'>, poll
   poll();
 
   return {
+    wake(): void {
+      poll();
+    },
     async stop(): Promise<void> {
       stopped = true;
       clearInterval(timer);

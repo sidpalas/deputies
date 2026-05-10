@@ -24,7 +24,7 @@ import { startSandboxReaper } from './sandbox/reaper.js';
 import type { SandboxProvider } from './sandbox/types.js';
 import { MemoryStore } from './store/memory.js';
 import { PostgresStore } from './store/postgres.js';
-import { startWorkerLoop, WorkerService } from './worker/service.js';
+import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from './worker/service.js';
 
 const config = loadConfig(process.env);
 const store = config.appStore === 'postgres' ? new PostgresStore(requireDatabaseUrl(config)) : new MemoryStore();
@@ -39,11 +39,11 @@ if (githubClient && githubRepositoryAccess) {
 }
 const resources: CloseableResource[] = [];
 let server: ReturnType<typeof createServer> | undefined;
-let workerLoop: ReturnType<typeof startWorkerLoop> | undefined;
+let workerLoop: WorkerLoopHandle | undefined;
 let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
 
 if ('close' in store && typeof store.close === 'function') resources.push(store as CloseableResource);
-if (store instanceof PostgresStore && (config.runMode === 'all' || config.runMode === 'api')) {
+if (store instanceof PostgresStore && (config.runMode === 'all' || config.runMode === 'api' || config.runMode === 'worker')) {
   resources.unshift(await store.listenEvents((event) => services.events.publishExternal(event)));
 }
 
@@ -55,18 +55,35 @@ if (config.runMode === 'all' || config.runMode === 'api') {
 }
 
 if (config.runMode === 'all' || config.runMode === 'worker') {
-  const worker = new WorkerService({
-    store,
-    events: services.events,
-    runner: await createRunner(),
-    runnerType: config.runner,
-    sandboxProvider,
-    leaseOwner: `worker-${process.pid}`,
-    cancellationPollIntervalMs: config.runCancellationPollIntervalMs,
-    callbackSenders: createCallbackSenders(),
-    progressNotifiers: createProgressNotifiers(),
+  const runner = await createRunner();
+  const callbackSenders = createCallbackSenders();
+  const progressNotifiers = createProgressNotifiers();
+  const workerLoops = Array.from({ length: config.workerConcurrency }, (_, index) => {
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      runner,
+      runnerType: config.runner,
+      sandboxProvider,
+      leaseOwner: `worker-${process.pid}-${index + 1}`,
+      cancellationPollIntervalMs: config.runCancellationPollIntervalMs,
+      callbackSenders,
+      progressNotifiers,
+    });
+    return startWorkerLoop(worker);
   });
-  workerLoop = startWorkerLoop(worker);
+  workerLoop = {
+    wake(): void {
+      for (const loop of workerLoops) loop.wake();
+    },
+    async stop(): Promise<void> {
+      await Promise.all(workerLoops.map((loop) => loop.stop()));
+    },
+  };
+  const unsubscribeWorkerWake = services.events.subscribeAllEvents((event) => {
+    if (event.type === 'message_created' || event.type === 'callback_retry_scheduled') workerLoop?.wake();
+  });
+  resources.unshift({ close: unsubscribeWorkerWake });
   if (services.sandboxCleanup) {
     sandboxReaper = startSandboxReaper({
       cleanup: services.sandboxCleanup,
@@ -76,7 +93,7 @@ if (config.runMode === 'all' || config.runMode === 'worker') {
       onError: (error: unknown) => console.error(error instanceof Error ? error.message : error),
     });
   }
-  console.log(`background-agent worker started (${config.runMode})`);
+  console.log(`background-agent worker started (${config.runMode}, concurrency=${config.workerConcurrency})`);
 }
 
 function createCallbackSenders(): CompletionCallbackSender[] {

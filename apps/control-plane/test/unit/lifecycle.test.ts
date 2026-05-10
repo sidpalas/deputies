@@ -28,6 +28,7 @@ describe('AppLifecycle', () => {
     const calls: string[] = [];
     const lifecycle = new AppLifecycle({
       workerLoop: {
+        wake() {},
         async stop() {
           calls.push('worker');
         },
