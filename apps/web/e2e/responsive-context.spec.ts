@@ -2,6 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 const sessionId = '00000000-0000-4000-8000-000000000001';
 
+test.describe.configure({ mode: 'serial' });
+
 test.beforeEach(async ({ page }) => {
   await mockApi(page);
 });
@@ -10,7 +12,8 @@ test('keeps context collapsed by default on narrow screens', async ({ page }) =>
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
 
-  await expect(page.getByRole('log', { name: 'Session messages' })).toBeVisible();
+  const messageLog = page.getByRole('log', { name: 'Session messages' });
+  await expect(messageLog).toBeVisible();
   await expect(page.getByPlaceholder('Ask your deputy to investigate, change code, or follow up...')).toBeVisible();
 
   const contextDisclosure = page.locator('details').filter({ has: page.getByText('Context', { exact: true }) });
@@ -18,8 +21,25 @@ test('keeps context collapsed by default on narrow screens', async ({ page }) =>
   await expect(contextDisclosure).not.toHaveAttribute('open', '');
   await expect(contextDisclosure.getByText('Completion reply')).not.toBeVisible();
 
-  const messageLogBox = await page.getByRole('log', { name: 'Session messages' }).boundingBox();
-  expect(messageLogBox?.height).toBeGreaterThan(300);
+  const messageLogHeight = await messageLog.evaluate((element) => element.getBoundingClientRect().height);
+  expect(messageLogHeight).toBeGreaterThan(300);
+});
+
+test('keeps mobile session controls in the header without covering the session title', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+
+  const openSessions = page.getByRole('button', { name: 'Open sessions' });
+  const newSession = page.getByRole('button', { name: 'New session' });
+  const title = page.getByRole('heading', { name: 'Existing session' });
+
+  await expect(openSessions).toBeVisible();
+  await expect(newSession).toBeVisible();
+  await expect(title).toBeVisible();
+
+  const controlsBox = await openSessions.locator('..').evaluate((element) => element.getBoundingClientRect().toJSON());
+  const titleBox = await title.evaluate((element) => element.getBoundingClientRect().toJSON());
+  expect(titleBox.x).toBeGreaterThanOrEqual(controlsBox.x + controlsBox.width + 8);
 });
 
 test('shows context as a sidebar on wide screens', async ({ page }) => {
@@ -33,7 +53,7 @@ test('shows context as a sidebar on wide screens', async ({ page }) => {
 });
 
 async function mockApi(page: Page): Promise<void> {
-  await page.route('http://localhost:3583/**', async (route) => {
+  await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
 
     if (url.pathname === '/health') {
@@ -74,7 +94,7 @@ async function mockApi(page: Page): Promise<void> {
       return;
     }
 
-    await route.fulfill({ status: 404, json: { error: 'not_found', message: 'Not found' } });
+    await route.fallback();
   });
 }
 
