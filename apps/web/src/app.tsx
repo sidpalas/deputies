@@ -437,11 +437,20 @@ export function App() {
       }
     });
 
-    return () => abort.abort();
+    return () => {
+      abort.abort();
+      clearScheduledSessionsRefresh();
+    };
   }, [pageVisible, canCallApi, sessionsLoaded, token]);
 
+  function clearScheduledSessionsRefresh() {
+    if (sessionsRefreshTimerRef.current === null) return;
+    window.clearTimeout(sessionsRefreshTimerRef.current);
+    sessionsRefreshTimerRef.current = null;
+  }
+
   function scheduleSessionsRefresh(delayMs = 300) {
-    if (sessionsRefreshTimerRef.current !== null) window.clearTimeout(sessionsRefreshTimerRef.current);
+    clearScheduledSessionsRefresh();
     sessionsRefreshTimerRef.current = window.setTimeout(() => {
       sessionsRefreshTimerRef.current = null;
       refreshSessions().catch(() => undefined);
