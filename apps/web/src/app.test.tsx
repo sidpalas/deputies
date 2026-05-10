@@ -577,6 +577,9 @@ it('renders assistant markdown with copyable highlighted code blocks and without
   expect(await screen.findByRole('heading', { name: 'Summary' })).toBeInTheDocument();
   expect(screen.getByText('Done')).toBeInTheDocument();
   expect(screen.getByText('const ok = true;')).toBeInTheDocument();
+  const highlightedCode = document.querySelector('.highlighted-code');
+  expect(highlightedCode).toHaveClass('highlighted-code-wrap');
+  expect(highlightedCode).toHaveClass('overflow-hidden');
   expect(codeToHtmlMock).toHaveBeenCalledWith('const ok = true;', { lang: 'ts', theme: 'github-light-default' });
   expect(screen.getByRole('link', { name: 'Docs' })).toHaveAttribute('href', 'https://example.com');
   expect(document.querySelector('script')).toBeNull();
