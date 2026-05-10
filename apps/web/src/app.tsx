@@ -566,7 +566,10 @@ export function App() {
         token,
         ...(firstRepository ? { repository: firstRepository } : {}),
       });
-      setSessions((current) => [session, ...current]);
+      setSessions((current) => [
+        { ...session, status: session.status === 'active' ? 'active' : 'queued', updatedAt: message.createdAt },
+        ...current,
+      ]);
       selectSession(session.id);
       setMessages([message]);
       setEvents([]);
@@ -599,6 +602,11 @@ export function App() {
         ...(repositoryInput ? { repository: repositoryInput } : {}),
       });
       setMessages((current) => [...current, message]);
+      setSessions((current) => current.map((session) => (
+        session.id === selectedSessionId && session.status !== 'active'
+          ? { ...session, status: 'queued', updatedAt: message.createdAt }
+          : session
+      )));
       setThreadAutoFollowEnabled(true);
       await refreshSessions();
       await refreshSessionDetail(selectedSessionId);

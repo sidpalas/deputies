@@ -137,6 +137,17 @@ export class MemoryStore implements AppStore {
     const sessionMessages = this.messages.get(record.sessionId) ?? [];
     sessionMessages.push(record);
     this.messages.set(record.sessionId, sessionMessages);
+
+    if (record.status === 'pending') {
+      const session = this.sessions.get(record.sessionId);
+      if (!session) throw new Error(`Session does not exist: ${record.sessionId}`);
+      this.sessions.set(record.sessionId, {
+        ...session,
+        status: session.status === 'archived' ? 'archived' : session.status === 'active' ? 'active' : 'queued',
+        updatedAt: record.createdAt,
+      });
+    }
+
     return record;
   }
 
@@ -159,6 +170,7 @@ export class MemoryStore implements AppStore {
     if (!message) return null;
     const updated: MessageRecord = { ...message, status: 'cancelled' };
     sessionMessages[sessionMessages.indexOf(message)] = updated;
+    this.refreshQueuedSessionStatus(input.sessionId, input.cancelledAt);
     return updated;
   }
 
@@ -334,7 +346,7 @@ export class MemoryStore implements AppStore {
       .filter((sandbox) => sandbox.provider === input.provider)
       .filter(isActiveSandbox)
       .filter((sandbox) => sandbox.updatedAt <= input.idleBefore)
-      .filter((sandbox) => this.sessions.get(sandbox.sessionId)?.status !== 'active')
+      .filter((sandbox) => !isSessionBusy(this.sessions.get(sandbox.sessionId)?.status))
       .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
       .slice(0, input.limit);
   }
@@ -344,7 +356,7 @@ export class MemoryStore implements AppStore {
       .filter((sandbox) => sandbox.provider === input.provider)
       .filter((sandbox) => !sandbox.destroyedAt && sandbox.status === 'ready')
       .filter((sandbox) => sandbox.updatedAt <= input.idleBefore)
-      .filter((sandbox) => this.sessions.get(sandbox.sessionId)?.status !== 'active')
+      .filter((sandbox) => !isSessionBusy(this.sessions.get(sandbox.sessionId)?.status))
       .filter((sandbox) => !(this.messages.get(sandbox.sessionId) ?? []).some((message) => message.status === 'pending'))
       .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
       .slice(0, input.limit);
@@ -585,9 +597,21 @@ export class MemoryStore implements AppStore {
 
     const session = this.sessions.get(run.sessionId);
     if (!session) throw new Error(`Session does not exist: ${run.sessionId}`);
-    this.sessions.set(run.sessionId, { ...session, status: session.status === 'archived' ? 'archived' : status === 'failed' ? 'failed' : 'idle', updatedAt: finishedAt });
+    const hasPendingMessages = sessionMessages.some((message) => message.status === 'pending');
+    this.sessions.set(run.sessionId, {
+      ...session,
+      status: session.status === 'archived' ? 'archived' : status === 'failed' ? 'failed' : hasPendingMessages ? 'queued' : 'idle',
+      updatedAt: finishedAt,
+    });
 
     return { messages: terminalMessages, run: terminalRun };
+  }
+
+  private refreshQueuedSessionStatus(sessionId: string, updatedAt: Date): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status === 'archived' || session.status === 'active') return;
+    const hasPendingMessages = (this.messages.get(sessionId) ?? []).some((message) => message.status === 'pending');
+    this.sessions.set(sessionId, { ...session, status: hasPendingMessages ? 'queued' : 'idle', updatedAt });
   }
 
   private requireCallback(id: string): CallbackDeliveryRecord {
@@ -608,6 +632,10 @@ function isStaleSendingCallback(delivery: CallbackDeliveryRecord, staleSendingBe
 
 function isActiveSandbox(sandbox: SandboxRecord): boolean {
   return !sandbox.destroyedAt && (sandbox.status === 'ready' || sandbox.status === 'stopped' || sandbox.status === 'unhealthy');
+}
+
+function isSessionBusy(status: string | undefined): boolean {
+  return status === 'active' || status === 'queued';
 }
 
 function getRunMessageIds(run: RunRecord): string[] {

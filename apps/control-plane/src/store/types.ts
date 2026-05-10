@@ -1,6 +1,6 @@
 import type { NormalizedEvent } from '../events/types.js';
 
-export type SessionStatus = 'created' | 'active' | 'idle' | 'completed' | 'failed' | 'cancelled' | 'archived';
+export type SessionStatus = 'created' | 'queued' | 'active' | 'idle' | 'completed' | 'failed' | 'cancelled' | 'archived';
 export type MessageStatus = 'pending' | 'processing' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
 export type RunStatus = 'starting' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'stale';
 export type IntegrationDeliveryStatus = 'received' | 'processed' | 'failed';
