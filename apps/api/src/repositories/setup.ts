@@ -64,7 +64,7 @@ export function parseRepositoryContext(context: Record<string, unknown>): Reposi
   return parseRepositoryValue(github.repository);
 }
 
-function repositorySetupCommand(access: GitHubRepositoryAccess, workspacePath: string): string {
+export function repositorySetupCommand(access: GitHubRepositoryAccess, workspacePath: string): string {
   return [
     'set -eu',
     `mkdir -p ${quoteShell(parentPath(workspacePath))}`,
