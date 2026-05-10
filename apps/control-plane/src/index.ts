@@ -43,7 +43,7 @@ let workerLoop: ReturnType<typeof startWorkerLoop> | undefined;
 let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
 
 if ('close' in store && typeof store.close === 'function') resources.push(store as CloseableResource);
-if (store instanceof PostgresStore && (config.runMode === 'all' || config.runMode === 'api')) {
+if (store instanceof PostgresStore && (config.runMode === 'all' || config.runMode === 'api' || config.runMode === 'worker')) {
   resources.unshift(await store.listenEvents((event) => services.events.publishExternal(event)));
 }
 
@@ -67,6 +67,10 @@ if (config.runMode === 'all' || config.runMode === 'worker') {
     progressNotifiers: createProgressNotifiers(),
   });
   workerLoop = startWorkerLoop(worker);
+  const unsubscribeWorkerWake = services.events.subscribeAllEvents((event) => {
+    if (event.type === 'message_created' || event.type === 'callback_retry_scheduled') workerLoop?.wake();
+  });
+  resources.unshift({ close: unsubscribeWorkerWake });
   if (services.sandboxCleanup) {
     sandboxReaper = startSandboxReaper({
       cleanup: services.sandboxCleanup,

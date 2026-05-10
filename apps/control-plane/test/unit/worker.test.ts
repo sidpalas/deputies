@@ -353,6 +353,40 @@ describe('WorkerService', () => {
     expect(provider.starts).toBe(1);
   });
 
+  it('drains available work without waiting for the next poll interval', async () => {
+    let calls = 0;
+    const loop = startWorkerLoop(
+      {
+        async processNext() {
+          calls += 1;
+          return calls < 3;
+        },
+      },
+      60_000,
+    );
+
+    await waitFor(() => calls === 3);
+    await loop.stop();
+  });
+
+  it('can be woken up before the next poll interval', async () => {
+    let calls = 0;
+    const loop = startWorkerLoop(
+      {
+        async processNext() {
+          calls += 1;
+          return false;
+        },
+      },
+      60_000,
+    );
+
+    await waitFor(() => calls === 1);
+    loop.wake();
+    await waitFor(() => calls === 2);
+    await loop.stop();
+  });
+
   it('stops the worker loop after in-flight processing completes', async () => {
     let release!: () => void;
     const inFlight = new Promise<void>((resolve) => {
