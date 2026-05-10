@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, SyntheticEvent, WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, KeyboardEvent, ReactNode, SyntheticEvent, WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Archive, Check, ChevronDown, Copy, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, RotateCcw, Sun, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -868,12 +868,6 @@ export function App() {
       {startupLoading ? <StartupLoadingPanel connectionStatus={connectionStatus} /> : bearerAuthRequired && !token ? <BearerAuthPanel draftToken={draftToken} setDraftToken={setDraftToken} saveToken={saveToken} /> : sessionAuthRequired && !currentUser ? <SessionAuthPanel password={loginPassword} provider={health?.authProvider ?? 'static'} username={loginUsername} onPasswordChange={setLoginPassword} onSubmit={handleLogin} onUsernameChange={setLoginUsername} /> : (
         <>
 
-      {!sidebarOpen ? (
-        <div className="fixed right-3 top-1/2 z-30 -translate-y-1/2 md:hidden">
-          <MobileSessionActions canCallApi={canCallApi} onNewThread={startNewThread} onOpenSidebar={expandSidebar} />
-        </div>
-      ) : null}
-
       <section className={cn('grid min-h-0 flex-1 grid-cols-1', sidebarCollapsed ? 'md:grid-cols-[3.75rem_minmax(0,1fr)]' : 'md:grid-cols-[18rem_minmax(0,1fr)]')}>
         {sidebarCollapsed ? (
           <aside className="hidden min-h-0 border-r border-border bg-card/95 p-3 md:flex">
@@ -919,6 +913,7 @@ export function App() {
               <NewThreadPanel
                 canCallApi={canCallApi}
                 loading={loading}
+                mobileActions={!sidebarOpen ? <MobileSessionActions canCallApi={canCallApi} onNewThread={startNewThread} onOpenSidebar={expandSidebar} /> : null}
                 prompt={newThreadPrompt}
                 repository={newThreadRepository}
                 onPromptChange={setNewThreadPrompt}
@@ -941,6 +936,7 @@ export function App() {
                 <section className="flex min-h-0 min-w-0 flex-col px-3 pt-4 md:px-8 xl:px-20">
                   <div className="relative min-h-0 flex-1">
                     <div className="h-full overflow-auto pb-4" ref={threadScrollRef} onScroll={handleThreadScroll} role="log" aria-label="Session messages">
+                      {!sidebarOpen ? <div className="mb-4 flex justify-end md:hidden"><MobileSessionActions canCallApi={canCallApi} onNewThread={startNewThread} onOpenSidebar={expandSidebar} /></div> : null}
                       <MobileContextPanel repository={selectedRepository} artifacts={artifacts} callbacks={callbacks} onReplayCallback={handleReplayCallback} />
                       <ChatPanel
                         editingMessageId={editingMessageId}
@@ -1276,7 +1272,7 @@ function MobileSessionActions(props: {
   onOpenSidebar: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex gap-2">
       <Button className="h-9 w-9 p-0" variant="secondary" size="icon" onClick={props.onOpenSidebar} aria-label="Open sessions" title="Open sessions">
         <PanelLeftOpen className="h-4 w-4" />
       </Button>
@@ -1290,6 +1286,7 @@ function MobileSessionActions(props: {
 function NewThreadPanel(props: {
   canCallApi: boolean;
   loading: boolean;
+  mobileActions?: ReactNode;
   prompt: string;
   repository: string;
   onPromptChange: (value: string) => void;
@@ -1299,6 +1296,7 @@ function NewThreadPanel(props: {
   return (
     <section className="grid min-h-screen place-items-center px-4">
       <Card className="w-full max-w-2xl p-5">
+        {props.mobileActions ? <div className="mb-4 flex justify-end md:hidden">{props.mobileActions}</div> : null}
         <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">Engineering agents for delegated work.</h1>
         <p className="mt-2 text-sm text-muted-foreground">Assign follow-ups, watch the work trail, and inspect the results.</p>

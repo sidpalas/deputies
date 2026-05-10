@@ -25,7 +25,7 @@ test('keeps context collapsed by default on narrow screens', async ({ page }) =>
   expect(messageLogHeight).toBeGreaterThan(300);
 });
 
-test('keeps floating mobile session controls from covering the session title', async ({ page }) => {
+test('keeps top mobile session controls non-sticky and clear of the session title', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
 
@@ -37,7 +37,9 @@ test('keeps floating mobile session controls from covering the session title', a
   await expect(newSession).toBeVisible();
   await expect(title).toBeVisible();
 
-  const controlsBox = await openSessions.locator('..').evaluate((element) => element.getBoundingClientRect().toJSON());
+  const controls = openSessions.locator('..');
+  await expect(controls).toHaveCSS('position', 'static');
+  const controlsBox = await controls.evaluate((element) => element.getBoundingClientRect().toJSON());
   const titleBox = await title.evaluate((element) => element.getBoundingClientRect().toJSON());
   expect(rectsOverlap(controlsBox, titleBox)).toBe(false);
 });
