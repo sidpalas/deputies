@@ -74,6 +74,13 @@ function repositorySetupCommand(access: GitHubRepositoryAccess, workspacePath: s
     'else',
     `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone -- ${quoteShell(access.cloneUrl)} ${quoteShell(workspacePath)}`,
     'fi',
+    `default_branch="$(git -C ${quoteShell(workspacePath)} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"`,
+    `if [ -z "$default_branch" ]; then`,
+    `  default_branch="$(git -C ${quoteShell(workspacePath)} for-each-ref --format='%(refname:short)' refs/remotes/origin/main refs/remotes/origin/master | sed 's#^origin/##' | head -n 1)"`,
+    'fi',
+    `if [ -n "$default_branch" ] && ! git -C ${quoteShell(workspacePath)} rev-parse --verify HEAD >/dev/null 2>&1; then`,
+    `  git -C ${quoteShell(workspacePath)} checkout -B "$default_branch" "origin/$default_branch"`,
+    'fi',
     `git -C ${quoteShell(workspacePath)} config user.name 'DevDeputies'`,
     `git -C ${quoteShell(workspacePath)} config user.email 'devdeputies@users.noreply.github.com'`,
   ].join('\n');
