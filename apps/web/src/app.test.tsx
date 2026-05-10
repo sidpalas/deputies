@@ -41,6 +41,7 @@ type MockApiOptions = {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   codeToHtmlMock.mockClear();
   localStorage.clear();
   document.documentElement.classList.remove('dark');
@@ -60,6 +61,22 @@ it('submits composer text on Enter and preserves Shift Enter for newlines', asyn
 
   fireEvent.keyDown(composer, { key: 'Enter' });
   await waitFor(() => expect(submittedPrompts).toEqual(['follow up']));
+});
+
+it('keeps Enter available for newlines in mobile composer text', async () => {
+  const submittedPrompts: string[] = [];
+  mockMobileTextEntryViewport();
+  mockApi({ submittedPrompts });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+
+  fireEvent.change(composer, { target: { value: 'line one' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  expect(submittedPrompts).toEqual([]);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+  await waitFor(() => expect(submittedPrompts).toEqual(['line one']));
 });
 
 it('keeps sidebar reachable after mobile open, hide, and reopen actions', async () => {
@@ -770,6 +787,19 @@ function messageFixture(input: { id: string; sequence: number; status: string; p
     sessionId: session.id,
     createdAt: '2026-05-05T12:01:00.000Z',
   };
+}
+
+function mockMobileTextEntryViewport() {
+  vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+    matches: query === '(hover: none) and (pointer: coarse)',
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })));
 }
 
 function eventFixture(input: { sequence: number; type: string; payload: Record<string, unknown>; id?: number; runId?: string; messageId?: string }) {

@@ -1897,9 +1897,13 @@ function statusTextClass(status: string): string {
 }
 
 function submitOnEnter(event: KeyboardEvent<HTMLTextAreaElement>): void {
-  if (event.key !== 'Enter' || event.shiftKey) return;
+  if (event.key !== 'Enter' || event.shiftKey || isMobileTextEntryViewport()) return;
   event.preventDefault();
   event.currentTarget.form?.requestSubmit();
+}
+
+function isMobileTextEntryViewport(): boolean {
+  return window.matchMedia?.('(hover: none) and (pointer: coarse)').matches ?? false;
 }
 
 function formatDate(value: string): string {
