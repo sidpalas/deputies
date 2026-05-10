@@ -1,6 +1,12 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './app.js';
 
+const { codeToHtmlMock } = vi.hoisted(() => ({
+  codeToHtmlMock: vi.fn((code: string) => `<pre class="shiki"><code>${code}</code></pre>`),
+}));
+
+vi.mock('shiki', () => ({ codeToHtml: codeToHtmlMock }));
+
 const session = {
   id: '00000000-0000-4000-8000-000000000001',
   status: 'idle',
@@ -35,7 +41,9 @@ type MockApiOptions = {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  codeToHtmlMock.mockClear();
   localStorage.clear();
+  document.documentElement.classList.remove('dark');
   setVisibilityState('visible');
 });
 
@@ -507,6 +515,7 @@ it('renders assistant markdown with copyable highlighted code blocks and without
   expect(await screen.findByRole('heading', { name: 'Summary' })).toBeInTheDocument();
   expect(screen.getByText('Done')).toBeInTheDocument();
   expect(screen.getByText('const ok = true;')).toBeInTheDocument();
+  expect(codeToHtmlMock).toHaveBeenCalledWith('const ok = true;', { lang: 'ts', theme: 'github-light-default' });
   expect(screen.getByRole('link', { name: 'Docs' })).toHaveAttribute('href', 'https://example.com');
   expect(document.querySelector('script')).toBeNull();
 

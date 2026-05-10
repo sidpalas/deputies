@@ -1532,14 +1532,40 @@ function MarkdownText(props: { text: string }) {
   );
 }
 
+type ResolvedColorTheme = 'light' | 'dark';
+
+function getResolvedColorTheme(): ResolvedColorTheme {
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+}
+
+function useResolvedColorTheme(): ResolvedColorTheme {
+  const [theme, setTheme] = useState<ResolvedColorTheme>(getResolvedColorTheme);
+
+  useEffect(() => {
+    const updateTheme = () => setTheme(getResolvedColorTheme());
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    updateTheme();
+
+    return () => observer.disconnect();
+  }, []);
+
+  return theme;
+}
+
+function codeHighlightTheme(theme: ResolvedColorTheme): 'github-light-default' | 'github-dark-default' {
+  return theme === 'dark' ? 'github-dark-default' : 'github-light-default';
+}
+
 function HighlightedCode(props: { code: string; language?: string; wrap?: boolean; chrome?: boolean }) {
   const [html, setHtml] = useState('');
   const [copied, setCopied] = useState(false);
+  const colorTheme = useResolvedColorTheme();
 
   useEffect(() => {
     let cancelled = false;
     import('shiki')
-      .then(({ codeToHtml }) => codeToHtml(props.code, { lang: props.language ?? 'text', theme: 'github-dark-default' }))
+      .then(({ codeToHtml }) => codeToHtml(props.code, { lang: props.language ?? 'text', theme: codeHighlightTheme(colorTheme) }))
       .then((nextHtml) => {
         if (!cancelled) setHtml(nextHtml);
       })
@@ -1549,7 +1575,7 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
     return () => {
       cancelled = true;
     };
-  }, [props.code, props.language]);
+  }, [props.code, props.language, colorTheme]);
 
   async function copyCode() {
     await navigator.clipboard.writeText(props.code);
