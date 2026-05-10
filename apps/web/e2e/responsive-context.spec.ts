@@ -25,7 +25,7 @@ test('keeps context collapsed by default on narrow screens', async ({ page }) =>
   expect(messageLogHeight).toBeGreaterThan(300);
 });
 
-test('keeps top mobile session controls non-sticky and clear of the session title', async ({ page }) => {
+test('keeps mobile session controls in a left-aligned row above the session header', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
 
@@ -42,6 +42,8 @@ test('keeps top mobile session controls non-sticky and clear of the session titl
   const controlsBox = await controls.evaluate((element) => element.getBoundingClientRect().toJSON());
   const titleBox = await title.evaluate((element) => element.getBoundingClientRect().toJSON());
   expect(rectsOverlap(controlsBox, titleBox)).toBe(false);
+  expect(controlsBox.y + controlsBox.height).toBeLessThanOrEqual(titleBox.y);
+  expect(controlsBox.x).toBeLessThanOrEqual(titleBox.x);
 });
 
 test('shows context as a sidebar on wide screens', async ({ page }) => {

@@ -922,6 +922,7 @@ export function App() {
               />
             ) : (
             <section className="flex h-full min-h-0 flex-col">
+              {!sidebarOpen ? <div className="flex border-b border-border bg-background/95 px-4 py-2 md:hidden"><MobileSessionActions canCallApi={canCallApi} onNewThread={startNewThread} onOpenSidebar={expandSidebar} /></div> : null}
               <ThreadHeader
                 editingTitle={editingTitle}
                 selectedSession={selectedSession}
@@ -936,7 +937,6 @@ export function App() {
                 <section className="flex min-h-0 min-w-0 flex-col px-3 pt-4 md:px-8 xl:px-20">
                   <div className="relative min-h-0 flex-1">
                     <div className="h-full overflow-auto pb-4" ref={threadScrollRef} onScroll={handleThreadScroll} role="log" aria-label="Session messages">
-                      {!sidebarOpen ? <div className="mb-4 flex justify-end md:hidden"><MobileSessionActions canCallApi={canCallApi} onNewThread={startNewThread} onOpenSidebar={expandSidebar} /></div> : null}
                       <MobileContextPanel repository={selectedRepository} artifacts={artifacts} callbacks={callbacks} onReplayCallback={handleReplayCallback} />
                       <ChatPanel
                         editingMessageId={editingMessageId}
@@ -1296,7 +1296,7 @@ function NewThreadPanel(props: {
   return (
     <section className="grid min-h-screen place-items-center px-4">
       <Card className="w-full max-w-2xl p-5">
-        {props.mobileActions ? <div className="mb-4 flex justify-end md:hidden">{props.mobileActions}</div> : null}
+        {props.mobileActions ? <div className="mb-4 flex justify-start md:hidden">{props.mobileActions}</div> : null}
         <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">Engineering agents for delegated work.</h1>
         <p className="mt-2 text-sm text-muted-foreground">Assign follow-ups, watch the work trail, and inspect the results.</p>
