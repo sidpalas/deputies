@@ -869,8 +869,7 @@ export function App() {
         <>
 
       {!sidebarOpen ? (
-        <div className="flex shrink-0 items-center justify-between border-b border-border bg-background/95 px-3 py-2 backdrop-blur md:hidden">
-          <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Deputies</span>
+        <div className="fixed right-3 top-1/2 z-30 -translate-y-1/2 md:hidden">
           <MobileSessionActions canCallApi={canCallApi} onNewThread={startNewThread} onOpenSidebar={expandSidebar} />
         </div>
       ) : null}
@@ -1277,7 +1276,7 @@ function MobileSessionActions(props: {
   onOpenSidebar: () => void;
 }) {
   return (
-    <div className="flex gap-2">
+    <div className="flex flex-col gap-2">
       <Button className="h-9 w-9 p-0" variant="secondary" size="icon" onClick={props.onOpenSidebar} aria-label="Open sessions" title="Open sessions">
         <PanelLeftOpen className="h-4 w-4" />
       </Button>

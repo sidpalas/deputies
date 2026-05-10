@@ -25,7 +25,7 @@ test('keeps context collapsed by default on narrow screens', async ({ page }) =>
   expect(messageLogHeight).toBeGreaterThan(300);
 });
 
-test('keeps mobile session controls in app chrome without covering the session title', async ({ page }) => {
+test('keeps floating mobile session controls from covering the session title', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
 
@@ -39,7 +39,7 @@ test('keeps mobile session controls in app chrome without covering the session t
 
   const controlsBox = await openSessions.locator('..').evaluate((element) => element.getBoundingClientRect().toJSON());
   const titleBox = await title.evaluate((element) => element.getBoundingClientRect().toJSON());
-  expect(controlsBox.y + controlsBox.height).toBeLessThanOrEqual(titleBox.y);
+  expect(rectsOverlap(controlsBox, titleBox)).toBe(false);
 });
 
 test('shows context as a sidebar on wide screens', async ({ page }) => {
@@ -124,6 +124,12 @@ const events = [{
   payload: { text: 'Responsive context check complete.' },
   createdAt: '2026-05-05T12:02:00.000Z',
 }];
+
+type Rect = { x: number; y: number; width: number; height: number };
+
+function rectsOverlap(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
 
 const callbacks = [{
   id: '00000000-0000-4000-8000-000000000301',
