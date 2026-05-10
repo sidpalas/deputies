@@ -96,6 +96,12 @@ export class EventService {
     return this.subscribeGlobal(subscriber, true);
   }
 
+  subscriberCount(): number {
+    let sessionSubscriberCount = 0;
+    for (const subscribers of this.subscribers.values()) sessionSubscriberCount += subscribers.size;
+    return sessionSubscriberCount + this.globalSubscribers.size;
+  }
+
   private subscribeGlobal(subscriber: EventSubscriber, allEvents: boolean): () => void {
     const record = { handler: subscriber, allEvents };
     this.globalSubscribers.add(record);

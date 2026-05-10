@@ -304,18 +304,23 @@ async function streamEventResponse(
   const decoder = new TextDecoder();
   let buffer = '';
 
-  while (!input.signal.aborted) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let boundary = buffer.indexOf('\n\n');
-    while (boundary !== -1) {
-      const frame = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const data = parseSseData(frame);
-      if (data) input.onEvent(JSON.parse(data) as AgentEvent);
-      boundary = buffer.indexOf('\n\n');
+  try {
+    while (!input.signal.aborted) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = parseSseData(frame);
+        if (data) input.onEvent(JSON.parse(data) as AgentEvent);
+        boundary = buffer.indexOf('\n\n');
+      }
     }
+  } finally {
+    if (input.signal.aborted) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 }
 

@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import { createServer, createServices } from '../../src/app/server.js';
+import { createServer, createServices, type AppServices } from '../../src/app/server.js';
 import { loadConfig } from '../../src/config/index.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
 import { MemoryStore } from '../../src/store/memory.js';
@@ -19,10 +19,12 @@ describe('core API', () => {
   let server: Server;
   let baseUrl: string;
   let store: MemoryStore;
+  let services: AppServices;
 
   beforeEach(async () => {
     store = new MemoryStore();
-    server = createServer(loadConfig({ API_AUTH_MODE: 'none' }), createServices(store));
+    services = createServices(store);
+    server = createServer(loadConfig({ API_AUTH_MODE: 'none' }), services);
     baseUrl = await listen(server);
   });
 
@@ -531,6 +533,22 @@ describe('core API', () => {
     await expect(nextEvent).resolves.toMatchObject({ type: 'message_created', sessionId: session.id, id: 2 });
   });
 
+  it('cleans up SSE subscribers when clients disconnect', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Cleanup stream session' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    const abort = new AbortController();
+
+    const streamResponse = await fetch(`${baseUrl}/sessions/${session.id}/events/stream`, { signal: abort.signal });
+    expect(streamResponse.status).toBe(200);
+    expect(services.events.subscriberCount()).toBe(1);
+
+    abort.abort();
+    void streamResponse.body?.cancel().catch(() => undefined);
+
+    await waitForZero(() => services.events.subscriberCount());
+    expect(services.events.subscriberCount()).toBe(0);
+  });
+
   it('returns 404 when enqueueing a message for a missing session', async () => {
     const response = await postJson(`${baseUrl}/sessions/missing/messages`, { prompt: 'hello' });
 
@@ -653,6 +671,13 @@ async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
+}
+
+async function waitForZero(readValue: () => number, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (readValue() !== 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 async function readNextSseEvent(response: Response, abort: AbortController): Promise<{ id: number; type: string; sequence: number }> {

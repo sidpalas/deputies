@@ -608,30 +608,41 @@ async function writeEventStream(
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
   let cursor = options.after;
+  let closed = false;
+  let writeQueue: Promise<void> = Promise.resolve();
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let unsubscribe: (() => void) | undefined;
 
-  const write = async (chunk: string) => {
-    await writer.write(encoder.encode(chunk));
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    if (heartbeat) clearInterval(heartbeat);
+    unsubscribe?.();
+    writer.close().catch(() => {});
+  };
+
+  const write = (chunk: string): Promise<void> => {
+    if (closed) return Promise.resolve();
+    const nextWrite = writeQueue.then(async () => {
+      if (!closed) await writer.write(encoder.encode(chunk));
+    });
+    writeQueue = nextWrite.catch(() => {});
+    nextWrite.catch(cleanup);
+    return nextWrite;
   };
   const writeEvent = (event: Awaited<ReturnType<EventService['list']>>[number]) => {
     const eventId = options.id(event);
-    if (eventId <= cursor) return;
+    if (eventId <= cursor || closed) return;
     cursor = eventId;
-    write(`id: ${eventId}\n`)
-      .then(() => write(`event: ${event.type}\n`))
-      .then(() => write(`data: ${JSON.stringify(event)}\n\n`))
-      .catch(() => {});
+    write(`id: ${eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).catch(() => {});
   };
 
-  const unsubscribe = options.subscribe(writeEvent);
-  const heartbeat = setInterval(() => {
+  unsubscribe = options.subscribe(writeEvent);
+  heartbeat = setInterval(() => {
     write(': keep-alive\n\n').catch(() => {});
   }, 15_000);
 
-  c.req.raw.signal.addEventListener('abort', () => {
-    clearInterval(heartbeat);
-    unsubscribe();
-    writer.close().catch(() => {});
-  });
+  c.req.raw.signal.addEventListener('abort', cleanup, { once: true });
 
   void (async () => {
     try {
@@ -642,9 +653,7 @@ async function writeEventStream(
         }
       }
     } catch {
-      clearInterval(heartbeat);
-      unsubscribe();
-      await writer.close().catch(() => {});
+      cleanup();
     }
   })();
 

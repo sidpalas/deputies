@@ -1560,7 +1560,14 @@ function codeHighlightTheme(theme: ResolvedColorTheme): 'github-light-default' |
 function HighlightedCode(props: { code: string; language?: string; wrap?: boolean; chrome?: boolean }) {
   const [html, setHtml] = useState('');
   const [copied, setCopied] = useState(false);
+  const copiedResetTimer = useRef<number | null>(null);
   const colorTheme = useResolvedColorTheme();
+
+  useEffect(() => {
+    return () => {
+      if (copiedResetTimer.current !== null) window.clearTimeout(copiedResetTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1580,7 +1587,11 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
   async function copyCode() {
     await navigator.clipboard.writeText(props.code);
     setCopied(true);
-    window.setTimeout(() => setCopied(false), 1400);
+    if (copiedResetTimer.current !== null) window.clearTimeout(copiedResetTimer.current);
+    copiedResetTimer.current = window.setTimeout(() => {
+      copiedResetTimer.current = null;
+      setCopied(false);
+    }, 1400);
   }
 
   return (
