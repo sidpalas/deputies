@@ -562,6 +562,7 @@ export function App() {
       setArtifacts([]);
       setCallbacks([]);
       eventCursor.current = 0;
+      blurFocusedTextControl();
       setNewThreadPrompt('');
       setNewThreadRepository('');
       setIsCreatingThread(false);
@@ -1312,7 +1313,10 @@ function MessageComposer(props: {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const sent = await props.onSubmit({ prompt, repository });
-    if (sent) setPrompt('');
+    if (sent) {
+      blurFocusedTextControl();
+      setPrompt('');
+    }
   }
 
   return (
@@ -1904,6 +1908,11 @@ function submitOnEnter(event: KeyboardEvent<HTMLTextAreaElement>): void {
 
 function isMobileTextEntryViewport(): boolean {
   return window.matchMedia?.('(hover: none) and (pointer: coarse)').matches ?? false;
+}
+
+function blurFocusedTextControl(): void {
+  const activeElement = document.activeElement;
+  if (activeElement instanceof HTMLTextAreaElement || activeElement instanceof HTMLInputElement) activeElement.blur();
 }
 
 function formatDate(value: string): string {

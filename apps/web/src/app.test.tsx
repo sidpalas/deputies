@@ -79,6 +79,23 @@ it('keeps Enter available for newlines in mobile composer text', async () => {
   await waitFor(() => expect(submittedPrompts).toEqual(['line one']));
 });
 
+it('blurs the composer before clearing submitted text', async () => {
+  const submittedPrompts: string[] = [];
+  mockApi({ submittedPrompts });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  composer.focus();
+  expect(document.activeElement).toBe(composer);
+
+  fireEvent.change(composer, { target: { value: 'follow up' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+
+  await waitFor(() => expect(submittedPrompts).toEqual(['follow up']));
+  await waitFor(() => expect(composer).toHaveValue(''));
+  expect(document.activeElement).not.toBe(composer);
+});
+
 it('keeps sidebar reachable after mobile open, hide, and reopen actions', async () => {
   mockApi();
   render(<App />);
