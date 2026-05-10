@@ -321,6 +321,44 @@ describe('WorkerService', () => {
     ]);
   });
 
+  it('allows another worker to process a different session while one session is active', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const sessionA = await services.sessions.create({ title: 'Active session' });
+    const sessionB = await services.sessions.create({ title: 'Other session' });
+    await services.messages.enqueue({ sessionId: sessionA.id, prompt: 'long running' });
+    await services.messages.enqueue({ sessionId: sessionB.id, prompt: 'should not wait' });
+
+    const blockingRunner = new BlockingRunner();
+    const workerA = new WorkerService({
+      store,
+      events: services.events,
+      runner: blockingRunner,
+      runnerType: 'blocking',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker-a',
+      heartbeatIntervalMs: 60_000,
+    });
+    const workerB = new WorkerService({
+      store,
+      events: services.events,
+      runner: new FakeRunner(),
+      runnerType: 'fake',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker-b',
+    });
+
+    const active = workerA.processNext();
+    await blockingRunner.waitForStart();
+
+    await expect(workerB.processNext()).resolves.toBe(true);
+    await expect(services.messages.list(sessionB.id)).resolves.toMatchObject([{ status: 'completed' }]);
+    await expect(services.messages.list(sessionA.id)).resolves.toMatchObject([{ status: 'processing' }]);
+
+    blockingRunner.release();
+    await expect(active).resolves.toBe(true);
+  });
+
   it('restarts a stopped persisted sandbox for follow-up messages', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -351,6 +389,40 @@ describe('WorkerService', () => {
     );
     expect(sandboxReadyEvents.map((event) => event.payload.created)).toEqual([true, false]);
     expect(provider.starts).toBe(1);
+  });
+
+  it('drains available work without waiting for the next poll interval', async () => {
+    let calls = 0;
+    const loop = startWorkerLoop(
+      {
+        async processNext() {
+          calls += 1;
+          return calls < 3;
+        },
+      },
+      60_000,
+    );
+
+    await waitFor(() => calls === 3);
+    await loop.stop();
+  });
+
+  it('can be woken up before the next poll interval', async () => {
+    let calls = 0;
+    const loop = startWorkerLoop(
+      {
+        async processNext() {
+          calls += 1;
+          return false;
+        },
+      },
+      60_000,
+    );
+
+    await waitFor(() => calls === 1);
+    loop.wake();
+    await waitFor(() => calls === 2);
+    await loop.stop();
   });
 
   it('stops the worker loop after in-flight processing completes', async () => {

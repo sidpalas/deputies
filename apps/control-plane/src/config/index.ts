@@ -10,6 +10,7 @@ export type AppConfig = {
   port: number;
   maxJsonBodyBytes: number;
   runCancellationPollIntervalMs: number;
+  workerConcurrency: number;
   sandboxIdleTimeoutSeconds: number;
   sandboxStopDelaySeconds: number;
   sandboxRetentionSeconds: number;
@@ -69,6 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     port: parsePort(env.PORT),
     maxJsonBodyBytes: parsePositiveInteger(env.MAX_JSON_BODY_BYTES, 1_048_576, 'MAX_JSON_BODY_BYTES'),
     runCancellationPollIntervalMs: parsePositiveInteger(env.RUN_CANCELLATION_POLL_INTERVAL_MS, 1_000, 'RUN_CANCELLATION_POLL_INTERVAL_MS'),
+    workerConcurrency: parsePositiveInteger(env.WORKER_CONCURRENCY, 4, 'WORKER_CONCURRENCY'),
     sandboxIdleTimeoutSeconds: parsePositiveInteger(env.SANDBOX_IDLE_TIMEOUT_SECONDS, 900, 'SANDBOX_IDLE_TIMEOUT_SECONDS'),
     sandboxStopDelaySeconds: parseNonNegativeInteger(env.SANDBOX_STOP_DELAY_SECONDS, 60, 'SANDBOX_STOP_DELAY_SECONDS'),
     sandboxRetentionSeconds: parsePositiveInteger(env.SANDBOX_RETENTION_SECONDS, 3600, 'SANDBOX_RETENTION_SECONDS'),
