@@ -1432,7 +1432,7 @@ function ChatPanel(props: {
               />
             ))}
             {response ? (
-            <Card className="p-3">
+            <Card className="min-w-0 overflow-hidden p-3">
               <h3 className="mb-1 text-xs font-medium text-muted-foreground">{activeRun ? 'Deputy progress' : 'Deputy response'}</h3>
               <MarkdownText text={formatAssistantDisplayText(response)} />
             </Card>
@@ -1512,7 +1512,7 @@ function MarkdownText(props: { text: string }) {
         code: ({ children, className, ...props }) => {
           const code = String(children).replace(/\n$/, '');
           const language = className?.match(/language-(\S+)/)?.[1];
-          if (language || String(children).includes('\n')) return <HighlightedCode code={code} wrap {...(language ? { language } : {})} />;
+          if (language || String(children).includes('\n')) return <HighlightedCode code={code} {...(language ? { language } : {})} />;
           return <code className={cn('rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground shadow-sm break-words', className)} {...props}>{children}</code>;
         },
         h1: ({ className, ...props }) => <h1 className={cn('mt-4 text-xl font-semibold text-foreground first:mt-0', className)} {...props} />,
@@ -1599,7 +1599,7 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
   }
 
   return (
-    <figure className="my-3 min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-[0_12px_32px_rgb(0_0_0_/_0.18)]">
+    <figure className="my-3 w-full max-w-full min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-[0_12px_32px_rgb(0_0_0_/_0.18)]">
       {props.chrome !== false ? (
         <figcaption className="flex items-center justify-between border-b border-border bg-muted/80 px-3 py-1.5 text-[0.7rem] font-medium uppercase tracking-widest text-muted-foreground">
           <span>{props.language ?? 'text'}</span>
@@ -1610,9 +1610,9 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
         </figcaption>
       ) : null}
       {html ? (
-        <div className={cn('highlighted-code text-sm leading-6', props.wrap ? 'highlighted-code-wrap overflow-hidden' : 'overflow-auto')} dangerouslySetInnerHTML={{ __html: html }} />
+        <div className={cn('highlighted-code text-sm leading-6', props.wrap ? 'highlighted-code-wrap overflow-hidden' : 'overflow-x-auto overflow-y-hidden')} dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
-        <pre className={cn('p-3 text-sm leading-6 text-foreground', props.wrap ? 'overflow-hidden whitespace-pre-wrap break-words' : 'overflow-auto')}><code>{props.code}</code></pre>
+        <pre className={cn('p-3 text-sm leading-6 text-foreground', props.wrap ? 'overflow-hidden whitespace-pre-wrap break-words' : 'overflow-x-auto overflow-y-hidden')}><code>{props.code}</code></pre>
       )}
     </figure>
   );
