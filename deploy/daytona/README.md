@@ -20,14 +20,21 @@ If your Daytona target supports privileged Docker, `deploy/local/docker-compose.
 Build from the repository root so the Docker context has access to this file:
 
 ```sh
-docker build -f deploy/daytona/Dockerfile -t ghcr.io/<owner>/deputies-daytona:node24-pg16-playwright1.59.1 .
-docker push ghcr.io/<owner>/deputies-daytona:node24-pg16-playwright1.59.1
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/daytona/Dockerfile -t ghcr.io/<owner>/deputies-daytona:node24-pg16-playwright1.59.1 --push .
 ```
 
 Or use mise:
 
 ```sh
 mise run daytona-image-publish
+```
+
+Daytona currently pulls `linux/amd64` images. If you build on Apple Silicon without `--platform linux/amd64`, GHCR may publish an ARM-only manifest and Daytona will fail with `no match for platform in manifest`. The publish command also disables SBOM/provenance attestations so GHCR does not add extra `unknown/unknown` package entries that can confuse strict image resolvers.
+
+To publish the `latest` tag explicitly:
+
+```sh
+DAYTONA_IMAGE=ghcr.io/<owner>/deputies-daytona:latest mise run daytona-image-publish
 ```
 
 Use any registry Daytona can pull from. For private registries, configure registry credentials in Daytona before using the image.

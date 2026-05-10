@@ -32,12 +32,32 @@ depends = ["deploy-api", "deploy-web"]
 
 [tasks.daytona-image-build]
 description = "Build the Daytona sandbox image"
-run = "docker build -f deploy/daytona/Dockerfile -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona:node24-pg16-playwright1.59.1} ."
+# Daytona pulls amd64 images, and disabling provenance/SBOM avoids extra
+# unknown/unknown GHCR attestation manifests that can confuse image resolution.
+run = """
+docker buildx build \
+  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
+  --provenance=false \
+  --sbom=false \
+  -f deploy/daytona/Dockerfile \
+  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona:node24-pg16-playwright1.59.1} \
+  --load \
+  .
+"""
 
 [tasks.daytona-image-push]
-description = "Push the Daytona sandbox image"
-run = "docker push ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona:node24-pg16-playwright1.59.1}"
+description = "Build and push the Daytona sandbox image"
+run = """
+docker buildx build \
+  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
+  --provenance=false \
+  --sbom=false \
+  -f deploy/daytona/Dockerfile \
+  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona:node24-pg16-playwright1.59.1} \
+  --push \
+  .
+"""
 
 [tasks.daytona-image-publish]
 description = "Build and push the Daytona sandbox image"
-depends = ["daytona-image-build", "daytona-image-push"]
+depends = ["daytona-image-push"]
