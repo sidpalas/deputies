@@ -30,6 +30,7 @@ import {
   pauseQueue,
   replayCallback,
   resumeQueue,
+  retryMessage,
   streamGlobalEvents,
   unarchiveSession,
   updateMessage,
@@ -693,6 +694,26 @@ export function App() {
     }
   }
 
+  async function retryFailedMessages(messageIds: string[]) {
+    if (!selectedSessionId || selectedSessionArchived || !messageIds.length) return;
+    setLoading(true);
+    setError('');
+    try {
+      const retriedMessages: Message[] = [];
+      for (const messageId of messageIds) {
+        retriedMessages.push(await retryMessage({ sessionId: selectedSessionId, messageId, token }));
+      }
+      setMessages((current) => [...current, ...retriedMessages]);
+      setThreadAutoFollowEnabled(true);
+      await refreshSessions();
+      await refreshSessionDetail(selectedSessionId);
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function cancelRun() {
     if (!selectedSessionId) return;
     setError('');
@@ -1022,11 +1043,13 @@ export function App() {
                         events={events}
                         messageDraft={messageDraft}
                         messages={messages}
+                        canRetryMessages={!selectedSessionArchived}
                         onCancelEdit={() => finishEditingMessage(true)}
                         onCancelQueuedMessage={cancelQueuedMessage}
                         onCancelRun={cancelRun}
                         onEditMessage={startEditingMessage}
                         onMessageDraftChange={setMessageDraft}
+                        onRetryFailedMessages={retryFailedMessages}
                         onSaveEdit={saveMessageEdit}
                       />
                       <div ref={threadEndRef} />
@@ -1491,6 +1514,7 @@ function ThreadHeader(props: {
 }
 
 function ChatPanel(props: {
+  canRetryMessages: boolean;
   editingMessageId: string;
   events: AgentEvent[];
   messageDraft: string;
@@ -1500,6 +1524,7 @@ function ChatPanel(props: {
   onCancelRun: () => void;
   onEditMessage: (message: Message) => void;
   onMessageDraftChange: (value: string) => void;
+  onRetryFailedMessages: (messageIds: string[]) => void;
   onSaveEdit: () => void;
 }) {
   const assistantText = buildAssistantText(props.events);
@@ -1513,20 +1538,26 @@ function ChatPanel(props: {
         const groupDiagnostics = diagnostics[group.runId ?? group.responseMessageId] ?? [];
         const activeRun = isActiveRunGroup(group.messages);
         const cancellingRun = isCancellingRunGroup(group.messages);
+        const failedMessages = group.messages.filter((message) => message.status === 'failed');
         return (
-            <div className="grid min-w-0 gap-2" key={group.key}>
+          <div className="grid min-w-0 gap-2" key={group.key}>
             {group.messages.length > 1 ? (
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Queued batch · {group.messages.filter((message) => message.status !== 'cancelled').length} active messages</p>
-                {activeRun ? <CancelRunButton cancelling={cancellingRun} onCancelRun={props.onCancelRun} /> : null}
+                <div className="flex flex-wrap justify-end gap-2">
+                  {failedMessages.length > 0 && !activeRun ? <RetryMessagesButton count={failedMessages.length} disabled={!props.canRetryMessages} onRetry={() => props.onRetryFailedMessages(failedMessages.map((message) => message.id))} /> : null}
+                  {activeRun ? <CancelRunButton cancelling={cancellingRun} onCancelRun={props.onCancelRun} /> : null}
+                </div>
               </div>
             ) : null}
             {group.messages.map((message) => (
               <UserMessageCard
+                canRetryMessages={props.canRetryMessages}
                 editingMessageId={props.editingMessageId}
                 key={message.id}
                 message={message}
                 messageDraft={props.messageDraft}
+                showMessageRetry={group.messages.length === 1 && message.status === 'failed'}
                 showRunCancel={group.messages.length === 1 && activeRun}
                 runCancelling={cancellingRun}
                 onCancelEdit={props.onCancelEdit}
@@ -1534,15 +1565,16 @@ function ChatPanel(props: {
                 onCancelRun={props.onCancelRun}
                 onEditMessage={props.onEditMessage}
                 onMessageDraftChange={props.onMessageDraftChange}
+                onRetryFailedMessages={props.onRetryFailedMessages}
                 onSaveEdit={props.onSaveEdit}
               />
             ))}
             {response ? (
-            <Card className="min-w-0 overflow-hidden p-3">
-              <h3 className="mb-1 text-xs font-medium text-muted-foreground">{activeRun ? 'Deputy progress' : 'Deputy response'}</h3>
-              <MarkdownText text={formatAssistantDisplayText(response)} />
-            </Card>
-          ) : null}
+              <Card className="min-w-0 overflow-hidden p-3">
+                <h3 className="mb-1 text-xs font-medium text-muted-foreground">{activeRun ? 'Deputy progress' : 'Deputy response'}</h3>
+                <MarkdownText text={formatAssistantDisplayText(response)} />
+              </Card>
+            ) : null}
             <Diagnostics events={groupDiagnostics} />
           </div>
         );
@@ -1553,9 +1585,11 @@ function ChatPanel(props: {
 }
 
 function UserMessageCard(props: {
+  canRetryMessages: boolean;
   editingMessageId: string;
   message: Message;
   messageDraft: string;
+  showMessageRetry: boolean;
   showRunCancel: boolean;
   runCancelling: boolean;
   onCancelEdit: () => void;
@@ -1563,6 +1597,7 @@ function UserMessageCard(props: {
   onCancelRun: () => void;
   onEditMessage: (message: Message) => void;
   onMessageDraftChange: (value: string) => void;
+  onRetryFailedMessages: (messageIds: string[]) => void;
   onSaveEdit: () => void;
 }) {
   const { message } = props;
@@ -1576,6 +1611,7 @@ function UserMessageCard(props: {
             <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onCancelQueuedMessage(message.id)}>Cancel</Button>
           </div>
         ) : null}
+        {props.showMessageRetry ? <RetryMessagesButton disabled={!props.canRetryMessages} onRetry={() => props.onRetryFailedMessages([message.id])} /> : null}
         {props.showRunCancel ? <CancelRunButton cancelling={props.runCancelling} onCancelRun={props.onCancelRun} /> : null}
       </div>
       {props.editingMessageId === message.id ? (
@@ -1750,6 +1786,14 @@ function CancelRunButton(props: { cancelling: boolean; onCancelRun: () => void }
   return (
     <Button className="h-7 px-2" type="button" variant="secondary" size="sm" onClick={props.onCancelRun} disabled={props.cancelling}>
       <X className="h-3.5 w-3.5" /> {props.cancelling ? 'Cancelling...' : 'Cancel task'}
+    </Button>
+  );
+}
+
+function RetryMessagesButton(props: { count?: number; disabled?: boolean; onRetry: () => void }) {
+  return (
+    <Button className="h-7 px-2" type="button" variant="secondary" size="sm" onClick={props.onRetry} disabled={props.disabled}>
+      <RotateCcw className="h-3.5 w-3.5" /> {props.count && props.count > 1 ? `Retry ${props.count} failed` : 'Retry'}
     </Button>
   );
 }

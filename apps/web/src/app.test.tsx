@@ -25,6 +25,7 @@ type MockApiOptions = {
   callbacks?: unknown[];
   sessionOverride?: Partial<typeof session>;
   onCancelRun?: () => void;
+  onRetryMessage?: (messageId: string) => void;
   onReplayCallback?: (callbackId: string) => void;
   onStreamOpen?: (push: StreamEventPusher) => void;
   onGlobalStreamOpen?: (push: StreamEventPusher) => void;
@@ -273,6 +274,40 @@ it('shows cancelling state on the active message cancel action', async () => {
 
   const messageCard = await screen.findByRole('article', { name: 'Message 1' });
   expect(within(messageCard).getByRole('button', { name: 'Cancelling...' })).toBeDisabled();
+});
+
+it('retries a failed message from its message card', async () => {
+  const retriedMessageIds: string[] = [];
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000120', sequence: 1, status: 'failed', prompt: 'try this again' })],
+    onRetryMessage: (messageId) => retriedMessageIds.push(messageId),
+  });
+  render(<App />);
+
+  const messageCard = await screen.findByRole('article', { name: 'Message 1' });
+  fireEvent.click(within(messageCard).getByRole('button', { name: 'Retry' }));
+
+  await waitFor(() => expect(retriedMessageIds).toEqual(['00000000-0000-4000-8000-000000000120']));
+  expect(await screen.findByRole('article', { name: 'Message 2' })).toHaveTextContent('try this again');
+});
+
+it('retries all failed messages in a failed message group', async () => {
+  const retriedMessageIds: string[] = [];
+  mockApi({
+    messages: [
+      messageFixture({ id: '00000000-0000-4000-8000-000000000121', sequence: 1, status: 'failed', prompt: 'first failed task' }),
+      messageFixture({ id: '00000000-0000-4000-8000-000000000122', sequence: 2, status: 'failed', prompt: 'second failed task' }),
+    ],
+    events: [eventFixture({ sequence: 1, type: 'message_started', runId: '00000000-0000-4000-8000-000000000220', messageId: '00000000-0000-4000-8000-000000000121', payload: { sequences: [1, 2], batchSize: 2 } })],
+    onRetryMessage: (messageId) => retriedMessageIds.push(messageId),
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Retry 2 failed' }));
+
+  await waitFor(() => expect(retriedMessageIds).toEqual(['00000000-0000-4000-8000-000000000121', '00000000-0000-4000-8000-000000000122']));
+  expect(await screen.findByRole('article', { name: 'Message 3' })).toHaveTextContent('first failed task');
+  expect(await screen.findByRole('article', { name: 'Message 4' })).toHaveTextContent('second failed task');
 });
 
 it('logs in with session auth before loading sessions', async () => {
@@ -802,6 +837,7 @@ function mockApi(options: MockApiOptions = {}) {
   let currentSession = { ...session, ...options.sessionOverride };
   let currentUser = options.currentUser;
   let callbacks = options.callbacks ?? [];
+  let messages = options.messages ?? [];
   let sessionsRequestCount = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
@@ -854,27 +890,46 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/messages` && method === 'GET') {
-      return jsonResponse({ messages: options.messages ?? [] });
+      return jsonResponse({ messages });
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/messages` && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { prompt: string };
       options.submittedPrompts?.push(body.prompt);
-      return jsonResponse({
-        message: {
-          id: '00000000-0000-4000-8000-000000000101',
-          sessionId: currentSession.id,
-          sequence: 1,
-          status: 'pending',
-          prompt: body.prompt,
-          createdAt: '2026-05-05T12:01:00.000Z',
-        },
-      }, 202);
+      const message = {
+        id: '00000000-0000-4000-8000-000000000101',
+        sessionId: currentSession.id,
+        sequence: 1,
+        status: 'pending',
+        prompt: body.prompt,
+        createdAt: '2026-05-05T12:01:00.000Z',
+      };
+      messages = [...messages, message];
+      return jsonResponse({ message }, 202);
+    }
+
+    const retryMessageMatch = url.pathname.match(new RegExp(`^/sessions/${currentSession.id}/messages/([^/]+)/retry$`));
+    if (retryMessageMatch && method === 'POST') {
+      const messageId = retryMessageMatch[1]!;
+      options.onRetryMessage?.(messageId);
+      const failedMessage = messages.find((message) => (message as { id?: string }).id === messageId) as { prompt?: string; source?: string; context?: Record<string, unknown> } | undefined;
+      const retriedMessage = {
+        id: `00000000-0000-4000-8000-0000000009${messages.length + 1}`,
+        sessionId: currentSession.id,
+        sequence: messages.length + 1,
+        status: 'pending',
+        prompt: failedMessage?.prompt ?? 'retried message',
+        ...(failedMessage?.source ? { source: failedMessage.source } : {}),
+        ...(failedMessage?.context ? { context: failedMessage.context } : {}),
+        createdAt: '2026-05-05T12:05:00.000Z',
+      };
+      messages = [...messages, retriedMessage];
+      return jsonResponse({ message: retriedMessage }, 202);
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/runs/current/cancel` && method === 'POST') {
       options.onCancelRun?.();
-      return jsonResponse({ messages: (options.messages ?? []).map((message) => ({ ...(message as object), status: 'cancelling' })) });
+      return jsonResponse({ messages: messages.map((message) => ({ ...(message as object), status: 'cancelling' })) });
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/events`) {
