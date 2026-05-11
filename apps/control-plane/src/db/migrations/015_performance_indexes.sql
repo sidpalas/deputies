@@ -16,7 +16,3 @@ CREATE INDEX IF NOT EXISTS sandboxes_provider_active_updated_idx
 CREATE INDEX IF NOT EXISTS sandboxes_provider_ready_updated_idx
   ON sandboxes (provider, updated_at ASC)
   WHERE destroyed_at IS NULL AND status = 'ready';
-
-CREATE INDEX IF NOT EXISTS callback_deliveries_sending_last_attempt_idx
-  ON callback_deliveries (last_attempt_at, created_at)
-  WHERE status = 'sending';

@@ -31,7 +31,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
   && apt-get update \
   && apt-get install -y --no-install-recommends nodejs \
   && corepack enable \
-  && curl https://mise.run | sh \
+  && curl -fsSL https://mise.run | sh \
   && mv /root/.local/bin/mise /usr/local/bin/mise \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*

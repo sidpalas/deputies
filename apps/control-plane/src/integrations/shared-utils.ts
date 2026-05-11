@@ -39,6 +39,23 @@ export async function getOrCreateExternalThreadSession(
     title: string;
   },
 ): Promise<SessionRecord> {
+  if (store.withExternalThreadLock) {
+    return store.withExternalThreadLock(input.source, input.externalId, () => getOrCreateExternalThreadSessionUnlocked(store, sessions, input));
+  }
+
+  return getOrCreateExternalThreadSessionUnlocked(store, sessions, input);
+}
+
+async function getOrCreateExternalThreadSessionUnlocked(
+  store: AppStore,
+  sessions: SessionService,
+  input: {
+    source: string;
+    externalId: string;
+    metadata: Record<string, unknown>;
+    title: string;
+  },
+): Promise<SessionRecord> {
   const existingThread = await store.getExternalThread(input.source, input.externalId);
   if (existingThread) {
     const session = await sessions.get(existingThread.sessionId);

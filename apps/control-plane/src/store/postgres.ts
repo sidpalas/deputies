@@ -239,6 +239,18 @@ export class PostgresStore implements AppStore {
     }
   }
 
+  async withExternalThreadLock<T>(source: string, externalId: string, fn: () => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    const lockKey = `${source}:${externalId}`;
+    try {
+      await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
+      return await fn();
+    } finally {
+      await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]);
+      client.release();
+    }
+  }
+
   async upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord> {
     const client = await this.pool.connect();
     try {

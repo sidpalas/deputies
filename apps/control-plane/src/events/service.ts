@@ -54,9 +54,7 @@ export class EventService {
     if (input.runId) event.runId = input.runId;
     if (input.messageId) event.messageId = input.messageId;
 
-    const persisted = this.store.appendEventWithNextSequence
-      ? await this.store.appendEventWithNextSequence(event)
-      : await this.store.appendEvent({ ...event, sequence: await this.store.nextEventSequence(input.sessionId) });
+    const persisted = await this.store.appendEventWithNextSequence(event);
     this.publish(persisted);
     return persisted as PersistedEvent<T>;
   }

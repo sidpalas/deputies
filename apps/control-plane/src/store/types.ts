@@ -316,7 +316,7 @@ export interface CallbackStore {
 export interface EventStore {
   nextEventSequence(sessionId: string): Promise<number>;
   appendEvent(event: NormalizedEvent & { sequence: number }): Promise<EventRecord>;
-  appendEventWithNextSequence?(event: NormalizedEvent): Promise<EventRecord>;
+  appendEventWithNextSequence(event: NormalizedEvent): Promise<EventRecord>;
   getEvents(sessionId: string, afterSequence?: number): Promise<EventRecord[]>;
   listEvents(afterId?: number): Promise<EventRecord[]>;
 }
@@ -334,6 +334,7 @@ export interface AppStore extends SessionStore, MessageStore, RunStore, SandboxS
 
   createWebhookSource(record: CreateWebhookSourceRecord): Promise<WebhookSourceRecord>;
   getWebhookSource(key: string): Promise<WebhookSourceRecord | null>;
+  withExternalThreadLock?<T>(source: string, externalId: string, fn: () => Promise<T>): Promise<T>;
   getExternalThread(source: string, externalId: string): Promise<ExternalThreadRecord | null>;
   createExternalThread(input: {
     id: string;
