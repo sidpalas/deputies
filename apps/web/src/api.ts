@@ -203,6 +203,15 @@ export async function cancelMessage(input: { sessionId: string; messageId: strin
   return body.message;
 }
 
+export async function retryMessage(input: { sessionId: string; messageId: string; token: string }): Promise<Message> {
+  const body = await request<{ message: Message }>(`/sessions/${input.sessionId}/messages/${input.messageId}/retry`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.message;
+}
+
 export async function cancelCurrentRun(input: { sessionId: string; token: string }): Promise<Message[]> {
   const body = await request<{ messages: Message[] }>(`/sessions/${input.sessionId}/runs/current/cancel`, {
     method: 'POST',
