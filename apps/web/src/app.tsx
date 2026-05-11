@@ -210,8 +210,6 @@ export function App() {
   const [callbacks, setCallbacks] = useState<CallbackDelivery[]>([]);
   const [newThreadPrompt, setNewThreadPrompt] = useState('');
   const [newThreadRepository, setNewThreadRepository] = useState('');
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState('');
   const [editingMessageId, setEditingMessageId] = useState('');
   const [messageDraft, setMessageDraft] = useState('');
   const [draftToken, setDraftToken] = useState(token);
@@ -320,11 +318,6 @@ export function App() {
       window.removeEventListener(apiConnectionDelayedEvent, handleConnectionDelayed);
     };
   }, []);
-
-  useEffect(() => {
-    setTitleDraft(selectedSession?.title ?? '');
-    setEditingTitle(false);
-  }, [selectedSession?.id, selectedSession?.title]);
 
   useEffect(() => {
     const markWakeRecovery = () => {
@@ -622,16 +615,17 @@ export function App() {
     }
   }
 
-  async function handleUpdateTitle(event: FormEvent) {
-    event.preventDefault();
-    if (!selectedSessionId || !titleDraft.trim()) return;
+  async function handleUpdateTitle(title: string): Promise<boolean> {
+    const nextTitle = title.trim();
+    if (!selectedSessionId || !nextTitle) return false;
     setError('');
     try {
-      const session = await updateSession({ sessionId: selectedSessionId, title: titleDraft.trim(), token });
+      const session = await updateSession({ sessionId: selectedSessionId, title: nextTitle, token });
       setSessions((current) => current.map((candidate) => (candidate.id === session.id ? session : candidate)));
-      setEditingTitle(false);
+      return true;
     } catch (err) {
       handleApiError(err);
+      return false;
     }
   }
 
@@ -1012,15 +1006,10 @@ export function App() {
             ) : (
             <section className="flex h-full min-h-0 flex-col">
               <ThreadHeader
-                editingTitle={editingTitle}
                 selectedSession={selectedSession}
                 showOpenSidebar={!sidebarOpen}
-                titleDraft={titleDraft}
                 onArchive={handleArchiveSession}
-                onCancelTitle={() => setEditingTitle(false)}
-                onEditTitle={() => setEditingTitle(true)}
                 onOpenSidebar={expandSidebar}
-                onTitleDraftChange={setTitleDraft}
                 onUpdateTitle={handleUpdateTitle}
               />
               <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -1441,17 +1430,31 @@ function MessageComposer(props: {
 }
 
 function ThreadHeader(props: {
-  editingTitle: boolean;
   selectedSession: Session;
   showOpenSidebar: boolean;
-  titleDraft: string;
   onArchive: () => void;
-  onCancelTitle: () => void;
-  onEditTitle: () => void;
   onOpenSidebar: () => void;
-  onTitleDraftChange: (value: string) => void;
-  onUpdateTitle: (event: FormEvent) => void;
+  onUpdateTitle: (title: string) => Promise<boolean>;
 }) {
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(props.selectedSession.title ?? '');
+
+  useEffect(() => {
+    setEditingTitle(false);
+    setTitleDraft(props.selectedSession.title ?? '');
+  }, [props.selectedSession.id, props.selectedSession.title]);
+
+  function startEditingTitle() {
+    setTitleDraft(props.selectedSession.title ?? '');
+    setEditingTitle(true);
+  }
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    const saved = await props.onUpdateTitle(titleDraft);
+    if (saved) setEditingTitle(false);
+  }
+
   return (
     <section className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
       <div className="flex min-w-0 items-start gap-2 overflow-hidden">
@@ -1462,16 +1465,16 @@ function ThreadHeader(props: {
         ) : null}
         <div className="min-w-0 flex-1 overflow-hidden">
           <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Session</p>
-          {props.editingTitle ? (
-            <form className="mt-1 flex flex-wrap items-center gap-2" onSubmit={props.onUpdateTitle}>
-              <Input className="max-w-xl" value={props.titleDraft} onChange={(event) => props.onTitleDraftChange(event.target.value)} autoFocus />
-              <Button type="submit" disabled={!props.titleDraft.trim()}>Save</Button>
-              <Button type="button" variant="secondary" onClick={props.onCancelTitle}>Cancel</Button>
+          {editingTitle ? (
+            <form className="mt-1 flex flex-wrap items-center gap-2" onSubmit={handleSubmit}>
+              <Input className="max-w-xl" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} autoFocus />
+              <Button type="submit" disabled={!titleDraft.trim()}>Save</Button>
+              <Button type="button" variant="secondary" onClick={() => setEditingTitle(false)}>Cancel</Button>
             </form>
           ) : (
             <div className="mt-1 flex min-w-0 items-center gap-1">
               <h2 className="min-w-0 truncate text-base font-semibold text-foreground">{props.selectedSession.title || 'Untitled session'}</h2>
-              <Button className="h-7 w-7 shrink-0 p-0" type="button" variant="ghost" size="icon" onClick={props.onEditTitle} aria-label="Edit title" title="Edit title"><Pencil className="h-3.5 w-3.5" /></Button>
+              <Button className="h-7 w-7 shrink-0 p-0" type="button" variant="ghost" size="icon" onClick={startEditingTitle} aria-label="Edit title" title="Edit title"><Pencil className="h-3.5 w-3.5" /></Button>
             </div>
           )}
           <p className="mt-1 hidden truncate text-xs text-muted-foreground sm:block">{props.selectedSession.id}</p>

@@ -660,6 +660,25 @@ it('renders assistant markdown with copyable highlighted code blocks and without
   await waitFor(() => expect(writeText).toHaveBeenCalledWith('const ok = true;'));
 });
 
+it('does not re-highlight assistant code while editing the session title', async () => {
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000126', sequence: 1, status: 'completed', prompt: 'show code' })],
+    events: [
+      eventFixture({ sequence: 1, type: 'agent_response_final', runId: '00000000-0000-4000-8000-000000000226', messageId: '00000000-0000-4000-8000-000000000126', payload: { text: '```ts\nconst ok = true;\n```' } }),
+    ],
+  });
+  render(<App />);
+
+  await waitFor(() => expect(document.querySelector('.highlighted-code')).toBeInTheDocument());
+  codeToHtmlMock.mockClear();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Edit title' }));
+  fireEvent.change(screen.getByDisplayValue('Existing session'), { target: { value: 'Existing session updated' } });
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+  expect(codeToHtmlMock).not.toHaveBeenCalled();
+});
+
 it('renders user prompts as plain text so Slack author lines are visible', async () => {
   mockApi({
     messages: [messageFixture({
@@ -824,6 +843,12 @@ function mockApi(options: MockApiOptions = {}) {
     if (url.pathname === `/sessions/${currentSession.id}/archive` && method === 'POST') {
       if (options.hangArchive) return new Promise<Response>(() => undefined);
       currentSession = { ...currentSession, status: 'archived' };
+      return jsonResponse({ session: currentSession });
+    }
+
+    if (url.pathname === `/sessions/${currentSession.id}` && method === 'PATCH') {
+      const body = JSON.parse(String(init?.body)) as { title?: string };
+      currentSession = { ...currentSession, ...(body.title ? { title: body.title } : {}) };
       return jsonResponse({ session: currentSession });
     }
 
