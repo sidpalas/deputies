@@ -126,6 +126,24 @@ export class MessageService {
     return message;
   }
 
+  async retryFailed(input: { sessionId: string; messageId: string }): Promise<MessageRecord> {
+    const session = await this.store.getSession(input.sessionId);
+    if (!session) throw new MessageServiceError('not_found', `Session not found: ${input.sessionId}`);
+    if (session.status === 'archived') throw new MessageServiceError('conflict', 'Cannot retry messages in an archived session');
+
+    const messages = await this.store.getMessages(input.sessionId);
+    const failedMessage = messages.find((message) => message.id === input.messageId);
+    if (!failedMessage) throw new MessageServiceError('not_found', `Message not found: ${input.messageId}`);
+    if (failedMessage.status !== 'failed') throw new MessageServiceError('conflict', 'Only failed messages can be retried');
+
+    return this.enqueue({
+      sessionId: input.sessionId,
+      prompt: failedMessage.prompt,
+      ...(failedMessage.source ? { source: failedMessage.source } : {}),
+      ...(failedMessage.context ? { context: failedMessage.context } : {}),
+    });
+  }
+
   async cancelActiveRun(input: { sessionId: string }): Promise<MessageRecord[]> {
     const session = await this.store.getSession(input.sessionId);
     if (!session) throw new MessageServiceError('not_found', `Session not found: ${input.sessionId}`);

@@ -55,7 +55,7 @@ pnpm control-plane:test
 pnpm control-plane:test:integration
 pnpm web:typecheck
 pnpm web:test
-VITE_API_BASE_URL=http://localhost:3583 pnpm web:e2e
+pnpm web:e2e
 pnpm web:build
 ```
 

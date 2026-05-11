@@ -50,7 +50,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(await services.sessions.get(session.id)).toMatchObject({
       id: session.id,
       title: 'Postgres test',
-      status: 'created',
+      status: 'queued',
     });
     expect(await services.messages.list(session.id)).toMatchObject([
       {
@@ -80,7 +80,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     const flueStore = new PostgresFlueSessionStore(testDatabaseUrl!);
     try {
       const data: SessionData = {
-        version: 2,
+        version: 3,
         entries: [],
         leafId: null,
         metadata: { appSessionId: 'session-1' },
@@ -237,7 +237,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     const cancelled = await store.finalizeRunCancellation({ runId: claimed.run.id, cancelledAt: new Date(), error: 'cancelled by test' });
     expect(cancelled.messages.map((message) => message.status)).toEqual(['cancelled', 'cancelled']);
     await expect(store.getRun(claimed.run.id)).resolves.toMatchObject({ status: 'cancelled', error: 'cancelled by test' });
-    await expect(services.sessions.get(session.id)).resolves.toMatchObject({ status: 'idle' });
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({ status: 'queued' });
   });
 
   it('runs postgres advisory locks on only one holder', async () => {

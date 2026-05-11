@@ -1,6 +1,6 @@
 import { stdin as input, stdout as output } from 'node:process';
 import { createInterface } from 'node:readline/promises';
-import { loginOpenAICodex, type OAuthAuthInfo, type OAuthPrompt } from '@mariozechner/pi-ai/oauth';
+import { loginOpenAICodex, type OAuthAuthInfo, type OAuthPrompt } from '@earendil-works/pi-ai/oauth';
 import { defaultOpenAICodexAuthFile, readOpenAICodexAuthFileIfPresent, writeOpenAICodexAuthFile } from './openai-codex-auth.js';
 
 async function main(): Promise<void> {

@@ -96,6 +96,7 @@ export class ApiError extends Error {
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 const requestTimeoutMs = 15_000;
 const requestRetryDelayMs = 250;
+const streamIdleTimeoutMs = 45_000;
 export const apiConnectionOkEvent = 'deputies:api-connection-ok';
 export const apiConnectionDelayedEvent = 'deputies:api-connection-delayed';
 
@@ -203,6 +204,15 @@ export async function cancelMessage(input: { sessionId: string; messageId: strin
   return body.message;
 }
 
+export async function retryMessage(input: { sessionId: string; messageId: string; token: string }): Promise<Message> {
+  const body = await request<{ message: Message }>(`/sessions/${input.sessionId}/messages/${input.messageId}/retry`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.message;
+}
+
 export async function cancelCurrentRun(input: { sessionId: string; token: string }): Promise<Message[]> {
   const body = await request<{ messages: Message[] }>(`/sessions/${input.sessionId}/runs/current/cancel`, {
     method: 'POST',
@@ -270,7 +280,8 @@ export async function streamGlobalEvents(input: {
   signal: AbortSignal;
   onEvent: (event: AgentEvent) => void;
 }): Promise<void> {
-  await streamEventResponse(`/events/stream?after=${input.after}&include=all&replay=false`, input);
+  const replay = input.after > 0 ? 'true' : 'false';
+  await streamEventResponse(`/events/stream?after=${input.after}&include=all&replay=${replay}`, input);
 }
 
 async function streamEventResponse(
@@ -281,15 +292,29 @@ async function streamEventResponse(
     onEvent: (event: AgentEvent) => void;
   },
 ): Promise<void> {
+  const abort = new AbortController();
+  let idleTimedOut = false;
+  let idleTimeout: number | undefined;
+  const abortStream = () => abort.abort();
+  input.signal.addEventListener('abort', abortStream, { once: true });
+  const resetIdleTimeout = () => {
+    if (idleTimeout !== undefined) window.clearTimeout(idleTimeout);
+    idleTimeout = window.setTimeout(() => {
+      idleTimedOut = true;
+      abort.abort();
+    }, streamIdleTimeoutMs);
+  };
+
   let response: Response;
   try {
+    resetIdleTimeout();
     response = await fetch(`${apiBaseUrl}${path}`, {
       headers: authHeaders(input.token),
       credentials: 'include',
-      signal: input.signal,
+      signal: abort.signal,
     });
   } catch (error) {
-    if (!input.signal.aborted) dispatchApiConnectionDelayed('Realtime connection interrupted.');
+    if (!input.signal.aborted) dispatchApiConnectionDelayed(idleTimedOut ? 'Realtime connection went idle.' : 'Realtime connection interrupted.');
     throw error;
   }
 
@@ -305,21 +330,32 @@ async function streamEventResponse(
   let buffer = '';
 
   try {
-    while (!input.signal.aborted) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary !== -1) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        const data = parseSseData(frame);
-        if (data) input.onEvent(JSON.parse(data) as AgentEvent);
-        boundary = buffer.indexOf('\n\n');
+    try {
+      while (!input.signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        resetIdleTimeout();
+        buffer += decoder.decode(value, { stream: true });
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary !== -1) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = parseSseData(frame);
+          if (data) input.onEvent(JSON.parse(data) as AgentEvent);
+          boundary = buffer.indexOf('\n\n');
+        }
       }
+    } catch (error) {
+      if (!idleTimedOut) throw error;
+    }
+    if (idleTimedOut) {
+      dispatchApiConnectionDelayed('Realtime connection went idle.');
+      throw new ApiError(0, 'Realtime connection went idle');
     }
   } finally {
-    if (input.signal.aborted) await reader.cancel().catch(() => undefined);
+    if (idleTimeout !== undefined) window.clearTimeout(idleTimeout);
+    input.signal.removeEventListener('abort', abortStream);
+    if (input.signal.aborted || abort.signal.aborted) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }

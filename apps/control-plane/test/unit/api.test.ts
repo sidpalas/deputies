@@ -383,6 +383,51 @@ describe('core API', () => {
     expect((await resume.json()) as { session: { queuePausedAt?: string } }).toMatchObject({ session: {} });
   });
 
+  it('retries a failed message by enqueueing a new copy', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Retry failed message' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    const createMessage = await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'try again', repository: 'acme/widgets' });
+    const { message } = (await createMessage.json()) as { message: { id: string } };
+    const claimed = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000303',
+      runnerType: 'fake',
+      leaseOwner: 'test-worker',
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      now: new Date(),
+    });
+    expect(claimed).not.toBeNull();
+    await store.failRunBatch({ runId: '00000000-0000-4000-8000-000000000303', failedAt: new Date(), error: 'boom' });
+
+    const retry = await postJson(`${baseUrl}/sessions/${session.id}/messages/${message.id}/retry`, {});
+
+    expect(retry.status).toBe(202);
+    const retryBody = (await retry.json()) as { message: { id: string; prompt: string; sequence: number; status: string; context?: unknown } };
+    expect(retryBody.message).toMatchObject({ prompt: 'try again', sequence: 2, status: 'pending' });
+    expect(retryBody.message.id).not.toBe(message.id);
+    expect(retryBody.message.context).toMatchObject({ repository: { owner: 'acme', repo: 'widgets' } });
+
+    const messagesResponse = await fetch(`${baseUrl}/sessions/${session.id}/messages`);
+    const messagesBody = (await messagesResponse.json()) as { messages: Array<{ status: string }> };
+    expect(messagesBody.messages.map((item) => item.status)).toEqual(['failed', 'pending']);
+
+    const eventsResponse = await fetch(`${baseUrl}/sessions/${session.id}/events`);
+    const eventsBody = await eventsResponse.json();
+    expectEventsResponse(eventsBody);
+    expect(eventsBody.events.map((event) => event.type)).toEqual(['session_created', 'session_updated', 'message_created', 'session_updated', 'message_created']);
+  });
+
+  it('rejects retrying a message that has not failed', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Retry pending message' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    const createMessage = await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'not failed' });
+    const { message } = (await createMessage.json()) as { message: { id: string } };
+
+    const retry = await postJson(`${baseUrl}/sessions/${session.id}/messages/${message.id}/retry`, {});
+
+    expect(retry.status).toBe(409);
+    await expect(retry.json()).resolves.toMatchObject({ error: 'conflict', message: 'Only failed messages can be retried' });
+  });
+
   it('cancels the active run for a session', async () => {
     const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Cancel active run' });
     const { session } = (await createSession.json()) as { session: { id: string } };

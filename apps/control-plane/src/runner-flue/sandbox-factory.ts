@@ -1,14 +1,27 @@
-import { createSandboxSessionEnv } from '@flue/sdk/sandbox';
-import type { FileStat, SandboxApi, SandboxFactory, SessionEnv } from '@flue/sdk/sandbox';
-import type { SandboxHandle } from '../sandbox/types.js';
+import { createSandboxSessionEnv } from "@flue/sdk/sandbox";
+import type {
+  FileStat,
+  SandboxApi,
+  SandboxFactory,
+  SessionEnv,
+} from "@flue/sdk/sandbox";
+import type { SandboxHandle } from "../sandbox/types.js";
 
 export function sandboxHandleToFlueFactory(
   handle: SandboxHandle,
   cleanup?: () => Promise<void>,
 ): SandboxFactory {
   return {
-    async createSessionEnv({ cwd }: { id: string; cwd?: string }): Promise<SessionEnv> {
-      return createSandboxSessionEnv(new SandboxHandleApi(handle), cwd ?? handle.workspacePath, cleanup);
+    async createSessionEnv({
+      cwd,
+    }: {
+      id: string;
+      cwd?: string;
+    }): Promise<SessionEnv> {
+      return createSandboxSessionEnv(
+        new SandboxHandleApi(handle),
+        cwd ?? handle.workspacePath,
+      );
     },
   };
 }
@@ -44,7 +57,10 @@ class SandboxHandleApi implements SandboxApi {
     await this.requireFs().mkdir(path, options);
   }
 
-  async rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
+  async rm(
+    path: string,
+    options?: { recursive?: boolean; force?: boolean },
+  ): Promise<void> {
     await this.requireFs().rm(path, options);
   }
 
@@ -52,17 +68,23 @@ class SandboxHandleApi implements SandboxApi {
     command: string,
     options?: { cwd?: string; env?: Record<string, string>; timeout?: number },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    const input: Parameters<SandboxHandle['exec']>[0] = { command };
+    const input: Parameters<SandboxHandle["exec"]>[0] = { command };
     if (options?.cwd) input.cwd = options.cwd;
     if (options?.env) input.env = options.env;
-    if (options?.timeout !== undefined) input.timeoutMs = options.timeout;
+    if (options?.timeout !== undefined) input.timeoutMs = options.timeout * 1000;
     const result = await this.handle.exec(input);
-    return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+    return {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
   }
 
   private requireFs() {
     if (!this.handle.fs) {
-      throw new Error(`Sandbox provider "${this.handle.provider}" does not expose filesystem operations`);
+      throw new Error(
+        `Sandbox provider "${this.handle.provider}" does not expose filesystem operations`,
+      );
     }
     return this.handle.fs;
   }

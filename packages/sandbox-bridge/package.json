@@ -1,0 +1,19 @@
+{
+  "name": "@deputies/sandbox-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "deputies-sandbox-bridge": "dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.10",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.0"
+  }
+}

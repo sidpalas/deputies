@@ -129,7 +129,7 @@ export class FlueRunner implements Runner {
     const result = await session.shell(setup.command, {
       cwd: input.sandbox.workspacePath,
       env: setup.env,
-      timeout: 120,
+      timeout: 120_000,
     });
     if (result.exitCode !== 0) {
       throw new Error(`Repository setup failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`);
@@ -187,13 +187,14 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
     messageId: input.messageId,
     createdAt: new Date(),
   };
+  const flueSessionId = event.session;
 
   switch (event.type) {
     case 'text_delta':
       return {
         ...base,
         type: 'agent_text_delta',
-        payload: { text: event.text, flueSessionId: event.sessionId },
+        payload: { text: event.text, flueSessionId },
       };
     case 'tool_start':
       return {
@@ -203,10 +204,10 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
           toolName: event.toolName,
           toolCallId: event.toolCallId,
           args: event.args,
-          flueSessionId: event.sessionId,
+          flueSessionId,
         },
       };
-    case 'tool_end':
+    case 'tool_call':
       return {
         ...base,
         type: 'tool_finished',
@@ -215,29 +216,7 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
           toolCallId: event.toolCallId,
           isError: event.isError,
           result: event.result,
-          flueSessionId: event.sessionId,
-        },
-      };
-    case 'command_start':
-      return {
-        ...base,
-        type: 'tool_started',
-        payload: {
-          toolName: 'command',
-          command: event.command,
-          args: event.args,
-          flueSessionId: event.sessionId,
-        },
-      };
-    case 'command_end':
-      return {
-        ...base,
-        type: 'tool_finished',
-        payload: {
-          toolName: 'command',
-          command: event.command,
-          exitCode: event.exitCode,
-          flueSessionId: event.sessionId,
+          flueSessionId,
         },
       };
     case 'task_start':
@@ -250,11 +229,11 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
           prompt: event.prompt,
           role: event.role,
           cwd: event.cwd,
-          parentSessionId: event.parentSessionId,
-          flueSessionId: event.sessionId,
+          parentSessionId: event.parentSession,
+          flueSessionId,
         },
       };
-    case 'task_end':
+    case 'task':
       return {
         ...base,
         type: 'tool_finished',
@@ -263,20 +242,50 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
           taskId: event.taskId,
           isError: event.isError,
           result: event.result,
-          parentSessionId: event.parentSessionId,
-          flueSessionId: event.sessionId,
+          parentSessionId: event.parentSession,
+          flueSessionId,
         },
       };
-    case 'error':
+    case 'operation_start':
+      if (event.operationKind !== 'shell') return null;
+      return {
+        ...base,
+        type: 'tool_started',
+        payload: { toolName: 'command', args: { operationId: event.operationId }, flueSessionId },
+      };
+    case 'operation':
+      if (event.operationKind !== 'shell') return null;
       return {
         ...base,
         type: 'tool_finished',
-        payload: { toolName: 'flue', isError: true, error: event.error, flueSessionId: event.sessionId },
+        payload: {
+          toolName: 'command',
+          isError: event.isError,
+          result: event.result,
+          flueSessionId,
+        },
       };
-    case 'agent_start':
-    case 'turn_end':
+    case 'run_end':
+      if (!event.isError) return null;
+      return {
+        ...base,
+        type: 'tool_finished',
+        payload: { toolName: 'flue', isError: true, error: event.error, flueSessionId },
+      };
+    case 'log':
+      if (event.level !== 'error') return null;
+      return {
+        ...base,
+        type: 'tool_finished',
+        payload: { toolName: 'flue', isError: true, error: event.message, flueSessionId },
+      };
+    case 'run_start':
+    case 'thinking_start':
+    case 'thinking_delta':
+    case 'thinking_end':
+    case 'turn':
     case 'compaction_start':
-    case 'compaction_end':
+    case 'compaction':
     case 'idle':
       return null;
   }

@@ -49,6 +49,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 ## Automations
 
+- Automatic stale session archival when associated GitHub PRs are closed, plus an agent-accessible archive-thread tool for direct-to-main workflows after successful commit/push completion.
 - Scheduled prompts for a session, repository, or integration source.
 - Recurring tasks with cron-like schedules, timezone support, pause/resume, and failure backoff.
 - One-off delayed tasks and reminders.

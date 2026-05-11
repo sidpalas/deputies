@@ -1,8 +1,13 @@
-FROM mcr.microsoft.com/playwright:v1.59.1-noble
+FROM ubuntu:24.04
 
+# Keep this image's base OS and sandbox toolchain aligned with
+# deploy/docker/Dockerfile. The provider-specific difference is the command:
+# Daytona keeps the container alive while Daytona supplies exec/filesystem APIs;
+# Docker starts the Deputies sandbox bridge.
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PGDATA=/home/daytona/.deputies/postgres
 ENV PATH=/usr/lib/postgresql/16/bin:$PATH
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -19,11 +24,19 @@ RUN apt-get update \
     sudo \
     vim \
     zsh \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends nodejs \
   && corepack enable \
   && curl https://mise.run | sh \
   && mv /root/.local/bin/mise /usr/local/bin/mise \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
+
+RUN pnpm dlx playwright@1.59.1 install --with-deps chromium
 
 RUN useradd -m -s /bin/bash daytona \
   && usermod -aG sudo daytona \

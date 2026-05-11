@@ -1,7 +1,7 @@
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { getOAuthApiKey, type OAuthCredentials } from '@mariozechner/pi-ai/oauth';
+import { getOAuthApiKey, type OAuthCredentials } from '@earendil-works/pi-ai/oauth';
 
 export const openAICodexProvider = 'openai-codex';
 

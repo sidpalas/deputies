@@ -1,7 +1,5 @@
-import { FocusEvent, FormEvent, KeyboardEvent, SyntheticEvent, WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Archive, Check, ChevronDown, Copy, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, RotateCcw, Sun, X } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { FormEvent, WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, PanelLeftOpen } from 'lucide-react';
 import {
   ApiError,
   AgentEvent,
@@ -16,9 +14,7 @@ import {
   cancelMessage,
   createSession,
   enqueueMessage,
-  getApiBaseUrl,
   getCurrentUser,
-  githubLoginUrl,
   getHealth,
   login,
   listArtifacts,
@@ -30,6 +26,7 @@ import {
   pauseQueue,
   replayCallback,
   resumeQueue,
+  retryMessage,
   streamGlobalEvents,
   unarchiveSession,
   updateMessage,
@@ -37,12 +34,10 @@ import {
   type Health,
   type AuthUser,
 } from './api.js';
-import { Badge } from './components/ui/badge.js';
 import { Button } from './components/ui/button.js';
-import { Card } from './components/ui/card.js';
-import { Input } from './components/ui/input.js';
-import { Textarea } from './components/ui/textarea.js';
+import { ArchivedSessionNotice, BearerAuthPanel, ConnectionStatusBanner, LocalSandboxWarning, MessageComposer, NewThreadPanel, SessionAuthPanel, StartupLoadingPanel, ThreadHeader, ThreadSidebar } from './components/app-panels.js';
 import { cn } from './lib/utils.js';
+import { ChatPanel, DesktopContextPanel, MobileContextPanel } from './components/thread/thread-content.js';
 
 const tokenStorageKey = 'deputies-api-token';
 const selectedSessionStorageKey = 'deputies-selected-session-id';
@@ -52,8 +47,9 @@ const themeStorageKey = 'deputies-theme';
 const threadAutoFollowThreshold = 160;
 const startupConnectionDelayMs = 3_000;
 const wakeRecoveryThresholdMs = 5_000;
+const realtimeReconnectInitialDelayMs = 500;
+const realtimeReconnectMaxDelayMs = 5_000;
 const liveConnectionMessage = 'Live updates connected.';
-const connectionLimitHint = 'If you have Deputies open in several windows, browser connection limits may block API requests.';
 const wakeRecoveryMessage = 'Reconnecting after your computer was asleep or offline.';
 type ThemePreference = 'light' | 'dark' | 'system';
 type ConnectionState = 'ok' | 'delayed' | 'reconnecting';
@@ -164,23 +160,6 @@ function wakeRecoveryConnectionStatus(): ConnectionStatus {
   return { state: 'reconnecting', message: wakeRecoveryMessage };
 }
 
-function connectionStatusTitle(status: ConnectionStatus): string {
-  if (isWakeRecoveryStatus(status)) return 'Reconnecting after sleep.';
-  if (status.state === 'reconnecting') return 'Realtime updates are reconnecting.';
-  return 'Connection delayed.';
-}
-
-function connectionStatusHint(status: ConnectionStatus): string {
-  if (isWakeRecoveryStatus(status)) return 'We will retry automatically as your network comes back online.';
-  return `${connectionLimitHint} Close inactive windows or keep one visible tab active.`;
-}
-
-function connectionStatusLabel(status: ConnectionStatus): string {
-  if (status.state === 'ok') return 'Live';
-  if (status.state === 'reconnecting') return 'Reconnecting';
-  return 'Delayed';
-}
-
 function isStreamConnectionOk(event: Event): boolean {
   const detail = event instanceof CustomEvent ? event.detail as ApiConnectionOkDetail : undefined;
   return detail?.source === 'stream';
@@ -230,6 +209,7 @@ export function App() {
   const eventCursor = useRef(0);
   const globalEventCursor = useRef(0);
   const lastBackgroundedAt = useRef<number | null>(null);
+  const wasPageHiddenRef = useRef(!isPageVisible());
   const wakeRecoveryActive = useRef(false);
   const appShellRef = useRef<HTMLElement | null>(null);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
@@ -383,6 +363,18 @@ export function App() {
   }, [canCallApi, token]);
 
   useEffect(() => {
+    if (!pageVisible) {
+      wasPageHiddenRef.current = true;
+      return;
+    }
+    if (!wasPageHiddenRef.current || !canCallApi || !sessionsLoaded) return;
+
+    wasPageHiddenRef.current = false;
+    refreshSessions().catch(() => undefined);
+    if (selectedSessionId) refreshSessionDetail(selectedSessionId).catch(() => undefined);
+  }, [pageVisible, canCallApi, sessionsLoaded, selectedSessionId, token]);
+
+  useEffect(() => {
     if (!selectedSessionId || !canCallApi) return;
     setDetailLoadedSessionId('');
     refreshSessionDetail(selectedSessionId);
@@ -417,30 +409,44 @@ export function App() {
     if (!pageVisible || !canCallApi || !sessionsLoaded) return;
 
     const abort = new AbortController();
-    streamGlobalEvents({
-      after: globalEventCursor.current,
-      token,
-      signal: abort.signal,
-      onEvent: (event) => {
-        if (typeof event.id === 'number') globalEventCursor.current = Math.max(globalEventCursor.current, event.id);
+    let reconnectDelayMs = realtimeReconnectInitialDelayMs;
 
-        const activeSessionId = selectedSessionIdRef.current;
-        if (event.sessionId === activeSessionId && detailLoadedSessionIdRef.current === activeSessionId) {
-          eventCursor.current = Math.max(eventCursor.current, event.sequence);
-          setEvents((current) => upsertEvent(current, event));
-          if (shouldRefreshSessionDetail(event.type)) {
-            refreshMessagesArtifactsAndCallbacks(activeSessionId).catch(() => undefined);
-          }
+    const runStreamLoop = async () => {
+      while (!abort.signal.aborted) {
+        try {
+          await streamGlobalEvents({
+            after: globalEventCursor.current,
+            token,
+            signal: abort.signal,
+            onEvent: (event) => {
+              reconnectDelayMs = realtimeReconnectInitialDelayMs;
+              if (typeof event.id === 'number') globalEventCursor.current = Math.max(globalEventCursor.current, event.id);
+
+              const activeSessionId = selectedSessionIdRef.current;
+              if (event.sessionId === activeSessionId && detailLoadedSessionIdRef.current === activeSessionId) {
+                eventCursor.current = Math.max(eventCursor.current, event.sequence);
+                setEvents((current) => upsertEvent(current, event));
+                if (shouldRefreshSessionDetail(event.type)) {
+                  refreshMessagesArtifactsAndCallbacks(activeSessionId).catch(() => undefined);
+                }
+              }
+
+              if (shouldRefreshSessions(event.type)) scheduleSessionsRefresh();
+            },
+          });
+        } catch (err: unknown) {
+          if (abort.signal.aborted) break;
+          scheduleSessionsRefresh(0);
+          setConnectionStatus({ state: 'reconnecting', message: errorMessage(err) });
         }
 
-        if (shouldRefreshSessions(event.type)) scheduleSessionsRefresh();
-      },
-    }).catch((err: unknown) => {
-      if (!abort.signal.aborted) {
-        scheduleSessionsRefresh(0);
-        setConnectionStatus({ state: 'reconnecting', message: errorMessage(err) });
+        if (abort.signal.aborted) break;
+        await waitForRealtimeReconnect(reconnectDelayMs, abort.signal);
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, realtimeReconnectMaxDelayMs);
       }
-    });
+    };
+
+    runStreamLoop().catch(() => undefined);
 
     return () => {
       abort.abort();
@@ -690,6 +696,26 @@ export function App() {
       setMessages((current) => current.map((candidate) => (candidate.id === message.id ? message : candidate)));
     } catch (err) {
       handleApiError(err);
+    }
+  }
+
+  async function retryFailedMessages(messageIds: string[]) {
+    if (!selectedSessionId || selectedSessionArchived || !messageIds.length) return;
+    setLoading(true);
+    setError('');
+    try {
+      const retriedMessages: Message[] = [];
+      for (const messageId of messageIds) {
+        retriedMessages.push(await retryMessage({ sessionId: selectedSessionId, messageId, token }));
+      }
+      setMessages((current) => [...current, ...retriedMessages]);
+      setThreadAutoFollowEnabled(true);
+      await refreshSessions();
+      await refreshSessionDetail(selectedSessionId);
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -1012,7 +1038,7 @@ export function App() {
                 onOpenSidebar={expandSidebar}
                 onUpdateTitle={handleUpdateTitle}
               />
-              <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_20rem]">
+              <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]">
                 <section className="flex min-h-0 min-w-0 flex-col px-3 pt-4 md:px-8 xl:px-20">
                   <div className="relative min-h-0 flex-1">
                     <div className="h-full overflow-auto pb-4" ref={threadScrollRef} onScroll={handleThreadScroll} role="log" aria-label="Session messages">
@@ -1022,11 +1048,13 @@ export function App() {
                         events={events}
                         messageDraft={messageDraft}
                         messages={messages}
+                        canRetryMessages={!selectedSessionArchived}
                         onCancelEdit={() => finishEditingMessage(true)}
                         onCancelQueuedMessage={cancelQueuedMessage}
                         onCancelRun={cancelRun}
                         onEditMessage={startEditingMessage}
                         onMessageDraftChange={setMessageDraft}
+                        onRetryFailedMessages={retryFailedMessages}
                         onSaveEdit={saveMessageEdit}
                       />
                       <div ref={threadEndRef} />
@@ -1076,778 +1104,6 @@ function isDesktopViewport(): boolean {
   return window.innerWidth >= 768;
 }
 
-function LocalSandboxWarning() {
-  return (
-    <div className="border-b border-warning/50 bg-warning/15 px-3 py-2 text-sm text-warning-foreground dark:text-warning md:px-8 xl:px-20" role="alert">
-      <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-        <p>
-          <strong>Local sandbox mode is not a security boundary.</strong> Commands run on the API/worker host runtime in a temporary workspace. Use it only for trusted local development.
-        </p>
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
-      </div>
-    </div>
-  );
-}
-
-type ConnectionStatusBannerProps = {
-  status: ConnectionStatus;
-};
-
-function ConnectionStatusBanner(props: ConnectionStatusBannerProps) {
-  return (
-    <div className="pointer-events-none fixed left-3 right-3 top-3 z-50 rounded-md border border-warning/50 bg-warning/15 px-3 py-2 text-sm text-warning-foreground shadow-lg backdrop-blur dark:text-warning md:left-8 md:right-8 xl:left-20 xl:right-20" role="status">
-      <div className="flex flex-wrap items-start gap-2">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
-        <p className="min-w-0 flex-1">
-          <strong>{connectionStatusTitle(props.status)}</strong> {props.status.message} {connectionStatusHint(props.status)}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-type ThreadSidebarProps = {
-  archivedSessionsOpen: boolean;
-  authRequired: boolean;
-  canCallApi: boolean;
-  connectionStatus: ConnectionStatus;
-  health: Health | null;
-  loading: boolean;
-  sessions: Session[];
-  selectedSessionId: string;
-  themePreference: ThemePreference;
-  token: string;
-  onArchive: (sessionId: string) => void;
-  onArchivedSessionsOpenChange: (open: boolean) => void;
-  onCollapse: () => void;
-  onNewThread: () => void;
-  onRefresh: () => void;
-  onSelect: (sessionId: string) => void;
-  onSignOut: () => void;
-  onThemeChange: (value: ThemePreference) => void;
-  onUnarchive: (sessionId: string) => void;
-};
-
-function ThreadSidebar(props: ThreadSidebarProps) {
-  const [search, setSearch] = useState('');
-  const filteredSessions = useMemo(() => filterSessions(props.sessions, search), [props.sessions, search]);
-  const activeSessions = useMemo(() => filteredSessions.filter((session) => session.status !== 'archived'), [filteredSessions]);
-  const archivedSessions = useMemo(() => filteredSessions.filter((session) => session.status === 'archived'), [filteredSessions]);
-  const searching = Boolean(search.trim());
-
-  function handleArchivedToggle(event: SyntheticEvent<HTMLDetailsElement>) {
-    if (searching) return;
-    const open = event.currentTarget.open;
-    localStorage.setItem(archivedSessionsOpenStorageKey, String(open));
-    props.onArchivedSessionsOpenChange(open);
-  }
-
-  return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <div className="mb-3 flex shrink-0 items-center gap-2">
-        <Button className="shrink-0" variant="ghost" size="icon" onClick={props.onCollapse} aria-label="Hide sidebar" title="Hide sidebar"><PanelLeftClose className="h-4 w-4" /></Button>
-        <h2 className="min-w-0 flex-1 text-sm font-semibold">Sessions</h2>
-        <div className="flex shrink-0 gap-2">
-          <Button size="icon" onClick={props.onNewThread} disabled={!props.canCallApi} aria-label="New session"><Plus className="h-4 w-4" /></Button>
-          <Button variant="secondary" size="icon" onClick={props.onRefresh} disabled={!props.canCallApi || props.loading} aria-label="Refresh"><RefreshCw className="h-4 w-4" /></Button>
-        </div>
-      </div>
-      <div className="relative mb-3 shrink-0">
-        <Input className="pr-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sessions..." />
-        {search ? (
-          <Button className="absolute right-1 top-1 h-8 w-8 p-0" variant="ghost" size="icon" onClick={() => setSearch('')} aria-label="Clear search" title="Clear search">
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        ) : null}
-      </div>
-      <div className="min-h-0 min-w-0 flex-1 overflow-auto" data-thread-scroll-exclude="true">
-        <div className="grid min-w-0 gap-1">
-          {activeSessions.map((session) => (
-            <SessionButton key={session.id} session={session} selected={session.id === props.selectedSessionId} onArchive={props.onArchive} onSelect={props.onSelect} />
-          ))}
-          {!activeSessions.length ? <p className="px-2 py-3 text-sm text-muted-foreground">{search ? 'No matching active sessions.' : 'No active sessions.'}</p> : null}
-        </div>
-        {archivedSessions.length || searching ? (
-          <details className="mt-4 border-t border-border pt-3" open={searching || props.archivedSessionsOpen} onToggle={handleArchivedToggle}>
-            <summary className="flex cursor-pointer items-center gap-1 text-sm font-medium text-muted-foreground"><ChevronDown className="h-4 w-4" /> Archived · {archivedSessions.length}</summary>
-            {archivedSessions.length ? (
-              <div className="mt-2 grid min-w-0 gap-1 opacity-80">
-                {archivedSessions.map((session) => <SessionButton key={session.id} session={session} selected={session.id === props.selectedSessionId} onSelect={props.onSelect} onUnarchive={props.onUnarchive} />)}
-              </div>
-            ) : <p className="px-2 py-3 text-sm text-muted-foreground">No matching archived sessions.</p>}
-          </details>
-        ) : null}
-      </div>
-      <ThemeToggle preference={props.themePreference} onChange={props.onThemeChange} />
-      <ApiStatusFooter authRequired={props.authRequired} connectionStatus={props.connectionStatus} health={props.health} token={props.token} onSignOut={props.onSignOut} />
-    </div>
-  );
-}
-
-function ThemeToggle(props: { preference: ThemePreference; onChange: (value: ThemePreference) => void }) {
-  const options: { value: ThemePreference; label: string; icon: typeof Monitor }[] = [
-    { value: 'system', label: 'System theme', icon: Monitor },
-    { value: 'light', label: 'Light theme', icon: Sun },
-    { value: 'dark', label: 'Dark theme', icon: Moon },
-  ];
-
-  return (
-    <div className="mt-3 grid grid-cols-3 gap-1 rounded-md border border-border bg-muted/60 p-1" aria-label="Theme preference">
-      {options.map((option) => {
-        const Icon = option.icon;
-        const active = props.preference === option.value;
-        return (
-          <button
-            className={cn('inline-flex h-8 items-center justify-center rounded border border-transparent text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground', active && 'border-border bg-card text-foreground shadow-sm')}
-            key={option.value}
-            type="button"
-            onClick={() => props.onChange(option.value)}
-            aria-label={option.label}
-            aria-pressed={active}
-            title={option.label}
-          >
-            <Icon className="h-4 w-4" />
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-type StartupLoadingPanelProps = {
-  connectionStatus: ConnectionStatus;
-};
-
-function StartupLoadingPanel(props: StartupLoadingPanelProps) {
-  return (
-    <section className="grid min-h-screen place-items-center px-4">
-      <Card className="max-w-lg p-6 text-center">
-        <h2 className="text-lg font-semibold">Loading Deputies</h2>
-        <p className="mt-2 text-sm text-muted-foreground">Restoring your session and workspace.</p>
-        {props.connectionStatus.state !== 'ok' ? (
-          <div className="mt-4 rounded-md border border-warning/50 bg-warning/10 p-3 text-left text-sm text-warning-foreground dark:text-warning" role="status">
-            <strong>{connectionStatusTitle(props.connectionStatus)}</strong>
-            <p className="mt-1">{props.connectionStatus.message} {connectionStatusHint(props.connectionStatus)}</p>
-          </div>
-        ) : null}
-      </Card>
-    </section>
-  );
-}
-
-type ApiStatusFooterProps = {
-  authRequired: boolean;
-  connectionStatus: ConnectionStatus;
-  health: Health | null;
-  token: string;
-  onSignOut: () => void;
-};
-
-function ApiStatusFooter(props: ApiStatusFooterProps) {
-  const connected = props.health?.status === 'ok' && props.connectionStatus.state === 'ok';
-  return (
-    <div className="mt-3 shrink-0 border-t border-border pt-3 text-left text-xs text-muted-foreground">
-      <div className="flex items-center gap-2">
-        <span className={cn('h-2 w-2 rounded-full', connected ? 'bg-success' : 'bg-warning')} />
-        <strong className="text-foreground">{props.health ? `API ${props.health.status}` : 'Checking API'}</strong>
-        <span>{connectionStatusLabel(props.connectionStatus)}</span>
-      </div>
-      <p className="mt-1 truncate">{getApiBaseUrl()}</p>
-      {props.health ? <p>{props.health.runMode} mode · auth {props.health.apiAuthMode}</p> : null}
-      {props.authRequired && (props.token || props.health?.apiAuthMode === 'session') ? <Button className="mt-2" variant="secondary" size="sm" onClick={props.onSignOut}>{props.health?.apiAuthMode === 'session' ? 'Sign out' : 'Clear token'}</Button> : null}
-    </div>
-  );
-}
-
-function SessionButton(props: {
-  session: Session;
-  selected: boolean;
-  onSelect: (sessionId: string) => void;
-  onArchive?: (sessionId: string) => void;
-  onUnarchive?: (sessionId: string) => void;
-}) {
-  return (
-    <div className={cn('group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-transparent p-2 hover:bg-accent', props.selected && 'border-primary bg-primary/15')}>
-      <button className="block min-w-0 flex-1 overflow-hidden bg-transparent p-0 text-left" type="button" onClick={() => props.onSelect(props.session.id)}>
-        <strong className="block w-full truncate text-sm font-medium text-foreground">{props.session.title || 'Untitled session'}</strong>
-        <span className="block w-full truncate text-xs text-muted-foreground"><span className={statusTextClass(props.session.status)}>{props.session.status}</span> · {formatDate(props.session.updatedAt)}</span>
-      </button>
-      {props.onArchive ? <Button className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100" variant="ghost" size="sm" onClick={() => props.onArchive?.(props.session.id)} aria-label="Archive session" title="Archive session"><Archive className="h-3.5 w-3.5" /></Button> : null}
-      {props.onUnarchive ? <Button className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100" variant="ghost" size="sm" onClick={() => props.onUnarchive?.(props.session.id)} aria-label="Restore session" title="Restore session"><RotateCcw className="h-3.5 w-3.5" /></Button> : null}
-    </div>
-  );
-}
-
-function ArchivedSessionNotice(props: { onRestore: () => void }) {
-  return (
-    <Card className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3 border-warning/50 bg-warning/10 p-3">
-      <div>
-        <p className="text-sm font-medium text-warning-foreground dark:text-warning">This session is archived.</p>
-        <p className="text-xs text-warning-foreground/80 dark:text-warning/80">Restore it before sending a new message.</p>
-      </div>
-      <Button type="button" variant="secondary" onClick={props.onRestore}><RotateCcw className="h-4 w-4" /> Restore session</Button>
-    </Card>
-  );
-}
-
-function BearerAuthPanel(props: { draftToken: string; setDraftToken: (value: string) => void; saveToken: (event: FormEvent) => void }) {
-  return (
-    <section className="grid min-h-screen place-items-center px-4">
-      <Card className="w-full max-w-2xl p-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">Engineering agents for delegated work.</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Assign follow-ups, watch the work trail, and inspect the results.</p>
-        <form className="mt-6 grid gap-3" onSubmit={props.saveToken}>
-          <div>
-            <strong>API token required</strong>
-            <p className="text-sm text-muted-foreground">Enter the backend bearer token. It stays in this browser's local storage.</p>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-            <Input type="password" value={props.draftToken} onChange={(event) => props.setDraftToken(event.target.value)} placeholder="Bearer token" />
-            <Button type="submit">Use token</Button>
-          </div>
-        </form>
-      </Card>
-    </section>
-  );
-}
-
-function SessionAuthPanel(props: { provider: 'static' | 'github'; username: string; password: string; onUsernameChange: (value: string) => void; onPasswordChange: (value: string) => void; onSubmit: (event: FormEvent) => void }) {
-  return (
-    <section className="grid min-h-screen place-items-center px-4">
-      <Card className="w-full max-w-2xl p-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">Sign in to Deputies.</h1>
-        <p className="mt-2 text-sm text-muted-foreground">The API will set an HTTP-only session cookie after login.</p>
-        {props.provider === 'github' ? (
-          <div className="mt-6 grid gap-3">
-            <div>
-              <strong>GitHub login</strong>
-              <p className="text-sm text-muted-foreground">Continue with a GitHub account allowed by this Deputies deployment.</p>
-            </div>
-            <Button className="justify-self-end" type="button" onClick={() => { window.location.href = githubLoginUrl(); }}>Continue with GitHub</Button>
-          </div>
-        ) : (
-          <form className="mt-6 grid gap-3" onSubmit={props.onSubmit}>
-            <div>
-              <strong>Operator login</strong>
-              <p className="text-sm text-muted-foreground">Use the static credentials configured for this environment.</p>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Input value={props.username} onChange={(event) => props.onUsernameChange(event.target.value)} placeholder="Username" autoComplete="username" />
-              <Input type="password" value={props.password} onChange={(event) => props.onPasswordChange(event.target.value)} placeholder="Password" autoComplete="current-password" />
-            </div>
-            <Button className="justify-self-end" type="submit" disabled={!props.username.trim() || !props.password}>Sign in</Button>
-          </form>
-        )}
-      </Card>
-    </section>
-  );
-}
-
-function NewThreadPanel(props: {
-  canCallApi: boolean;
-  loading: boolean;
-  prompt: string;
-  repository: string;
-  showOpenSidebar: boolean;
-  onOpenSidebar: () => void;
-  onPromptChange: (value: string) => void;
-  onRepositoryChange: (value: string) => void;
-  onSubmit: (event: FormEvent) => void;
-}) {
-  return (
-    <section className="relative grid min-h-screen place-items-center px-4">
-      {props.showOpenSidebar ? (
-        <Button className="absolute left-4 top-4 h-8 w-8 p-0 md:hidden" variant="ghost" size="icon" onClick={props.onOpenSidebar} aria-label="Open sessions" title="Open sessions">
-          <PanelLeftOpen className="h-4 w-4" />
-        </Button>
-      ) : null}
-      <Card className="w-full max-w-2xl p-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">Engineering agents for delegated work.</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Assign follow-ups, watch the work trail, and inspect the results.</p>
-        <h2 className="mt-6 text-xl font-semibold">What needs doing?</h2>
-        <form className="mt-4 grid gap-3" onSubmit={props.onSubmit}>
-          <Input value={props.repository} onChange={(event) => props.onRepositoryChange(event.target.value)} placeholder="GitHub repository, e.g. owner/repo or https://github.com/owner/repo" disabled={!props.canCallApi} />
-          <Textarea className="min-h-40" value={props.prompt} onChange={(event) => props.onPromptChange(event.target.value)} onKeyDown={(event) => submitOnEnter(event)} placeholder="Ask Deputies to investigate, change code, or answer a question..." disabled={!props.canCallApi} autoFocus />
-          <Button className="justify-self-end" type="submit" disabled={!props.canCallApi || props.loading || !props.prompt.trim()}>Start session</Button>
-        </form>
-      </Card>
-    </section>
-  );
-}
-
-function MessageComposer(props: {
-  archived: boolean;
-  hasSelectedRepository: boolean;
-  onFocusChange: (focused: boolean) => void;
-  onSubmit: (input: { prompt: string; repository: string }) => Promise<boolean>;
-}) {
-  const [prompt, setPrompt] = useState('');
-  const [repository, setRepository] = useState('');
-
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    const submittedPrompt = prompt;
-    const submittedRepository = repository;
-    blurFocusedTextControl();
-    setPrompt('');
-    const sent = await props.onSubmit({ prompt: submittedPrompt, repository: submittedRepository });
-    if (!sent) setPrompt(submittedPrompt);
-  }
-
-  function handleBlur(event: FocusEvent<HTMLFormElement>) {
-    if (!event.currentTarget.contains(event.relatedTarget)) props.onFocusChange(false);
-  }
-
-  return (
-    <form className="shrink-0 bg-background/95 py-3" data-thread-composer="true" onFocus={() => props.onFocusChange(true)} onBlur={handleBlur} onSubmit={handleSubmit}>
-      <Card className="overflow-hidden bg-card/90">
-        <Textarea
-          className="min-h-28 border-0 bg-transparent focus:ring-0"
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          onKeyDown={(event) => submitOnEnter(event)}
-          placeholder={props.archived ? 'Restore this archived session before sending new work.' : 'Ask your deputy to investigate, change code, or follow up...'}
-          disabled={props.archived}
-        />
-        <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
-          <Input
-            className="h-8 min-w-0 flex-1 text-xs min-[480px]:max-w-80"
-            value={repository}
-            onChange={(event) => setRepository(event.target.value)}
-            placeholder={props.hasSelectedRepository ? 'Override repo...' : 'GitHub repo, e.g. owner/repo'}
-            disabled={props.archived}
-          />
-          {props.archived ? <span className="min-w-full text-center sm:min-w-0 sm:flex-1 sm:text-left">Archived sessions are read-only until restored.</span> : null}
-          <Button className="ml-auto shrink-0 whitespace-nowrap" type="submit" disabled={props.archived || !prompt.trim()}>Send message</Button>
-        </div>
-      </Card>
-    </form>
-  );
-}
-
-function ThreadHeader(props: {
-  selectedSession: Session;
-  showOpenSidebar: boolean;
-  onArchive: () => void;
-  onOpenSidebar: () => void;
-  onUpdateTitle: (title: string) => Promise<boolean>;
-}) {
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(props.selectedSession.title ?? '');
-
-  useEffect(() => {
-    setEditingTitle(false);
-    setTitleDraft(props.selectedSession.title ?? '');
-  }, [props.selectedSession.id, props.selectedSession.title]);
-
-  function startEditingTitle() {
-    setTitleDraft(props.selectedSession.title ?? '');
-    setEditingTitle(true);
-  }
-
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    const saved = await props.onUpdateTitle(titleDraft);
-    if (saved) setEditingTitle(false);
-  }
-
-  return (
-    <section className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
-      <div className="flex min-w-0 items-start gap-2 overflow-hidden">
-        {props.showOpenSidebar ? (
-          <Button className="mt-4 h-8 w-8 shrink-0 p-0 md:hidden" variant="ghost" size="icon" onClick={props.onOpenSidebar} aria-label="Open sessions" title="Open sessions">
-            <PanelLeftOpen className="h-4 w-4" />
-          </Button>
-        ) : null}
-        <div className="min-w-0 flex-1 overflow-hidden">
-          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Session</p>
-          {editingTitle ? (
-            <form className="mt-1 flex flex-wrap items-center gap-2" onSubmit={handleSubmit}>
-              <Input className="max-w-xl" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} autoFocus />
-              <Button type="submit" disabled={!titleDraft.trim()}>Save</Button>
-              <Button type="button" variant="secondary" onClick={() => setEditingTitle(false)}>Cancel</Button>
-            </form>
-          ) : (
-            <div className="mt-1 flex min-w-0 items-center gap-1">
-              <h2 className="min-w-0 truncate text-base font-semibold text-foreground">{props.selectedSession.title || 'Untitled session'}</h2>
-              <Button className="h-7 w-7 shrink-0 p-0" type="button" variant="ghost" size="icon" onClick={startEditingTitle} aria-label="Edit title" title="Edit title"><Pencil className="h-3.5 w-3.5" /></Button>
-            </div>
-          )}
-          <p className="mt-1 hidden truncate text-xs text-muted-foreground sm:block">{props.selectedSession.id}</p>
-        </div>
-      </div>
-      <div className="grid min-h-9 shrink-0 grid-cols-[auto_auto] items-center justify-items-end gap-2 justify-self-end">
-        <Badge className={cn('col-start-1', statusTextClass(props.selectedSession.status))}>{props.selectedSession.status}</Badge>
-        <div className="col-start-2 flex justify-end gap-2">
-          {props.selectedSession.status !== 'archived' ? <Button className="h-9 w-9 p-0" type="button" variant="secondary" size="icon" onClick={props.onArchive} aria-label="Archive session" title="Archive session"><Archive className="h-4 w-4" /></Button> : null}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function ChatPanel(props: {
-  editingMessageId: string;
-  events: AgentEvent[];
-  messageDraft: string;
-  messages: Message[];
-  onCancelEdit: () => void;
-  onCancelQueuedMessage: (messageId: string) => void;
-  onCancelRun: () => void;
-  onEditMessage: (message: Message) => void;
-  onMessageDraftChange: (value: string) => void;
-  onSaveEdit: () => void;
-}) {
-  const assistantText = buildAssistantText(props.events);
-  const diagnostics = groupDiagnosticsByRun(props.events);
-  const groups = groupMessagesByRun(props.messages, props.events);
-
-  return (
-    <section className="grid gap-3">
-      {groups.map((group) => {
-        const response = assistantText[group.responseMessageId];
-        const groupDiagnostics = diagnostics[group.runId ?? group.responseMessageId] ?? [];
-        const activeRun = isActiveRunGroup(group.messages);
-        const cancellingRun = isCancellingRunGroup(group.messages);
-        return (
-            <div className="grid min-w-0 gap-2" key={group.key}>
-            {group.messages.length > 1 ? (
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Queued batch · {group.messages.filter((message) => message.status !== 'cancelled').length} active messages</p>
-                {activeRun ? <CancelRunButton cancelling={cancellingRun} onCancelRun={props.onCancelRun} /> : null}
-              </div>
-            ) : null}
-            {group.messages.map((message) => (
-              <UserMessageCard
-                editingMessageId={props.editingMessageId}
-                key={message.id}
-                message={message}
-                messageDraft={props.messageDraft}
-                showRunCancel={group.messages.length === 1 && activeRun}
-                runCancelling={cancellingRun}
-                onCancelEdit={props.onCancelEdit}
-                onCancelQueuedMessage={props.onCancelQueuedMessage}
-                onCancelRun={props.onCancelRun}
-                onEditMessage={props.onEditMessage}
-                onMessageDraftChange={props.onMessageDraftChange}
-                onSaveEdit={props.onSaveEdit}
-              />
-            ))}
-            {response ? (
-            <Card className="min-w-0 overflow-hidden p-3">
-              <h3 className="mb-1 text-xs font-medium text-muted-foreground">{activeRun ? 'Deputy progress' : 'Deputy response'}</h3>
-              <MarkdownText text={formatAssistantDisplayText(response)} />
-            </Card>
-          ) : null}
-            <Diagnostics events={groupDiagnostics} />
-          </div>
-        );
-      })}
-      {!props.messages.length ? <p className="text-sm text-muted-foreground">No messages yet.</p> : null}
-    </section>
-  );
-}
-
-function UserMessageCard(props: {
-  editingMessageId: string;
-  message: Message;
-  messageDraft: string;
-  showRunCancel: boolean;
-  runCancelling: boolean;
-  onCancelEdit: () => void;
-  onCancelQueuedMessage: (messageId: string) => void;
-  onCancelRun: () => void;
-  onEditMessage: (message: Message) => void;
-  onMessageDraftChange: (value: string) => void;
-  onSaveEdit: () => void;
-}) {
-  const { message } = props;
-  return (
-    <Card className="border-primary/50 bg-primary/10 p-3" role="article" aria-label={`Message ${message.sequence}`}>
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <h3 className="text-xs font-medium text-muted-foreground">{messageLabel(message)} <Badge className={statusTextClass(message.status)}>{messageStatusLabel(message)}</Badge></h3>
-        {message.status === 'pending' && props.editingMessageId !== message.id ? (
-          <div className="flex gap-1">
-            <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onEditMessage(message)}>Edit</Button>
-            <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onCancelQueuedMessage(message.id)}>Cancel</Button>
-          </div>
-        ) : null}
-        {props.showRunCancel ? <CancelRunButton cancelling={props.runCancelling} onCancelRun={props.onCancelRun} /> : null}
-      </div>
-      {props.editingMessageId === message.id ? (
-        <div className="grid gap-2">
-          <Textarea className="min-h-24" value={props.messageDraft} onChange={(event) => props.onMessageDraftChange(event.target.value)} autoFocus />
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" size="sm" onClick={props.onCancelEdit}>Cancel</Button>
-            <Button size="sm" onClick={props.onSaveEdit} disabled={!props.messageDraft.trim()}>Save</Button>
-          </div>
-        </div>
-      ) : <PlainText text={message.prompt} />}
-    </Card>
-  );
-}
-
-function messageLabel(message: Message): string {
-  if (message.source === 'github_notice') return `GitHub notice ${message.sequence}`;
-  if (message.source === 'slack_notice') return `Slack notice ${message.sequence}`;
-  if (message.context?.transcriptOnly && message.source === 'github') return `GitHub comment ${message.sequence}`;
-  if (message.context?.transcriptOnly && message.source === 'slack') return `Slack message ${message.sequence}`;
-  return `Message ${message.sequence}`;
-}
-
-function messageStatusLabel(message: Message): string {
-  if (message.context?.transcriptOnly && message.status === 'cancelled') return 'not queued';
-  return message.status === 'pending' ? 'queued' : message.status;
-}
-
-function PlainText(props: { text: string }) {
-  return <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{props.text}</p>;
-}
-
-function MarkdownText(props: { text: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        a: ({ className, ...props }) => <a className={cn('text-primary underline decoration-primary/60 underline-offset-2 hover:text-primary/80', className)} target="_blank" rel="noreferrer" {...props} />,
-        blockquote: ({ className, ...props }) => <blockquote className={cn('border-l-2 border-border pl-3 text-muted-foreground', className)} {...props} />,
-        code: ({ children, className, ...props }) => {
-          const code = String(children).replace(/\n$/, '');
-          const language = className?.match(/language-(\S+)/)?.[1];
-          if (language || String(children).includes('\n')) return <HighlightedCode code={code} {...(language ? { language } : {})} />;
-          return <code className={cn('rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground shadow-sm break-words', className)} {...props}>{children}</code>;
-        },
-        h1: ({ className, ...props }) => <h1 className={cn('mt-4 text-xl font-semibold text-foreground first:mt-0', className)} {...props} />,
-        h2: ({ className, ...props }) => <h2 className={cn('mt-4 text-lg font-semibold text-foreground first:mt-0', className)} {...props} />,
-        h3: ({ className, ...props }) => <h3 className={cn('mt-3 text-base font-semibold text-foreground first:mt-0', className)} {...props} />,
-        hr: ({ className, ...props }) => <hr className={cn('border-border', className)} {...props} />,
-        li: ({ className, ...props }) => <li className={cn('pl-1', className)} {...props} />,
-        ol: ({ className, ...props }) => <ol className={cn('list-decimal space-y-1 pl-5', className)} {...props} />,
-        p: ({ className, ...props }) => <p className={cn('whitespace-pre-wrap text-sm leading-6 text-foreground', className)} {...props} />,
-        pre: ({ children }) => <>{children}</>,
-        table: ({ className, ...props }) => (
-          <div className="my-3 max-w-full overflow-x-auto overscroll-x-contain touch-pan-x" data-markdown-table-wrapper="true">
-            <table className={cn('min-w-full w-max border-collapse text-sm', className)} {...props} />
-          </div>
-        ),
-        tbody: ({ className, ...props }) => <tbody className={cn('divide-y divide-border', className)} {...props} />,
-        td: ({ className, ...props }) => <td className={cn('border border-border px-2 py-1 align-top text-foreground', className)} {...props} />,
-        th: ({ className, ...props }) => <th className={cn('border border-border px-2 py-1 text-left font-medium text-foreground', className)} {...props} />,
-        thead: ({ className, ...props }) => <thead className={cn('bg-muted/80', className)} {...props} />,
-        ul: ({ className, ...props }) => <ul className={cn('list-disc space-y-1 pl-5', className)} {...props} />,
-      }}
-    >
-      {props.text}
-    </ReactMarkdown>
-  );
-}
-
-type ResolvedColorTheme = 'light' | 'dark';
-
-function getResolvedColorTheme(): ResolvedColorTheme {
-  return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-}
-
-function useResolvedColorTheme(): ResolvedColorTheme {
-  const [theme, setTheme] = useState<ResolvedColorTheme>(getResolvedColorTheme);
-
-  useEffect(() => {
-    const updateTheme = () => setTheme(getResolvedColorTheme());
-    const observer = new MutationObserver(updateTheme);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    updateTheme();
-
-    return () => observer.disconnect();
-  }, []);
-
-  return theme;
-}
-
-function codeHighlightTheme(theme: ResolvedColorTheme): 'github-light-default' | 'github-dark-default' {
-  return theme === 'dark' ? 'github-dark-default' : 'github-light-default';
-}
-
-function HighlightedCode(props: { code: string; language?: string; wrap?: boolean; chrome?: boolean }) {
-  const [html, setHtml] = useState('');
-  const [copied, setCopied] = useState(false);
-  const copiedResetTimer = useRef<number | null>(null);
-  const colorTheme = useResolvedColorTheme();
-
-  useEffect(() => {
-    return () => {
-      if (copiedResetTimer.current !== null) window.clearTimeout(copiedResetTimer.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    import('shiki')
-      .then(({ codeToHtml }) => codeToHtml(props.code, { lang: props.language ?? 'text', theme: codeHighlightTheme(colorTheme) }))
-      .then((nextHtml) => {
-        if (!cancelled) setHtml(nextHtml);
-      })
-      .catch(() => {
-        if (!cancelled) setHtml('');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [props.code, props.language, colorTheme]);
-
-  async function copyCode() {
-    await navigator.clipboard.writeText(props.code);
-    setCopied(true);
-    if (copiedResetTimer.current !== null) window.clearTimeout(copiedResetTimer.current);
-    copiedResetTimer.current = window.setTimeout(() => {
-      copiedResetTimer.current = null;
-      setCopied(false);
-    }, 1400);
-  }
-
-  return (
-    <figure className="my-3 w-full max-w-full min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-[0_12px_32px_rgb(0_0_0_/_0.18)]">
-      {props.chrome !== false ? (
-        <figcaption className="flex items-center justify-between border-b border-border bg-muted/80 px-3 py-1.5 text-[0.7rem] font-medium uppercase tracking-widest text-muted-foreground">
-          <span>{props.language ?? 'text'}</span>
-          <button className="inline-flex items-center gap-1 rounded border border-border bg-background px-2 py-1 text-[0.65rem] text-muted-foreground transition hover:text-foreground" type="button" onClick={copyCode} aria-label="Copy code">
-            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-        </figcaption>
-      ) : null}
-      {html ? (
-        <div className={cn('highlighted-code text-sm leading-6', props.wrap ? 'highlighted-code-wrap overflow-hidden' : 'overflow-x-auto overflow-y-hidden')} dangerouslySetInnerHTML={{ __html: html }} />
-      ) : (
-        <pre className={cn('p-3 text-sm leading-6 text-foreground', props.wrap ? 'overflow-hidden whitespace-pre-wrap break-words' : 'overflow-x-auto overflow-y-hidden')}><code>{props.code}</code></pre>
-      )}
-    </figure>
-  );
-}
-
-function JsonPayload(props: { value: unknown }) {
-  return <HighlightedCode code={JSON.stringify(props.value, null, 2)} language="json" wrap chrome={false} />;
-}
-
-function CancelRunButton(props: { cancelling: boolean; onCancelRun: () => void }) {
-  return (
-    <Button className="h-7 px-2" type="button" variant="secondary" size="sm" onClick={props.onCancelRun} disabled={props.cancelling}>
-      <X className="h-3.5 w-3.5" /> {props.cancelling ? 'Cancelling...' : 'Cancel task'}
-    </Button>
-  );
-}
-
-function Diagnostics(props: { events: AgentEvent[] }) {
-  const [open, setOpen] = useState(false);
-  if (!props.events.length) return null;
-
-  return (
-    <details className="min-w-0 rounded-md border border-border bg-muted/30 p-2" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary className="cursor-pointer text-sm text-muted-foreground">Diagnostics · {props.events.length} events</summary>
-      <div className="mt-2 grid min-w-0 gap-2">
-        {props.events.map((event) => (
-          <article className="min-w-0 rounded-md border border-border bg-card/80 p-2" key={`${event.sessionId}-${event.sequence}`}>
-            <span className="text-xs text-muted-foreground">#{event.sequence} · {formatDate(event.createdAt)}</span>
-            <strong className="mt-1 block text-sm font-medium text-foreground">{event.type}</strong>
-            <div className="max-h-44 min-w-0 overflow-auto text-xs [&_figure]:my-2 [&_figure]:shadow-none [&_.highlighted-code]:text-xs">
-              <JsonPayload value={event.payload} />
-            </div>
-          </article>
-        ))}
-        <Button className="justify-self-start px-2" type="button" variant="secondary" size="sm" onClick={() => setOpen(false)}>Collapse diagnostics</Button>
-      </div>
-    </details>
-  );
-}
-
-function MobileContextPanel(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
-  return (
-    <details className="mb-5 rounded-md border border-border bg-card/90 shadow-sm lg:hidden">
-      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-foreground">Context</summary>
-      <ContextPanelContent {...props} />
-    </details>
-  );
-}
-
-function DesktopContextPanel(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
-  return (
-    <aside className="hidden min-h-0 overflow-auto border-l border-border bg-card/50 p-4 lg:block" data-thread-scroll-exclude="true">
-      <h2 className="text-sm font-semibold">Context</h2>
-      <ContextPanelContent {...props} />
-    </aside>
-  );
-}
-
-function ContextPanelContent(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
-  return (
-    <div className="p-4 pt-0 lg:p-0 lg:pt-0">
-      <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
-        <strong className="block font-medium text-foreground">Repository</strong>
-        {props.repository ? (
-          <>
-            <a className="mt-1 block break-all text-primary" href={`https://github.com/${props.repository}`} target="_blank" rel="noreferrer">{props.repository}</a>
-            <span className="mt-1 block text-xs">Follow-ups inherit this repo. Enter another repo in the composer to switch.</span>
-          </>
-        ) : (
-          <span className="mt-1 block">No repository selected.</span>
-        )}
-      </div>
-      <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
-        <strong className="block font-medium text-foreground">Artifacts</strong>
-        <span>Outputs and links created by the deputy appear here.</span>
-      </div>
-      <div className="mt-3 grid gap-2">
-        {props.artifacts.map((artifact) => (
-          <Card className="p-3" key={artifact.id}>
-            <span className="text-xs text-muted-foreground">{artifact.type} · {formatDate(artifact.createdAt)}</span>
-            <strong className="mt-1 block text-sm font-medium">{artifact.title || artifact.url || artifact.id}</strong>
-            {artifact.url ? <a className="mt-1 block text-sm text-primary" href={artifact.url} target="_blank" rel="noreferrer">Open artifact</a> : null}
-            <div className="max-h-44 min-w-0 overflow-auto text-xs [&_figure]:my-2 [&_figure]:shadow-none [&_.highlighted-code]:text-xs">
-              <JsonPayload value={artifact.payload} />
-            </div>
-          </Card>
-        ))}
-        {!props.artifacts.length ? <p className="text-sm text-muted-foreground">No artifacts yet.</p> : null}
-      </div>
-      <div className="mt-6 border-b border-border pb-3 text-sm text-muted-foreground">
-        <strong className="block font-medium text-foreground">Callbacks</strong>
-        <span>Delivery status for Slack and webhook completion replies.</span>
-      </div>
-      <div className="mt-3 grid gap-2">
-        {props.callbacks.map((callback) => (
-          <details className="group rounded-md border border-border bg-card/70 text-xs text-muted-foreground" key={callback.id}>
-            <summary className="grid cursor-pointer list-none grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 [&::-webkit-details-marker]:hidden">
-              <ChevronDown className="h-3.5 w-3.5 -rotate-90 text-muted-foreground transition-transform group-open:rotate-0" aria-hidden="true" />
-              <span className="min-w-0 truncate text-muted-foreground">{callback.targetType} · {formatDate(callback.updatedAt)}</span>
-              <Badge className={statusTextClass(callback.status)}>{callback.status}</Badge>
-            </summary>
-            <div className="border-t border-border px-3 py-2">
-              <dl className="grid gap-1">
-                <div>Type: {callbackEventLabel(callback.eventType)}</div>
-                <div>Attempts: {callback.attempts}/{callback.maxAttempts}</div>
-                {callback.nextAttemptAt ? <div>Next retry: {formatDate(callback.nextAttemptAt)}</div> : null}
-                {callback.lastAttemptAt ? <div>Last attempt: {formatDate(callback.lastAttemptAt)}</div> : null}
-                {callback.deliveredAt ? <div>Delivered: {formatDate(callback.deliveredAt)}</div> : null}
-                {callback.lastError ? <div className="text-destructive">Last error: {callback.lastError}</div> : null}
-                <div className="truncate">ID: {callback.id}</div>
-              </dl>
-              {callback.status === 'failed' ? (
-                <Button className="mt-2 h-7 px-2" size="sm" variant="secondary" onClick={() => props.onReplayCallback(callback.id)}>
-                  <RotateCcw className="h-3.5 w-3.5" /> Replay callback
-                </Button>
-              ) : null}
-            </div>
-          </details>
-        ))}
-        {!props.callbacks.length ? <p className="text-sm text-muted-foreground">No callbacks yet.</p> : null}
-      </div>
-    </div>
-  );
-}
-
 function upsertEvent(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
   if (events.some((current) => current.sequence === event.sequence)) return events;
   return [...events, event].sort((a, b) => a.sequence - b.sequence);
@@ -1858,12 +1114,18 @@ function shouldRefreshSessionDetail(eventType: string): boolean {
 }
 
 function shouldRefreshSessions(eventType: string): boolean {
-  return new Set(['session_created', 'session_updated', 'session_archived', 'session_unarchived', 'session_queue_paused', 'session_queue_resumed', 'message_created', 'message_completed', 'message_failed', 'message_cancelled', 'run_failed', 'run_cancelled']).has(eventType);
+  return new Set(['session_created', 'session_updated', 'session_archived', 'session_unarchived', 'session_queue_paused', 'session_queue_resumed', 'message_created', 'message_started', 'message_completed', 'message_failed', 'message_cancelled', 'run_failed', 'run_cancelled']).has(eventType);
 }
 
-function callbackEventLabel(eventType: string): string {
-  if (eventType === 'message_completed') return 'Completion reply';
-  return eventType.replace(/_/g, ' ');
+function waitForRealtimeReconnect(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(resolve, delayMs);
+    signal.addEventListener('abort', () => {
+      window.clearTimeout(timeout);
+      resolve();
+    }, { once: true });
+  });
 }
 
 function repositoryLabel(value: unknown): string | null {
@@ -1873,105 +1135,6 @@ function repositoryLabel(value: unknown): string | null {
   const owner = typeof repository.owner === 'string' ? repository.owner : '';
   const repo = typeof repository.repo === 'string' ? repository.repo : '';
   return owner && repo ? `${owner}/${repo}` : null;
-}
-
-function buildAssistantText(events: AgentEvent[]): Record<string, string> {
-  const messageIdsBySequence: Record<number, string> = {};
-  const outputByMessageId: Record<string, string> = {};
-  let currentSequence = 0;
-  let currentMessageId = '';
-
-  for (const event of events) {
-    const maybeSequence = event.payload.sequence;
-    if (typeof maybeSequence === 'number') {
-      currentSequence = maybeSequence;
-      if (event.messageId) messageIdsBySequence[maybeSequence] = event.messageId;
-    }
-    if (event.messageId) currentMessageId = event.messageId;
-    const messageId = event.messageId || currentMessageId || messageIdsBySequence[currentSequence];
-    if (!messageId) continue;
-    const text = event.payload.text;
-    if (typeof text !== 'string') continue;
-    if (event.type === 'agent_response_final') {
-      outputByMessageId[messageId] = text;
-    } else if (event.type === 'agent_text_delta') {
-      outputByMessageId[messageId] = `${outputByMessageId[messageId] ?? ''}${text}`;
-    }
-  }
-
-  return outputByMessageId;
-}
-
-function formatAssistantDisplayText(text: string): string {
-  return text
-    .replace(/([.!?])(?=[A-Z])/g, '$1 ')
-    .replace(/:(?=[A-Z][a-z])/g, ': ');
-}
-
-type MessageGroup = {
-  key: string;
-  messages: Message[];
-  responseMessageId: string;
-  runId?: string;
-};
-
-function groupMessagesByRun(messages: Message[], events: AgentEvent[]): MessageGroup[] {
-  const batchBySequence = new Map<number, { runId: string; sequences: number[] }>();
-  for (const event of events) {
-    if (event.type !== 'message_started' || !event.runId) continue;
-    const sequences = Array.isArray(event.payload.sequences) ? event.payload.sequences.filter((value): value is number => typeof value === 'number') : [];
-    if (sequences.length <= 1) continue;
-    for (const sequence of sequences) batchBySequence.set(sequence, { runId: event.runId, sequences });
-  }
-
-  const groups: MessageGroup[] = [];
-  const seen = new Set<string>();
-
-  for (const message of messages) {
-    if (seen.has(message.id)) continue;
-    const batch = batchBySequence.get(message.sequence);
-    if (!batch) {
-      groups.push({ key: message.id, messages: [message], responseMessageId: message.id });
-      seen.add(message.id);
-      continue;
-    }
-
-    const minSequence = Math.min(...batch.sequences);
-    const maxSequence = Math.max(...batch.sequences);
-    const batchSequenceSet = new Set(batch.sequences);
-    const batchMessages = messages.filter((candidate) => {
-      if (batchSequenceSet.has(candidate.sequence)) return true;
-      return candidate.status === 'cancelled' && candidate.sequence > minSequence && candidate.sequence < maxSequence;
-    });
-    for (const item of batchMessages) seen.add(item.id);
-    groups.push({ key: batch.runId, messages: batchMessages, responseMessageId: batchMessages[0]?.id ?? message.id, runId: batch.runId });
-  }
-
-  return groups;
-}
-
-function isActiveRunGroup(messages: Message[]): boolean {
-  return messages.some((message) => message.status === 'processing' || message.status === 'cancelling');
-}
-
-function isCancellingRunGroup(messages: Message[]): boolean {
-  return messages.some((message) => message.status === 'cancelling');
-}
-
-function groupDiagnosticsByRun(events: AgentEvent[]): Record<string, AgentEvent[]> {
-  const grouped: Record<string, AgentEvent[]> = {};
-  for (const event of events) {
-    if (event.type === 'message_created' || event.type === 'agent_text_delta' || event.type === 'agent_response_final') continue;
-    for (const key of diagnosticGroupKeys(event)) {
-      grouped[key] = [...(grouped[key] ?? []), event];
-    }
-  }
-  return grouped;
-}
-
-function diagnosticGroupKeys(event: AgentEvent): string[] {
-  const keys = [event.runId, event.messageId].filter((key): key is string => Boolean(key));
-  return Array.from(new Set(keys));
 }
 
 function titleFromPrompt(prompt: string): string {
@@ -1984,60 +1147,9 @@ function sortSessionsByLastActivity(sessions: Session[]): Session[] {
   return [...sessions].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 }
 
-function filterSessions(sessions: Session[], search: string): Session[] {
-  const query = search.trim().toLowerCase();
-  if (!query) return sessions;
-  return sessions
-    .map((session) => ({ session, score: fuzzyScore(`${session.title ?? ''} ${session.status} ${session.id}`, query) }))
-    .filter((match) => match.score !== null)
-    .sort((a, b) => a.score! - b.score!)
-    .map((match) => match.session);
-}
-
-function fuzzyScore(value: string, query: string): number | null {
-  const haystack = value.toLowerCase();
-  let score = 0;
-  let lastIndex = -1;
-
-  for (const char of query) {
-    if (char === ' ') continue;
-    const index = haystack.indexOf(char, lastIndex + 1);
-    if (index === -1) return null;
-    score += index - lastIndex - 1;
-    lastIndex = index;
-  }
-
-  if (haystack.includes(query)) score -= query.length;
-  if (haystack.startsWith(query)) score -= query.length * 2;
-  return score;
-}
-
-function statusTextClass(status: string): string {
-  if (['completed', 'ready', 'ok'].includes(status)) return 'text-success';
-  if (['active', 'processing', 'running', 'starting', 'cancelling'].includes(status)) return 'text-info';
-  if (['pending', 'queued', 'created', 'stopped'].includes(status)) return 'text-warning';
-  if (['failed', 'cancelled', 'unhealthy', 'destroyed', 'missing'].includes(status)) return 'text-destructive';
-  if (status === 'idle' || status === 'archived') return 'text-muted-foreground';
-  return 'text-foreground';
-}
-
-function submitOnEnter(event: KeyboardEvent<HTMLTextAreaElement>): void {
-  if (event.key !== 'Enter' || event.shiftKey || isMobileTextEntryViewport()) return;
-  event.preventDefault();
-  event.currentTarget.form?.requestSubmit();
-}
-
-function isMobileTextEntryViewport(): boolean {
-  return window.matchMedia?.('(hover: none) and (pointer: coarse)').matches ?? false;
-}
-
 function blurFocusedTextControl(): void {
   const activeElement = document.activeElement;
   if (activeElement instanceof HTMLTextAreaElement || activeElement instanceof HTMLInputElement) activeElement.blur();
-}
-
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' }).format(new Date(value));
 }
 
 function errorMessage(err: unknown): string {

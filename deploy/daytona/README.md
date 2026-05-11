@@ -10,8 +10,9 @@ If your Daytona target supports privileged Docker, `deploy/local/docker-compose.
 
 ## Included Tooling
 
+- Ubuntu 24.04 base
 - Node.js 24 and Corepack/pnpm
-- Playwright Chromium and Linux browser dependencies
+- Playwright Chromium and Linux browser dependencies installed explicitly
 - Postgres and PostgreSQL client tools
 - Git, Git LFS, SSH, jq, rsync, and zsh
 
@@ -20,7 +21,7 @@ If your Daytona target supports privileged Docker, `deploy/local/docker-compose.
 Build from the repository root so the Docker context has access to this file:
 
 ```sh
-docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/daytona/Dockerfile -t ghcr.io/<owner>/deputies-daytona:node24-pg16-playwright1.59.1 --push .
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/daytona/Dockerfile -t ghcr.io/<owner>/deputies-daytona:ubuntu24-node24-pg16-playwright1.59.1 --push .
 ```
 
 Or use mise:
@@ -61,7 +62,7 @@ Set the control-plane service environment so new agent sandboxes use this image:
 
 ```sh
 SANDBOX_PROVIDER=daytona
-DAYTONA_IMAGE=ghcr.io/<owner>/deputies-daytona:node24-pg16-playwright1.59.1
+DAYTONA_IMAGE=ghcr.io/<owner>/deputies-daytona:ubuntu24-node24-pg16-playwright1.59.1
 ```
 
 Keep the existing Daytona settings as needed:

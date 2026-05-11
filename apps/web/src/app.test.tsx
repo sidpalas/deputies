@@ -25,9 +25,11 @@ type MockApiOptions = {
   callbacks?: unknown[];
   sessionOverride?: Partial<typeof session>;
   onCancelRun?: () => void;
+  onRetryMessage?: (messageId: string) => void;
   onReplayCallback?: (callbackId: string) => void;
   onStreamOpen?: (push: StreamEventPusher) => void;
   onGlobalStreamOpen?: (push: StreamEventPusher) => void;
+  onGlobalStreamRequest?: (url: URL) => void;
   onListSessions?: (count: number) => void;
   globalStreamStatus?: number;
   hangArchive?: boolean;
@@ -203,6 +205,59 @@ it('refreshes sessions when the global event stream reports an external session'
   expect(await screen.findByText('Slack thread')).toBeInTheDocument();
 });
 
+it('keeps initial global event stream replay disabled to avoid loading old events', async () => {
+  let streamUrl: URL | undefined;
+  mockApi({
+    onGlobalStreamRequest: (url) => {
+      streamUrl = url;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findAllByText('Existing session')).not.toHaveLength(0);
+  await waitFor(() => expect(streamUrl).toBeDefined());
+
+  expect(streamUrl?.searchParams.get('include')).toBe('all');
+  expect(streamUrl?.searchParams.get('replay')).toBe('false');
+});
+
+it('refreshes sessions after returning from a hidden tab to catch phone updates', async () => {
+  const sessions = [{ ...session }];
+  mockApi({ sessions });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+
+  setVisibilityState('hidden');
+  fireEvent(document, new Event('visibilitychange'));
+  sessions[0] = { ...session, status: 'archived' };
+
+  setVisibilityState('visible');
+  fireEvent(document, new Event('visibilitychange'));
+
+  expect(await screen.findByText('This session is archived.')).toBeInTheDocument();
+});
+
+it('refreshes sessions when a queued message starts processing', async () => {
+  const sessions = [{ ...session, status: 'queued' }];
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    sessions,
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findAllByText('queued')).not.toHaveLength(0);
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+
+  sessions[0] = { ...session, status: 'active' };
+  pushGlobalEvent?.(eventFixture({ id: 2, sequence: 1, type: 'message_started', payload: { sequences: [1], batchSize: 1 } }));
+
+  expect(await screen.findAllByText('active')).not.toHaveLength(0);
+});
+
 it('coalesces rapid global session refresh events into one sessions request', async () => {
   const sessions = [session];
   let sessionsRequestCount = 0;
@@ -275,6 +330,40 @@ it('shows cancelling state on the active message cancel action', async () => {
   expect(within(messageCard).getByRole('button', { name: 'Cancelling...' })).toBeDisabled();
 });
 
+it('retries a failed message from its message card', async () => {
+  const retriedMessageIds: string[] = [];
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000120', sequence: 1, status: 'failed', prompt: 'try this again' })],
+    onRetryMessage: (messageId) => retriedMessageIds.push(messageId),
+  });
+  render(<App />);
+
+  const messageCard = await screen.findByRole('article', { name: 'Message 1' });
+  fireEvent.click(within(messageCard).getByRole('button', { name: 'Retry' }));
+
+  await waitFor(() => expect(retriedMessageIds).toEqual(['00000000-0000-4000-8000-000000000120']));
+  expect(await screen.findByRole('article', { name: 'Message 2' })).toHaveTextContent('try this again');
+});
+
+it('retries all failed messages in a failed message group', async () => {
+  const retriedMessageIds: string[] = [];
+  mockApi({
+    messages: [
+      messageFixture({ id: '00000000-0000-4000-8000-000000000121', sequence: 1, status: 'failed', prompt: 'first failed task' }),
+      messageFixture({ id: '00000000-0000-4000-8000-000000000122', sequence: 2, status: 'failed', prompt: 'second failed task' }),
+    ],
+    events: [eventFixture({ sequence: 1, type: 'message_started', runId: '00000000-0000-4000-8000-000000000220', messageId: '00000000-0000-4000-8000-000000000121', payload: { sequences: [1, 2], batchSize: 2 } })],
+    onRetryMessage: (messageId) => retriedMessageIds.push(messageId),
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Retry 2 failed' }));
+
+  await waitFor(() => expect(retriedMessageIds).toEqual(['00000000-0000-4000-8000-000000000121', '00000000-0000-4000-8000-000000000122']));
+  expect(await screen.findByRole('article', { name: 'Message 3' })).toHaveTextContent('first failed task');
+  expect(await screen.findByRole('article', { name: 'Message 4' })).toHaveTextContent('second failed task');
+});
+
 it('logs in with session auth before loading sessions', async () => {
   const logins: Array<{ username: string; password: string }> = [];
   mockApi({ authMode: 'session', currentUser: null, logins });
@@ -324,7 +413,7 @@ it('keeps a cancelled middle message inline with its surrounding batch', async (
   const response = screen.getByText('Deputy response');
 
   expect(message12.compareDocumentPosition(response)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-  expect(screen.getAllByText(/Diagnostics/)).toHaveLength(1);
+  expect(screen.getAllByText(/Activity/)).toHaveLength(1);
 });
 
 it('shows a jump control instead of autoscrolling after the user scrolls up', async () => {
@@ -591,8 +680,115 @@ it('shows run diagnostics for a single-message response', async () => {
 
   await screen.findByText('single response');
 
-  expect(screen.getByText(/Diagnostics · 2 events/)).toBeInTheDocument();
-  expect(screen.getByText('sandbox_ready')).toBeInTheDocument();
+  expect(screen.getByText(/Activity · 2 events/)).toBeInTheDocument();
+  expect(screen.getByText('fake sandbox ready')).toBeInTheDocument();
+});
+
+it('renders tool diagnostics as readable activity with raw details collapsed', async () => {
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000124', sequence: 1, status: 'completed', prompt: 'inspect env' })],
+    events: [
+      eventFixture({ sequence: 1, type: 'message_started', runId: '00000000-0000-4000-8000-000000000224', messageId: '00000000-0000-4000-8000-000000000124', payload: { sequences: [1], batchSize: 1 } }),
+      eventFixture({ sequence: 2, type: 'tool_started', runId: '00000000-0000-4000-8000-000000000224', messageId: '00000000-0000-4000-8000-000000000124', payload: { toolName: 'shell', toolCallId: 'tool-1', args: { command: 'pnpm test' } } }),
+      eventFixture({ sequence: 3, type: 'tool_finished', runId: '00000000-0000-4000-8000-000000000224', messageId: '00000000-0000-4000-8000-000000000124', payload: { toolName: 'shell', toolCallId: 'tool-1', isError: true, result: 'Tests failed' } }),
+      eventFixture({ sequence: 4, type: 'agent_text_delta', runId: '00000000-0000-4000-8000-000000000224', messageId: '00000000-0000-4000-8000-000000000124', payload: { text: 'I ran the tests.' } }),
+    ],
+  });
+  render(<App />);
+
+  await screen.findByText('I ran the tests.');
+  fireEvent.click(screen.getByText(/Activity · 3 events/));
+
+  expect(screen.getByText('Command failed: pnpm test')).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByText('pnpm test')).toBeInTheDocument());
+  expect(screen.getByText('Tests failed')).toBeInTheDocument();
+  expect(screen.getAllByText('Debug details')).toHaveLength(2);
+});
+
+it('labels unmatched tool start diagnostics as started instead of running', async () => {
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000127', sequence: 1, status: 'completed', prompt: 'inspect env' })],
+    events: [
+      eventFixture({ sequence: 1, type: 'message_started', runId: '00000000-0000-4000-8000-000000000227', messageId: '00000000-0000-4000-8000-000000000127', payload: { sequences: [1], batchSize: 1 } }),
+      eventFixture({ sequence: 2, type: 'tool_started', runId: '00000000-0000-4000-8000-000000000227', messageId: '00000000-0000-4000-8000-000000000127', payload: { toolName: 'shell', toolCallId: 'tool-1', args: { command: 'pnpm test' } } }),
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByText(/Activity · 2 events/));
+
+  expect(screen.getByText('Command started: pnpm test')).toBeInTheDocument();
+  expect(screen.getByText('started')).toBeInTheDocument();
+  expect(screen.queryByText('running')).not.toBeInTheDocument();
+});
+
+it('renders custom tool text content without exposing the result envelope', async () => {
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000125', sequence: 1, status: 'completed', prompt: 'push branch' })],
+    events: [
+      eventFixture({ sequence: 1, type: 'message_started', runId: '00000000-0000-4000-8000-000000000225', messageId: '00000000-0000-4000-8000-000000000125', payload: { sequences: [1], batchSize: 1 } }),
+      eventFixture({ sequence: 2, type: 'tool_started', runId: '00000000-0000-4000-8000-000000000225', messageId: '00000000-0000-4000-8000-000000000125', payload: { toolName: 'git', toolCallId: 'tool-1' } }),
+      eventFixture({
+        sequence: 3,
+        type: 'tool_finished',
+        runId: '00000000-0000-4000-8000-000000000225',
+        messageId: '00000000-0000-4000-8000-000000000125',
+        payload: {
+          toolName: 'git',
+          toolCallId: 'tool-1',
+          isError: false,
+          result: { content: [{ text: 'exitCode: 0\nstderr:\nremote: Create a pull request', type: 'text' }], details: { customTool: 'git' } },
+        },
+      }),
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByText(/Activity · 3 events/));
+
+  expect(screen.getByText('Git custom tool completed')).toBeInTheDocument();
+  const visibleToolOutput = screen.getByText(/remote: Create a pull request/, { selector: 'p' });
+  expect(visibleToolOutput).toBeInTheDocument();
+  expect(visibleToolOutput).not.toHaveTextContent('customTool');
+});
+
+it('contains long diagnostic output in a scrollable panel', async () => {
+  const longOutput = Array.from({ length: 12 }, (_, index) => `line ${index + 1}: expect(messageLogHeight).toBeGreaterThan(300);`).join('\n');
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000127', sequence: 1, status: 'completed', prompt: 'read a large file' })],
+    events: [
+      eventFixture({ sequence: 1, type: 'message_started', runId: '00000000-0000-4000-8000-000000000227', messageId: '00000000-0000-4000-8000-000000000127', payload: { sequences: [1], batchSize: 1 } }),
+      eventFixture({ sequence: 2, type: 'tool_started', runId: '00000000-0000-4000-8000-000000000227', messageId: '00000000-0000-4000-8000-000000000127', payload: { toolName: 'read', toolCallId: 'tool-1' } }),
+      eventFixture({ sequence: 3, type: 'tool_finished', runId: '00000000-0000-4000-8000-000000000227', messageId: '00000000-0000-4000-8000-000000000127', payload: { toolName: 'read', toolCallId: 'tool-1', result: longOutput } }),
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByText(/Activity · 3 events/));
+
+  const panel = screen.getByRole('region', { name: 'Scrollable diagnostic output' });
+  expect(panel).toHaveClass('max-h-56');
+  expect(panel).toHaveClass('overflow-auto');
+  expect(panel).toHaveTextContent('line 12:');
+});
+
+it('identifies upstream sandbox provider failures during sandbox startup', async () => {
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000123', sequence: 7, status: 'failed', prompt: 'please create a PR with these changes' })],
+    events: [
+      eventFixture({ sequence: 1, type: 'message_started', runId: '00000000-0000-4000-8000-000000000223', messageId: '00000000-0000-4000-8000-000000000123', payload: { sequences: [7], batchSize: 1 } }),
+      eventFixture({ sequence: 2, type: 'sandbox_starting', runId: '00000000-0000-4000-8000-000000000223', messageId: '00000000-0000-4000-8000-000000000123', payload: { provider: 'daytona' } }),
+      eventFixture({ sequence: 3, type: 'run_failed', runId: '00000000-0000-4000-8000-000000000223', messageId: '00000000-0000-4000-8000-000000000123', payload: { error: '<html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1></body></html>' } }),
+      eventFixture({ sequence: 4, type: 'message_failed', runId: '00000000-0000-4000-8000-000000000223', messageId: '00000000-0000-4000-8000-000000000123', payload: { error: '<html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1></body></html>' } }),
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByText(/Activity · 4 events/));
+
+  expect(screen.getByText('Likely sandbox provider issue')).toBeInTheDocument();
+  expect(screen.getByText(/starting a daytona sandbox/)).toBeInTheDocument();
+  expect(screen.getByText(/upstream sandbox\/API availability issue/)).toBeInTheDocument();
 });
 
 it('prefers final assistant response over streamed deltas', async () => {
@@ -712,12 +908,11 @@ it('shows callback delivery status and replays failed callbacks', async () => {
   });
   render(<App />);
 
-  expect(await screen.findAllByText('Callbacks')).not.toHaveLength(0);
-  expect(screen.getAllByText('Last error: HTTP callback returned 500')[1]).not.toBeVisible();
-  fireEvent.click(screen.getAllByText(/http ·/)[1]!);
-  expect(screen.getAllByText('Type: Completion reply')[1]).toBeVisible();
-  expect(screen.getAllByText('Last error: HTTP callback returned 500')[1]).toBeVisible();
-  fireEvent.click(screen.getAllByRole('button', { name: /Replay callback/ })[1]!);
+  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  fireEvent.click(await contextPanel.findByLabelText('http callback failed'));
+  expect(contextPanel.getByText('Type: Completion reply')).toBeVisible();
+  expect(contextPanel.getByText('Last error: HTTP callback returned 500')).toBeVisible();
+  fireEvent.click(contextPanel.getByRole('button', { name: /Replay callback/ }));
 
   await waitFor(() => expect(replays).toEqual(['00000000-0000-4000-8000-000000000301']));
   expect(await screen.findAllByText('pending')).not.toHaveLength(0);
@@ -783,6 +978,7 @@ function mockApi(options: MockApiOptions = {}) {
   let currentSession = { ...session, ...options.sessionOverride };
   let currentUser = options.currentUser;
   let callbacks = options.callbacks ?? [];
+  let messages = options.messages ?? [];
   let sessionsRequestCount = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
@@ -835,27 +1031,46 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/messages` && method === 'GET') {
-      return jsonResponse({ messages: options.messages ?? [] });
+      return jsonResponse({ messages });
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/messages` && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { prompt: string };
       options.submittedPrompts?.push(body.prompt);
-      return jsonResponse({
-        message: {
-          id: '00000000-0000-4000-8000-000000000101',
-          sessionId: currentSession.id,
-          sequence: 1,
-          status: 'pending',
-          prompt: body.prompt,
-          createdAt: '2026-05-05T12:01:00.000Z',
-        },
-      }, 202);
+      const message = {
+        id: '00000000-0000-4000-8000-000000000101',
+        sessionId: currentSession.id,
+        sequence: 1,
+        status: 'pending',
+        prompt: body.prompt,
+        createdAt: '2026-05-05T12:01:00.000Z',
+      };
+      messages = [...messages, message];
+      return jsonResponse({ message }, 202);
+    }
+
+    const retryMessageMatch = url.pathname.match(new RegExp(`^/sessions/${currentSession.id}/messages/([^/]+)/retry$`));
+    if (retryMessageMatch && method === 'POST') {
+      const messageId = retryMessageMatch[1]!;
+      options.onRetryMessage?.(messageId);
+      const failedMessage = messages.find((message) => (message as { id?: string }).id === messageId) as { prompt?: string; source?: string; context?: Record<string, unknown> } | undefined;
+      const retriedMessage = {
+        id: `00000000-0000-4000-8000-0000000009${messages.length + 1}`,
+        sessionId: currentSession.id,
+        sequence: messages.length + 1,
+        status: 'pending',
+        prompt: failedMessage?.prompt ?? 'retried message',
+        ...(failedMessage?.source ? { source: failedMessage.source } : {}),
+        ...(failedMessage?.context ? { context: failedMessage.context } : {}),
+        createdAt: '2026-05-05T12:05:00.000Z',
+      };
+      messages = [...messages, retriedMessage];
+      return jsonResponse({ message: retriedMessage }, 202);
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/runs/current/cancel` && method === 'POST') {
       options.onCancelRun?.();
-      return jsonResponse({ messages: (options.messages ?? []).map((message) => ({ ...(message as object), status: 'cancelling' })) });
+      return jsonResponse({ messages: messages.map((message) => ({ ...(message as object), status: 'cancelling' })) });
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/events`) {
@@ -890,6 +1105,7 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === '/events/stream') {
+      options.onGlobalStreamRequest?.(url);
       if (options.globalStreamStatus) return new Response(null, { status: options.globalStreamStatus });
       return new Response(new ReadableStream({
         start(controller) {

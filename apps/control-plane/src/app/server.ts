@@ -448,6 +448,17 @@ export function createApp(config: AppConfig, services = createServices()) {
     }
   });
 
+  app.post('/sessions/:sessionId/messages/:messageId/retry', async (c) => {
+    try {
+      const message = await services.messages.retryFailed({ sessionId: c.req.param('sessionId'), messageId: c.req.param('messageId') });
+      return c.json({ message }, 202);
+    } catch (error) {
+      if (error instanceof MessageServiceError && error.code === 'not_found') return writeError(c, 404, 'not_found', error.message);
+      if (error instanceof MessageServiceError && error.code === 'conflict') return writeError(c, 409, 'conflict', error.message);
+      throw error;
+    }
+  });
+
   app.get('/sessions/:sessionId/events', async (c) => {
     const sessionId = c.req.param('sessionId');
     const session = await services.sessions.get(sessionId);

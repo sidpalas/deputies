@@ -53,26 +53,27 @@ describe('FlueRunner', () => {
           async session() {
             return {
               async prompt() {
-                input.onEvent?.({ type: 'text_delta', text: 'hello', sessionId: 'flue-session' });
+                input.onEvent?.({ type: 'text_delta', text: 'hello', session: 'flue-session' });
                 input.onEvent?.({
                   type: 'tool_start',
                   toolName: 'shell',
                   toolCallId: 'tool-1',
                   args: { command: 'pwd' },
-                  sessionId: 'flue-session',
+                  session: 'flue-session',
                 });
                 input.onEvent?.({
-                  type: 'tool_end',
+                  type: 'tool_call',
                   toolName: 'shell',
                   toolCallId: 'tool-1',
                   isError: false,
                   result: 'ok',
-                  sessionId: 'flue-session',
+                  durationMs: 1,
+                  session: 'flue-session',
                 });
-                input.onEvent?.({ type: 'command_start', command: 'gh', args: ['issue', 'list'] });
-                input.onEvent?.({ type: 'command_end', command: 'gh', exitCode: 0 });
+                input.onEvent?.({ type: 'operation_start', operationId: 'op-1', operationKind: 'shell' });
+                input.onEvent?.({ type: 'operation', operationId: 'op-1', operationKind: 'shell', durationMs: 1, isError: false, result: { command: 'gh', exitCode: 0 } });
                 input.onEvent?.({ type: 'task_start', taskId: 'task-1', prompt: 'research', cwd: '/workspace' });
-                input.onEvent?.({ type: 'task_end', taskId: 'task-1', isError: false, result: 'done' });
+                input.onEvent?.({ type: 'task', taskId: 'task-1', isError: false, result: 'done', durationMs: 1 });
                 return { text: 'hello' };
               },
               abort() {},
@@ -110,7 +111,7 @@ describe('FlueRunner', () => {
     expect(events.filter((event) => event.type === 'agent_text_delta')).toHaveLength(1);
     expect(events[1]?.payload).toMatchObject({ text: 'hello', flueSessionId: 'flue-session' });
     expect(events[2]?.payload).toMatchObject({ toolName: 'shell', toolCallId: 'tool-1' });
-    expect(events[4]?.payload).toMatchObject({ toolName: 'command', command: 'gh' });
+    expect(events[4]?.payload).toMatchObject({ toolName: 'command', args: { operationId: 'op-1' } });
     expect(events[6]?.payload).toMatchObject({ toolName: 'task', taskId: 'task-1' });
   });
 
@@ -171,7 +172,7 @@ describe('FlueRunner', () => {
 
   it('restores persisted Flue session state after abort', async () => {
     const previousSession = {
-      version: 2 as const,
+      version: 3 as const,
       entries: [
         {
           type: 'message' as const,
@@ -280,7 +281,7 @@ describe('FlueRunner', () => {
 
   it('maps product session IDs to Flue storage keys for snapshots', async () => {
     const keys: string[] = [];
-    const data = { version: 2, entries: [], leafId: null, metadata: {}, createdAt: 'now', updatedAt: 'now' } satisfies SessionData;
+    const data = { version: 3, entries: [], leafId: null, metadata: {}, createdAt: 'now', updatedAt: 'now' } satisfies SessionData;
     const store: SessionStore = {
       async load(id) {
         keys.push(`load:${id}`);
@@ -299,8 +300,14 @@ describe('FlueRunner', () => {
     await factory.saveSession('session-1', data);
     await factory.deleteSession('session-1');
 
-    const key = 'agent-session:["session-1","session-1"]';
-    expect(keys).toEqual([`load:${key}`, `save:${key}`, `delete:${key}`]);
+    const key = 'agent-session:["deputies","runner","session-1"]';
+    expect(keys).toEqual([
+      `load:${key}`,
+      `save:${key}`,
+      `delete:${key}`,
+      'delete:agent-session:["session-1","session-1","session-1"]',
+      'delete:agent-session:["session-1","session-1"]',
+    ]);
   });
 
 });

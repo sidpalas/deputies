@@ -27,7 +27,39 @@ describe('RealFlueAgentFactory', () => {
 
     await agent.session('thread-1');
 
-    expect(saved.has('agent-session:["agent-1","thread-1"]')).toBe(true);
+    expect(saved.has('agent-session:["deputies","runner","thread-1"]')).toBe(true);
+    expect(saved.has('agent-session:["agent-1","agent-1","thread-1"]')).toBe(false);
+  });
+
+  it('migrates long Flue affinity keys from the previous adapter', async () => {
+    const legacyData = { version: 3, entries: [], leafId: null, metadata: {}, createdAt: 'then', updatedAt: 'then' };
+    const saved = new Map<string, unknown>([
+      ['agent-session:["agent-1","agent-1","thread-1"]', legacyData],
+    ]);
+    const agent = await new RealFlueAgentFactory({
+      model: false,
+      sessionStore: {
+        async save(id, data) {
+          saved.set(id, data);
+        },
+        async load(id) {
+          return (saved.get(id) as never) ?? null;
+        },
+        async delete(id) {
+          saved.delete(id);
+        },
+      },
+      env: {},
+    }).create({
+      agentId: 'agent-1',
+      sessionId: 'thread-1',
+      cwd: '/workspace/project',
+      sandbox: createSandboxHandle(),
+    });
+
+    await agent.session('thread-1');
+
+    expect(saved.get('agent-session:["deputies","runner","thread-1"]')).toBe(legacyData);
   });
 });
 
