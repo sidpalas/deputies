@@ -1107,7 +1107,7 @@ type ConnectionStatusBannerProps = {
 
 function ConnectionStatusBanner(props: ConnectionStatusBannerProps) {
   return (
-    <div className="border-b border-warning/50 bg-warning/15 px-3 py-2 text-sm text-warning-foreground dark:text-warning md:px-8 xl:px-20" role="status">
+    <div className="pointer-events-none fixed left-3 right-3 top-3 z-50 rounded-md border border-warning/50 bg-warning/15 px-3 py-2 text-sm text-warning-foreground shadow-lg backdrop-blur dark:text-warning md:left-8 md:right-8 xl:left-20 xl:right-20" role="status">
       <div className="flex flex-wrap items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
         <p className="min-w-0 flex-1">
