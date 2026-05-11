@@ -516,6 +516,7 @@ it('surfaces realtime connection failures with a multiple-window hint', async ()
   render(<App />);
 
   const banner = await screen.findByRole('status');
+  expect(banner).toHaveClass('fixed');
   expect(banner).toHaveTextContent(/Realtime updates are reconnecting|Connection delayed/);
   expect(banner).toHaveTextContent(/several windows/);
   expect(screen.getByText(/Delayed|Reconnecting/)).toBeInTheDocument();
