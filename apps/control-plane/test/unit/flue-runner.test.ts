@@ -300,8 +300,14 @@ describe('FlueRunner', () => {
     await factory.saveSession('session-1', data);
     await factory.deleteSession('session-1');
 
-    const key = 'agent-session:["session-1","session-1"]';
-    expect(keys).toEqual([`load:${key}`, `save:${key}`, `delete:${key}`]);
+    const key = 'agent-session:["deputies","runner","session-1"]';
+    expect(keys).toEqual([
+      `load:${key}`,
+      `save:${key}`,
+      `delete:${key}`,
+      'delete:agent-session:["session-1","session-1","session-1"]',
+      'delete:agent-session:["session-1","session-1"]',
+    ]);
   });
 
 });

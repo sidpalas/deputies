@@ -15,6 +15,9 @@ import { configureProvider } from '@flue/sdk/app';
 import type { FlueAgentFactory, FlueAgentPort, FlueSessionPort } from "./types.js";
 import { sandboxHandleToFlueFactory } from "./sandbox-factory.js";
 
+const FLUE_INSTANCE_ID = 'deputies';
+const FLUE_HARNESS_NAME = 'runner';
+
 export type RealFlueAgentFactoryOptions = {
   model: AgentInit["model"];
   providers?: Record<string, { apiKey?: string; baseUrl?: string; headers?: Record<string, string> }>;
@@ -38,7 +41,7 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
     input: Parameters<FlueAgentFactory["create"]>[0],
   ): Promise<FlueAgentPort> {
     const ctx = createFlueContext({
-      id: input.agentId,
+      id: FLUE_INSTANCE_ID,
       runId: input.sessionId,
       payload: {},
       env: this.env,
@@ -56,7 +59,7 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
     ctx.setEventCallback(input.onEvent);
 
     const initOptions: AgentInit = {
-      name: input.agentId,
+      name: FLUE_HARNESS_NAME,
       sandbox: sandboxHandleToFlueFactory(input.sandbox),
       model: this.options.model,
       persist: this.sessionStore,
@@ -68,7 +71,7 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
   }
 
   async loadSession(id: string): Promise<SessionData | null> {
-    return this.sessionStore.load(flueSessionStorageKey(id));
+    return loadFlueSession(this.sessionStore, id, id);
   }
 
   async saveSession(id: string, data: SessionData): Promise<void> {
@@ -76,12 +79,39 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
   }
 
   async deleteSession(id: string): Promise<void> {
-    await this.sessionStore.delete(flueSessionStorageKey(id));
+    await Promise.all(flueSessionStorageKeys(id, id).map((key) => this.sessionStore.delete(key)));
   }
 }
 
-function flueSessionStorageKey(agentId: string, sessionId = agentId): string {
-  return `agent-session:${JSON.stringify([agentId, sessionId])}`;
+function flueSessionStorageKey(sessionId: string): string {
+  return `agent-session:${JSON.stringify([FLUE_INSTANCE_ID, FLUE_HARNESS_NAME, sessionId])}`;
+}
+
+function legacyFlueSessionStorageKey(sessionId: string, legacyAgentId: string): string {
+  return `agent-session:${JSON.stringify([legacyAgentId, legacyAgentId, sessionId])}`;
+}
+
+function preUpgradeFlueSessionStorageKey(sessionId: string): string {
+  return `agent-session:${JSON.stringify([sessionId, sessionId])}`;
+}
+
+function flueSessionStorageKeys(sessionId: string, legacyAgentId: string): string[] {
+  return [flueSessionStorageKey(sessionId), legacyFlueSessionStorageKey(sessionId, legacyAgentId), preUpgradeFlueSessionStorageKey(sessionId)];
+}
+
+async function loadFlueSession(store: SessionStore, sessionId: string, legacyAgentId: string): Promise<SessionData | null> {
+  const key = flueSessionStorageKey(sessionId);
+  const existing = await store.load(key);
+  if (existing) return existing;
+
+  for (const legacyKey of flueSessionStorageKeys(sessionId, legacyAgentId).slice(1)) {
+    const legacy = await store.load(legacyKey);
+    if (legacy) {
+      await store.save(key, legacy);
+      return legacy;
+    }
+  }
+  return null;
 }
 
 function unsupportedEnv(kind: string) {
@@ -92,16 +122,12 @@ function unsupportedEnv(kind: string) {
   };
 }
 
-function adaptHarness(harness: FlueHarness, agentId: string, sessionStore: SessionStore): FlueAgentPort {
+function adaptHarness(harness: FlueHarness, legacyAgentId: string, sessionStore: SessionStore): FlueAgentPort {
   return {
     session: async (id?: string) => {
-      const session = await harness.session(id);
       const sessionId = id ?? "default";
-      const key = flueSessionStorageKey(agentId, sessionId);
-      if (!(await sessionStore.load(key))) {
-        const now = new Date().toISOString();
-        await sessionStore.save(key, { version: 3, entries: [], leafId: null, metadata: {}, createdAt: now, updatedAt: now });
-      }
+      await loadFlueSession(sessionStore, sessionId, legacyAgentId);
+      const session = await harness.session(id);
       return adaptSession(session);
     },
     shell: (command, options) =>
