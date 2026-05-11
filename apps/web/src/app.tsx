@@ -1991,22 +1991,45 @@ function diagnosticGroupKeys(event: AgentEvent): string[] {
 }
 
 function analyzeDiagnosticFailure(events: AgentEvent[]): DiagnosticFailureAnalysis | null {
-  if (!looksLikeDaytonaApiFailure(events)) return null;
+  const providerFailure = sandboxProviderFailure(events);
+  if (!providerFailure) return null;
+
   return {
-    title: 'Likely Daytona API failure',
-    detail: 'The run was still starting a Daytona sandbox when Daytona returned a 502 Bad Gateway response, so this looks like an upstream Daytona API/gateway outage rather than a task or repository failure.',
+    title: 'Likely sandbox provider issue',
+    detail: `The run was still starting a ${providerFailure.provider} sandbox when the provider returned ${providerFailure.errorSummary}. This points to an upstream sandbox/API availability issue rather than a task or repository failure.`,
   };
 }
 
-function looksLikeDaytonaApiFailure(events: AgentEvent[]): boolean {
-  const daytonaSandboxStartingIndex = events.findIndex((event) => event.type === 'sandbox_starting' && event.payload.provider === 'daytona');
-  if (daytonaSandboxStartingIndex === -1) return false;
+type SandboxProviderFailure = {
+  provider: string;
+  errorSummary: string;
+};
 
-  return events.slice(daytonaSandboxStartingIndex + 1).some((event) => {
-    if (event.type !== 'run_failed' && event.type !== 'message_failed') return false;
-    const error = typeof event.payload.error === 'string' ? event.payload.error : '';
-    return /502\s+Bad Gateway/i.test(error);
-  });
+function sandboxProviderFailure(events: AgentEvent[]): SandboxProviderFailure | null {
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+    if (!event || event.type !== 'sandbox_starting') continue;
+    const provider = typeof event.payload.provider === 'string' ? event.payload.provider : 'sandbox provider';
+    const failedEvent = events.slice(index + 1).find((candidate) => isGatewayFailureEvent(candidate));
+    if (failedEvent) return { provider, errorSummary: summarizeProviderError(failedEvent.payload.error) };
+  }
+
+  return null;
+}
+
+function isGatewayFailureEvent(event: AgentEvent): boolean {
+  if (event.type !== 'run_failed' && event.type !== 'message_failed') return false;
+  const error = typeof event.payload.error === 'string' ? event.payload.error : '';
+  return /\b(?:50[0-4]|52[0-4])\b/.test(error) || /\b(?:Bad Gateway|Service Unavailable|Gateway Timeout|upstream)\b/i.test(error);
+}
+
+function summarizeProviderError(error: unknown): string {
+  if (typeof error !== 'string' || !error.trim()) return 'an upstream error';
+  const statusMatch = error.match(/\b(50[0-4]|52[0-4])\b(?:\s+([A-Za-z][A-Za-z ]{2,40}))?/);
+  if (statusMatch?.[1]) return `${statusMatch[1]}${statusMatch[2] ? ` ${statusMatch[2].trim()}` : ''}`;
+  const gatewayMatch = error.match(/\b(Bad Gateway|Service Unavailable|Gateway Timeout|upstream[^<\n.]*)\b/i);
+  if (gatewayMatch?.[1]) return gatewayMatch[1];
+  return 'an upstream error';
 }
 
 function titleFromPrompt(prompt: string): string {

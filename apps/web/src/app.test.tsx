@@ -595,7 +595,7 @@ it('shows run diagnostics for a single-message response', async () => {
   expect(screen.getByText('sandbox_ready')).toBeInTheDocument();
 });
 
-it('identifies Daytona gateway failures during sandbox startup', async () => {
+it('identifies upstream sandbox provider failures during sandbox startup', async () => {
   mockApi({
     messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000123', sequence: 7, status: 'failed', prompt: 'please create a PR with these changes' })],
     events: [
@@ -609,8 +609,9 @@ it('identifies Daytona gateway failures during sandbox startup', async () => {
 
   fireEvent.click(await screen.findByText(/Diagnostics · 4 events/));
 
-  expect(screen.getByText('Likely Daytona API failure')).toBeInTheDocument();
-  expect(screen.getByText(/upstream Daytona API\/gateway outage/)).toBeInTheDocument();
+  expect(screen.getByText('Likely sandbox provider issue')).toBeInTheDocument();
+  expect(screen.getByText(/starting a daytona sandbox/)).toBeInTheDocument();
+  expect(screen.getByText(/upstream sandbox\/API availability issue/)).toBeInTheDocument();
 });
 
 it('prefers final assistant response over streamed deltas', async () => {
