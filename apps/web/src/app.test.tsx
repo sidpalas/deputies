@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './app.js';
 
 const { codeToHtmlMock } = vi.hoisted(() => ({
@@ -87,7 +87,7 @@ it('blurs and clears the composer before waiting for post-submit refreshes', asy
   render(<App />);
 
   const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
-  composer.focus();
+  act(() => composer.focus());
   expect(document.activeElement).toBe(composer);
 
   fireEvent.change(composer, { target: { value: 'follow up' } });
@@ -378,7 +378,7 @@ it('pauses autoscroll while the message composer has focus', async () => {
     scrollTop: 1500,
   });
   const composer = screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
-  composer.focus();
+  act(() => composer.focus());
   expect(document.activeElement).toBe(composer);
   scrollIntoView.mockClear();
 
@@ -388,7 +388,7 @@ it('pauses autoscroll while the message composer has focus', async () => {
   expect(await screen.findByText('streaming while typing')).toBeInTheDocument();
   expect(scrollIntoView).not.toHaveBeenCalled();
   expect(messageLog.scrollTop).toBe(1500);
-  expect(await screen.findByRole('button', { name: /Jump to latest/ })).toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByRole('button', { name: /Jump to latest/ })).not.toBeInTheDocument());
 });
 
 it('scrolls session messages when wheeling outside nested scroll areas', async () => {

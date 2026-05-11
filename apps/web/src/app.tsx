@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, SyntheticEvent, WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { FocusEvent, FormEvent, KeyboardEvent, SyntheticEvent, WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Archive, Check, ChevronDown, Copy, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, RotateCcw, Sun, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -228,6 +228,7 @@ export function App() {
   const [pageVisible, setPageVisible] = useState(isPageVisible);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(initialConnectionStatus);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [composerFocused, setComposerFocused] = useState(false);
   const eventCursor = useRef(0);
   const globalEventCursor = useRef(0);
   const lastBackgroundedAt = useRef<number | null>(null);
@@ -405,9 +406,9 @@ export function App() {
       return;
     }
 
-    if (isThreadComposerFocused()) {
+    if (composerFocused || isThreadComposerFocused()) {
       setThreadAutoFollowEnabled(false);
-      setShowJumpToLatest(true);
+      setShowJumpToLatest(false);
       return;
     }
 
@@ -417,7 +418,7 @@ export function App() {
     }
 
     setShowJumpToLatest(true);
-  }, [selectedSessionId, messages.length, events.length]);
+  }, [selectedSessionId, messages.length, events.length, composerFocused]);
 
   useEffect(() => {
     if (!pageVisible || !canCallApi || !sessionsLoaded) return;
@@ -1052,6 +1053,7 @@ export function App() {
                     key={selectedSession.id}
                     archived={selectedSessionArchived}
                     hasSelectedRepository={Boolean(selectedRepository)}
+                    onFocusChange={setComposerFocused}
                     onSubmit={handleSendMessage}
                   />
                 </section>
@@ -1391,6 +1393,7 @@ function NewThreadPanel(props: {
 function MessageComposer(props: {
   archived: boolean;
   hasSelectedRepository: boolean;
+  onFocusChange: (focused: boolean) => void;
   onSubmit: (input: { prompt: string; repository: string }) => Promise<boolean>;
 }) {
   const [prompt, setPrompt] = useState('');
@@ -1406,8 +1409,12 @@ function MessageComposer(props: {
     if (!sent) setPrompt(submittedPrompt);
   }
 
+  function handleBlur(event: FocusEvent<HTMLFormElement>) {
+    if (!event.currentTarget.contains(event.relatedTarget)) props.onFocusChange(false);
+  }
+
   return (
-    <form className="shrink-0 bg-background/95 py-3" data-thread-composer="true" onSubmit={handleSubmit}>
+    <form className="shrink-0 bg-background/95 py-3" data-thread-composer="true" onFocus={() => props.onFocusChange(true)} onBlur={handleBlur} onSubmit={handleSubmit}>
       <Card className="overflow-hidden bg-card/90">
         <Textarea
           className="min-h-28 border-0 bg-transparent focus:ring-0"
