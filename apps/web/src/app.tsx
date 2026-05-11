@@ -1847,7 +1847,7 @@ function MobileContextPanel(props: { repository: string | null; artifacts: Artif
 
 function DesktopContextPanel(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
   return (
-    <aside className="hidden min-h-0 overflow-auto border-l border-border bg-card/50 p-4 xl:block" data-thread-scroll-exclude="true">
+    <aside aria-label="Desktop context" className="hidden min-h-0 overflow-auto border-l border-border bg-card/50 p-4 xl:block" data-thread-scroll-exclude="true">
       <h2 className="text-sm font-semibold">Context</h2>
       <ContextPanelContent {...props} />
     </aside>
@@ -1892,7 +1892,7 @@ function ContextPanelContent(props: { repository: string | null; artifacts: Arti
       <div className="mt-3 grid gap-2">
         {props.callbacks.map((callback) => (
           <details className="group rounded-md border border-border bg-card/70 text-xs text-muted-foreground" key={callback.id}>
-            <summary className="grid cursor-pointer list-none grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 [&::-webkit-details-marker]:hidden">
+            <summary aria-label={`${callback.targetType} callback ${callback.status}`} className="grid cursor-pointer list-none grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 [&::-webkit-details-marker]:hidden">
               <ChevronDown className="h-3.5 w-3.5 -rotate-90 text-muted-foreground transition-transform group-open:rotate-0" aria-hidden="true" />
               <span className="min-w-0 truncate text-muted-foreground">{callback.targetType} · {formatDate(callback.updatedAt)}</span>
               <Badge className={statusTextClass(callback.status)}>{callback.status}</Badge>

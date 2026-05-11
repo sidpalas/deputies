@@ -41,7 +41,7 @@ export function createGitTool(input: {
       const result = await agent.shell(gitCommand(args), {
         cwd: prepared.workspacePath,
         env: { GITHUB_AUTH_HEADER: gitAuthHeader(prepared.access.auth.token) },
-        timeout: 120,
+        timeout: 120_000,
       });
       const output = formatShellResult(result, prepared.access.auth.token);
       if (result.exitCode !== 0) throw new Error(output);

@@ -6,6 +6,8 @@
   "scripts": {
     "auth:login:openai-codex": "tsx src/runner-flue/openai-codex-login.ts",
     "db:migrate": "tsx src/db/migrate.ts",
+    "docker-orchestrator:dev": "tsx watch src/sandbox/docker-orchestrator-server.ts",
+    "docker-orchestrator:start": "node dist/sandbox/docker-orchestrator-server.js",
     "dev": "tsx watch src/index.ts",
     "emulate:slack": "emulate start --service slack --portless",
     "portless:start": "pnpm dlx portless proxy start",

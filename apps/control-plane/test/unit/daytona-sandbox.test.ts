@@ -17,7 +17,7 @@ describe('DaytonaSandboxProvider', () => {
     const provider = new DaytonaSandboxProvider({
       client,
       image: 'ubuntu:latest',
-      idleTimeoutSeconds: 900,
+      idleTimeoutMs: 900_000,
       envVars: { NODE_ENV: 'test' },
       labels: { app: 'flue-bg-agents' },
     });

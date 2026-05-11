@@ -1,6 +1,7 @@
 export type RunMode = 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue';
-export type SandboxProviderKind = 'fake' | 'local' | 'local-docker' | 'daytona' | 'kubernetes' | 'ecs';
+export type SandboxProviderKind = 'fake' | 'local' | 'docker' | 'daytona' | 'kubernetes' | 'ecs';
+export type DockerOrchestratorMode = 'in-process' | 'http';
 export type AppStoreKind = 'memory' | 'postgres';
 export type ApiAuthMode = 'none' | 'bearer' | 'session';
 export type AuthProviderKind = 'static' | 'github';
@@ -11,13 +12,22 @@ export type AppConfig = {
   maxJsonBodyBytes: number;
   runCancellationPollIntervalMs: number;
   workerConcurrency: number;
-  sandboxIdleTimeoutSeconds: number;
-  sandboxStopDelaySeconds: number;
-  sandboxRetentionSeconds: number;
+  sandboxIdleTimeoutMs: number;
+  sandboxStopDelayMs: number;
+  sandboxRetentionMs: number;
   runMode: RunMode;
   runner: RunnerKind;
   sandboxProvider: SandboxProviderKind;
   localSandboxAllowedCommands: string[];
+  dockerOrchestratorMode: DockerOrchestratorMode;
+  dockerOrchestratorUrl?: string;
+  dockerOrchestratorToken?: string;
+  dockerSandboxImage: string;
+  dockerSandboxWorkspacePath: string;
+  dockerSandboxBridgeHost: string;
+  dockerSandboxNetwork?: string;
+  dockerSandboxMemory?: string;
+  dockerSandboxCpus?: string;
   appStore: AppStoreKind;
   apiAuthMode: ApiAuthMode;
   apiBearerToken?: string;
@@ -71,17 +81,21 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     maxJsonBodyBytes: parsePositiveInteger(env.MAX_JSON_BODY_BYTES, 1_048_576, 'MAX_JSON_BODY_BYTES'),
     runCancellationPollIntervalMs: parsePositiveInteger(env.RUN_CANCELLATION_POLL_INTERVAL_MS, 1_000, 'RUN_CANCELLATION_POLL_INTERVAL_MS'),
     workerConcurrency: parsePositiveInteger(env.WORKER_CONCURRENCY, 4, 'WORKER_CONCURRENCY'),
-    sandboxIdleTimeoutSeconds: parsePositiveInteger(env.SANDBOX_IDLE_TIMEOUT_SECONDS, 900, 'SANDBOX_IDLE_TIMEOUT_SECONDS'),
-    sandboxStopDelaySeconds: parseNonNegativeInteger(env.SANDBOX_STOP_DELAY_SECONDS, 60, 'SANDBOX_STOP_DELAY_SECONDS'),
-    sandboxRetentionSeconds: parsePositiveInteger(env.SANDBOX_RETENTION_SECONDS, 3600, 'SANDBOX_RETENTION_SECONDS'),
+    sandboxIdleTimeoutMs: parsePositiveInteger(env.SANDBOX_IDLE_TIMEOUT_SECONDS, 900, 'SANDBOX_IDLE_TIMEOUT_SECONDS') * 1000,
+    sandboxStopDelayMs: parseNonNegativeInteger(env.SANDBOX_STOP_DELAY_SECONDS, 60, 'SANDBOX_STOP_DELAY_SECONDS') * 1000,
+    sandboxRetentionMs: parsePositiveInteger(env.SANDBOX_RETENTION_SECONDS, 3600, 'SANDBOX_RETENTION_SECONDS') * 1000,
     runMode: parseEnum(env.RUN_MODE, ['all', 'api', 'worker'], 'all'),
     runner: parseEnum(env.RUNNER, ['fake', 'flue'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'local', 'local-docker', 'daytona', 'kubernetes', 'ecs'],
+      ['fake', 'local', 'docker', 'daytona', 'kubernetes', 'ecs'],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
+    dockerOrchestratorMode: parseEnum(env.DOCKER_ORCHESTRATOR_MODE, ['in-process', 'http'], 'in-process'),
+    dockerSandboxImage: env.DOCKER_SANDBOX_IMAGE ?? 'deputies-sandbox:local',
+    dockerSandboxWorkspacePath: env.DOCKER_SANDBOX_WORKSPACE_PATH ?? '/workspace',
+    dockerSandboxBridgeHost: env.DOCKER_SANDBOX_BRIDGE_HOST ?? '127.0.0.1',
     appStore: parseEnum(env.APP_STORE, ['memory', 'postgres'], 'memory'),
     apiAuthMode: parseRequiredEnum(env.API_AUTH_MODE, ['none', 'bearer', 'session'], 'API_AUTH_MODE'),
     authProvider: parseEnum(env.AUTH_PROVIDER, ['static', 'github'], 'static'),
@@ -119,6 +133,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.FLUE_OPENAI_CODEX_AUTH_FILE) config.flueOpenaiCodexAuthFile = env.FLUE_OPENAI_CODEX_AUTH_FILE;
   if (env.FLUE_OPENAI_CODEX_AUTH_JSON) config.flueOpenaiCodexAuthJson = env.FLUE_OPENAI_CODEX_AUTH_JSON;
   if (env.FLUE_OPENAI_CODEX_AUTH_BASE64) config.flueOpenaiCodexAuthBase64 = env.FLUE_OPENAI_CODEX_AUTH_BASE64;
+  if (env.DOCKER_ORCHESTRATOR_URL) config.dockerOrchestratorUrl = env.DOCKER_ORCHESTRATOR_URL;
+  if (env.DOCKER_ORCHESTRATOR_TOKEN) config.dockerOrchestratorToken = env.DOCKER_ORCHESTRATOR_TOKEN;
+  if (env.DOCKER_SANDBOX_NETWORK) config.dockerSandboxNetwork = env.DOCKER_SANDBOX_NETWORK;
+  if (env.DOCKER_SANDBOX_MEMORY) config.dockerSandboxMemory = env.DOCKER_SANDBOX_MEMORY;
+  if (env.DOCKER_SANDBOX_CPUS) config.dockerSandboxCpus = env.DOCKER_SANDBOX_CPUS;
   if (env.DAYTONA_API_KEY) config.daytonaApiKey = env.DAYTONA_API_KEY;
   if (env.DAYTONA_API_URL) config.daytonaApiUrl = env.DAYTONA_API_URL;
   if (env.DAYTONA_TARGET) config.daytonaTarget = env.DAYTONA_TARGET;
@@ -208,6 +227,14 @@ export function requireDaytonaApiKey(config: AppConfig): string {
   }
 
   return config.daytonaApiKey;
+}
+
+export function requireDockerOrchestratorUrl(config: AppConfig): string {
+  if (!config.dockerOrchestratorUrl) {
+    throw new Error('DOCKER_ORCHESTRATOR_URL is required when DOCKER_ORCHESTRATOR_MODE=http');
+  }
+
+  return config.dockerOrchestratorUrl;
 }
 
 export function requireFlueModel(config: AppConfig): string {

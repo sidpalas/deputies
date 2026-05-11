@@ -1,7 +1,7 @@
 import { AppLifecycle, installProcessShutdownHandlers, type CloseableResource } from './app/lifecycle.js';
 import { createServer, createServices } from './app/server.js';
 import { HttpCompletionCallbackSender, type CompletionCallbackSender } from './callbacks/service.js';
-import { loadConfig, requireDatabaseUrl, requireDaytonaApiKey, requireFlueModel, requireGitHubAppCredentials } from './config/index.js';
+import { loadConfig, requireDatabaseUrl, requireDaytonaApiKey, requireDockerOrchestratorUrl, requireFlueModel, requireGitHubAppCredentials } from './config/index.js';
 import { GitHubArchivedSessionNotifier } from './integrations/github/archived-session-notifier.js';
 import { GitHubCompletionCallbackSender } from './integrations/github/callback-sender.js';
 import { GitHubClient } from './integrations/github/client.js';
@@ -18,6 +18,7 @@ import { loadOpenAICodexApiKey } from './runner-flue/openai-codex-auth.js';
 import { FlueRunner } from './runner-flue/runner.js';
 import { PostgresFlueSessionStore } from './runner-flue/session-store.js';
 import { DaytonaSandboxProvider } from './sandbox/daytona.js';
+import { DockerSandboxProvider, HttpDockerOrchestratorClient, InProcessDockerOrchestrator } from './sandbox/docker.js';
 import { FakeSandboxProvider } from './sandbox/fake.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
@@ -88,8 +89,8 @@ if (config.runMode === 'all' || config.runMode === 'worker') {
     sandboxReaper = startSandboxReaper({
       cleanup: services.sandboxCleanup,
       store,
-      stopDelayMs: config.sandboxStopDelaySeconds * 1000,
-      retentionMs: config.sandboxRetentionSeconds * 1000,
+      stopDelayMs: config.sandboxStopDelayMs,
+      retentionMs: config.sandboxRetentionMs,
       onError: (error: unknown) => console.error(error instanceof Error ? error.message : error),
     });
   }
@@ -143,11 +144,24 @@ function createSandboxProvider(): SandboxProvider {
   if (config.sandboxProvider === 'local') {
     return new LocalSandboxProvider(config.localSandboxAllowedCommands.length ? { allowedCommands: config.localSandboxAllowedCommands } : {});
   }
+  if (config.sandboxProvider === 'docker') {
+    const orchestrator = config.dockerOrchestratorMode === 'http'
+      ? new HttpDockerOrchestratorClient(optional({ baseUrl: requireDockerOrchestratorUrl(config), token: config.dockerOrchestratorToken }))
+      : new InProcessDockerOrchestrator(optional({
+        image: config.dockerSandboxImage,
+        workspacePath: config.dockerSandboxWorkspacePath,
+        bridgeHost: config.dockerSandboxBridgeHost,
+        network: config.dockerSandboxNetwork,
+        memory: config.dockerSandboxMemory,
+        cpus: config.dockerSandboxCpus,
+      }));
+    return new DockerSandboxProvider({ orchestrator });
+  }
   if (config.sandboxProvider === 'daytona') {
-    const options = {
-      apiKey: requireDaytonaApiKey(config),
-      idleTimeoutSeconds: config.sandboxIdleTimeoutSeconds,
-    };
+      const options = {
+        apiKey: requireDaytonaApiKey(config),
+        idleTimeoutMs: config.sandboxIdleTimeoutMs,
+      };
     if (config.daytonaApiUrl) Object.assign(options, { apiUrl: config.daytonaApiUrl });
     if (config.daytonaTarget) Object.assign(options, { target: config.daytonaTarget });
     if (config.daytonaImage) Object.assign(options, { image: config.daytonaImage });
@@ -156,6 +170,10 @@ function createSandboxProvider(): SandboxProvider {
   }
 
   throw new Error(`SANDBOX_PROVIDER=${config.sandboxProvider} is not wired yet`);
+}
+
+function optional<T extends Record<string, unknown>>(input: T): T {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T;
 }
 
 async function createRunner(): Promise<Runner> {

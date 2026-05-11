@@ -129,7 +129,7 @@ export class FlueRunner implements Runner {
     const result = await session.shell(setup.command, {
       cwd: input.sandbox.workspacePath,
       env: setup.env,
-      timeout: 120,
+      timeout: 120_000,
     });
     if (result.exitCode !== 0) {
       throw new Error(`Repository setup failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`);
