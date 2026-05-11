@@ -35,11 +35,5 @@
     "web:test:watch": "pnpm --dir apps/web test:watch",
     "web:typecheck": "pnpm --dir apps/web typecheck",
     "check": "pnpm sandbox-bridge:typecheck && pnpm sandbox-bridge:test && pnpm control-plane:typecheck && pnpm control-plane:test && pnpm web:typecheck && pnpm web:test"
-  },
-  "pnpm": {
-    "overrides": {
-      "@mariozechner/pi-ai": "npm:@earendil-works/pi-ai@0.74.0",
-      "@mariozechner/pi-agent-core": "npm:@earendil-works/pi-agent-core@0.74.0"
-    }
   }
 }

@@ -4,10 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@mariozechner/pi-ai': npm:@earendil-works/pi-ai@0.74.0
-  '@mariozechner/pi-agent-core': npm:@earendil-works/pi-agent-core@0.74.0
-
 importers:
 
   .: {}
@@ -511,10 +507,6 @@ packages:
   '@daytona/toolbox-api-client@0.171.0':
     resolution: {integrity: sha512-uxJxTQdMSFOjHi5BCtLr9SpTPBHabIj2OdVWa4MDWc8iXsXI/N6YnjpK7CzrEQP7724mLxUoqqUdu2rjQjjAQA==}
 
-  '@earendil-works/pi-agent-core@0.74.0':
-    resolution: {integrity: sha512-6GMR7/wwjEJ1EsXLWEz03QOWin4AMrJ/AZoMpgm5DJ6GHsF6q6GOhQbj5Zip4dow3vo/TmBAVqM+vmGfrjGAFQ==}
-    engines: {node: '>=20.0.0'}
-
   '@earendil-works/pi-ai@0.74.0':
     resolution: {integrity: sha512-7M7qcrZY/KEkH4wFkX3eqzvmKru4O88wezNKoN0KD2m4aAOmp9tdW2xCmUgSTSWlKB7b2Xw9QtAgrzHtg6t6iw==}
     engines: {node: '>=20.0.0'}
@@ -929,6 +921,17 @@ packages:
 
   '@js-sdsl/ordered-map@4.4.2':
     resolution: {integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==}
+
+  '@mariozechner/pi-agent-core@0.73.1':
+    resolution: {integrity: sha512-Y/KVOhuKSgRQgYBlwmRtO2gPkUcoavOSqGF9bpQIINvNZvc19k6Z1H3bFDTce3Vp5ApMmTsfLH3+tNvOg75fAQ==}
+    engines: {node: '>=20.0.0'}
+    deprecated: please use @earendil-works/pi-agent-core instead going forward
+
+  '@mariozechner/pi-ai@0.73.1':
+    resolution: {integrity: sha512-Jh4lXawZYuC83HzSIYuVum9NBqJD49i4JOt3H96cGW/924cwJMOyUs1Mv/e4QPzTXnzrqMoGviNQnvGgSu1LSg==}
+    engines: {node: '>=20.0.0'}
+    deprecated: please use @earendil-works/pi-ai instead going forward
+    hasBin: true
 
   '@mistralai/mistralai@2.2.1':
     resolution: {integrity: sha512-uKU8CZmL2RzYKmplsU01hii4p3pe4HqJefpWNRWXm1Tcm0Sm4xXfwSLIy4k7ZCPlbETCGcp69E7hZs+WOJ5itQ==}
@@ -4865,19 +4868,6 @@ snapshots:
     transitivePeerDependencies:
       - debug
 
-  '@earendil-works/pi-agent-core@0.74.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)':
-    dependencies:
-      '@earendil-works/pi-ai': 0.74.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)
-      typebox: 1.1.37
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - aws-crt
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
-
   '@earendil-works/pi-ai@0.74.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@4.4.3)
@@ -5078,8 +5068,8 @@ snapshots:
     dependencies:
       '@cloudflare/shell': 0.3.6(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
       '@hono/node-server': 1.19.14(hono@4.12.17)
-      '@mariozechner/pi-agent-core': '@earendil-works/pi-agent-core@0.74.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)'
-      '@mariozechner/pi-ai': '@earendil-works/pi-ai@0.74.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)'
+      '@mariozechner/pi-agent-core': 0.73.1(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)
+      '@mariozechner/pi-ai': 0.73.1(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       '@valibot/to-json-schema': 1.6.0(valibot@1.3.1(typescript@5.9.3))
       esbuild: 0.25.12
@@ -5177,6 +5167,41 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.5.5
 
   '@js-sdsl/ordered-map@4.4.2': {}
+
+  '@mariozechner/pi-agent-core@0.73.1(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)':
+    dependencies:
+      '@mariozechner/pi-ai': 0.73.1(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)
+      typebox: 1.1.37
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - aws-crt
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-ai@0.73.1(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.91.1(zod@4.4.3)
+      '@aws-sdk/client-bedrock-runtime': 3.1042.0
+      '@google/genai': 1.52.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
+      '@mistralai/mistralai': 2.2.1
+      chalk: 5.6.2
+      openai: 6.26.0(ws@8.20.0)(zod@4.4.3)
+      partial-json: 0.1.7
+      proxy-agent: 6.5.0
+      typebox: 1.1.37
+      undici: 7.25.0
+      zod-to-json-schema: 3.25.2(zod@4.4.3)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - aws-crt
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
 
   '@mistralai/mistralai@2.2.1':
     dependencies:
