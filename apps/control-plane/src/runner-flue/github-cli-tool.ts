@@ -208,7 +208,7 @@ async function readPreparedRepositoryBranch(repository: RepositoryToolServices):
   const prepared = getPreparedRepository(repository);
   const agent = repository.agentRef.current;
   if (!agent?.shell) throw new Error('gh pr create cannot infer --head before the sandbox agent is ready');
-  const result = await agent.shell('git branch --show-current', { cwd: prepared.workspacePath, timeout: 30 });
+  const result = await agent.shell('git branch --show-current', { cwd: prepared.workspacePath, timeout: 30_000 });
   if (result.exitCode !== 0) throw new Error(`gh pr create could not infer --head: ${result.stderr || result.stdout}`);
   return result.stdout.trim();
 }
@@ -217,7 +217,7 @@ async function readPreparedRepositoryCommit(repository: RepositoryToolServices):
   const prepared = getPreparedRepository(repository);
   const agent = repository.agentRef.current;
   if (!agent?.shell) throw new Error('gh pr create cannot use --fill before the sandbox agent is ready');
-  const result = await agent.shell('git log -1 --pretty=format:%s%n%n%b', { cwd: prepared.workspacePath, timeout: 30 });
+  const result = await agent.shell('git log -1 --pretty=format:%s%n%n%b', { cwd: prepared.workspacePath, timeout: 30_000 });
   if (result.exitCode !== 0) throw new Error(`gh pr create --fill failed: ${result.stderr || result.stdout}`);
   const [title = '', ...body] = result.stdout.trim().split('\n');
   return { title: title.trim(), body: body.join('\n').trim() };

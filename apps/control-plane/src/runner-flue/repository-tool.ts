@@ -88,7 +88,7 @@ export async function prepareActiveRepository(services: RepositoryToolServices):
   const result = await agent.shell(repositorySetupCommand(access, workspacePath), {
     cwd: services.sandbox.workspacePath,
     env: { GITHUB_AUTH_HEADER: gitAuthHeader(access.auth.token) },
-    timeout: 120,
+    timeout: 120_000,
   });
   if (result.exitCode !== 0) throw new Error(`Repository preparation failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`);
 

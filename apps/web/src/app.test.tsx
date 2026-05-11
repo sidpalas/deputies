@@ -800,11 +800,11 @@ it('shows callback delivery status and replays failed callbacks', async () => {
   });
   render(<App />);
 
-  expect(await screen.findAllByText('Callbacks')).not.toHaveLength(0);
-  fireEvent.click(screen.getAllByText(/http ·/)[1]!);
-  expect(screen.getAllByText('Type: Completion reply')[1]).toBeVisible();
-  expect(screen.getAllByText('Last error: HTTP callback returned 500')[1]).toBeVisible();
-  fireEvent.click(screen.getAllByRole('button', { name: /Replay callback/ })[1]!);
+  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  fireEvent.click(await contextPanel.findByLabelText('http callback failed'));
+  expect(contextPanel.getByText('Type: Completion reply')).toBeVisible();
+  expect(contextPanel.getByText('Last error: HTTP callback returned 500')).toBeVisible();
+  fireEvent.click(contextPanel.getByRole('button', { name: /Replay callback/ }));
 
   await waitFor(() => expect(replays).toEqual(['00000000-0000-4000-8000-000000000301']));
   expect(await screen.findAllByText('pending')).not.toHaveLength(0);

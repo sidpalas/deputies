@@ -218,7 +218,7 @@ function execLocalCommand(rootDir: string, toolPath: string, input: SandboxExecI
     const timer = input.timeoutMs ? setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
-    }, input.timeoutMs * 1000) : undefined;
+    }, input.timeoutMs) : undefined;
 
     child.stdout.setEncoding('utf-8');
     child.stderr.setEncoding('utf-8');
@@ -231,7 +231,7 @@ function execLocalCommand(rootDir: string, toolPath: string, input: SandboxExecI
     child.on('error', reject);
     child.on('close', (code, signal) => {
       if (timer) clearTimeout(timer);
-      if (timedOut && !stderr.trim()) stderr = `[local sandbox] Command timed out after ${input.timeoutMs} seconds.`;
+      if (timedOut && !stderr.trim()) stderr = `[local sandbox] Command timed out after ${input.timeoutMs}ms.`;
       resolveResult({
         exitCode: code ?? signalExitCode(signal),
         stdout,

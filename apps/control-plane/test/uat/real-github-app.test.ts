@@ -133,7 +133,7 @@ function gitAuthHeader(token: string): string {
 
 function daytonaOptions(): DaytonaSandboxProviderOptions {
   const options: DaytonaSandboxProviderOptions = {
-    idleTimeoutSeconds: 300,
+    idleTimeoutMs: 300_000,
     labels: { 'uat-kind': 'real-github-daytona' },
   };
   if (process.env.DAYTONA_API_KEY) options.apiKey = process.env.DAYTONA_API_KEY;

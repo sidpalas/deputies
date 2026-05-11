@@ -81,6 +81,7 @@ Current local policy:
 - `pnpm web:e2e` runs Playwright browser tests such as responsive context-panel coverage.
 - `pnpm check` runs API typecheck/tests and web typecheck/jsdom tests; it does not run Playwright E2E tests.
 - Real local Flue UAT is opt-in: set `RUN_REAL_LOCAL_FLUE_UAT=true`, `API_AUTH_MODE=none`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-local-flue.test.ts`.
+- Real Docker sandbox UAT is opt-in: build `deputies-sandbox:local`, set `RUN_REAL_DOCKER_SANDBOX_UAT=true`, and run `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-docker-sandbox.test.ts` to verify create, stop/start, reconnect, bridge exec/fs, and cleanup against a real Docker daemon.
 - Real Daytona/Flue UAT is opt-in: build first and set `RUN_REAL_DAYTONA_FLUE_UAT=true`, `API_AUTH_MODE=none`, `TEST_DATABASE_URL`, `DAYTONA_API_KEY`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm control-plane:test:uat`.
 - `pnpm db:up` starts local Postgres from `deploy/local/docker-compose.yml` and creates both `flue` and `flue_test`.
 - Daytona sandboxes should not assume nested Docker is available. Use `./deploy/daytona/start-postgres.sh` to start Postgres directly in the sandbox, then set `DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue` and `TEST_DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue_test`.

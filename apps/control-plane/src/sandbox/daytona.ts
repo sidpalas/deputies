@@ -51,7 +51,7 @@ export type DaytonaSandboxProviderOptions = {
   snapshot?: string;
   workspacePath?: string;
   createTimeoutSeconds?: number;
-  idleTimeoutSeconds?: number;
+  idleTimeoutMs?: number;
   envVars?: Record<string, string>;
   labels?: Record<string, string>;
 };
@@ -132,7 +132,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       'flue-session-id': input.sessionId,
     };
     const params: Record<string, unknown> = { labels };
-    if (this.options.idleTimeoutSeconds) params.autoStopInterval = Math.max(1, Math.ceil(this.options.idleTimeoutSeconds / 60));
+    if (this.options.idleTimeoutMs) params.autoStopInterval = Math.max(1, Math.ceil(this.options.idleTimeoutMs / 60_000));
     if (this.options.envVars) params.envVars = this.options.envVars;
     if (this.options.image) params.image = this.options.image;
     if (!this.options.image && this.options.snapshot) params.snapshot = this.options.snapshot;

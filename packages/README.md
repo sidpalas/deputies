@@ -10,4 +10,8 @@ Examples that may fit here later:
 - `types`: shared type-only contracts.
 - `ui`: reusable UI primitives shared by web surfaces.
 
+Current packages:
+
+- `sandbox-bridge`: in-container bridge process for sandbox exec and filesystem APIs.
+
 Deployable applications and services belong in `apps/`, not `packages/`.

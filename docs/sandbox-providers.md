@@ -8,7 +8,7 @@ Initial providers may include:
 
 - `fake`: deterministic tests.
 - `local`: local development with host subprocess execution in a temp workspace. This is convenient for getting started but is not a security sandbox. Commands inherit a minimal environment and discover executables through an allowlisted `.deputies-bin` path; configure `LOCAL_SANDBOX_ALLOWED_COMMANDS` to replace the built-in development allowlist.
-- `local-docker`: planned local development and CI smoke tests with container isolation.
+- `docker`: planned Docker Engine backed sandboxes. This can use a local or remote Docker daemon depending on deployment configuration.
 - `daytona`: hosted persistent development sandboxes.
 - `kubernetes`: pods/jobs inside a cluster.
 - `ecs`: Fargate tasks in AWS.
@@ -274,18 +274,252 @@ Behavior:
 - Filesystem is in memory.
 - No network or real process execution.
 
-### Local Docker Provider
+### Docker Provider
 
 Purpose:
 
-- Local development and CI smoke tests.
+- Local development, CI smoke tests, and production deployments backed by isolated Docker hosts.
 
 Behavior:
 
-- Creates Docker container per session.
-- Uses bind mount or named volume for workspace.
-- Executes commands via Docker exec.
-- Destroy removes container and optional volume.
+- Creates one Docker container per session.
+- Uses the Docker Engine API only for lifecycle: create, start, stop, inspect, and destroy.
+- Runs a small authenticated sandbox bridge inside each container for command execution and filesystem operations.
+- Avoids host bind mounts by default so the provider works with local and remote Docker daemons.
+- Destroys the container and any provider-owned Docker volume or container filesystem state when retention expires.
+
+Implementation plan:
+
+1. Use `docker` as the provider kind because the provider targets the Docker Engine API, not only a local daemon.
+2. Add `DockerSandboxProvider` behind the existing `SandboxProvider` interface.
+3. Add a narrow `DockerOrchestrator` interface used by `DockerSandboxProvider`.
+4. Implement an in-process Docker orchestrator for single-service local/dev operation.
+5. Keep the orchestrator boundary HTTP-compatible so production can run the same logic as a separate service without changing worker, lifecycle, or Flue code.
+6. Add a sandbox bridge process to the Docker image and use it for all runtime operations.
+7. Add provider conformance tests and Docker-specific integration tests.
+
+Provider capabilities for the first implementation should be:
+
+```ts
+export const dockerCapabilities: SandboxCapabilities = {
+  persistentFilesystem: true,
+  snapshots: false,
+  stopStart: true,
+  exec: true,
+  filesystem: true,
+  streamingLogs: false,
+  portForwarding: false,
+  objectStorageArtifacts: false,
+};
+```
+
+If stop/start support complicates the first implementation, it is acceptable to ship `stopStart: false` and add it after create/connect/destroy/exec/filesystem are reliable.
+
+#### Docker Architecture
+
+The control plane should keep its existing product-level provider boundary:
+
+```txt
+worker
+  -> SandboxLifecycleService
+    -> DockerSandboxProvider
+      -> DockerOrchestrator
+        -> Docker Engine API
+        -> sandbox bridge
+```
+
+`DockerSandboxProvider` should not call Docker Engine or the bridge directly. It should call `DockerOrchestrator`, then adapt returned sandbox descriptors into `SandboxHandle` values.
+
+Recommended interfaces:
+
+```ts
+export interface DockerOrchestrator {
+  create(input: DockerCreateSandboxInput): Promise<DockerSandboxDescriptor>;
+  connect(input: DockerConnectSandboxInput): Promise<DockerSandboxDescriptor>;
+  health(input: DockerSandboxRef): Promise<SandboxHealth>;
+  start(input: DockerSandboxRef): Promise<void>;
+  stop(input: DockerSandboxRef): Promise<void>;
+  destroy(input: DockerSandboxRef): Promise<void>;
+  exec(input: DockerExecInput): Promise<SandboxExecResult>;
+  readFile(input: DockerFileInput): Promise<Uint8Array>;
+  writeFile(input: DockerWriteFileInput): Promise<void>;
+  stat(input: DockerFileInput): Promise<FileStat>;
+  readdir(input: DockerFileInput): Promise<string[]>;
+  exists(input: DockerFileInput): Promise<boolean>;
+  mkdir(input: DockerMkdirInput): Promise<void>;
+  rm(input: DockerRmInput): Promise<void>;
+}
+```
+
+Deployment modes:
+
+```txt
+Single-service mode:
+control-plane process
+  -> DockerSandboxProvider
+    -> InProcessDockerOrchestrator
+      -> Docker Engine API
+      -> sandbox bridge
+
+Split production mode:
+control-plane process
+  -> DockerSandboxProvider
+    -> HttpDockerOrchestratorClient
+      -> sandbox-orchestrator service
+        -> Docker Engine API
+        -> sandbox bridge
+```
+
+This adds one intentional seam without creating two provider implementations. The same `DockerSandboxProvider` should be used in both modes.
+
+#### Docker Configuration
+
+Suggested control-plane configuration:
+
+```txt
+SANDBOX_PROVIDER=docker
+DOCKER_ORCHESTRATOR_MODE=in-process|http
+DOCKER_ORCHESTRATOR_URL=https://sandbox-orchestrator.internal
+DOCKER_SANDBOX_IMAGE=...
+DOCKER_SANDBOX_WORKSPACE_PATH=/workspace
+DOCKER_SANDBOX_NETWORK=bridge
+DOCKER_SANDBOX_MEMORY=2g
+DOCKER_SANDBOX_CPUS=2
+```
+
+In `in-process` mode, Docker daemon configuration lives with the control-plane process and can use standard Docker environment variables such as `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, and `DOCKER_CERT_PATH`.
+
+In `http` mode, Docker daemon credentials should live only in the orchestrator service. The control plane should only know `DOCKER_ORCHESTRATOR_URL` and orchestrator API credentials.
+
+#### Docker Runtime Bridge
+
+The Docker sandbox image should start a bridge process inside the container:
+
+```sh
+deputies-sandbox-bridge \
+  --workspace /workspace \
+  --listen 0.0.0.0:3584 \
+  --token "$DEPUTIES_SANDBOX_TOKEN"
+```
+
+Bridge responsibilities:
+
+- Authenticate every request with a per-sandbox token.
+- Execute commands with `cwd`, `env`, `stdin`, and `timeoutMs` support.
+- Return non-zero command exits as `exitCode`, not thrown infrastructure errors.
+- Bound stdout and stderr output.
+- Implement filesystem operations relative to the configured workspace.
+- Reject filesystem and command working-directory paths that escape the workspace.
+- Avoid logging command environment values or bridge tokens.
+- Report health once the workspace and runtime dependencies are ready.
+
+Minimal bridge API:
+
+```txt
+GET  /health
+POST /exec
+GET  /fs/read?path=...
+PUT  /fs/write?path=...
+GET  /fs/stat?path=...
+GET  /fs/readdir?path=...
+GET  /fs/exists?path=...
+POST /fs/mkdir
+POST /fs/rm
+```
+
+Example exec request:
+
+```json
+{
+  "command": "pnpm test",
+  "cwd": "/workspace/repo",
+  "env": { "NODE_ENV": "test" },
+  "timeoutMs": 120000,
+  "stdin": "optional"
+}
+```
+
+Example exec response:
+
+```json
+{
+  "exitCode": 0,
+  "stdout": "...",
+  "stderr": "...",
+  "startedAt": "2026-05-11T00:00:00.000Z",
+  "completedAt": "2026-05-11T00:00:03.000Z"
+}
+```
+
+The sandbox container does not need outbound connectivity back to the control plane for bridge control traffic. The orchestrator should initiate connections to the bridge and optionally proxy those calls for the control plane. Containers may still need outbound internet access for task work such as `git clone` and package installation.
+
+Current bridge implementation:
+
+- `packages/sandbox-bridge` contains the in-container HTTP bridge process.
+- `deploy/docker/Dockerfile` builds a sandbox image that runs the bridge as the non-root `sandbox` user.
+- The Docker sandbox image mirrors the Daytona sandbox core tooling: Ubuntu 24.04, Postgres, Git LFS, SSH, jq, rsync, zsh, vim, sudo, Node.js 24, and Corepack/pnpm. Playwright browsers are optional in Docker builds because they add significant image size.
+- `deploy/docker/README.md` documents local image build and smoke-test commands.
+
+Current provider implementation:
+
+- `apps/control-plane/src/sandbox/docker.ts` implements `DockerSandboxProvider`, `InProcessDockerOrchestrator`, `HttpDockerOrchestratorClient`, and the shared HTTP orchestrator handler.
+- `apps/control-plane/src/sandbox/docker-orchestrator-server.ts` is the split-service entrypoint for running the Docker orchestrator separately from the main API/worker process.
+- `DOCKER_ORCHESTRATOR_MODE=in-process` runs Docker orchestration inside the control-plane process for single-service operation.
+- `DOCKER_ORCHESTRATOR_MODE=http` makes the control-plane call an external Docker orchestrator service.
+- `pnpm control-plane:docker-orchestrator:dev` starts the orchestrator service from source for development.
+
+#### Docker Persistence
+
+Persist provider metadata needed to reconnect without storing long-lived credentials:
+
+```json
+{
+  "containerId": "...",
+  "containerName": "...",
+  "workspacePath": "/workspace",
+  "bridge": {
+    "url": "http://...",
+    "tokenRef": "provider-managed"
+  },
+  "image": "..."
+}
+```
+
+If bridge tokens are persisted, they must be treated as secrets. Prefer an orchestrator-owned token store or encrypted storage over raw metadata when running in production.
+
+#### Flue Integration
+
+No Docker-specific logic should be added to `runner-flue`.
+
+The Docker provider must return a normal filesystem-capable `SandboxHandle`:
+
+```ts
+{
+  provider: 'docker',
+  providerSandboxId: containerId,
+  workspacePath: '/workspace',
+  capabilities: dockerCapabilities,
+  fs: createDockerBridgeFileSystem(orchestrator, ref),
+  exec: (input) => orchestrator.exec({ ...ref, ...input }),
+}
+```
+
+`apps/control-plane/src/runner-flue/sandbox-factory.ts` should continue adapting `SandboxHandle` into Flue's `SandboxFactory`. A small improvement is acceptable: fail early with a clear error when `RUNNER=flue` is paired with a provider handle that lacks `fs`.
+
+#### Docker Security
+
+Required controls:
+
+- Do not mount the Docker socket into sandbox containers.
+- Do not use host bind mounts by default.
+- Use one container per session.
+- Generate a unique bridge token per sandbox.
+- Keep the bridge reachable only from the orchestrator when possible.
+- Apply memory and CPU limits by default in production deployments.
+- Use an image allowlist for production orchestrators.
+- Avoid privileged containers unless explicitly required for a trusted deployment.
+- Do not pass arbitrary parent process environment variables into containers.
+- Do not persist raw Docker daemon credentials in sandbox metadata.
 
 ### Daytona Provider
 
@@ -353,7 +587,9 @@ Bridge responsibilities:
 
 The provider adapter then talks to the bridge instead of provider-native exec APIs.
 
-This is especially useful for ECS, Kubernetes, and any provider with awkward remote exec semantics.
+This is especially useful for Docker, ECS, Kubernetes, and any provider with awkward remote exec semantics.
+
+Docker should use the bridge pattern from the first implementation rather than using `docker exec` as the product runtime API. `docker exec` is acceptable for diagnostics or bootstrapping, but the provider-grade runtime should use the bridge so Docker, Kubernetes, ECS, and future providers can converge on one exec/filesystem contract.
 
 ## Planned Conformance Tests
 
@@ -433,7 +669,28 @@ Rules:
 
 ## MVP Recommendation
 
-Current implemented providers are `fake`, `local`, and `daytona`. Future provider work should add `local-docker`, then Kubernetes or ECS depending on deployment needs.
+Current implemented providers are `fake`, `local`, and `daytona`. Future provider work should add `docker`, then Kubernetes or ECS depending on deployment needs. Docker should be named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
+
+Docker MVP order:
+
+1. Standardize `SandboxExecInput.timeoutMs` as milliseconds across all providers.
+2. Add the sandbox bridge image/process and bridge client.
+3. Add `DockerOrchestrator` with an in-process implementation.
+4. Add `DockerSandboxProvider` that wraps the orchestrator and returns normal `SandboxHandle` values.
+5. Wire `SANDBOX_PROVIDER=docker` in control-plane startup.
+6. Add conformance tests shared by `local`, `daytona` mocks, and Docker.
+7. Add opt-in Docker integration tests that require a Docker daemon.
+8. Add `HttpDockerOrchestratorClient` and a separate orchestrator service only when production isolation is needed.
+
+Docker testing approach:
+
+- Unit test `DockerSandboxProvider` against a fake `DockerOrchestrator`.
+- Unit test bridge client request/response mapping, auth headers, binary file reads, and error handling.
+- Unit test bridge path validation and command timeout behavior inside the bridge package.
+- Run provider conformance tests against the fake orchestrator and against real Docker when enabled.
+- Add real Docker integration tests guarded by an environment variable such as `RUN_DOCKER_SANDBOX_TESTS=true`.
+- Add one Flue adapter integration test using a Docker handle to verify repository setup and command execution still use the generic `SandboxHandle` path.
+- Add cleanup tests for idempotent destroy, missing containers, stopped containers, and orphaned resources.
 
 ## Relationship To Flue's Daytona Example
 

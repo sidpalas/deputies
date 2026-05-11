@@ -12,6 +12,8 @@
     "db:down": "docker compose -f deploy/local/docker-compose.yml down",
     "auth:login:openai-codex": "pnpm --dir apps/control-plane auth:login:openai-codex",
     "control-plane:db:migrate": "pnpm --dir apps/control-plane db:migrate",
+    "control-plane:docker-orchestrator:dev": "pnpm --dir apps/control-plane docker-orchestrator:dev",
+    "control-plane:docker-orchestrator:start": "pnpm --dir apps/control-plane docker-orchestrator:start",
     "control-plane:dev": "pnpm --dir apps/control-plane dev",
     "control-plane:emulate:slack": "pnpm --dir apps/control-plane emulate:slack",
     "control-plane:portless:start": "pnpm --dir apps/control-plane portless:start",
@@ -23,13 +25,16 @@
     "control-plane:test:load": "pnpm --dir apps/control-plane test:load",
     "control-plane:test:uat": "pnpm --dir apps/control-plane test:uat",
     "control-plane:test:watch": "pnpm --dir apps/control-plane test:watch",
+    "sandbox-bridge:build": "pnpm --dir packages/sandbox-bridge build",
+    "sandbox-bridge:test": "pnpm --dir packages/sandbox-bridge test",
+    "sandbox-bridge:typecheck": "pnpm --dir packages/sandbox-bridge typecheck",
     "web:dev": "pnpm --dir apps/web dev",
     "web:build": "pnpm --dir apps/web build",
     "web:e2e": "pnpm --dir apps/web e2e",
     "web:test": "pnpm --dir apps/web test",
     "web:test:watch": "pnpm --dir apps/web test:watch",
     "web:typecheck": "pnpm --dir apps/web typecheck",
-    "check": "pnpm control-plane:typecheck && pnpm control-plane:test && pnpm web:typecheck && pnpm web:test"
+    "check": "pnpm sandbox-bridge:typecheck && pnpm sandbox-bridge:test && pnpm control-plane:typecheck && pnpm control-plane:test && pnpm web:typecheck && pnpm web:test"
   },
   "pnpm": {
     "overrides": {
