@@ -22,8 +22,18 @@ test('keeps context collapsed by default on narrow screens', async ({ page }) =>
   expect(messageLogBox?.height).toBeGreaterThan(300);
 });
 
+test('keeps context collapsed around tablet and small desktop widths', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.goto('/');
+
+  const contextDisclosure = page.locator('details').filter({ has: page.getByText('Context', { exact: true }) });
+  await expect(contextDisclosure).toBeVisible();
+  await expect(contextDisclosure).not.toHaveAttribute('open', '');
+  await expect(page.getByRole('heading', { name: 'Context' })).not.toBeVisible();
+});
+
 test('shows context as a sidebar on wide screens', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.setViewportSize({ width: 1360, height: 900 });
   await page.goto('/');
 
   await expect(page.getByRole('heading', { name: 'Context' })).toBeVisible();

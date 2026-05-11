@@ -1046,7 +1046,7 @@ export function App() {
                 onOpenSidebar={expandSidebar}
                 onUpdateTitle={handleUpdateTitle}
               />
-              <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_20rem]">
+              <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]">
                 <section className="flex min-h-0 min-w-0 flex-col px-3 pt-4 md:px-8 xl:px-20">
                   <div className="relative min-h-0 flex-1">
                     <div className="h-full overflow-auto pb-4" ref={threadScrollRef} onScroll={handleThreadScroll} role="log" aria-label="Session messages">
@@ -1838,7 +1838,7 @@ function Diagnostics(props: { events: AgentEvent[] }) {
 
 function MobileContextPanel(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
   return (
-    <details className="mb-5 rounded-md border border-border bg-card/90 shadow-sm lg:hidden">
+    <details className="mb-5 rounded-md border border-border bg-card/90 shadow-sm xl:hidden">
       <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-foreground">Context</summary>
       <ContextPanelContent {...props} />
     </details>
@@ -1847,7 +1847,7 @@ function MobileContextPanel(props: { repository: string | null; artifacts: Artif
 
 function DesktopContextPanel(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
   return (
-    <aside className="hidden min-h-0 overflow-auto border-l border-border bg-card/50 p-4 lg:block" data-thread-scroll-exclude="true">
+    <aside className="hidden min-h-0 overflow-auto border-l border-border bg-card/50 p-4 xl:block" data-thread-scroll-exclude="true">
       <h2 className="text-sm font-semibold">Context</h2>
       <ContextPanelContent {...props} />
     </aside>
@@ -1856,7 +1856,7 @@ function DesktopContextPanel(props: { repository: string | null; artifacts: Arti
 
 function ContextPanelContent(props: { repository: string | null; artifacts: Artifact[]; callbacks: CallbackDelivery[]; onReplayCallback: (callbackId: string) => void }) {
   return (
-    <div className="p-4 pt-0 lg:p-0 lg:pt-0">
+    <div className="p-4 pt-0 xl:p-0 xl:pt-0">
       <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
         <strong className="block font-medium text-foreground">Repository</strong>
         {props.repository ? (

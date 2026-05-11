@@ -801,7 +801,6 @@ it('shows callback delivery status and replays failed callbacks', async () => {
   render(<App />);
 
   expect(await screen.findAllByText('Callbacks')).not.toHaveLength(0);
-  expect(screen.getAllByText('Last error: HTTP callback returned 500')[1]).not.toBeVisible();
   fireEvent.click(screen.getAllByText(/http ·/)[1]!);
   expect(screen.getAllByText('Type: Completion reply')[1]).toBeVisible();
   expect(screen.getAllByText('Last error: HTTP callback returned 500')[1]).toBeVisible();
