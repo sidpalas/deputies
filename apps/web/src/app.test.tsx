@@ -595,6 +595,24 @@ it('shows run diagnostics for a single-message response', async () => {
   expect(screen.getByText('sandbox_ready')).toBeInTheDocument();
 });
 
+it('identifies Daytona gateway failures during sandbox startup', async () => {
+  mockApi({
+    messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000123', sequence: 7, status: 'failed', prompt: 'please create a PR with these changes' })],
+    events: [
+      eventFixture({ sequence: 1, type: 'message_started', runId: '00000000-0000-4000-8000-000000000223', messageId: '00000000-0000-4000-8000-000000000123', payload: { sequences: [7], batchSize: 1 } }),
+      eventFixture({ sequence: 2, type: 'sandbox_starting', runId: '00000000-0000-4000-8000-000000000223', messageId: '00000000-0000-4000-8000-000000000123', payload: { provider: 'daytona' } }),
+      eventFixture({ sequence: 3, type: 'run_failed', runId: '00000000-0000-4000-8000-000000000223', messageId: '00000000-0000-4000-8000-000000000123', payload: { error: '<html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1></body></html>' } }),
+      eventFixture({ sequence: 4, type: 'message_failed', runId: '00000000-0000-4000-8000-000000000223', messageId: '00000000-0000-4000-8000-000000000123', payload: { error: '<html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1></body></html>' } }),
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByText(/Diagnostics · 4 events/));
+
+  expect(screen.getByText('Likely Daytona API failure')).toBeInTheDocument();
+  expect(screen.getByText(/upstream Daytona API\/gateway outage/)).toBeInTheDocument();
+});
+
 it('prefers final assistant response over streamed deltas', async () => {
   mockApi({
     messages: [messageFixture({ id: '00000000-0000-4000-8000-000000000121', sequence: 1, status: 'completed', prompt: 'single message' })],

@@ -1729,6 +1729,20 @@ function JsonPayload(props: { value: unknown }) {
   return <HighlightedCode code={JSON.stringify(props.value, null, 2)} language="json" wrap chrome={false} />;
 }
 
+type DiagnosticFailureAnalysis = {
+  title: string;
+  detail: string;
+};
+
+function FailureAnalysisNotice(props: { analysis: DiagnosticFailureAnalysis }) {
+  return (
+    <div className="rounded-md border border-warning/50 bg-warning/10 p-2 text-sm text-warning-foreground dark:text-warning" role="note">
+      <strong className="block text-foreground dark:text-warning">{props.analysis.title}</strong>
+      <p className="mt-1">{props.analysis.detail}</p>
+    </div>
+  );
+}
+
 function CancelRunButton(props: { cancelling: boolean; onCancelRun: () => void }) {
   return (
     <Button className="h-7 px-2" type="button" variant="secondary" size="sm" onClick={props.onCancelRun} disabled={props.cancelling}>
@@ -1739,12 +1753,14 @@ function CancelRunButton(props: { cancelling: boolean; onCancelRun: () => void }
 
 function Diagnostics(props: { events: AgentEvent[] }) {
   const [open, setOpen] = useState(false);
+  const failureAnalysis = analyzeDiagnosticFailure(props.events);
   if (!props.events.length) return null;
 
   return (
     <details className="min-w-0 rounded-md border border-border bg-muted/30 p-2" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="cursor-pointer text-sm text-muted-foreground">Diagnostics · {props.events.length} events</summary>
       <div className="mt-2 grid min-w-0 gap-2">
+        {failureAnalysis ? <FailureAnalysisNotice analysis={failureAnalysis} /> : null}
         {props.events.map((event) => (
           <article className="min-w-0 rounded-md border border-border bg-card/80 p-2" key={`${event.sessionId}-${event.sequence}`}>
             <span className="text-xs text-muted-foreground">#{event.sequence} · {formatDate(event.createdAt)}</span>
@@ -1969,6 +1985,25 @@ function groupDiagnosticsByRun(events: AgentEvent[]): Record<string, AgentEvent[
 function diagnosticGroupKeys(event: AgentEvent): string[] {
   const keys = [event.runId, event.messageId].filter((key): key is string => Boolean(key));
   return Array.from(new Set(keys));
+}
+
+function analyzeDiagnosticFailure(events: AgentEvent[]): DiagnosticFailureAnalysis | null {
+  if (!looksLikeDaytonaApiFailure(events)) return null;
+  return {
+    title: 'Likely Daytona API failure',
+    detail: 'The run was still starting a Daytona sandbox when Daytona returned a 502 Bad Gateway response, so this looks like an upstream Daytona API/gateway outage rather than a task or repository failure.',
+  };
+}
+
+function looksLikeDaytonaApiFailure(events: AgentEvent[]): boolean {
+  const daytonaSandboxStartingIndex = events.findIndex((event) => event.type === 'sandbox_starting' && event.payload.provider === 'daytona');
+  if (daytonaSandboxStartingIndex === -1) return false;
+
+  return events.slice(daytonaSandboxStartingIndex + 1).some((event) => {
+    if (event.type !== 'run_failed' && event.type !== 'message_failed') return false;
+    const error = typeof event.payload.error === 'string' ? event.payload.error : '';
+    return /502\s+Bad Gateway/i.test(error);
+  });
 }
 
 function titleFromPrompt(prompt: string): string {
