@@ -925,6 +925,37 @@ export class PostgresStore implements AppStore {
     return toEvent(result.rows[0]!);
   }
 
+  async appendEventWithNextSequence(event: NormalizedEvent): Promise<EventRecord> {
+    const result = await this.pool.query<EventRow>(
+      `WITH next_sequence AS (
+         INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
+         VALUES ($1, 'events', 2)
+         ON CONFLICT (session_id, kind)
+         DO UPDATE SET next_sequence = session_sequence_counters.next_sequence + 1
+         RETURNING next_sequence - 1 AS sequence
+       ), inserted AS (
+         INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
+         SELECT $1, $2, $3, sequence, $4, $5, $6
+         FROM next_sequence
+         RETURNING id, session_id, run_id, message_id, sequence, type, payload, created_at
+       )
+       SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at,
+              pg_notify($7, json_build_object('id', id)::text)
+       FROM inserted`,
+      [
+        event.sessionId,
+        event.runId ?? null,
+        event.messageId ?? null,
+        event.type,
+        event.payload,
+        event.createdAt,
+        eventNotificationChannel,
+      ],
+    );
+
+    return toEvent(result.rows[0]!);
+  }
+
   async getEvents(sessionId: string, afterSequence = 0): Promise<EventRecord[]> {
     const result = await this.pool.query<EventRow>(
       `SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at

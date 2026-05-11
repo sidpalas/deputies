@@ -44,19 +44,19 @@ export class EventService {
   constructor(private readonly store: EventStore) {}
 
   async append<T extends NormalizedEventType>(input: AppendEventInput<T>): Promise<PersistedEvent<T>> {
-    const sequence = await this.store.nextEventSequence(input.sessionId);
     const event = {
       sessionId: input.sessionId,
-      sequence,
       type: input.type,
       payload: (input.payload ?? {}) as NormalizedEventPayload<T>,
       createdAt: new Date(),
-    } as NormalizedEvent<T> & { sequence: number };
+    } as NormalizedEvent<T>;
 
     if (input.runId) event.runId = input.runId;
     if (input.messageId) event.messageId = input.messageId;
 
-    const persisted = await this.store.appendEvent(event);
+    const persisted = this.store.appendEventWithNextSequence
+      ? await this.store.appendEventWithNextSequence(event)
+      : await this.store.appendEvent({ ...event, sequence: await this.store.nextEventSequence(input.sessionId) });
     this.publish(persisted);
     return persisted as PersistedEvent<T>;
   }

@@ -475,6 +475,10 @@ export class MemoryStore implements AppStore {
     return record;
   }
 
+  async appendEventWithNextSequence(event: NormalizedEvent): Promise<EventRecord> {
+    return this.appendEvent({ ...event, sequence: await this.nextEventSequence(event.sessionId) });
+  }
+
   async getEvents(
     sessionId: string,
     afterSequence = 0,

@@ -316,6 +316,7 @@ export interface CallbackStore {
 export interface EventStore {
   nextEventSequence(sessionId: string): Promise<number>;
   appendEvent(event: NormalizedEvent & { sequence: number }): Promise<EventRecord>;
+  appendEventWithNextSequence?(event: NormalizedEvent): Promise<EventRecord>;
   getEvents(sessionId: string, afterSequence?: number): Promise<EventRecord[]>;
   listEvents(afterId?: number): Promise<EventRecord[]>;
 }

@@ -20,6 +20,8 @@ RUN apt-get update \
     vim \
     zsh \
   && corepack enable \
+  && curl https://mise.run | sh \
+  && mv /root/.local/bin/mise /usr/local/bin/mise \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
