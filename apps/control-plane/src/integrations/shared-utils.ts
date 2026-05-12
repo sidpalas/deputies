@@ -1,10 +1,48 @@
 import { randomUUID } from 'node:crypto';
+import type { MessageService } from '../messages/service.js';
 import type { SessionService } from '../sessions/service.js';
-import type { AppStore, SessionRecord } from '../store/types.js';
+import type { AppStore, MessageRecord, SessionRecord } from '../store/types.js';
 
 export type IntegrationDeliveryRef = {
   source: string;
   dedupeKey: string;
+};
+
+export type IntegrationActor = {
+  type: 'user' | 'bot' | 'system';
+  externalId: string;
+  displayName?: string;
+};
+
+export type IntegrationRepository = {
+  provider: 'github';
+  owner: string;
+  repo: string;
+};
+
+export type IntegrationThreadRef = {
+  source: string;
+  externalId: string;
+  metadata: Record<string, unknown>;
+};
+
+export type IntegrationIngress = {
+  source: string;
+  messageSource?: string;
+  thread: IntegrationThreadRef;
+  title: string;
+  prompt: string;
+  dedupeKey?: string;
+  actor?: IntegrationActor;
+  repository?: IntegrationRepository;
+  callback?: Record<string, unknown>;
+  sourceContext?: Record<string, unknown>;
+  context?: Record<string, unknown>;
+};
+
+export type IntegrationIngressResult = {
+  session: SessionRecord;
+  message: MessageRecord;
 };
 
 export async function receiveIntegrationDelivery(
@@ -51,6 +89,53 @@ export async function getOrCreateExternalThreadSession(
   return getOrCreateExternalThreadSessionUnlocked(store, sessions, input);
 }
 
+export async function enqueueIntegrationIngress(
+  store: AppStore,
+  sessions: SessionService,
+  messages: MessageService,
+  input: IntegrationIngress,
+): Promise<IntegrationIngressResult> {
+  assertIngressSourceMatchesThread(input);
+  const session = await getOrCreateExternalThreadSession(store, sessions, {
+    source: input.thread.source,
+    externalId: input.thread.externalId,
+    metadata: input.thread.metadata,
+    title: input.title,
+  });
+  const message = await enqueueIntegrationMessage(messages, session, input);
+  return { session, message };
+}
+
+export async function enqueueIntegrationMessage(
+  messages: MessageService,
+  session: SessionRecord,
+  input: IntegrationIngress,
+): Promise<MessageRecord> {
+  assertIngressSourceMatchesThread(input);
+  return messages.enqueue({
+    sessionId: session.id,
+    prompt: input.prompt,
+    source: input.messageSource ?? input.source,
+    context: integrationMessageContext(input),
+  });
+}
+
+export function integrationMessageContext(input: IntegrationIngress): Record<string, unknown> {
+  return compactRecord({
+    ...input.context,
+    source: input.source,
+    integration: compactRecord({
+      source: input.source,
+      thread: { source: input.thread.source, externalId: input.thread.externalId },
+      dedupeKey: input.dedupeKey,
+      actor: input.actor,
+    }),
+    repository: input.repository,
+    callback: input.callback,
+    ...input.sourceContext,
+  });
+}
+
 async function getOrCreateExternalThreadSessionUnlocked(
   store: AppStore,
   sessions: SessionService,
@@ -80,4 +165,14 @@ async function getOrCreateExternalThreadSessionUnlocked(
 
   const winningSession = await sessions.get(thread.sessionId);
   return winningSession ?? createdSession;
+}
+
+function compactRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+}
+
+function assertIngressSourceMatchesThread(input: IntegrationIngress): void {
+  if (input.thread.source !== input.source) {
+    throw new Error(`Integration thread source must match message source: ${input.thread.source} !== ${input.source}`);
+  }
 }

@@ -156,7 +156,7 @@ Acceptance criteria:
 - Filtered-out payload does not create a message.
 - Rendered prompt includes source, repo, request, and payload context.
 
-Status: implemented for the first DB-backed shape. Webhook sources are stored in Postgres with bearer tokens and prompt prefixes. The route accepts `threadId`, `dedupeKey`, `title`, `prompt`, and `context`; reuses sessions by external thread; dedupes deliveries; and enqueues prefixed prompts. Configurable JSON-path mapping/filtering/templates remain future enhancements.
+Status: implemented for the first DB-backed shape. Webhook sources are stored in Postgres with bearer tokens and prompt prefixes. The route accepts the shared integration ingress-style fields `thread.externalId`, `dedupeKey`, `title`, `prompt`, `actor`, `repository`, `callback`, and `context`; reuses sessions by external thread; dedupes deliveries; and enqueues prefixed prompts. Configurable JSON-path mapping/filtering/templates remain future enhancements.
 
 ## Phase 5: Flue Runner Adapter
 

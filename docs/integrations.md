@@ -80,10 +80,10 @@ MVP capabilities:
 - Bearer token auth.
 - JSON body only.
 - Dedupe via request-provided `dedupeKey`.
-- External thread reuse via request-provided `threadId`.
+- External thread reuse via request-provided `thread.externalId`.
 - Prompt ingestion via request-provided `prompt` plus optional source prompt prefix.
 - Context ingestion via request-provided `context`.
-- Optional HTTP completion callback via request-provided `callbackUrl`.
+- Optional HTTP completion callback via request-provided `callback: { "type": "http", "url": "..." }`.
 
 Future capabilities:
 
@@ -95,7 +95,7 @@ Future capabilities:
 
 Current callback support:
 
-- Generic webhook payloads may include `callbackUrl`.
+- Generic webhook payloads may include an HTTP `callback` target.
 - On message completion, the worker posts a JSON payload to that URL.
 - Callback attempts are persisted in `callback_deliveries`. The dispatcher claims due callbacks, delivers them through target-specific sender plugins, records `callback_sent` on success, schedules retry on transient failure, and records `callback_failed` after terminal failure.
 
@@ -127,10 +127,10 @@ Current stored source shape is `key`, `name`, `enabled`, `bearer_token`, and opt
 Session resolution:
 
 ```txt
-sourceKey + threadId -> existing session or create new
+sourceKey + thread.externalId -> existing session or create new
 ```
 
-Generic webhook payloads currently require non-empty `threadId`, `dedupeKey`, and `prompt`. Requests without `threadId` are rejected.
+Generic webhook payloads currently require non-empty `thread.externalId`, `dedupeKey`, and `prompt`. Requests without `thread.externalId` are rejected. The payload shape mirrors the internal first-party integration ingress contract where practical: optional `actor`, `repository`, `callback`, and `context` fields flow into message context through the shared integration handoff.
 
 ## GitHub Integration
 

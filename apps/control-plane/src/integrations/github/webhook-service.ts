@@ -13,10 +13,12 @@ import {
 } from '../archive.js';
 import { boundPriorContext, boundPromptText } from '../prompt-bounds.js';
 import {
+  enqueueIntegrationMessage,
   getOrCreateExternalThreadSession,
   markIntegrationDeliveryFailed,
   markIntegrationDeliveryProcessed,
   receiveIntegrationDelivery,
+  type IntegrationIngress,
 } from '../shared-utils.js';
 import type { GitHubArchivedSessionNotifier } from './archived-session-notifier.js';
 import { githubCallbackTarget } from './callback-target.js';
@@ -179,8 +181,7 @@ export class GitHubWebhookService {
 
     await this.addReceivedReaction(accepted);
 
-    const threadId = githubExternalThreadId(accepted);
-    let session = await this.getOrCreateSession(threadId, accepted);
+    let session = await this.getOrCreateSession(accepted);
     if (session.status === 'archived') {
       if (includesArchivedSessionRecoveryPhrase(githubEventText(accepted))) {
         session = await this.sessions.unarchive(session.id);
@@ -210,15 +211,17 @@ export class GitHubWebhookService {
     const threadContext = await this.fetchThreadContext(session, accepted);
     const promptThreadContext = { ...threadContext, comments: boundPriorContext(threadContext.comments) };
 
-    const message = await this.messages.enqueue({
-      sessionId: session.id,
+    const message = await enqueueIntegrationMessage(this.messages, session, {
+      source: 'github',
+      thread: githubIntegrationThread(accepted),
+      title: githubSessionTitle(accepted),
       prompt: renderGitHubPrompt(accepted, promptThreadContext, {
         includeFullThreadContext: existingMessageCount === 0,
       }),
-      source: 'github',
-      context: {
-        source: 'github',
-        repository: { provider: 'github', owner: accepted.owner, repo: accepted.repo },
+      dedupeKey: accepted.deliveryId,
+      ...(accepted.actor ? { actor: { type: 'user' as const, externalId: accepted.actor } } : {}),
+      repository: { provider: 'github', owner: accepted.owner, repo: accepted.repo },
+      sourceContext: {
         github: {
           event: accepted.event,
           action: accepted.action,
@@ -230,26 +233,24 @@ export class GitHubWebhookService {
           ...(accepted.commentId ? { commentId: accepted.commentId } : {}),
           includedCommentIds: promptThreadContext.comments.map((comment) => comment.id),
         },
-        callback: githubCallbackTarget({
-          owner: accepted.owner,
-          repo: accepted.repo,
-          issueNumber: accepted.number,
-          ...githubReplyHint(this.options.triggerPhrases),
-          ...(existingMessageCount === 0 ? { includeSessionLink: true } : {}),
-          ...callbackSessionUrl(session.id, this.options.webBaseUrl),
-        }),
       },
+      callback: githubCallbackTarget({
+        owner: accepted.owner,
+        repo: accepted.repo,
+        issueNumber: accepted.number,
+        ...githubReplyHint(this.options.triggerPhrases),
+        ...(existingMessageCount === 0 ? { includeSessionLink: true } : {}),
+        ...callbackSessionUrl(session.id, this.options.webBaseUrl),
+      }),
     });
 
     await markIntegrationDeliveryProcessed(this.store, { source: 'github', dedupeKey: accepted.deliveryId });
     return { ok: true, type: 'accepted', session, message };
   }
 
-  private async getOrCreateSession(threadId: string, event: AcceptedGitHubEvent): Promise<SessionRecord> {
+  private async getOrCreateSession(event: AcceptedGitHubEvent): Promise<SessionRecord> {
     return getOrCreateExternalThreadSession(this.store, this.sessions, {
-      source: 'github',
-      externalId: threadId,
-      metadata: { owner: event.owner, repo: event.repo, number: event.number, itemType: event.itemType },
+      ...githubIntegrationThread(event),
       title: githubSessionTitle(event),
     });
   }
@@ -378,18 +379,20 @@ export class GitHubWebhookService {
     event: AcceptedGitHubEvent,
     archivedMessages: MessageRecord[],
   ): Promise<MessageRecord> {
-    return this.messages.enqueue({
-      sessionId: session.id,
+    return enqueueIntegrationMessage(this.messages, session, {
+      source: 'github',
+      thread: githubIntegrationThread(event),
+      title: githubSessionTitle(event),
       prompt: archivedRecoveryWorkPrompt({
         sourceLabel: 'GitHub',
         archivedMessages,
         recoveryText: currentGitHubMessageText(event),
       }),
-      source: 'github',
-      context: {
-        source: 'github',
+      dedupeKey: event.deliveryId,
+      ...(event.actor ? { actor: { type: 'user' as const, externalId: event.actor } } : {}),
+      repository: { provider: 'github', owner: event.owner, repo: event.repo },
+      sourceContext: {
         includedArchivedMessageIds: archivedMessages.map((message) => message.id),
-        repository: { provider: 'github', owner: event.owner, repo: event.repo },
         github: {
           event: event.event,
           action: event.action,
@@ -401,14 +404,14 @@ export class GitHubWebhookService {
           ...(event.commentId ? { commentId: event.commentId } : {}),
           includedCommentIds: [],
         },
-        callback: githubCallbackTarget({
-          owner: event.owner,
-          repo: event.repo,
-          issueNumber: event.number,
-          ...githubReplyHint(this.options.triggerPhrases),
-          ...callbackSessionUrl(session.id, this.options.webBaseUrl),
-        }),
       },
+      callback: githubCallbackTarget({
+        owner: event.owner,
+        repo: event.repo,
+        issueNumber: event.number,
+        ...githubReplyHint(this.options.triggerPhrases),
+        ...callbackSessionUrl(session.id, this.options.webBaseUrl),
+      }),
     });
   }
 
@@ -658,6 +661,16 @@ function renderGitHubPrompt(
 
 function githubExternalThreadId(event: Pick<AcceptedGitHubEvent, 'owner' | 'repo' | 'number'>): string {
   return `${event.owner}/${event.repo}#${event.number}`;
+}
+
+function githubIntegrationThread(
+  event: Pick<AcceptedGitHubEvent, 'owner' | 'repo' | 'number' | 'itemType'>,
+): IntegrationIngress['thread'] {
+  return {
+    source: 'github',
+    externalId: githubExternalThreadId(event),
+    metadata: { owner: event.owner, repo: event.repo, number: event.number, itemType: event.itemType },
+  };
 }
 
 function callbackSessionUrl(sessionId: string, webBaseUrl: string | undefined): { sessionUrl?: string } {

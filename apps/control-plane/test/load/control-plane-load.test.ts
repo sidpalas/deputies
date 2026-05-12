@@ -247,7 +247,7 @@ describe.skipIf(!testDatabaseUrl)('control-plane load', () => {
         sourceKey: 'load-generic',
         authorization: 'Bearer load-token',
         payload: {
-          threadId: `thread-${Math.floor(index / 3)}`,
+          thread: { externalId: `thread-${Math.floor(index / 3)}` },
           dedupeKey: `delivery-${Math.max(dedupeIndex, 0)}`,
           prompt: `Load webhook prompt ${index}`,
           title: `Webhook load thread ${Math.floor(index / 3)}`,

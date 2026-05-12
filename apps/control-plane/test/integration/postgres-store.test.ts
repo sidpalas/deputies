@@ -582,7 +582,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
 
     try {
       const first = await postJsonWithAuth(`${baseUrl}/webhooks/generic/foo`, 'secret', {
-        threadId: 'thread-1',
+        thread: { externalId: 'thread-1' },
         dedupeKey: 'delivery-1',
         title: 'Foo task',
         prompt: 'do work',
@@ -594,7 +594,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       expect(firstBody.message?.prompt).toBe('bar baz\n\ndo work');
 
       const duplicate = await postJsonWithAuth(`${baseUrl}/webhooks/generic/foo`, 'secret', {
-        threadId: 'thread-1',
+        thread: { externalId: 'thread-1' },
         dedupeKey: 'delivery-1',
         prompt: 'do work again',
       });
@@ -604,7 +604,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       expect(duplicateBody).toMatchObject({ duplicate: true });
 
       const followUp = await postJsonWithAuth(`${baseUrl}/webhooks/generic/foo`, 'secret', {
-        threadId: 'thread-1',
+        thread: { externalId: 'thread-1' },
         dedupeKey: 'delivery-2',
         prompt: 'follow up',
       });
@@ -614,7 +614,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
 
       await expect(
         postJsonWithAuth(`${baseUrl}/webhooks/generic/foo`, 'wrong', {
-          threadId: 'thread-2',
+          thread: { externalId: 'thread-2' },
           dedupeKey: 'delivery-3',
           prompt: 'nope',
         }),

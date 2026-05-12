@@ -2,9 +2,12 @@ import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
 import type { AppStore, MessageRecord, SessionRecord, WebhookSourceRecord } from '../../store/types.js';
 import {
-  getOrCreateExternalThreadSession,
+  enqueueIntegrationIngress,
   markIntegrationDeliveryProcessed,
   receiveIntegrationDelivery,
+  type IntegrationActor,
+  type IntegrationIngress,
+  type IntegrationRepository,
 } from '../shared-utils.js';
 
 export type HandleGenericWebhookInput = {
@@ -41,49 +44,41 @@ export class GenericWebhookService {
     const received = await receiveIntegrationDelivery(this.store, {
       source: source.key,
       dedupeKey: parsed.dedupeKey,
-      metadata: { threadId: parsed.threadId },
+      metadata: { thread: parsed.thread },
     });
 
     if (!received) {
       return { accepted: true, duplicate: true };
     }
 
-    const session = await this.getOrCreateSession(source, parsed);
-    const message = await this.messages.enqueue({
-      sessionId: session.id,
+    const { session, message } = await enqueueIntegrationIngress(this.store, this.sessions, this.messages, {
+      source: source.key,
+      messageSource: `generic:${source.key}`,
+      thread: { source: source.key, externalId: parsed.thread.externalId, metadata: parsed.thread.metadata },
+      title: parsed.title ?? `Webhook: ${source.name}`,
       prompt: renderPrompt(source, parsed.prompt),
-      source: `generic:${source.key}`,
-      context: {
-        source: source.key,
-        threadId: parsed.threadId,
-        dedupeKey: parsed.dedupeKey,
-        webhookContext: parsed.context,
-        webhookPayload: input.payload,
-        callback: parsed.callbackUrl ? { type: 'http', url: parsed.callbackUrl } : undefined,
-      },
+      dedupeKey: parsed.dedupeKey,
+      ...(parsed.actor ? { actor: parsed.actor } : {}),
+      ...(parsed.repository ? { repository: parsed.repository } : {}),
+      ...(parsed.callback ? { callback: parsed.callback } : {}),
+      sourceContext: { webhook: { sourceName: source.name, context: parsed.context } },
+      context: parsed.context,
     });
 
     await markIntegrationDeliveryProcessed(this.store, { source: source.key, dedupeKey: parsed.dedupeKey });
 
     return { accepted: true, duplicate: false, session, message };
   }
-
-  private async getOrCreateSession(source: WebhookSourceRecord, parsed: ParsedWebhookPayload): Promise<SessionRecord> {
-    return getOrCreateExternalThreadSession(this.store, this.sessions, {
-      source: source.key,
-      externalId: parsed.threadId,
-      metadata: { sourceName: source.name },
-      title: parsed.title ?? `Webhook: ${source.name}`,
-    });
-  }
 }
 
 type ParsedWebhookPayload = {
-  threadId: string;
+  thread: IntegrationIngress['thread'];
   dedupeKey: string;
   prompt: string;
   title?: string;
-  callbackUrl?: string;
+  actor?: IntegrationActor;
+  repository?: IntegrationRepository;
+  callback?: Record<string, unknown>;
   context: Record<string, unknown>;
 };
 
@@ -101,17 +96,66 @@ function isAuthorized(authorization: string | undefined, source: WebhookSourceRe
 }
 
 function parseWebhookPayload(payload: Record<string, unknown>): ParsedWebhookPayload {
-  const threadId = requiredString(payload.threadId, 'threadId');
+  const thread = parseThread(payload.thread);
   const dedupeKey = requiredString(payload.dedupeKey, 'dedupeKey');
   const prompt = requiredString(payload.prompt, 'prompt');
   const title = optionalString(payload.title);
-  const callbackUrl = optionalUrl(payload.callbackUrl, 'callbackUrl');
+  const actor = parseActor(payload.actor);
+  const repository = parseRepository(payload.repository);
+  const callback = parseCallback(payload.callback);
   const context = isRecord(payload.context) ? payload.context : {};
 
-  const parsed: ParsedWebhookPayload = { threadId, dedupeKey, prompt, context };
+  const parsed: ParsedWebhookPayload = { thread, dedupeKey, prompt, context };
   if (title) parsed.title = title;
-  if (callbackUrl) parsed.callbackUrl = callbackUrl;
+  if (actor) parsed.actor = actor;
+  if (repository) parsed.repository = repository;
+  if (callback) parsed.callback = callback;
   return parsed;
+}
+
+function parseThread(value: unknown): IntegrationIngress['thread'] {
+  if (!isRecord(value)) throw new GenericWebhookError('invalid_request', 'Expected object field: thread');
+  return {
+    source: 'generic',
+    externalId: requiredString(value.externalId, 'thread.externalId'),
+    metadata: isRecord(value.metadata) ? value.metadata : {},
+  };
+}
+
+function parseActor(value: unknown): IntegrationActor | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new GenericWebhookError('invalid_request', 'Expected object field: actor');
+  const type = value.type;
+  if (type !== 'user' && type !== 'bot' && type !== 'system') {
+    throw new GenericWebhookError('invalid_request', 'Expected actor.type to be user, bot, or system');
+  }
+  const displayName = optionalString(value.displayName);
+  return {
+    type,
+    externalId: requiredString(value.externalId, 'actor.externalId'),
+    ...(displayName ? { displayName } : {}),
+  };
+}
+
+function parseRepository(value: unknown): IntegrationRepository | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new GenericWebhookError('invalid_request', 'Expected object field: repository');
+  if (value.provider !== 'github')
+    throw new GenericWebhookError('invalid_request', 'Expected repository.provider to be github');
+  return {
+    provider: 'github',
+    owner: requiredString(value.owner, 'repository.owner'),
+    repo: requiredString(value.repo, 'repository.repo'),
+  };
+}
+
+function parseCallback(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new GenericWebhookError('invalid_request', 'Expected object field: callback');
+  if (value.type === 'http') {
+    return { type: 'http', url: httpUrl(value.url, 'callback.url') };
+  }
+  throw new GenericWebhookError('invalid_request', 'Expected callback.type to be http');
 }
 
 function renderPrompt(source: WebhookSourceRecord, prompt: string): string {
@@ -128,9 +172,8 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
-function optionalUrl(value: unknown, field: string): string | undefined {
-  const raw = optionalString(value);
-  if (!raw) return undefined;
+function httpUrl(value: unknown, field: string): string {
+  const raw = requiredString(value, field);
   try {
     const url = new URL(raw);
     if (url.protocol === 'http:' || url.protocol === 'https:') return url.toString();

@@ -65,7 +65,7 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
     );
 
     const response = await postJsonWithAuth('/webhooks/generic/foo', 'secret', {
-      threadId: 'thread-1',
+      thread: { externalId: 'thread-1' },
       dedupeKey: 'delivery-1',
       title: 'Webhook UAT',
       prompt: 'complete from webhook',
@@ -191,14 +191,14 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
     expect(productApi.status).toBe(401);
 
     const wrongWebhookAuth = await postJsonWithAuth('/webhooks/generic/auth-split', 'product-secret', {
-      threadId: 'thread-1',
+      thread: { externalId: 'thread-1' },
       dedupeKey: 'delivery-1',
       prompt: 'wrong auth',
     });
     expect(wrongWebhookAuth.status).toBe(401);
 
     const webhook = await postJsonWithAuth('/webhooks/generic/auth-split', 'webhook-secret', {
-      threadId: 'thread-1',
+      thread: { externalId: 'thread-1' },
       dedupeKey: 'delivery-2',
       prompt: 'complete via webhook auth',
     });
@@ -231,10 +231,10 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
       );
 
       const response = await postJsonWithAuth('/webhooks/generic/callback', 'secret', {
-        threadId: 'thread-callback',
+        thread: { externalId: 'thread-callback' },
         dedupeKey: 'delivery-callback',
         prompt: 'complete with callback',
-        callbackUrl,
+        callback: { type: 'http', url: callbackUrl },
         context: {
           fakeArtifact: { type: 'external_link', url: 'https://example.com/result', payload: { ok: true } },
         },

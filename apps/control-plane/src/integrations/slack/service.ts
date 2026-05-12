@@ -13,10 +13,12 @@ import {
 } from '../archive.js';
 import { boundPriorContext } from '../prompt-bounds.js';
 import {
+  enqueueIntegrationMessage,
   getOrCreateExternalThreadSession,
   markIntegrationDeliveryFailed,
   markIntegrationDeliveryProcessed,
   receiveIntegrationDelivery,
+  type IntegrationIngress,
 } from '../shared-utils.js';
 import { slackCallbackTarget } from './callback-target.js';
 import type {
@@ -98,7 +100,7 @@ export class SlackIntegrationService {
       });
       return { ok: true, type: 'ignored', reason: 'unmapped_thread' };
     }
-    let session = await this.getOrCreateSession(threadId, accepted);
+    let session = await this.getOrCreateSession(accepted);
     if (session.status === 'archived') {
       if (includesArchivedSessionRecoveryPhrase(accepted.text)) {
         session = await this.sessions.unarchive(session.id);
@@ -136,12 +138,18 @@ export class SlackIntegrationService {
     const promptMetadata = await this.fetchPromptMetadata(accepted, promptThreadContext.messages);
     const includeChannelContext = existingMessageCount === 0;
 
-    const message = await this.messages.enqueue({
-      sessionId: session.id,
-      prompt: renderSlackPrompt(accepted, promptThreadContext, promptMetadata, { includeChannelContext }),
+    const message = await enqueueIntegrationMessage(this.messages, session, {
       source: 'slack',
-      context: {
-        source: 'slack',
+      thread: slackIntegrationThread(accepted),
+      title: slackSessionTitle(accepted),
+      prompt: renderSlackPrompt(accepted, promptThreadContext, promptMetadata, { includeChannelContext }),
+      dedupeKey: accepted.eventId,
+      actor: {
+        type: 'user',
+        externalId: accepted.user,
+        ...(promptMetadata.actorName ? { displayName: promptMetadata.actorName } : {}),
+      },
+      sourceContext: {
         slack: {
           teamId: accepted.teamId,
           channel: accepted.channel,
@@ -152,13 +160,13 @@ export class SlackIntegrationService {
           type: accepted.type,
           includedThreadTs: promptThreadContext.messages.map((message) => message.ts),
         },
-        callback: slackCallbackTarget({
-          channel: accepted.channel,
-          threadTs: accepted.threadTs,
-          messageTs: accepted.ts,
-          ...callbackSessionUrl(session.id, this.options.webBaseUrl),
-        }),
       },
+      callback: slackCallbackTarget({
+        channel: accepted.channel,
+        threadTs: accepted.threadTs,
+        messageTs: accepted.ts,
+        ...callbackSessionUrl(session.id, this.options.webBaseUrl),
+      }),
     });
 
     await markIntegrationDeliveryProcessed(this.store, { source: 'slack', dedupeKey: accepted.eventId });
@@ -306,12 +314,14 @@ export class SlackIntegrationService {
     event: SlackAcceptedEvent,
     archivedMessages: MessageRecord[],
   ): Promise<MessageRecord> {
-    return this.messages.enqueue({
-      sessionId: session.id,
-      prompt: archivedRecoveryWorkPrompt({ sourceLabel: 'Slack', archivedMessages, recoveryText: event.text }),
+    return enqueueIntegrationMessage(this.messages, session, {
       source: 'slack',
-      context: {
-        source: 'slack',
+      thread: slackIntegrationThread(event),
+      title: slackSessionTitle(event),
+      prompt: archivedRecoveryWorkPrompt({ sourceLabel: 'Slack', archivedMessages, recoveryText: event.text }),
+      dedupeKey: event.eventId,
+      actor: { type: 'user', externalId: event.user },
+      sourceContext: {
         includedArchivedMessageIds: archivedMessages.map((message) => message.id),
         slack: {
           teamId: event.teamId,
@@ -323,13 +333,13 @@ export class SlackIntegrationService {
           type: event.type,
           includedThreadTs: [],
         },
-        callback: slackCallbackTarget({
-          channel: event.channel,
-          threadTs: event.threadTs,
-          messageTs: event.ts,
-          ...callbackSessionUrl(session.id, this.options.webBaseUrl),
-        }),
       },
+      callback: slackCallbackTarget({
+        channel: event.channel,
+        threadTs: event.threadTs,
+        messageTs: event.ts,
+        ...callbackSessionUrl(session.id, this.options.webBaseUrl),
+      }),
     });
   }
 
@@ -427,14 +437,22 @@ export class SlackIntegrationService {
     return { teamId, eventId, type: event.type, text, user, channel, ts, threadTs, raw: event };
   }
 
-  private async getOrCreateSession(threadId: string, event: SlackAcceptedEvent): Promise<SessionRecord> {
+  private async getOrCreateSession(event: SlackAcceptedEvent): Promise<SessionRecord> {
     return getOrCreateExternalThreadSession(this.store, this.sessions, {
-      source: 'slack',
-      externalId: threadId,
-      metadata: { teamId: event.teamId, channel: event.channel, threadTs: event.threadTs },
+      ...slackIntegrationThread(event),
       title: slackSessionTitle(event),
     });
   }
+}
+
+function slackIntegrationThread(
+  event: Pick<SlackAcceptedEvent, 'teamId' | 'channel' | 'threadTs'>,
+): IntegrationIngress['thread'] {
+  return {
+    source: 'slack',
+    externalId: slackExternalThreadId(event),
+    metadata: { teamId: event.teamId, channel: event.channel, threadTs: event.threadTs },
+  };
 }
 
 function callbackSessionUrl(sessionId: string, webBaseUrl: string | undefined): { sessionUrl?: string } {
