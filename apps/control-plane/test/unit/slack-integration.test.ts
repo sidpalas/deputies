@@ -111,6 +111,7 @@ describe('Slack integration', () => {
     const store = new MemoryStore();
     const services = createServices(store);
     const statuses: Array<{ channel: string; threadTs: string; status: string }> = [];
+    const replies: Array<{ channel: string; threadTs: string; text: string; blocks?: unknown[] }> = [];
     const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
       assistantThreadClient: {
         async setThreadStatus(input) {
@@ -118,6 +119,13 @@ describe('Slack integration', () => {
           return { ok: true };
         },
       },
+      replyClient: {
+        async postThreadReply(input) {
+          replies.push(input);
+          return { ok: true };
+        },
+      },
+      webBaseUrl: 'https://deputies.example',
     });
 
     const first = await slack.handle(
@@ -158,8 +166,34 @@ describe('Slack integration', () => {
       channel: 'C123',
       threadTs: '1710000000.000100',
       messageTs: '1710000000.000100',
+      sessionUrl: `https://deputies.example/?session=${first.session.id}`,
       replyHint: 'Tag @deputies in replies to continue here.',
     });
+    expect(messages[0]!.context?.callback).not.toMatchObject({ includeSessionLink: true });
+    expect(replies).toEqual([
+      {
+        channel: 'C123',
+        threadTs: '1710000000.000100',
+        text: `:incoming_envelope: Your Deputy will reply when it has finished processing.
+
+:link: You can follow along on the web here: https://deputies.example/?session=${first.session.id}
+
+:speech_balloon: You can also continue the session here with follow-up messages. Make sure to tag @deputies in your messages.`,
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `:incoming_envelope: Your Deputy will reply when it has finished processing.
+
+:link: You can follow along on the web here: https://deputies.example/?session=${first.session.id}
+
+:speech_balloon: You can also continue the session here with follow-up messages. Make sure to tag @deputies in your messages.`,
+            },
+          },
+        ],
+      },
+    ]);
     expect(statuses).toEqual([
       { channel: 'C123', threadTs: '1710000000.000100', status: 'Queued your request...' },
       { channel: 'C123', threadTs: '1710000000.000100', status: 'Queued your request...' },

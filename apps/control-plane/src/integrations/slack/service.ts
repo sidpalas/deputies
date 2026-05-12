@@ -118,12 +118,15 @@ export class SlackIntegrationService {
       }
     }
 
+    const existingMessageCount = (await this.store.getMessages(session.id)).length;
+    if (existingMessageCount === 0) await this.postSessionLink(accepted, session.id);
+
     await this.setThreadStatus(accepted, 'Queued your request...');
     const threadContext =
       accepted.type === 'app_mention' ? await this.fetchThreadContext(session, accepted) : { messages: [] };
     const promptThreadContext = { ...threadContext, messages: boundPriorContext(threadContext.messages) };
     const promptMetadata = await this.fetchPromptMetadata(accepted, promptThreadContext.messages);
-    const includeChannelContext = (await this.store.getMessages(session.id)).length === 0;
+    const includeChannelContext = existingMessageCount === 0;
 
     const message = await this.messages.enqueue({
       sessionId: session.id,
@@ -145,7 +148,6 @@ export class SlackIntegrationService {
           channel: accepted.channel,
           threadTs: accepted.threadTs,
           messageTs: accepted.ts,
-          ...(includeChannelContext ? { includeSessionLink: true } : {}),
           ...callbackSessionUrl(session.id, this.options.webBaseUrl),
         }),
       },
@@ -194,6 +196,28 @@ export class SlackIntegrationService {
         text: archivedSessionRecoveredNotice(),
       });
       if (!response.ok) console.warn(`Slack recovery acknowledgement failed: ${response.error ?? 'unknown_error'}`);
+    } catch (error) {
+      console.warn(error instanceof Error ? error.message : error);
+    }
+  }
+
+  private async postSessionLink(event: SlackAcceptedEvent, sessionId: string): Promise<void> {
+    if (!this.options.replyClient) return;
+    const sessionUrl = callbackSessionUrl(sessionId, this.options.webBaseUrl).sessionUrl;
+    if (!sessionUrl) return;
+    const text = `:incoming_envelope: Your Deputy will reply when it has finished processing.
+
+:link: You can follow along on the web here: ${sessionUrl}
+
+:speech_balloon: You can also continue the session here with follow-up messages. Make sure to tag @deputies in your messages.`;
+    try {
+      const response = await this.options.replyClient.postThreadReply({
+        channel: event.channel,
+        threadTs: event.threadTs,
+        text,
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }],
+      });
+      if (!response.ok) console.warn(`Slack session-link reply failed: ${response.error ?? 'unknown_error'}`);
     } catch (error) {
       console.warn(error instanceof Error ? error.message : error);
     }
