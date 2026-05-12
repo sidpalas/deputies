@@ -1,4 +1,4 @@
-import { FocusEvent, FormEvent, KeyboardEvent, SyntheticEvent, useEffect, useMemo, useState } from 'react';
+import { FocusEvent, FormEvent, KeyboardEvent, SyntheticEvent, TouchEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Archive,
@@ -545,16 +545,51 @@ export function MessageComposer(props: {
   onSubmit: (input: { prompt: string; repository: string }) => Promise<boolean>;
 }) {
   const [prompt, setPrompt] = useState('');
+  const [promptResetKey, setPromptResetKey] = useState(0);
   const [repository, setRepository] = useState('');
+  const submitTouchRef = useRef<{ moved: boolean; x: number; y: number } | null>(null);
 
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
+  const canSubmit = !props.archived && Boolean(prompt.trim());
+
+  async function submitPrompt() {
+    if (!canSubmit) return;
     const submittedPrompt = prompt;
     const submittedRepository = repository;
     blurFocusedTextControl();
+    setPromptResetKey((key) => key + 1);
     setPrompt('');
     const sent = await props.onSubmit({ prompt: submittedPrompt, repository: submittedRepository });
     if (!sent) setPrompt(submittedPrompt);
+  }
+
+  function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    void submitPrompt();
+  }
+
+  function handleSubmitTouchStart(event: TouchEvent<HTMLButtonElement>) {
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    submitTouchRef.current = { moved: false, x: touch.clientX, y: touch.clientY };
+  }
+
+  function handleSubmitTouchMove(event: TouchEvent<HTMLButtonElement>) {
+    const touch = event.changedTouches[0];
+    const start = submitTouchRef.current;
+    if (!touch || !start) return;
+    if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > 10) start.moved = true;
+  }
+
+  function handleSubmitTouchEnd(event: TouchEvent<HTMLButtonElement>) {
+    const start = submitTouchRef.current;
+    submitTouchRef.current = null;
+    if (!canSubmit || start?.moved) return;
+    event.preventDefault();
+    void submitPrompt();
+  }
+
+  function handleSubmitTouchCancel() {
+    submitTouchRef.current = null;
   }
 
   function handleBlur(event: FocusEvent<HTMLFormElement>) {
@@ -571,6 +606,7 @@ export function MessageComposer(props: {
     >
       <Card className="overflow-hidden bg-card/90">
         <Textarea
+          key={promptResetKey}
           className="min-h-28 border-0 bg-transparent focus:ring-0"
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
@@ -598,7 +634,11 @@ export function MessageComposer(props: {
           <Button
             className="ml-auto shrink-0 whitespace-nowrap"
             type="submit"
-            disabled={props.archived || !prompt.trim()}
+            disabled={!canSubmit}
+            onTouchStart={handleSubmitTouchStart}
+            onTouchMove={handleSubmitTouchMove}
+            onTouchEnd={handleSubmitTouchEnd}
+            onTouchCancel={handleSubmitTouchCancel}
           >
             Send message
           </Button>

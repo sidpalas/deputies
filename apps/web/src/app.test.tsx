@@ -82,8 +82,33 @@ it('keeps Enter available for newlines in mobile composer text', async () => {
   fireEvent.keyDown(composer, { key: 'Enter' });
   expect(submittedPrompts).toEqual([]);
 
-  fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+  const sendButton = screen.getByRole('button', { name: 'Send message' });
+  expect(sendButton).toHaveClass('ml-auto');
+  expect(sendButton).not.toHaveClass('h-11', 'w-full');
+  await act(async () => {
+    fireEvent.touchStart(sendButton, { changedTouches: [{ clientX: 20, clientY: 20 }] });
+    fireEvent.touchEnd(sendButton, { changedTouches: [{ clientX: 20, clientY: 20 }] });
+  });
+  expect(composer).not.toBeInTheDocument();
   await waitFor(() => expect(submittedPrompts).toEqual(['line one']));
+});
+
+it('does not submit the mobile composer when a touch turns into a scroll', async () => {
+  const submittedPrompts: string[] = [];
+  mockMobileTextEntryViewport();
+  mockApi({ submittedPrompts });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: 'line one' } });
+
+  const sendButton = screen.getByRole('button', { name: 'Send message' });
+  fireEvent.touchStart(sendButton, { changedTouches: [{ clientX: 20, clientY: 20 }] });
+  fireEvent.touchMove(sendButton, { changedTouches: [{ clientX: 20, clientY: 42 }] });
+  fireEvent.touchEnd(sendButton, { changedTouches: [{ clientX: 20, clientY: 42 }] });
+
+  expect(submittedPrompts).toEqual([]);
+  expect(composer).toHaveValue('line one');
 });
 
 it('blurs and clears the composer before waiting for post-submit refreshes', async () => {
@@ -99,7 +124,8 @@ it('blurs and clears the composer before waiting for post-submit refreshes', asy
   fireEvent.keyDown(composer, { key: 'Enter' });
 
   await waitFor(() => expect(submittedPrompts).toEqual(['follow up']));
-  expect(composer).toHaveValue('');
+  expect(composer).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...')).toHaveValue('');
   expect(document.activeElement).not.toBe(composer);
 });
 
