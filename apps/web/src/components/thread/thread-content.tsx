@@ -142,13 +142,10 @@ function UserMessageCard(props: {
       </div>
       {props.editingMessageId === message.id ? (
         <div className="grid gap-2">
-          {/* Chrome mobile can ignore autocomplete="off" and still show password/card suggestions.
-             Use new-password on freeform work inputs to avoid offering saved credentials. */}
           <Textarea
             className="min-h-24"
             value={props.messageDraft}
             onChange={(event) => props.onMessageDraftChange(event.target.value)}
-            autoComplete="new-password"
             autoFocus
           />
           <div className="flex justify-end gap-2">

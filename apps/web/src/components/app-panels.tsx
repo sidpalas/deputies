@@ -509,15 +509,12 @@ export function NewThreadPanel(props: {
           Assign follow-ups, watch the work trail, and inspect the results.
         </p>
         <h2 className="mt-6 text-xl font-semibold">What needs doing?</h2>
-        <form className="mt-4 grid gap-3" onSubmit={props.onSubmit} autoComplete="off">
-          {/* Chrome mobile can ignore autocomplete="off" and still show password/card suggestions.
-             Use new-password on freeform work inputs to avoid offering saved credentials. */}
+        <form className="mt-4 grid gap-3" onSubmit={props.onSubmit}>
           <Input
             value={props.repository}
             onChange={(event) => props.onRepositoryChange(event.target.value)}
             placeholder="GitHub repository, e.g. owner/repo or https://github.com/owner/repo"
             disabled={!props.canCallApi}
-            autoComplete="new-password"
           />
           <Textarea
             className="min-h-40"
@@ -526,7 +523,6 @@ export function NewThreadPanel(props: {
             onKeyDown={(event) => submitOnEnter(event)}
             placeholder="Ask Deputies to investigate, change code, or answer a question..."
             disabled={!props.canCallApi}
-            autoComplete="new-password"
             autoFocus
           />
           <Button
@@ -607,11 +603,8 @@ export function MessageComposer(props: {
       onFocus={() => props.onFocusChange(true)}
       onBlur={handleBlur}
       onSubmit={handleSubmit}
-      autoComplete="off"
     >
       <Card className="overflow-hidden bg-card/90">
-        {/* Chrome mobile can ignore autocomplete="off" and still show password/card suggestions.
-           Use new-password on freeform work inputs to avoid offering saved credentials. */}
         <Textarea
           key={promptResetKey}
           className="min-h-28 border-0 bg-transparent focus:ring-0"
@@ -624,7 +617,6 @@ export function MessageComposer(props: {
               : 'Ask your deputy to investigate, change code, or follow up...'
           }
           disabled={props.archived}
-          autoComplete="new-password"
         />
         <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
           <Input
@@ -633,7 +625,6 @@ export function MessageComposer(props: {
             onChange={(event) => setRepository(event.target.value)}
             placeholder={props.hasSelectedRepository ? 'Override repo...' : 'GitHub repo, e.g. owner/repo'}
             disabled={props.archived}
-            autoComplete="new-password"
           />
           {props.archived ? (
             <span className="min-w-full text-center sm:min-w-0 sm:flex-1 sm:text-left">
