@@ -146,6 +146,7 @@ function UserMessageCard(props: {
             className="min-h-24"
             value={props.messageDraft}
             onChange={(event) => props.onMessageDraftChange(event.target.value)}
+            autoComplete="off"
             autoFocus
           />
           <div className="flex justify-end gap-2">

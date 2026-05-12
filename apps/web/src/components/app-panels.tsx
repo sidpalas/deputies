@@ -509,12 +509,13 @@ export function NewThreadPanel(props: {
           Assign follow-ups, watch the work trail, and inspect the results.
         </p>
         <h2 className="mt-6 text-xl font-semibold">What needs doing?</h2>
-        <form className="mt-4 grid gap-3" onSubmit={props.onSubmit}>
+        <form className="mt-4 grid gap-3" onSubmit={props.onSubmit} autoComplete="off">
           <Input
             value={props.repository}
             onChange={(event) => props.onRepositoryChange(event.target.value)}
             placeholder="GitHub repository, e.g. owner/repo or https://github.com/owner/repo"
             disabled={!props.canCallApi}
+            autoComplete="off"
           />
           <Textarea
             className="min-h-40"
@@ -523,6 +524,7 @@ export function NewThreadPanel(props: {
             onKeyDown={(event) => submitOnEnter(event)}
             placeholder="Ask Deputies to investigate, change code, or answer a question..."
             disabled={!props.canCallApi}
+            autoComplete="off"
             autoFocus
           />
           <Button
@@ -603,6 +605,7 @@ export function MessageComposer(props: {
       onFocus={() => props.onFocusChange(true)}
       onBlur={handleBlur}
       onSubmit={handleSubmit}
+      autoComplete="off"
     >
       <Card className="overflow-hidden bg-card/90">
         <Textarea
@@ -617,6 +620,7 @@ export function MessageComposer(props: {
               : 'Ask your deputy to investigate, change code, or follow up...'
           }
           disabled={props.archived}
+          autoComplete="off"
         />
         <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
           <Input
@@ -625,6 +629,7 @@ export function MessageComposer(props: {
             onChange={(event) => setRepository(event.target.value)}
             placeholder={props.hasSelectedRepository ? 'Override repo...' : 'GitHub repo, e.g. owner/repo'}
             disabled={props.archived}
+            autoComplete="off"
           />
           {props.archived ? (
             <span className="min-w-full text-center sm:min-w-0 sm:flex-1 sm:text-left">
