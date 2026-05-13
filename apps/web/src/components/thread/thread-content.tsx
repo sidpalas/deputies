@@ -381,7 +381,7 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
 }
 
 function JsonPayload(props: { value: unknown }) {
-  return <HighlightedCode code={JSON.stringify(props.value, null, 2)} language="json" wrap chrome={false} />;
+  return <DiagnosticCode code={JSON.stringify(props.value, null, 2)} language="json" label="Scrollable diagnostic debug details" />;
 }
 
 type DiagnosticActivity = {
@@ -479,6 +479,7 @@ function Diagnostics(props: { events: AgentEvent[] }) {
 
 const DIAGNOSTIC_SCROLL_TEXT_LENGTH = 480;
 const DIAGNOSTIC_SCROLL_LINE_COUNT = 8;
+const DIAGNOSTIC_MAX_TEXT_LENGTH = 2000;
 
 function DiagnosticActivityCard(props: { activity: DiagnosticActivity }) {
   const { activity } = props;
@@ -493,7 +494,7 @@ function DiagnosticActivityCard(props: { activity: DiagnosticActivity }) {
         </div>
         <Badge className={diagnosticStatusClass(activity.status)}>{diagnosticStatusLabel(activity.status)}</Badge>
       </div>
-      {activity.command ? <HighlightedCode code={activity.command} language="bash" wrap chrome={false} /> : null}
+      {activity.command ? <DiagnosticCode code={activity.command} language="bash" label="Scrollable diagnostic command" /> : null}
       {activity.detail ? <DiagnosticText text={activity.detail} /> : null}
       {activity.error ? <DiagnosticText text={activity.error} tone="error" /> : null}
       <details className="mt-2 min-w-0">
@@ -514,7 +515,8 @@ function DiagnosticActivityCard(props: { activity: DiagnosticActivity }) {
 }
 
 function DiagnosticText(props: { text: string; tone?: 'error' }) {
-  const isLong = isLongDiagnosticText(props.text);
+  const text = truncateDiagnosticText(props.text);
+  const isLong = isLongDiagnosticText(text);
   const textClassName = cn(
     'whitespace-pre-wrap break-words text-sm leading-6',
     props.tone === 'error' ? 'text-destructive' : 'text-muted-foreground',
@@ -529,7 +531,7 @@ function DiagnosticText(props: { text: string; tone?: 'error' }) {
           textClassName,
         )}
       >
-        {props.text}
+        {text}
       </p>
     );
   }
@@ -543,7 +545,19 @@ function DiagnosticText(props: { text: string; tone?: 'error' }) {
       aria-label={props.tone === 'error' ? 'Scrollable diagnostic error' : 'Scrollable diagnostic output'}
       role="region"
     >
-      <p className={textClassName}>{props.text}</p>
+      <p className={textClassName}>{text}</p>
+    </div>
+  );
+}
+
+function DiagnosticCode(props: { code: string; language: string; label: string }) {
+  return (
+    <div
+      className="mt-2 max-h-56 min-w-0 overflow-auto rounded-md border border-border bg-muted/30 overscroll-contain"
+      aria-label={props.label}
+      role="region"
+    >
+      <HighlightedCode code={truncateDiagnosticText(props.code)} language={props.language} wrap chrome={false} />
     </div>
   );
 }
@@ -754,6 +768,12 @@ function singleLine(value: string, maxLength: number): string {
 function truncateText(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function truncateDiagnosticText(value: string): string {
+  if (value.length <= DIAGNOSTIC_MAX_TEXT_LENGTH) return value;
+  const omitted = value.length - DIAGNOSTIC_MAX_TEXT_LENGTH;
+  return `${value.slice(0, DIAGNOSTIC_MAX_TEXT_LENGTH)}\n... truncated ${omitted} characters`;
 }
 
 function humanizeEventName(value: string): string {

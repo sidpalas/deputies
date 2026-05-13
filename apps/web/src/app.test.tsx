@@ -1286,6 +1286,53 @@ it('contains long diagnostic output in a scrollable panel', async () => {
   expect(panel).toHaveTextContent('line 12:');
 });
 
+it('caps long diagnostic commands inside a scrollable panel', async () => {
+  const longCommand = `python3 - <<'PY'\n${'print("synthetic sunset")\n'.repeat(180)}PY`;
+  mockApi({
+    messages: [
+      messageFixture({
+        id: '00000000-0000-4000-8000-000000000128',
+        sequence: 1,
+        status: 'failed',
+        prompt: 'generate an image',
+      }),
+    ],
+    events: [
+      eventFixture({
+        sequence: 1,
+        type: 'message_started',
+        runId: '00000000-0000-4000-8000-000000000228',
+        messageId: '00000000-0000-4000-8000-000000000128',
+        payload: { sequences: [1], batchSize: 1 },
+      }),
+      eventFixture({
+        sequence: 2,
+        type: 'tool_started',
+        runId: '00000000-0000-4000-8000-000000000228',
+        messageId: '00000000-0000-4000-8000-000000000128',
+        payload: { toolName: 'shell', toolCallId: 'tool-1', args: { command: longCommand } },
+      }),
+      eventFixture({
+        sequence: 3,
+        type: 'tool_finished',
+        runId: '00000000-0000-4000-8000-000000000228',
+        messageId: '00000000-0000-4000-8000-000000000128',
+        payload: { toolName: 'shell', toolCallId: 'tool-1', isError: true, result: 'ModuleNotFoundError: No module named PIL' },
+      }),
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByText(/Activity · 3 events/));
+
+  const panel = screen.getByRole('region', { name: 'Scrollable diagnostic command' });
+  expect(panel).toHaveClass('max-h-56');
+  expect(panel).toHaveClass('overflow-auto');
+  expect(panel).toHaveTextContent('python3 - <<');
+  expect(panel).toHaveTextContent('truncated');
+  expect(panel.textContent!.length).toBeLessThan(longCommand.length);
+});
+
 it('identifies upstream sandbox provider failures during sandbox startup', async () => {
   mockApi({
     messages: [
