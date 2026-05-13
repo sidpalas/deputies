@@ -223,7 +223,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       now: new Date(),
     });
     await setAuthSessionCookie(c, config, services.store, user.id);
-    return c.redirect(config.authSuccessRedirectUrl ?? '/', 302);
+    return c.html(oauthSuccessHtml(config.authSuccessRedirectUrl ?? '/'));
   });
 
   app.post('/auth/logout', async (c) => {
@@ -1266,6 +1266,31 @@ function serializeAuthUser(user: AuthUserRecord) {
 function githubOAuthCallbackUrl(c: Context, config: AppConfig): string {
   if (config.githubAppCallbackUrl) return config.githubAppCallbackUrl;
   return new URL('/auth/oauth/github/callback', c.req.url).toString();
+}
+
+function oauthSuccessHtml(redirectUrl: string): string {
+  const escapedUrl = escapeHtmlAttribute(redirectUrl);
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="refresh" content="0; url=${escapedUrl}">
+    <title>Sign in complete</title>
+  </head>
+  <body>
+    <p>Sign in complete. Redirecting to <a href="${escapedUrl}">Deputies</a>.</p>
+    <script>window.location.replace(${JSON.stringify(redirectUrl)});</script>
+  </body>
+</html>`;
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function isAllowedGitHubLogin(username: string, organizations: string[], config: AppConfig): boolean {

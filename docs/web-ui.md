@@ -79,6 +79,10 @@ PREVIEW_BASE_DOMAIN=example.com
 PREVIEW_TRUST_FORWARDED_HOSTS=false
 ```
 
+On Railway with Cloudflare DNS, add both custom domains to the web entrypoint service: `app.example.com` and `*.example.com`. The wildcard CNAME should point directly to Railway's provided target, and Railway's `_acme-challenge` CNAME must remain DNS-only so certificate issuance and renewal can complete. If a wildcard preview host returns a TLS handshake error before any HTTP status, Railway has not finished validating or serving the wildcard certificate yet.
+
+After changing `AUTH_COOKIE_DOMAIN`, existing browser sessions may still hold an old host-only cookie for the app domain. Log out and back in, or clear cookies for the app and preview domains. A valid production session cookie should be scoped to `.example.com` so it is sent to both `app.example.com` and `p-<session>.example.com`.
+
 The Deputies web dev server moves its own Vite HMR socket to `/__deputies_vite_hmr` so preview app WebSocket upgrades on `/` can pass through the preview proxy. For Vite apps running inside a sandbox, avoid hard-coding `server.hmr.host`, `server.hmr.clientPort`, or `server.hmr.protocol` to `localhost`; let Vite infer the preview browser URL.
 
 If you keep using plain Vite without a wildcard proxy, keep `AUTH_COOKIE_SECURE=false` and use an HTTP `WEB_BASE_URL`/`AUTH_SUCCESS_REDIRECT_URL` instead.

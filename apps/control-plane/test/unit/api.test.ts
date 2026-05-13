@@ -165,9 +165,10 @@ describe('core API', () => {
       `${baseUrl}/auth/oauth/github/callback?code=oauth-code&state=${encodeURIComponent(state!)}`,
       { redirect: 'manual' },
     );
-    expect(callback.status).toBe(302);
+    expect(callback.status).toBe(200);
     const cookie = callback.headers.get('set-cookie');
     expect(cookie).toContain('dev_deputies_session=');
+    await expect(callback.text()).resolves.toContain('Sign in complete');
 
     const me = await fetch(`${baseUrl}/auth/me`, { headers: { cookie: cookie! } });
     expect(me.status).toBe(200);
