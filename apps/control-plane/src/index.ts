@@ -232,6 +232,7 @@ async function createRunner(): Promise<Runner> {
   return new FlueRunner(new RealFlueAgentFactory(options), {
     repositoryAccess: createRepositoryAccess(),
     ...(artifactObjectStorage ? { artifacts: services.artifacts } : {}),
+    externalResources: services.externalResources,
     artifactToolMaxBytes: config.artifactToolMaxBytes,
   });
 }

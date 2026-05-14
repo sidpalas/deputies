@@ -175,6 +175,18 @@ export type ArtifactRecord = {
   payload: Record<string, unknown>;
 };
 
+export type ExternalResourceRecord = {
+  id: string;
+  sessionId: string;
+  runId?: string;
+  messageId?: string;
+  type: string;
+  title?: string;
+  url: string;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
 export type CallbackDeliveryRecord = {
   id: string;
   sessionId: string;
@@ -249,6 +261,18 @@ export type CreateArtifactRecord = {
   title?: string;
   url?: string;
   storageKey?: string;
+};
+
+export type CreateExternalResourceRecord = {
+  id: string;
+  sessionId: string;
+  type: string;
+  url: string;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+  runId?: string;
+  messageId?: string;
+  title?: string;
 };
 
 export type CreateCallbackDeliveryRecord = {
@@ -375,6 +399,9 @@ export interface AppStore extends SessionStore, MessageStore, RunStore, SandboxS
 
   createArtifact(record: CreateArtifactRecord): Promise<ArtifactRecord>;
   getArtifacts(sessionId: string): Promise<ArtifactRecord[]>;
+
+  createExternalResource(record: CreateExternalResourceRecord): Promise<ExternalResourceRecord>;
+  getExternalResources(sessionId: string): Promise<ExternalResourceRecord[]>;
 
   createWebhookSource(record: CreateWebhookSourceRecord): Promise<WebhookSourceRecord>;
   getWebhookSource(key: string): Promise<WebhookSourceRecord | null>;

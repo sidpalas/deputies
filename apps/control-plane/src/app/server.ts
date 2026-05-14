@@ -27,6 +27,7 @@ import {
   type AppConfig,
 } from '../config/index.js';
 import { EventService } from '../events/service.js';
+import { ExternalResourceService } from '../external-resources/service.js';
 import { GenericWebhookError, GenericWebhookService } from '../integrations/generic-webhook/service.js';
 import { type GitHubArchivedSessionNotifier } from '../integrations/github/archived-session-notifier.js';
 import { verifyGitHubWebhookSignature } from '../integrations/github/webhook-auth.js';
@@ -74,6 +75,7 @@ export type AppServices = {
   sessions: SessionService;
   messages: MessageService;
   artifacts: ArtifactService;
+  externalResources: ExternalResourceService;
   genericWebhooks: GenericWebhookService;
   callbacks: CallbackService;
   sandboxProvider?: SandboxProvider;
@@ -97,6 +99,7 @@ export function createServices(
     sessions,
     messages,
     artifacts: new ArtifactService(store, events, options.artifactObjectStorage),
+    externalResources: new ExternalResourceService(store, events),
     genericWebhooks: new GenericWebhookService(store, sessions, messages),
     callbacks: new CallbackService(store, events),
   };
@@ -591,6 +594,15 @@ export function createApp(config: AppConfig, services = createServices()) {
 
     const artifacts = await services.artifacts.list(sessionId);
     return c.json({ artifacts });
+  });
+
+  app.get('/sessions/:sessionId/external-resources', async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const session = await services.sessions.get(sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+
+    const externalResources = await services.externalResources.list(sessionId);
+    return c.json({ externalResources });
   });
 
   app.get('/sessions/:sessionId/artifacts/:artifactId/download', async (c) => {

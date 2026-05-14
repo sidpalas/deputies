@@ -75,6 +75,18 @@ export type SandboxPreview = {
   path?: string;
 };
 
+export type ExternalResource = {
+  id: string;
+  sessionId: string;
+  type: string;
+  url: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  title?: string;
+  runId?: string;
+  messageId?: string;
+};
+
 export type CallbackDelivery = {
   id: string;
   sessionId: string;
@@ -296,6 +308,13 @@ export async function getArtifactPreview(input: {
 export async function listPreviews(sessionId: string, token: string): Promise<SandboxPreview[]> {
   const body = await request<{ previews: SandboxPreview[] }>(`/sessions/${sessionId}/previews`, { token });
   return body.previews;
+}
+
+export async function listExternalResources(sessionId: string, token: string): Promise<ExternalResource[]> {
+  const body = await request<{ externalResources: ExternalResource[] }>(`/sessions/${sessionId}/external-resources`, {
+    token,
+  });
+  return body.externalResources;
 }
 
 export async function listCallbacks(sessionId: string, token: string): Promise<CallbackDelivery[]> {

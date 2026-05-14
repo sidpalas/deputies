@@ -60,6 +60,10 @@ export const publicApiResponseSchemas = {
     description: 'Artifact list envelope.',
     fields: { artifacts: 'array' },
   },
+  externalResources: {
+    description: 'External resource list envelope.',
+    fields: { externalResources: 'array' },
+  },
   previews: {
     description: 'Published sandbox preview list envelope.',
     fields: { previews: 'array' },

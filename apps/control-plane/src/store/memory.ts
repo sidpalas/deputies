@@ -8,8 +8,10 @@ import type {
   CallbackDeliveryRecord,
   CreateArtifactRecord,
   CreateCallbackDeliveryRecord,
+  CreateExternalResourceRecord,
   CreateSandboxRecord,
   CreateWebhookSourceRecord,
+  ExternalResourceRecord,
   ExternalThreadRecord,
   IntegrationDeliveryRecord,
   EventRecord,
@@ -39,6 +41,7 @@ export class MemoryStore implements AppStore {
   private nextEventId = 1;
   private readonly sandboxes = new Map<string, SandboxRecord>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
+  private readonly externalResources = new Map<string, ExternalResourceRecord>();
   private readonly callbacks = new Map<string, CallbackDeliveryRecord>();
   private readonly webhookSources = new Map<string, WebhookSourceRecord>();
   private readonly externalThreads = new Map<string, ExternalThreadRecord>();
@@ -440,6 +443,16 @@ export class MemoryStore implements AppStore {
 
   async getArtifacts(sessionId: string): Promise<ArtifactRecord[]> {
     return Array.from(this.artifacts.values()).filter((artifact) => artifact.sessionId === sessionId);
+  }
+
+  async createExternalResource(record: CreateExternalResourceRecord): Promise<ExternalResourceRecord> {
+    if (this.externalResources.has(record.id)) throw new Error(`External resource already exists: ${record.id}`);
+    this.externalResources.set(record.id, record);
+    return record;
+  }
+
+  async getExternalResources(sessionId: string): Promise<ExternalResourceRecord[]> {
+    return Array.from(this.externalResources.values()).filter((resource) => resource.sessionId === sessionId);
   }
 
   async createCallbackDelivery(record: CreateCallbackDeliveryRecord): Promise<CallbackDeliveryRecord> {

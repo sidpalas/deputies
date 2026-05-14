@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolDef } from '@flue/sdk';
+import type { ExternalResourceService } from '../external-resources/service.js';
 import type { GitHubRepositoryAccess } from '../repositories/setup.js';
 import {
   getPreparedRepository,
@@ -27,9 +28,18 @@ export type GitHubCliResult = {
   stderr: string;
 };
 
+type GitHubCliToolOptions = {
+  runner?: GitHubCliRunner;
+  fetchImpl?: typeof fetch;
+  externalResources?: ExternalResourceService;
+  sessionId?: string;
+  runId?: string;
+  messageId?: string;
+};
+
 export function createGitHubCliTool(
   repository: RepositoryToolServices,
-  options: { runner?: GitHubCliRunner; fetchImpl?: typeof fetch } = {},
+  options: GitHubCliToolOptions = {},
 ): ToolDef {
   return {
     name: 'gh',
@@ -55,7 +65,7 @@ export function createGitHubCliTool(
       const args = validateArgs(params.args);
       const access = await resolveActiveRepositoryAccess(repository);
       if (isPullRequestCreateCommand(args)) {
-        return createPullRequest(repository, access, args, options.fetchImpl ?? fetch, signal);
+        return createPullRequest(repository, access, args, options.fetchImpl ?? fetch, options, signal);
       }
       if (isPullRequestUpdateCommand(args)) {
         return updatePullRequest(repository, access, args, options.fetchImpl ?? fetch, signal);
@@ -121,6 +131,7 @@ async function createPullRequest(
   access: GitHubRepositoryAccess,
   args: string[],
   fetchImpl: typeof fetch,
+  options: GitHubCliToolOptions,
   signal?: AbortSignal,
 ): Promise<string> {
   const input = await parsePullRequestCreateInput(repository, access, args, fetchImpl, signal);
@@ -139,7 +150,36 @@ async function createPullRequest(
     typeof body.html_url === 'string'
       ? body.html_url
       : `https://github.com/${access.owner}/${access.repo}/pull/${body.number ?? ''}`;
+  await recordPullRequestExternalResource(options, access, input, url, body.number);
   return formatResult({ exitCode: 0, stdout: url, stderr: '' }, access.auth.token);
+}
+
+async function recordPullRequestExternalResource(
+  options: GitHubCliToolOptions,
+  access: GitHubRepositoryAccess,
+  input: PullRequestCreateInput,
+  url: string,
+  number: number | undefined,
+): Promise<void> {
+  if (!options.externalResources || !options.sessionId) return;
+
+  await options.externalResources.create({
+    sessionId: options.sessionId,
+    ...(options.runId ? { runId: options.runId } : {}),
+    ...(options.messageId ? { messageId: options.messageId } : {}),
+    type: 'pull_request',
+    title: input.title,
+    url,
+    metadata: {
+      provider: 'github',
+      owner: access.owner,
+      repo: access.repo,
+      number,
+      branch: input.head,
+      base: input.base,
+      draft: input.draft ?? false,
+    },
+  });
 }
 
 type PullRequestCreateInput = {

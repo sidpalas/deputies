@@ -5,6 +5,7 @@ import {
   AgentEvent,
   Artifact,
   CallbackDelivery,
+  ExternalResource,
   Message,
   SandboxPreview,
   Session,
@@ -22,6 +23,7 @@ import {
   listArtifacts,
   listCallbacks,
   listEvents,
+  listExternalResources,
   listMessages,
   listPreviews,
   listSessions,
@@ -95,6 +97,7 @@ export function App() {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [previews, setPreviews] = useState<SandboxPreview[]>([]);
+  const [externalResources, setExternalResources] = useState<ExternalResource[]>([]);
   const [callbacks, setCallbacks] = useState<CallbackDelivery[]>([]);
   const [newThreadPrompt, setNewThreadPrompt] = useState('');
   const [newThreadRepository, setNewThreadRepository] = useState('');
@@ -344,7 +347,7 @@ export function App() {
                 eventCursor.current = Math.max(eventCursor.current, event.sequence);
                 setEvents((current) => upsertEvent(current, event));
                 if (shouldRefreshSessionDetail(event.type)) {
-                  refreshMessagesArtifactsAndCallbacks(activeSessionId).catch(() => undefined);
+                  refreshSessionOutputs(activeSessionId).catch(() => undefined);
                 }
               }
 
@@ -422,19 +425,22 @@ export function App() {
   async function refreshSessionDetail(sessionId: string) {
     setError('');
     try {
-      const [nextMessages, nextEvents, nextArtifacts, nextPreviews, nextCallbacks] = await Promise.all([
-        listMessages(sessionId, token),
-        listEvents(sessionId, token),
-        listArtifacts(sessionId, token),
-        listPreviews(sessionId, token),
-        listCallbacks(sessionId, token),
-      ]);
+      const [nextMessages, nextEvents, nextArtifacts, nextPreviews, nextExternalResources, nextCallbacks] =
+        await Promise.all([
+          listMessages(sessionId, token),
+          listEvents(sessionId, token),
+          listArtifacts(sessionId, token),
+          listPreviews(sessionId, token),
+          listExternalResources(sessionId, token),
+          listCallbacks(sessionId, token),
+        ]);
       if (selectedSessionIdRef.current !== sessionId) return;
       eventCursor.current = nextEvents.at(-1)?.sequence ?? 0;
       setMessages(nextMessages);
       setEvents(nextEvents);
       setArtifacts(nextArtifacts);
       setPreviews(nextPreviews);
+      setExternalResources(nextExternalResources);
       setCallbacks(nextCallbacks);
       setDetailLoadedSessionId(sessionId);
     } catch (err) {
@@ -442,7 +448,7 @@ export function App() {
     }
   }
 
-  async function refreshMessagesArtifactsAndCallbacks(sessionId: string) {
+  async function refreshSessionOutputs(sessionId: string) {
     if (detailRefreshInFlightRef.current) {
       detailRefreshQueuedSessionIdRef.current = sessionId;
       return;
@@ -450,16 +456,18 @@ export function App() {
 
     detailRefreshInFlightRef.current = sessionId;
     try {
-      const [nextMessages, nextArtifacts, nextPreviews, nextCallbacks] = await Promise.all([
+      const [nextMessages, nextArtifacts, nextPreviews, nextExternalResources, nextCallbacks] = await Promise.all([
         listMessages(sessionId, token),
         listArtifacts(sessionId, token),
         listPreviews(sessionId, token),
+        listExternalResources(sessionId, token),
         listCallbacks(sessionId, token),
       ]);
       if (selectedSessionIdRef.current === sessionId) {
         setMessages(nextMessages);
         setArtifacts(nextArtifacts);
         setPreviews(nextPreviews);
+        setExternalResources(nextExternalResources);
         setCallbacks(nextCallbacks);
       }
     } finally {
@@ -467,7 +475,7 @@ export function App() {
       const queuedSessionId = detailRefreshQueuedSessionIdRef.current;
       detailRefreshQueuedSessionIdRef.current = null;
       if (queuedSessionId && queuedSessionId === selectedSessionIdRef.current) {
-        refreshMessagesArtifactsAndCallbacks(queuedSessionId).catch(() => undefined);
+        refreshSessionOutputs(queuedSessionId).catch(() => undefined);
       }
     }
   }
@@ -500,6 +508,7 @@ export function App() {
       setEvents([]);
       setArtifacts([]);
       setPreviews([]);
+      setExternalResources([]);
       setCallbacks([]);
       eventCursor.current = 0;
       setIsCreatingThread(false);
@@ -705,6 +714,7 @@ export function App() {
     setEvents([]);
     setArtifacts([]);
     setPreviews([]);
+    setExternalResources([]);
     setCallbacks([]);
   }
 
@@ -720,6 +730,7 @@ export function App() {
     setEvents([]);
     setArtifacts([]);
     setPreviews([]);
+    setExternalResources([]);
     setCallbacks([]);
     eventCursor.current = 0;
   }
@@ -783,6 +794,7 @@ export function App() {
   type SessionStatusRollback = {
     artifacts: Artifact[];
     previews: SandboxPreview[];
+    externalResources: ExternalResource[];
     callbacks: CallbackDelivery[];
     events: AgentEvent[];
     isCreatingThread: boolean;
@@ -797,6 +809,7 @@ export function App() {
     const rollback = {
       artifacts,
       previews,
+      externalResources,
       callbacks,
       events,
       isCreatingThread,
@@ -822,6 +835,7 @@ export function App() {
       setEvents(rollback.events);
       setArtifacts(rollback.artifacts);
       setPreviews(rollback.previews);
+      setExternalResources(rollback.externalResources);
       setCallbacks(rollback.callbacks);
     }
   }
@@ -832,6 +846,7 @@ export function App() {
     const rollback = {
       artifacts,
       previews,
+      externalResources,
       callbacks,
       events,
       isCreatingThread,
@@ -857,6 +872,7 @@ export function App() {
       setEvents([]);
       setArtifacts([]);
       setPreviews([]);
+      setExternalResources([]);
       setCallbacks([]);
       eventCursor.current = 0;
     }
@@ -1036,6 +1052,7 @@ export function App() {
                                   repository={selectedRepository}
                                   artifacts={artifacts}
                                   previews={previews}
+                                  externalResources={externalResources}
                                   callbacks={callbacks}
                                   onReplayCallback={handleReplayCallback}
                                 />
@@ -1093,6 +1110,7 @@ export function App() {
                           repository={selectedRepository}
                           artifacts={artifacts}
                           previews={previews}
+                          externalResources={externalResources}
                           callbacks={callbacks}
                           onReplayCallback={handleReplayCallback}
                         />
@@ -1158,6 +1176,7 @@ function shouldRefreshSessionDetail(eventType: string): boolean {
     'run_cancel_requested',
     'run_cancelled',
     'artifact_created',
+    'external_resource_created',
     'callback_sent',
     'callback_retry_scheduled',
     'callback_failed',

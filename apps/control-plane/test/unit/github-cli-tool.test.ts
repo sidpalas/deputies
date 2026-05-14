@@ -27,13 +27,20 @@ describe('GitHub CLI Flue tool', () => {
 
   it('creates pull requests through the GitHub API', async () => {
     const requests: Array<{ url: string; init: RequestInit }> = [];
+    const createExternalResource = vi.fn(async () => ({}));
     const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
       requests.push({ url: String(url), init: init ?? {} });
-      return new Response(JSON.stringify({ html_url: 'https://github.com/manaflow-ai/manaflow/pull/7' }), {
+      return new Response(JSON.stringify({ html_url: 'https://github.com/manaflow-ai/manaflow/pull/7', number: 7 }), {
         status: 201,
       });
     };
-    const tool = createGitHubCliTool(repositoryServices(), { fetchImpl });
+    const tool = createGitHubCliTool(repositoryServices(), {
+      fetchImpl,
+      externalResources: { create: createExternalResource } as never,
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+    });
     const abort = new AbortController();
 
     const result = await tool.execute(
@@ -67,6 +74,23 @@ describe('GitHub CLI Flue tool', () => {
       head: 'sp/feature',
       base: 'main',
       draft: true,
+    });
+    expect(createExternalResource).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      type: 'pull_request',
+      title: 'Add feature',
+      url: 'https://github.com/manaflow-ai/manaflow/pull/7',
+      metadata: {
+        provider: 'github',
+        owner: 'manaflow-ai',
+        repo: 'manaflow',
+        number: 7,
+        branch: 'sp/feature',
+        base: 'main',
+        draft: true,
+      },
     });
   });
 

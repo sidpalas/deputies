@@ -9,6 +9,7 @@ import type {
   CallbackDeliveryStatus,
   CreateArtifactRecord,
   CreateCallbackDeliveryRecord,
+  CreateExternalResourceRecord,
   ClaimedMessage,
   ClaimedMessageBatch,
   CreateMessageRecord,
@@ -16,6 +17,7 @@ import type {
   CreateSessionRecord,
   CreateWebhookSourceRecord,
   EventRecord,
+  ExternalResourceRecord,
   ExternalThreadRecord,
   IntegrationDeliveryRecord,
   MessageRecord,
@@ -122,6 +124,18 @@ type ArtifactRow = QueryResultRow & {
   url: string | null;
   storage_key: string | null;
   payload: Record<string, unknown>;
+  created_at: Date;
+};
+
+type ExternalResourceRow = QueryResultRow & {
+  id: string;
+  session_id: string;
+  run_id: string | null;
+  message_id: string | null;
+  type: string;
+  title: string | null;
+  url: string;
+  metadata: Record<string, unknown>;
   created_at: Date;
 };
 
@@ -856,6 +870,37 @@ export class PostgresStore implements AppStore {
     return result.rows.map(toArtifact);
   }
 
+  async createExternalResource(record: CreateExternalResourceRecord): Promise<ExternalResourceRecord> {
+    const result = await this.pool.query<ExternalResourceRow>(
+      `INSERT INTO external_resources (id, session_id, run_id, message_id, type, title, url, metadata, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, session_id, run_id, message_id, type, title, url, metadata, created_at`,
+      [
+        record.id,
+        record.sessionId,
+        record.runId ?? null,
+        record.messageId ?? null,
+        record.type,
+        record.title ?? null,
+        record.url,
+        record.metadata,
+        record.createdAt,
+      ],
+    );
+    return toExternalResource(result.rows[0]!);
+  }
+
+  async getExternalResources(sessionId: string): Promise<ExternalResourceRecord[]> {
+    const result = await this.pool.query<ExternalResourceRow>(
+      `SELECT id, session_id, run_id, message_id, type, title, url, metadata, created_at
+       FROM external_resources
+       WHERE session_id = $1
+       ORDER BY created_at ASC`,
+      [sessionId],
+    );
+    return result.rows.map(toExternalResource);
+  }
+
   async createCallbackDelivery(record: CreateCallbackDeliveryRecord): Promise<CallbackDeliveryRecord> {
     const result = await this.pool.query<CallbackDeliveryRow>(
       `INSERT INTO callback_deliveries (id, session_id, run_id, message_id, target_type, target, status, event_type, payload, created_at, updated_at, next_attempt_at, max_attempts)
@@ -1389,6 +1434,21 @@ function toArtifact(row: ArtifactRow): ArtifactRecord {
   if (row.title) record.title = row.title;
   if (row.url) record.url = row.url;
   if (row.storage_key) record.storageKey = row.storage_key;
+  return record;
+}
+
+function toExternalResource(row: ExternalResourceRow): ExternalResourceRecord {
+  const record: ExternalResourceRecord = {
+    id: row.id,
+    sessionId: row.session_id,
+    type: row.type,
+    url: row.url,
+    metadata: row.metadata,
+    createdAt: row.created_at,
+  };
+  if (row.run_id) record.runId = row.run_id;
+  if (row.message_id) record.messageId = row.message_id;
+  if (row.title) record.title = row.title;
   return record;
 }
 

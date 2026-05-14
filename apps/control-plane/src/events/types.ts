@@ -38,6 +38,7 @@ export type NormalizedEventPayloadMap = {
   tool_started: ToolStartedPayload;
   tool_finished: ToolFinishedPayload;
   artifact_created: { artifact: ArtifactPayload };
+  external_resource_created: { resource: ExternalResourcePayload };
   run_completed: { runner: string };
   run_failed: { error: string; recovered?: true };
   run_cancel_requested: { sequences: number[]; batchSize: number };
@@ -95,6 +96,18 @@ type ArtifactPayload = {
   payload: Record<string, unknown>;
 };
 
+type ExternalResourcePayload = {
+  id: string;
+  sessionId: string;
+  runId?: string;
+  messageId?: string;
+  type: string;
+  title?: string;
+  url: string;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
 type CallbackPayload = {
   deliveryId: string;
   targetType: string;
@@ -125,6 +138,7 @@ export type NormalizedEventType =
   | 'tool_started'
   | 'tool_finished'
   | 'artifact_created'
+  | 'external_resource_created'
   | 'run_completed'
   | 'run_failed'
   | 'run_cancel_requested'

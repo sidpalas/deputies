@@ -1,6 +1,7 @@
 import type { FlueEvent } from '@flue/sdk';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ArtifactService } from '../artifacts/service.js';
+import type { ExternalResourceService } from '../external-resources/service.js';
 import {
   prepareRepositoryShellSetup,
   type RepositoryAccessProvider,
@@ -19,6 +20,7 @@ export type FlueRunnerOptions = {
     github?: RepositoryAccessProvider;
   };
   artifacts?: ArtifactService;
+  externalResources?: ExternalResourceService;
   artifactToolMaxBytes?: number;
 };
 
@@ -73,7 +75,12 @@ export class FlueRunner implements Runner {
     if (repositoryServices) {
       tools.push(
         createRepositoryTool(repositoryServices),
-        createGitHubCliTool(repositoryServices),
+        createGitHubCliTool(repositoryServices, {
+          ...(this.options.externalResources ? { externalResources: this.options.externalResources } : {}),
+          sessionId: input.sessionId,
+          runId: input.runId,
+          messageId: input.messageId,
+        }),
         createGitTool({ agentRef, repository: repositoryServices }),
       );
     }

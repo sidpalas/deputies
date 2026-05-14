@@ -3,7 +3,15 @@ import type { AnchorHTMLAttributes, MouseEvent, ToggleEvent } from 'react';
 import { Check, ChevronDown, Copy, Download, ExternalLink, Play, RotateCcw, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { AgentEvent, Artifact, ArtifactPreview, CallbackDelivery, Message, SandboxPreview } from '../../api.js';
+import type {
+  AgentEvent,
+  Artifact,
+  ArtifactPreview,
+  CallbackDelivery,
+  ExternalResource,
+  Message,
+  SandboxPreview,
+} from '../../api.js';
 import { getApiBaseUrl } from '../../api.js';
 import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
@@ -838,6 +846,7 @@ export function MobileContextPanel(props: {
   repository: string | null;
   artifacts: Artifact[];
   previews: SandboxPreview[];
+  externalResources: ExternalResource[];
   callbacks: CallbackDelivery[];
   onReplayCallback: (callbackId: string) => void;
 }) {
@@ -853,6 +862,7 @@ export function DesktopContextPanel(props: {
   repository: string | null;
   artifacts: Artifact[];
   previews: SandboxPreview[];
+  externalResources: ExternalResource[];
   callbacks: CallbackDelivery[];
   onReplayCallback: (callbackId: string) => void;
 }) {
@@ -872,6 +882,7 @@ function ContextPanelContent(props: {
   repository: string | null;
   artifacts: Artifact[];
   previews: SandboxPreview[];
+  externalResources: ExternalResource[];
   callbacks: CallbackDelivery[];
   onReplayCallback: (callbackId: string) => void;
 }) {
@@ -908,8 +919,20 @@ function ContextPanelContent(props: {
         {!props.previews.length ? <p className="text-sm text-muted-foreground">No live preview available.</p> : null}
       </div>
       <div className="mt-6 border-b border-border pb-3 text-sm text-muted-foreground">
+        <strong className="block font-medium text-foreground">External resources</strong>
+        <span>Durable resources created outside the sandbox, such as pull requests.</span>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {props.externalResources.map((resource) => (
+          <ExternalResourceCard key={resource.id} resource={resource} />
+        ))}
+        {!props.externalResources.length ? (
+          <p className="text-sm text-muted-foreground">No external resources yet.</p>
+        ) : null}
+      </div>
+      <div className="mt-6 border-b border-border pb-3 text-sm text-muted-foreground">
         <strong className="block font-medium text-foreground">Artifacts</strong>
-        <span>Outputs and links created by the deputy appear here.</span>
+        <span>Downloadable or previewable files created by the deputy appear here.</span>
       </div>
       <div className="mt-3 grid gap-2">
         {props.artifacts.map((artifact) => (
@@ -996,6 +1019,35 @@ function PreviewCard(props: { preview: SandboxPreview; compact?: boolean }) {
         </div>
         <Button asChild size="sm" variant="secondary">
           <a href={props.preview.url} target="_blank" rel="noreferrer">
+            <ExternalLink className="h-3.5 w-3.5" /> Open
+          </a>
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function ExternalResourceCard(props: { resource: ExternalResource }) {
+  const { resource } = props;
+  const owner = stringPayloadValue(resource.metadata.owner);
+  const repo = stringPayloadValue(resource.metadata.repo);
+  const number = numberPayloadValue(resource.metadata.number);
+  const repository = owner && repo ? `${owner}/${repo}` : undefined;
+  const label = resourceLabel(resource);
+  const description = externalResourceDescription(resource, repository, number);
+  return (
+    <Card className="min-w-0 p-3">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <strong className="truncate text-sm text-foreground">{label}</strong>
+            <Badge>{externalResourceTypeLabel(resource.type)}</Badge>
+          </div>
+          <p className="mt-1 truncate text-xs text-muted-foreground">{description}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Created: {formatDate(resource.createdAt)}</p>
+        </div>
+        <Button asChild size="sm" variant="secondary">
+          <a href={resource.url} target="_blank" rel="noreferrer">
             <ExternalLink className="h-3.5 w-3.5" /> Open
           </a>
         </Button>
@@ -1428,6 +1480,33 @@ function fileNameFromContentDisposition(value: string | null): string | undefine
 
 function stringPayloadValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function numberPayloadValue(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined;
+}
+
+function resourceLabel(resource: ExternalResource): string {
+  const title = resource.title?.trim();
+  if (title) return title;
+  const number = numberPayloadValue(resource.metadata.number);
+  if (resource.type === 'pull_request' && number) return `Pull request #${number}`;
+  return resource.url;
+}
+
+function externalResourceTypeLabel(value: string): string {
+  if (value === 'pull_request') return 'PR';
+  return humanizeEventName(value);
+}
+
+function externalResourceDescription(
+  resource: ExternalResource,
+  repository: string | undefined,
+  number: number | undefined,
+): string {
+  if (!repository) return resource.url;
+  if (!number) return repository;
+  return `${repository} #${number}`;
 }
 
 function isActiveRunGroup(messages: Message[]): boolean {

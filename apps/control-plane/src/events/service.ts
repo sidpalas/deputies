@@ -24,6 +24,7 @@ const globalEventTypes = new Set<NormalizedEventType>([
   'run_cancel_requested',
   'run_cancelled',
   'artifact_created',
+  'external_resource_created',
   'callback_failed',
 ]);
 
