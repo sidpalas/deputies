@@ -23,18 +23,24 @@ export class SandboxLifecycleService {
     }
 
     const sandbox = await this.provider.create({ sessionId });
-    const now = new Date();
-    const record = await this.store.createSandbox({
-      id: randomUUID(),
-      sessionId,
-      provider: this.provider.name,
-      providerSandboxId: sandbox.providerSandboxId,
-      status: 'ready',
-      workspacePath: sandbox.workspacePath,
-      metadata: sandbox.metadata,
-      createdAt: now,
-      updatedAt: now,
-    });
+    let record: SandboxRecord;
+    try {
+      const now = new Date();
+      record = await this.store.createSandbox({
+        id: randomUUID(),
+        sessionId,
+        provider: this.provider.name,
+        providerSandboxId: sandbox.providerSandboxId,
+        status: 'ready',
+        workspacePath: sandbox.workspacePath,
+        metadata: sandbox.metadata,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } catch (error) {
+      await this.provider.destroy(sandbox).catch(() => undefined);
+      throw error;
+    }
 
     return { sandbox, record, created: true };
   }

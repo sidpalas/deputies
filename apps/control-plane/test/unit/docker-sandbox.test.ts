@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import {
   DockerSandboxProvider,
   HttpDockerOrchestratorClient,
@@ -128,7 +129,54 @@ describe('DockerSandboxProvider', () => {
       bridgeUrlMock.mockRestore();
     }
   });
+
+  it('removes a created container if bridge URL resolution fails and preserves the setup error', async () => {
+    vi.resetModules();
+    const commands: string[][] = [];
+    const spawnMock = vi.fn((command: string, args: string[]) => {
+      commands.push([command, ...args]);
+      return mockDockerProcess(args);
+    });
+    vi.doMock('node:child_process', () => ({ spawn: spawnMock }));
+
+    try {
+      const { InProcessDockerOrchestrator: MockedInProcessDockerOrchestrator } = await import(
+        '../../src/sandbox/docker.js'
+      );
+      const orchestrator = new MockedInProcessDockerOrchestrator();
+
+      await expect(orchestrator.create({ sessionId: 'session-5' })).rejects.toThrow(
+        'Docker bridge port is not published for container-1',
+      );
+
+      expect(commands).toEqual([
+        expect.arrayContaining(['docker', 'run', '-d']),
+        ['docker', 'port', 'container-1', '3584/tcp'],
+        ['docker', 'rm', '-f', 'container-1'],
+      ]);
+    } finally {
+      vi.doUnmock('node:child_process');
+      vi.resetModules();
+    }
+  });
 });
+
+function mockDockerProcess(args: string[]): EventEmitter & {
+  stdout: EventEmitter & { setEncoding(encoding: BufferEncoding): void };
+  stderr: EventEmitter & { setEncoding(encoding: BufferEncoding): void };
+} {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter & { setEncoding(encoding: BufferEncoding): void };
+    stderr: EventEmitter & { setEncoding(encoding: BufferEncoding): void };
+  };
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding() {} });
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding() {} });
+  queueMicrotask(() => {
+    if (args[0] === 'run') child.stdout.emit('data', 'container-1\n');
+    child.emit('close', 0);
+  });
+  return child;
+}
 
 function cacheDescriptor(orchestrator: InProcessDockerOrchestrator, sessionId: string): DockerSandboxDescriptor {
   const descriptor = {

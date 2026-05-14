@@ -98,6 +98,53 @@ describe('DaytonaSandboxProvider', () => {
       },
     });
   });
+
+  it('deletes a created sandbox if handle setup fails and preserves the setup error', async () => {
+    const setupError = new Error('workdir unavailable');
+    const sandbox = createMockDaytonaSandbox();
+    const deleteMock = vi.fn(async () => {});
+    sandbox.getWorkDir = async () => {
+      throw setupError;
+    };
+    sandbox.delete = deleteMock;
+    const provider = new DaytonaSandboxProvider({
+      client: {
+        async create() {
+          return sandbox;
+        },
+        async get() {
+          return sandbox;
+        },
+      },
+    });
+
+    await expect(provider.create({ sessionId: 'session-1' })).rejects.toBe(setupError);
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the setup error if best-effort created sandbox deletion fails', async () => {
+    const setupError = new Error('workdir unavailable');
+    const sandbox = createMockDaytonaSandbox();
+    sandbox.getWorkDir = async () => {
+      throw setupError;
+    };
+    sandbox.delete = vi.fn(async () => {
+      throw new Error('delete failed');
+    });
+    const provider = new DaytonaSandboxProvider({
+      client: {
+        async create() {
+          return sandbox;
+        },
+        async get() {
+          return sandbox;
+        },
+      },
+    });
+
+    await expect(provider.create({ sessionId: 'session-1' })).rejects.toBe(setupError);
+    expect(sandbox.delete).toHaveBeenCalledTimes(1);
+  });
 });
 
 function createMockDaytonaSandbox(): DaytonaSandboxLike {

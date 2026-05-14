@@ -92,7 +92,12 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       ? { timeout: this.options.createTimeoutSeconds }
       : undefined;
     const sandbox = await this.client.create(this.createParams(input), createOptions);
-    return this.toHandle(sandbox, input.sessionId, input.metadata ?? {});
+    try {
+      return await this.toHandle(sandbox, input.sessionId, input.metadata ?? {});
+    } catch (error) {
+      await sandbox.delete().catch(() => undefined);
+      throw error;
+    }
   }
 
   async connect(input: ConnectSandboxInput): Promise<SandboxHandle> {

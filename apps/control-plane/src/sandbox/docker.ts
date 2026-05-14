@@ -172,17 +172,22 @@ export class InProcessDockerOrchestrator implements DockerOrchestrator {
     args.push(this.image);
 
     const containerId = (await docker(args)).stdout.trim();
-    const bridgeUrl = await this.bridgeUrl(containerId);
-    const descriptor = this.descriptor({
-      providerSandboxId: containerId,
-      sessionId: input.sessionId,
-      bridgeUrl,
-      bridgeToken,
-      metadata: input.metadata ?? {},
-    });
-    await waitForBridge(descriptor);
-    this.descriptors.set(containerId, descriptor);
-    return descriptor;
+    try {
+      const bridgeUrl = await this.bridgeUrl(containerId);
+      const descriptor = this.descriptor({
+        providerSandboxId: containerId,
+        sessionId: input.sessionId,
+        bridgeUrl,
+        bridgeToken,
+        metadata: input.metadata ?? {},
+      });
+      await waitForBridge(descriptor);
+      this.descriptors.set(containerId, descriptor);
+      return descriptor;
+    } catch (error) {
+      await this.destroy({ providerSandboxId: containerId, sessionId: input.sessionId }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async connect(input: DockerConnectSandboxInput): Promise<DockerSandboxDescriptor> {
