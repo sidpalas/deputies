@@ -277,6 +277,76 @@ describe('GenericWebhookService', () => {
     });
   });
 
+  it.each([
+    ['owner hyphen and repo dot', 'acme-inc', 'widget.api'],
+    ['single-character names', 'a', 'b'],
+    ['repo punctuation', 'acme', '.github_repo-1'],
+  ])('accepts valid GitHub repository payloads with %s', async (_label, owner, repo) => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const now = new Date();
+    await store.createWebhookSource({
+      id: '00000000-0000-4000-8000-000000000106',
+      key: 'foo',
+      name: 'Foo',
+      enabled: true,
+      bearerToken: 'secret',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await services.genericWebhooks.handle({
+      sourceKey: 'foo',
+      authorization: 'Bearer secret',
+      payload: {
+        thread: { externalId: 'thread-1' },
+        dedupeKey: 'delivery-1',
+        prompt: 'do work',
+        repository: { provider: 'github', owner, repo },
+      },
+    });
+
+    expect(result.accepted).toBe(true);
+    const [message] = await services.messages.list(result.session!.id);
+    expect(message?.context?.repository).toEqual({ provider: 'github', owner, repo });
+  });
+
+  it.each([
+    ['owner with trailing slash', 'acme/', 'widget'],
+    ['repo with trailing slash', 'acme', 'widget/'],
+    ['repo with git suffix', 'acme', 'widget.git'],
+    ['owner with whitespace', ' acme', 'widget'],
+    ['repo with whitespace', 'acme', 'widget '],
+    ['owner', '-bad', 'widget'],
+    ['repo', 'acme', '..'],
+  ])('rejects invalid GitHub repository %s in payloads', async (_field, owner, repo) => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const now = new Date();
+    await store.createWebhookSource({
+      id: '00000000-0000-4000-8000-000000000107',
+      key: 'foo',
+      name: 'Foo',
+      enabled: true,
+      bearerToken: 'secret',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await expect(
+      services.genericWebhooks.handle({
+        sourceKey: 'foo',
+        authorization: 'Bearer secret',
+        payload: {
+          thread: { externalId: 'thread-1' },
+          dedupeKey: 'delivery-1',
+          prompt: 'do work',
+          repository: { provider: 'github', owner, repo },
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+
   it('does not let generic webhook context override reserved integration fields', async () => {
     const store = new MemoryStore();
     const services = createServices(store);

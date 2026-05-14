@@ -50,10 +50,20 @@ function parseOwnerRepo(value: string): RepositoryReference | null {
   return { provider: 'github', owner, repo };
 }
 
+export function parseStructuredGitHubRepository(owner: string, repo: string): RepositoryReference | null {
+  if (owner.trim() !== owner || repo.trim() !== repo) return null;
+  if (!isValidGitHubOwner(owner) || !isValidStructuredGitHubRepo(repo)) return null;
+  return { provider: 'github', owner, repo };
+}
+
 function isValidGitHubOwner(value: string): boolean {
   return /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/.test(value);
 }
 
 function isValidGitHubRepo(value: string): boolean {
   return /^[a-zA-Z0-9._-]+$/.test(value) && value !== '.' && value !== '..';
+}
+
+function isValidStructuredGitHubRepo(value: string): boolean {
+  return isValidGitHubRepo(value) && !value.toLowerCase().endsWith('.git');
 }

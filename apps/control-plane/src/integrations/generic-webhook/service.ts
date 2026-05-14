@@ -2,6 +2,7 @@ import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
 import type { AppStore, MessageRecord, SessionRecord, WebhookSourceRecord } from '../../store/types.js';
 import { parseHttpCallbackUrl } from '../../callbacks/service.js';
+import { parseStructuredGitHubRepository } from '../../repositories/extract.js';
 import {
   enqueueIntegrationIngress,
   markIntegrationDeliveryProcessed,
@@ -147,11 +148,11 @@ function parseRepository(value: unknown): IntegrationRepository | undefined {
   if (!isRecord(value)) throw new GenericWebhookError('invalid_request', 'Expected object field: repository');
   if (value.provider !== 'github')
     throw new GenericWebhookError('invalid_request', 'Expected repository.provider to be github');
-  return {
-    provider: 'github',
-    owner: requiredString(value.owner, 'repository.owner'),
-    repo: requiredString(value.repo, 'repository.repo'),
-  };
+  const owner = requiredString(value.owner, 'repository.owner');
+  const repo = requiredString(value.repo, 'repository.repo');
+  const repository = parseStructuredGitHubRepository(owner, repo);
+  if (!repository) throw new GenericWebhookError('invalid_request', 'Expected valid GitHub repository owner/repo');
+  return repository;
 }
 
 function parseCallback(value: unknown): Record<string, unknown> | undefined {

@@ -1,4 +1,4 @@
-import { extractRepositoryReference } from '../../src/repositories/extract.js';
+import { extractRepositoryReference, parseStructuredGitHubRepository } from '../../src/repositories/extract.js';
 
 describe('extractRepositoryReference', () => {
   it('extracts explicit repo syntax with a colon', () => {
@@ -64,5 +64,30 @@ describe('extractRepositoryReference', () => {
 
   it('returns null when no repository appears in text', () => {
     expect(extractRepositoryReference('please fix the flaky test')).toBeNull();
+  });
+});
+
+describe('parseStructuredGitHubRepository', () => {
+  it.each([
+    ['simple names', 'acme', 'widget'],
+    ['single-character names', 'a', 'b'],
+    ['owner hyphens and repo punctuation', 'acme-inc', 'widget.api_name-1'],
+    ['maximum-length owner', 'a'.repeat(39), '.github'],
+  ])('accepts valid GitHub repository %s', (_label, owner, repo) => {
+    expect(parseStructuredGitHubRepository(owner, repo)).toEqual({ provider: 'github', owner, repo });
+  });
+
+  it.each([
+    ['owner with trailing slash', 'acme/', 'widget'],
+    ['repo with trailing slash', 'acme', 'widget/'],
+    ['repo with git suffix', 'acme', 'widget.git'],
+    ['owner with whitespace', ' acme', 'widget'],
+    ['repo with whitespace', 'acme', 'widget '],
+    ['invalid owner punctuation', 'acme_inc', 'widget'],
+    ['invalid owner edge hyphen', '-acme', 'widget'],
+    ['invalid repo path traversal', 'acme', '..'],
+    ['invalid repo path separator', 'acme', 'widget/extra'],
+  ])('rejects structured GitHub repository %s', (_label, owner, repo) => {
+    expect(parseStructuredGitHubRepository(owner, repo)).toBeNull();
   });
 });
