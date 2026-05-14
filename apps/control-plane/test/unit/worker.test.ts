@@ -1,4 +1,4 @@
-import { CallbackDispatcher } from '../../src/callbacks/service.js';
+import { CallbackDispatcher, type CompletionCallbackPayload } from '../../src/callbacks/service.js';
 import { createServices } from '../../src/app/server.js';
 import type { PutArtifactObjectInput, StoredArtifactObject } from '../../src/artifacts/storage.js';
 import { FakeRunner } from '../../src/runner/fake.js';
@@ -489,6 +489,77 @@ describe('WorkerService', () => {
     expect((await services.events.list(session.id)).map((event) => event.type)).toContain('artifact_created');
   });
 
+  it('sends content-backed callback artifacts as persisted records without content', async () => {
+    const store = new MemoryStore();
+    const storage = new InMemoryArtifactObjectStorage();
+    const services = createServices(store, { artifactObjectStorage: storage });
+    const session = await services.sessions.create({ title: 'Artifact callback' });
+    const payloads: CompletionCallbackPayload[] = [];
+    await services.messages.enqueue({
+      sessionId: session.id,
+      prompt: 'produce artifact',
+      context: { callback: { type: 'http', url: 'https://example.com/callback' } },
+    });
+
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner: new ArtifactRunner(),
+      runnerType: 'artifact',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+      callbackSenders: [
+        {
+          type: 'http',
+          async deliver(_callback, payload) {
+            payloads.push(payload);
+          },
+        },
+      ],
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+    await expect(worker.processNext()).resolves.toBe(true);
+
+    const [artifact] = await store.getArtifacts(session.id);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]!.artifacts).toEqual([
+      expect.objectContaining({
+        id: artifact!.id,
+        sessionId: session.id,
+        type: 'report',
+        downloadUrl: `/sessions/${session.id}/artifacts/${artifact!.id}/download`,
+        previewUrl: `/sessions/${session.id}/artifacts/${artifact!.id}/preview`,
+        contentType: 'text/plain',
+        fileName: 'result.txt',
+        payload: expect.objectContaining({
+          storage: 'internal',
+          sizeBytes: 15,
+          contentType: 'text/plain',
+          fileName: 'result.txt',
+          nested: { keep: 'metadata' },
+          attachments: [{ name: 'summary', metadata: { keep: 'safe' } }],
+        }),
+      }),
+    ]);
+    expect(payloads[0]!.artifacts[0]).not.toHaveProperty('content');
+    expect(payloads[0]!.artifacts[0]).not.toHaveProperty('contentBase64');
+    expect(payloads[0]!.artifacts[0]).not.toHaveProperty('storageKey');
+    expect(payloads[0]!.artifacts[0]!.payload).not.toHaveProperty('content');
+    expect(payloads[0]!.artifacts[0]!.payload).not.toHaveProperty('contentBase64');
+    expect(payloads[0]!.artifacts[0]!.payload).not.toHaveProperty('storageKey');
+    expect(payloads[0]!.artifacts[0]!.payload).toMatchObject({
+      nested: { keep: 'metadata' },
+      attachments: [{ name: 'summary', metadata: { keep: 'safe' } }],
+    });
+    expect(JSON.stringify(payloads[0]!.artifacts[0]!.payload)).not.toContain('secret');
+    expect(JSON.stringify(payloads[0]!.artifacts[0]!.payload)).not.toContain('aW5saW5lIHNlY3JldA==');
+    expect(JSON.stringify(payloads[0]!.artifacts[0]!.payload)).not.toContain('bmVzdGVkIHNlY3JldA==');
+    expect(JSON.stringify(payloads[0]!.artifacts[0]!.payload)).not.toContain('storageKey');
+    expect(JSON.stringify(payloads[0]!.artifacts[0]!.payload)).not.toContain('private/object.txt');
+  });
+
   it('retries failed callbacks with backoff before terminal failure', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -971,6 +1042,25 @@ class ArtifactRunner implements Runner {
           content: 'artifact output',
           contentType: 'text/plain',
           fileName: 'result.txt',
+          payload: {
+            content: 'inline secret',
+            contentBase64: 'aW5saW5lIHNlY3JldA==',
+            storageKey: 'private/object.txt',
+            nested: {
+              keep: 'metadata',
+              content: 'nested secret',
+              contentBase64: 'bmVzdGVkIHNlY3JldA==',
+              storageKey: 'private/nested.txt',
+            },
+            attachments: [
+              {
+                name: 'summary',
+                content: 'attachment secret',
+                storageKey: 'private/attachment.txt',
+                metadata: { keep: 'safe', storageKey: 'private/metadata.txt' },
+              },
+            ],
+          },
         },
       ],
     };

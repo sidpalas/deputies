@@ -274,7 +274,7 @@ export class WorkerService {
         type: 'agent_response_final',
         payload: { text: result.text },
       });
-      await this.artifacts.recordRunArtifacts({
+      const artifacts = await this.artifacts.recordRunArtifacts({
         sessionId: primary.sessionId,
         runId: claimed.run.id,
         messageId: primary.id,
@@ -283,6 +283,7 @@ export class WorkerService {
       await new CallbackService(this.options.store).enqueueCompletion({
         claimed: { message: primary, run: claimed.run },
         result,
+        artifactRecords: artifacts,
       });
     } finally {
       await this.options.store.updateSandbox({ ...record, updatedAt: new Date() });

@@ -4,8 +4,8 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import type { EventService } from '../events/service.js';
-import type { RunnerResult } from '../runner/types.js';
-import type { CallbackDeliveryRecord, CallbackStore, ClaimedMessage } from '../store/types.js';
+import type { RunnerArtifact, RunnerResult } from '../runner/types.js';
+import type { ArtifactRecord, CallbackDeliveryRecord, CallbackStore, ClaimedMessage } from '../store/types.js';
 
 const DEFAULT_HTTP_CALLBACK_TIMEOUT_MS = 10_000;
 
@@ -22,7 +22,23 @@ export type CompletionCallbackPayload = {
   runId: string;
   messageId: string;
   text: string;
-  artifacts: Array<{ type: string; url?: string; payload?: Record<string, unknown> }>;
+  artifacts: CompletionCallbackArtifact[];
+};
+
+export type CompletionCallbackArtifact = {
+  type: string;
+  id?: string;
+  sessionId?: string;
+  runId?: string;
+  messageId?: string;
+  title?: string;
+  url?: string;
+  downloadUrl?: string;
+  previewUrl?: string;
+  contentType?: string;
+  fileName?: string;
+  createdAt?: string;
+  payload?: Record<string, unknown>;
 };
 
 export type CompletionCallbackSender = {
@@ -47,6 +63,7 @@ export class CallbackService {
   async enqueueCompletion(input: {
     claimed: ClaimedMessage;
     result: RunnerResult;
+    artifactRecords?: ArtifactRecord[];
   }): Promise<CallbackDeliveryRecord | null> {
     const callback = getCompletionCallback(input.claimed.message.context);
     if (!callback) return null;
@@ -58,7 +75,9 @@ export class CallbackService {
       runId: input.claimed.run.id,
       messageId: input.claimed.message.id,
       text: input.result.text,
-      artifacts: input.result.artifacts ?? [],
+      artifacts: input.artifactRecords
+        ? input.artifactRecords.map(serializeArtifactRecord)
+        : (input.result.artifacts ?? []).map(serializeRunnerArtifact),
     };
     const delivery = await this.store.createCallbackDelivery({
       id: randomUUID(),
@@ -98,6 +117,64 @@ export class CallbackService {
     });
     return delivery;
   }
+}
+
+function serializeArtifactRecord(artifact: ArtifactRecord): CompletionCallbackArtifact {
+  return {
+    id: artifact.id,
+    sessionId: artifact.sessionId,
+    ...(artifact.runId ? { runId: artifact.runId } : {}),
+    ...(artifact.messageId ? { messageId: artifact.messageId } : {}),
+    type: artifact.type,
+    ...(artifact.title ? { title: artifact.title } : {}),
+    ...(artifact.url ? { url: artifact.url } : {}),
+    ...(artifact.storageKey ? { downloadUrl: artifactDownloadUrl(artifact.sessionId, artifact.id) } : {}),
+    ...(artifact.storageKey ? { previewUrl: artifactPreviewUrl(artifact.sessionId, artifact.id) } : {}),
+    ...(typeof artifact.payload.contentType === 'string' ? { contentType: artifact.payload.contentType } : {}),
+    ...(typeof artifact.payload.fileName === 'string' ? { fileName: artifact.payload.fileName } : {}),
+    createdAt: artifact.createdAt.toISOString(),
+    payload: sanitizeArtifactPayload(artifact.payload),
+  };
+}
+
+function serializeRunnerArtifact(artifact: RunnerArtifact): CompletionCallbackArtifact {
+  return {
+    type: artifact.type,
+    ...(artifact.title ? { title: artifact.title } : {}),
+    ...(artifact.url ? { url: artifact.url } : {}),
+    ...(artifact.contentType ? { contentType: artifact.contentType } : {}),
+    ...(artifact.fileName ? { fileName: artifact.fileName } : {}),
+    ...(artifact.payload ? { payload: sanitizeArtifactPayload(artifact.payload) } : {}),
+  };
+}
+
+function sanitizeArtifactPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === 'content' || key === 'contentBase64' || key === 'storageKey') continue;
+    sanitized[key] = sanitizeArtifactPayloadValue(value);
+  }
+  return sanitized;
+}
+
+function sanitizeArtifactPayloadValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeArtifactPayloadValue);
+  if (!value || typeof value !== 'object') return value;
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (key === 'content' || key === 'contentBase64' || key === 'storageKey') continue;
+    sanitized[key] = sanitizeArtifactPayloadValue(nestedValue);
+  }
+  return sanitized;
+}
+
+function artifactDownloadUrl(sessionId: string, artifactId: string): string {
+  return `/sessions/${sessionId}/artifacts/${artifactId}/download`;
+}
+
+function artifactPreviewUrl(sessionId: string, artifactId: string): string {
+  return `/sessions/${sessionId}/artifacts/${artifactId}/preview`;
 }
 
 export class CallbackServiceError extends Error {
