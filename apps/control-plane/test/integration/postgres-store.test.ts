@@ -200,6 +200,126 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(completed.messages.map((message) => message.status)).toEqual(['completed', 'completed']);
   });
 
+  it('does not double-claim one session under concurrent workers', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Postgres concurrent queue' });
+    const first = await services.messages.enqueue({ sessionId: session.id, prompt: 'first' });
+    const second = await services.messages.enqueue({ sessionId: session.id, prompt: 'second' });
+    const now = new Date();
+
+    const claims = await Promise.all(
+      [1, 2].map((worker) =>
+        store.claimNextPendingMessageBatch({
+          runId: `00000000-0000-4000-8000-00000000091${worker}`,
+          runnerType: 'fake',
+          leaseOwner: `worker-${worker}`,
+          leaseExpiresAt: new Date(now.getTime() + 60_000),
+          now,
+        }),
+      ),
+    );
+
+    const claimed = claims.filter((claim) => claim !== null);
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]!.messages.map((message) => message.id)).toEqual([first.id, second.id]);
+    expect(claims.filter((claim) => claim === null)).toHaveLength(1);
+  });
+
+  it('skips locked sessions while preserving pending message order', async () => {
+    const services = createServices(store);
+    const oldestSession = await services.sessions.create({ title: 'Postgres oldest locked queue' });
+    const newestSession = await services.sessions.create({ title: 'Postgres newest queue' });
+    const oldestMessage = await store.createMessage({
+      id: '00000000-0000-4000-8000-000000000923',
+      sessionId: oldestSession.id,
+      sequence: 1,
+      status: 'pending',
+      prompt: 'oldest',
+      createdAt: new Date('2026-05-06T00:00:00.000Z'),
+    });
+    const newestMessage = await store.createMessage({
+      id: '00000000-0000-4000-8000-000000000924',
+      sessionId: newestSession.id,
+      sequence: 1,
+      status: 'pending',
+      prompt: 'newest',
+      createdAt: new Date('2026-05-06T00:00:01.000Z'),
+    });
+    const now = new Date();
+    const locker = await pool.connect();
+
+    try {
+      await locker.query('BEGIN');
+      await locker.query('SELECT id FROM sessions WHERE id = $1 FOR UPDATE', [oldestSession.id]);
+
+      const skippedLocked = await store.claimNextPendingMessageBatch({
+        runId: '00000000-0000-4000-8000-000000000921',
+        runnerType: 'fake',
+        leaseOwner: 'worker-1',
+        leaseExpiresAt: new Date(now.getTime() + 60_000),
+        now,
+      });
+
+      expect(skippedLocked?.messages.map((message) => message.id)).toEqual([newestMessage.id]);
+    } finally {
+      await locker.query('ROLLBACK');
+      locker.release();
+    }
+
+    const claimedOldest = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000922',
+      runnerType: 'fake',
+      leaseOwner: 'worker-2',
+      leaseExpiresAt: new Date(now.getTime() + 60_000),
+      now,
+    });
+
+    expect(claimedOldest?.messages.map((message) => message.id)).toEqual([oldestMessage.id]);
+  });
+
+  it('does not lock messages before sessions when cancelling pending messages', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Postgres cancel lock order' });
+    const message = await services.messages.enqueue({ sessionId: session.id, prompt: 'cancel me' });
+    const sessionLocker = await pool.connect();
+    const messageLocker = await pool.connect();
+    let cancel: Promise<unknown> | undefined;
+
+    try {
+      await sessionLocker.query('BEGIN');
+      await sessionLocker.query('SELECT id FROM sessions WHERE id = $1 FOR UPDATE', [session.id]);
+
+      cancel = store.cancelPendingMessage({
+        sessionId: session.id,
+        messageId: message.id,
+        cancelledAt: new Date(),
+      });
+
+      await waitFor(async () => {
+        const result = await pool.query<{ count: string }>(
+          `SELECT count(*)
+           FROM pg_stat_activity
+           WHERE datname = current_database()
+             AND wait_event_type = 'Lock'
+             AND query LIKE 'SELECT id FROM sessions WHERE id = $1 FOR UPDATE%'`,
+        );
+        return Number(result.rows[0]?.count ?? 0) > 0;
+      });
+
+      await messageLocker.query('BEGIN');
+      await expect(
+        messageLocker.query('SELECT id FROM messages WHERE id = $1 FOR UPDATE NOWAIT', [message.id]),
+      ).resolves.toBeDefined();
+    } finally {
+      await messageLocker.query('ROLLBACK').catch(() => undefined);
+      messageLocker.release();
+      await sessionLocker.query('ROLLBACK').catch(() => undefined);
+      sessionLocker.release();
+    }
+
+    await expect(cancel).resolves.toMatchObject({ id: message.id, status: 'cancelled' });
+  });
+
   it('does not claim pending messages for archived sessions', async () => {
     const services = createServices(store);
     const session = await services.sessions.create({ title: 'Postgres archived queue' });
@@ -653,4 +773,13 @@ async function close(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
+}
+
+async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out waiting for condition');
 }

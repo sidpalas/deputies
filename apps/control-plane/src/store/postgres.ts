@@ -472,6 +472,8 @@ export class PostgresStore implements AppStore {
     cancelledAt: Date;
   }): Promise<MessageRecord | null> {
     return this.transaction(async (client) => {
+      await client.query('SELECT id FROM sessions WHERE id = $1 FOR UPDATE', [input.sessionId]);
+
       const result = await client.query<MessageRow>(
         `UPDATE messages SET status = 'cancelled' WHERE session_id = $1 AND id = $2 AND status = 'pending'
          RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
@@ -515,36 +517,38 @@ export class PostgresStore implements AppStore {
     now: Date;
   }): Promise<ClaimedMessageBatch | null> {
     return this.transaction(async (client) => {
-      const candidate = await client.query<MessageRow>(
-        `SELECT m.id, m.session_id, m.sequence, m.status, m.prompt, m.source, m.context, m.created_at
-          FROM messages m
-          JOIN sessions s ON s.id = m.session_id
-          WHERE m.status = 'pending'
-            AND s.status <> 'archived'
-            AND s.queue_paused_at IS NULL
+      const candidate = await client.query<{ session_id: string }>(
+        `SELECT m.session_id
+         FROM messages m
+         JOIN sessions s ON s.id = m.session_id
+         WHERE m.status = 'pending'
+           AND s.status <> 'archived'
+           AND s.queue_paused_at IS NULL
            AND NOT EXISTS (
              SELECT 1 FROM runs r
-             WHERE r.session_id = m.session_id
-                AND r.status IN ('starting', 'running', 'cancelling')
+             WHERE r.session_id = s.id
+               AND r.status IN ('starting', 'running', 'cancelling')
                AND (r.lease_expires_at IS NULL OR r.lease_expires_at > $1)
            )
          ORDER BY m.created_at ASC, m.sequence ASC
-         FOR UPDATE SKIP LOCKED
+         FOR UPDATE OF s SKIP LOCKED
          LIMIT 1`,
         [input.now],
       );
 
-      const message = candidate.rows[0];
-      if (!message) return null;
+      const sessionId = candidate.rows[0]?.session_id;
+      if (!sessionId) return null;
 
       const updatedMessages = await client.query<MessageRow>(
         `UPDATE messages
          SET status = 'processing'
          WHERE session_id = $1 AND status = 'pending'
          RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
-        [message.session_id],
+        [sessionId],
       );
       const messages = updatedMessages.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence);
+      const firstMessage = messages[0];
+      if (!firstMessage) return null;
       const metadata = {
         messageIds: messages.map((item) => item.id),
         sequences: messages.map((item) => item.sequence),
@@ -552,12 +556,12 @@ export class PostgresStore implements AppStore {
 
       const run = await client.query<RunRow>(
         `INSERT INTO runs (id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, started_at, metadata)
-         VALUES ($1, $2, $3, 'running', $4, $5, $6, $7, $7, $8)
+          VALUES ($1, $2, $3, 'running', $4, $5, $6, $7, $7, $8)
          RETURNING id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, attempt, started_at, completed_at, failed_at, error, metadata`,
         [
           input.runId,
-          message.session_id,
-          message.id,
+          sessionId,
+          firstMessage.id,
           input.runnerType,
           input.leaseOwner,
           input.leaseExpiresAt,
@@ -567,7 +571,7 @@ export class PostgresStore implements AppStore {
       );
 
       await client.query('UPDATE sessions SET status = $2, updated_at = $3 WHERE id = $1', [
-        message.session_id,
+        sessionId,
         'active',
         input.now,
       ]);
