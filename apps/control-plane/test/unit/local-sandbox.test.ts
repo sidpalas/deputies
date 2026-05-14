@@ -25,7 +25,7 @@ describe('LocalSandboxProvider', () => {
     const sandbox = await provider.create({ sessionId: 'session-1', metadata: { owner: 'test' } });
 
     expect(sandbox).toMatchObject({
-      provider: 'local',
+      provider: 'unsafe-local',
       sessionId: 'session-1',
       metadata: { owner: 'test' },
       capabilities: { persistentFilesystem: true, exec: true, filesystem: true },

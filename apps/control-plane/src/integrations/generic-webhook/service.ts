@@ -30,6 +30,7 @@ export class GenericWebhookService {
     private readonly store: AppStore,
     private readonly sessions: SessionService,
     private readonly messages: MessageService,
+    private readonly options: { unsafeAllowLocalHttpCallbacks?: boolean } = {},
   ) {}
 
   async handle(input: HandleGenericWebhookInput): Promise<HandleGenericWebhookResult> {
@@ -42,7 +43,7 @@ export class GenericWebhookService {
       throw new GenericWebhookError('unauthorized', 'Invalid webhook authorization');
     }
 
-    const parsed = parseWebhookPayload(input.payload);
+    const parsed = parseWebhookPayload(input.payload, this.options);
     const received = await receiveIntegrationDelivery(this.store, {
       source: source.key,
       dedupeKey: parsed.dedupeKey,
@@ -101,14 +102,17 @@ function isAuthorized(authorization: string | undefined, source: WebhookSourceRe
   return authorization === `Bearer ${source.bearerToken}`;
 }
 
-function parseWebhookPayload(payload: Record<string, unknown>): ParsedWebhookPayload {
+function parseWebhookPayload(
+  payload: Record<string, unknown>,
+  options: { unsafeAllowLocalHttpCallbacks?: boolean } = {},
+): ParsedWebhookPayload {
   const thread = parseThread(payload.thread);
   const dedupeKey = requiredString(payload.dedupeKey, 'dedupeKey');
   const prompt = requiredString(payload.prompt, 'prompt');
   const title = optionalString(payload.title);
   const actor = parseActor(payload.actor);
   const repository = parseRepository(payload.repository);
-  const callback = parseCallback(payload.callback);
+  const callback = parseCallback(payload.callback, options);
   const context = isRecord(payload.context) ? payload.context : {};
 
   const parsed: ParsedWebhookPayload = { thread, dedupeKey, prompt, context };
@@ -155,11 +159,14 @@ function parseRepository(value: unknown): IntegrationRepository | undefined {
   return repository;
 }
 
-function parseCallback(value: unknown): Record<string, unknown> | undefined {
+function parseCallback(
+  value: unknown,
+  options: { unsafeAllowLocalHttpCallbacks?: boolean } = {},
+): Record<string, unknown> | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new GenericWebhookError('invalid_request', 'Expected object field: callback');
   if (value.type === 'http') {
-    return { type: 'http', url: httpUrl(value.url, 'callback.url') };
+    return { type: 'http', url: httpUrl(value.url, 'callback.url', options) };
   }
   throw new GenericWebhookError('invalid_request', 'Expected callback.type to be http');
 }
@@ -178,10 +185,12 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
-function httpUrl(value: unknown, field: string): string {
+function httpUrl(value: unknown, field: string, options: { unsafeAllowLocalHttpCallbacks?: boolean } = {}): string {
   const raw = requiredString(value, field);
   try {
-    return parseHttpCallbackUrl(raw).toString();
+    return parseHttpCallbackUrl(raw, {
+      unsafeAllowLocalNetwork: Boolean(options.unsafeAllowLocalHttpCallbacks),
+    }).toString();
   } catch {
     // handled below
   }

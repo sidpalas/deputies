@@ -16,7 +16,7 @@ Initial providers may include:
 
 Daytona sandboxes are created from OCI images, but agents should not assume nested Docker or Docker Compose is available inside those sandboxes. The repo-owned Daytona image and scripts in `deploy/daytona/` install Postgres directly and expose `./deploy/daytona/start-postgres.sh` for Postgres-backed tests.
 
-> **Warning:** `SANDBOX_PROVIDER=local` is for trusted local development only. It is not a security boundary; agent commands run on the API/worker host runtime in a temporary workspace.
+> **Warning:** `SANDBOX_PROVIDER=unsafe-local` is for trusted local development only. It is not a security boundary; agent commands run on the API/worker host runtime in a temporary workspace.
 
 ## Design Rule
 

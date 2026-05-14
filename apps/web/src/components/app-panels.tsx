@@ -53,8 +53,8 @@ export function LocalSandboxWarning() {
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <p>
-          <strong>Local sandbox mode is not a security boundary.</strong> Commands run on the API/worker host runtime in
-          a temporary workspace. Use it only for trusted local development.
+          <strong>Unsafe local sandbox mode is not a security boundary.</strong> Commands run on the API/worker host
+          runtime in a temporary workspace. Use it only for trusted local development.
         </p>
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
       </div>

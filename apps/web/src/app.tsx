@@ -1011,7 +1011,7 @@ export function App() {
             )}
 
             <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-              {health?.sandboxProvider === 'local' ? <LocalSandboxWarning /> : null}
+              {health?.sandboxProvider === 'unsafe-local' ? <LocalSandboxWarning /> : null}
               <div className="min-h-0 flex-1 overflow-hidden">
                 {isCreatingThread || !selectedSession ? (
                   <NewThreadPanel

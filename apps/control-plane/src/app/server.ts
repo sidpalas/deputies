@@ -88,7 +88,11 @@ export type AppServices = {
 
 export function createServices(
   store: AppStore = new MemoryStore(),
-  options: { sandboxProvider?: SandboxProvider; artifactObjectStorage?: ArtifactObjectStorage } = {},
+  options: {
+    sandboxProvider?: SandboxProvider;
+    artifactObjectStorage?: ArtifactObjectStorage;
+    unsafeAllowLocalHttpCallbacks?: boolean;
+  } = {},
 ): AppServices {
   const events = new EventService(store);
   const sessions = new SessionService(store, events);
@@ -100,7 +104,9 @@ export function createServices(
     messages,
     artifacts: new ArtifactService(store, events, options.artifactObjectStorage),
     externalResources: new ExternalResourceService(store, events),
-    genericWebhooks: new GenericWebhookService(store, sessions, messages),
+    genericWebhooks: new GenericWebhookService(store, sessions, messages, {
+      unsafeAllowLocalHttpCallbacks: Boolean(options.unsafeAllowLocalHttpCallbacks),
+    }),
     callbacks: new CallbackService(store, events),
   };
   if (options.sandboxProvider) {
@@ -734,6 +740,23 @@ export function createServer(config: AppConfig, services = createServices()) {
     handlePreviewUpgrade(config, services, request, socket, head).catch(() => socket.destroy());
   });
   return server;
+}
+
+export function createWorkerHealthServer(config: AppConfig) {
+  const app = new Hono();
+
+  app.notFound((c) => c.json({ error: 'not_found', message: 'Route not found' }, 404));
+  app.get('/health', (c) =>
+    c.json({
+      status: 'ok',
+      runMode: config.runMode,
+      apiAuthMode: config.apiAuthMode,
+      authProvider: config.apiAuthMode === 'session' ? config.authProvider : undefined,
+      sandboxProvider: config.sandboxProvider,
+    }),
+  );
+
+  return createAdaptorServer({ fetch: app.fetch }) as Server;
 }
 
 function contentDisposition(fileName: string, disposition: 'attachment' | 'inline' = 'attachment'): string {

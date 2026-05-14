@@ -275,6 +275,7 @@ export class HttpCompletionCallbackSender implements CompletionCallbackSender {
 
 export type HttpCompletionCallbackSenderOptions = {
   timeoutMs?: number;
+  unsafeAllowLocalNetwork?: boolean;
   resolveHostname?: (hostname: string) => Promise<ResolvedAddress[]>;
   request?: (input: ValidatedHttpCallbackRequest) => Promise<{ statusCode: number }>;
 };
@@ -289,7 +290,10 @@ export type ValidatedHttpCallbackRequest = {
   signal: AbortSignal;
 };
 
-export function parseHttpCallbackUrl(value: string): URL {
+export function parseHttpCallbackUrl(
+  value: string,
+  options: Pick<HttpCompletionCallbackSenderOptions, 'unsafeAllowLocalNetwork'> = {},
+): URL {
   let url: URL;
   try {
     url = new URL(value);
@@ -299,9 +303,10 @@ export function parseHttpCallbackUrl(value: string): URL {
   if (url.protocol !== 'http:' && url.protocol !== 'https:')
     throw new Error('HTTP callback URL must use http or https');
   if (url.username || url.password) throw new Error('HTTP callback URL must not include credentials');
-  if (isBlockedHostname(url.hostname)) throw new Error('HTTP callback URL host is not allowed');
+  if (!options.unsafeAllowLocalNetwork && isBlockedHostname(url.hostname))
+    throw new Error('HTTP callback URL host is not allowed');
   const literalFamily = ipFamily(url.hostname);
-  if (literalFamily && isBlockedIp(normalizeIpLiteral(url.hostname), literalFamily))
+  if (!options.unsafeAllowLocalNetwork && literalFamily && isBlockedIp(normalizeIpLiteral(url.hostname), literalFamily))
     throw new Error('HTTP callback URL IP is not allowed');
   return url;
 }
@@ -311,12 +316,12 @@ async function postJsonToCallback(
   payload: CompletionCallbackPayload,
   options: HttpCompletionCallbackSenderOptions,
 ): Promise<{ statusCode: number }> {
-  const url = parseHttpCallbackUrl(rawUrl);
+  const url = parseHttpCallbackUrl(rawUrl, options);
   const timeoutMs = options.timeoutMs ?? DEFAULT_HTTP_CALLBACK_TIMEOUT_MS;
   const abortController = new AbortController();
   return withTimeout(
     (async () => {
-      const addresses = await resolveSafeCallbackAddresses(url, options.resolveHostname);
+      const addresses = await resolveSafeCallbackAddresses(url, options);
       return (options.request ?? sendHttpCallbackRequest)({
         url,
         addresses,
@@ -345,15 +350,15 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () =>
 
 async function resolveSafeCallbackAddresses(
   url: URL,
-  resolveHostname: HttpCompletionCallbackSenderOptions['resolveHostname'],
+  options: Pick<HttpCompletionCallbackSenderOptions, 'resolveHostname' | 'unsafeAllowLocalNetwork'>,
 ): Promise<ResolvedAddress[]> {
   const literalFamily = ipFamily(url.hostname);
   const addresses = literalFamily
     ? [{ address: normalizeIpLiteral(url.hostname), family: literalFamily }]
-    : await (resolveHostname ?? resolveCallbackHostname)(url.hostname);
+    : await (options.resolveHostname ?? resolveCallbackHostname)(url.hostname);
   if (!addresses.length) throw new Error('HTTP callback URL host did not resolve');
   for (const resolved of addresses) {
-    if (isBlockedIp(resolved.address, resolved.family))
+    if (!options.unsafeAllowLocalNetwork && isBlockedIp(resolved.address, resolved.family))
       throw new Error('HTTP callback URL resolved to a blocked IP range');
   }
   return addresses;

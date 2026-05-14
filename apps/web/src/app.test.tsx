@@ -1746,11 +1746,11 @@ it('restores the selected session before waiting for the restore request', async
   ).not.toBeDisabled();
 });
 
-it('warns when running in local sandbox mode', async () => {
-  mockApi({ sandboxProvider: 'local' });
+it('warns when running in unsafe local sandbox mode', async () => {
+  mockApi({ sandboxProvider: 'unsafe-local' });
   render(<App />);
 
-  expect(await screen.findByText('Local sandbox mode is not a security boundary.')).toBeInTheDocument();
+  expect(await screen.findByText('Unsafe local sandbox mode is not a security boundary.')).toBeInTheDocument();
   expect(screen.getByText(/Commands run on the API\/worker host runtime/)).toBeInTheDocument();
 });
 

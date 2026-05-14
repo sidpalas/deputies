@@ -11,6 +11,7 @@ describe('loadConfig', () => {
       maxJsonBodyBytes: 1048576,
       runCancellationPollIntervalMs: 1000,
       workerConcurrency: 4,
+      workerPollIntervalMs: 1000,
       sandboxIdleTimeoutMs: 900_000,
       sandboxStopDelayMs: 60_000,
       sandboxRetentionMs: 3_600_000,
@@ -50,6 +51,7 @@ describe('loadConfig', () => {
       artifactStorageS3ForcePathStyle: true,
       artifactStorageS3CreateBucket: false,
       artifactToolMaxBytes: 26_214_400,
+      unsafeAllowLocalHttpCallbacks: false,
     });
   });
 
@@ -60,12 +62,13 @@ describe('loadConfig', () => {
         MAX_JSON_BODY_BYTES: '2048',
         RUN_CANCELLATION_POLL_INTERVAL_MS: '250',
         WORKER_CONCURRENCY: '3',
+        WORKER_POLL_INTERVAL_MS: '60000',
         SANDBOX_IDLE_TIMEOUT_SECONDS: '120',
         SANDBOX_STOP_DELAY_SECONDS: '30',
         SANDBOX_RETENTION_SECONDS: '240',
         RUN_MODE: 'worker',
         RUNNER: 'flue',
-        SANDBOX_PROVIDER: 'local',
+        SANDBOX_PROVIDER: 'unsafe-local',
         LOCAL_SANDBOX_ALLOWED_COMMANDS: 'git,node,pnpm',
         DOCKER_ORCHESTRATOR_MODE: 'http',
         DOCKER_ORCHESTRATOR_URL: 'https://docker-orchestrator.example',
@@ -130,18 +133,20 @@ describe('loadConfig', () => {
         ARTIFACT_STORAGE_S3_FORCE_PATH_STYLE: 'false',
         ARTIFACT_STORAGE_S3_CREATE_BUCKET: 'true',
         ARTIFACT_TOOL_MAX_BYTES: '1024',
+        UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS: 'true',
       }),
     ).toMatchObject({
       port: 4000,
       maxJsonBodyBytes: 2048,
       runCancellationPollIntervalMs: 250,
       workerConcurrency: 3,
+      workerPollIntervalMs: 60_000,
       sandboxIdleTimeoutMs: 120_000,
       sandboxStopDelayMs: 30_000,
       sandboxRetentionMs: 240_000,
       runMode: 'worker',
       runner: 'flue',
-      sandboxProvider: 'local',
+      sandboxProvider: 'unsafe-local',
       localSandboxAllowedCommands: ['git', 'node', 'pnpm'],
       dockerOrchestratorMode: 'http',
       dockerOrchestratorUrl: 'https://docker-orchestrator.example',
@@ -207,6 +212,7 @@ describe('loadConfig', () => {
       artifactStorageS3ForcePathStyle: false,
       artifactStorageS3CreateBucket: true,
       artifactToolMaxBytes: 1024,
+      unsafeAllowLocalHttpCallbacks: true,
     });
   });
 
@@ -366,6 +372,12 @@ describe('loadConfig', () => {
     );
   });
 
+  it('rejects invalid worker poll intervals', () => {
+    expect(() => loadConfig({ WORKER_POLL_INTERVAL_MS: '0' })).toThrow(
+      'WORKER_POLL_INTERVAL_MS must be a positive integer',
+    );
+  });
+
   it('rejects invalid sandbox idle timeout', () => {
     expect(() => loadConfig({ SANDBOX_IDLE_TIMEOUT_SECONDS: '0' })).toThrow(
       'SANDBOX_IDLE_TIMEOUT_SECONDS must be a positive integer',
@@ -386,6 +398,9 @@ describe('loadConfig', () => {
 
   it('rejects invalid enum values', () => {
     expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of all, api, worker');
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'local' })).toThrow(
+      'Expected one of fake, unsafe-local, docker, daytona, kubernetes, ecs',
+    );
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_COOKIE_SAME_SITE: 'strict' })).toThrow(
       'Expected one of lax, none',
     );
@@ -400,6 +415,9 @@ describe('loadConfig', () => {
     );
     expect(() => loadConfig({ API_AUTH_MODE: 'none', UNSAFE_ALLOW_ALL_GITHUB_USERS_AND_ORGS: 'yes' })).toThrow(
       'UNSAFE_ALLOW_ALL_GITHUB_USERS_AND_ORGS must be true or false',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS: 'yes' })).toThrow(
+      'UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS must be true or false',
     );
   });
 });

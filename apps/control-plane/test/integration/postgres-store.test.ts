@@ -2,13 +2,14 @@ import type { Server } from 'node:http';
 import type { SessionData } from '@flue/sdk';
 import { Pool } from 'pg';
 import { createServer, createServices } from '../../src/app/server.js';
+import type { CompletionCallbackSender } from '../../src/callbacks/service.js';
 import { loadConfig } from '../../src/config/index.js';
 import { runMigrations } from '../../src/db/migrate.js';
 import { PostgresFlueSessionStore } from '../../src/runner-flue/session-store.js';
 import { FakeRunner } from '../../src/runner/fake.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
-import { PostgresStore } from '../../src/store/postgres.js';
-import { WorkerService } from '../../src/worker/service.js';
+import { PostgresStore, type PostgresEventListener } from '../../src/store/postgres.js';
+import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from '../../src/worker/service.js';
 import { expectGenericWebhookResponse } from '../support/contracts.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
@@ -765,6 +766,91 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     } finally {
       await Promise.all([close(serverA), close(serverB)]);
       await Promise.all([replicaStoreA.close(), replicaStoreB.close()]);
+    }
+  });
+
+  it('wakes a worker loop on callback retry scheduled events from another Postgres connection', async () => {
+    const apiStore = new PostgresStore(testDatabaseUrl!);
+    const workerStore = new PostgresStore(testDatabaseUrl!);
+    const apiServices = createServices(apiStore);
+    const workerServices = createServices(workerStore);
+    let listener: PostgresEventListener | undefined;
+    let loop: WorkerLoopHandle | undefined;
+    let processNextCalls = 0;
+    let deliveryAttempts = 0;
+    const sender: CompletionCallbackSender = {
+      type: 'http',
+      async deliver() {
+        deliveryAttempts += 1;
+      },
+    };
+
+    try {
+      const worker = new WorkerService({
+        store: workerStore,
+        events: workerServices.events,
+        artifacts: workerServices.artifacts,
+        runner: new FakeRunner(),
+        runnerType: 'fake',
+        sandboxProvider: new FakeSandboxProvider(),
+        leaseOwner: 'callback-retry-worker',
+        callbackSenders: [sender],
+      });
+      loop = startWorkerLoop(
+        {
+          async processNext() {
+            processNextCalls += 1;
+            return worker.processNext();
+          },
+        },
+        60_000,
+      );
+      listener = await workerStore.listenEvents((event) => {
+        if (event.type === 'callback_retry_scheduled') loop?.wake();
+      });
+      await waitFor(() => Promise.resolve(processNextCalls === 1));
+
+      const session = await apiServices.sessions.create({ title: 'Callback retry wake' });
+      const now = new Date();
+      const delivery = await apiStore.createCallbackDelivery({
+        id: '00000000-0000-4000-8000-000000000401',
+        sessionId: session.id,
+        targetType: 'http',
+        target: { url: 'https://example.com/callback' },
+        eventType: 'message_completed',
+        payload: {
+          event: 'message_completed',
+          sessionId: session.id,
+          runId: '00000000-0000-4000-8000-000000000402',
+          messageId: '00000000-0000-4000-8000-000000000403',
+          text: 'completed',
+          artifacts: [],
+        },
+        createdAt: now,
+        updatedAt: now,
+        nextAttemptAt: now,
+      });
+
+      await apiServices.events.append({
+        sessionId: session.id,
+        type: 'callback_retry_scheduled',
+        payload: {
+          deliveryId: delivery.id,
+          error: 'previous attempt failed',
+          targetType: delivery.targetType,
+          attempts: delivery.attempts,
+          nextAttemptAt: now.toISOString(),
+        },
+      });
+
+      await waitFor(async () => deliveryAttempts === 1, 3_000);
+      await expect(apiStore.listCallbackDeliveries({ sessionId: session.id })).resolves.toMatchObject([
+        { id: delivery.id, status: 'sent', attempts: 1 },
+      ]);
+    } finally {
+      await loop?.stop();
+      await listener?.close();
+      await Promise.all([apiStore.close(), workerStore.close()]);
     }
   });
 

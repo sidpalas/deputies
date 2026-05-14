@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ArtifactService } from '../../src/artifacts/service.js';
 import { FilesystemArtifactObjectStorage, type ArtifactObjectStorage } from '../../src/artifacts/storage.js';
-import { createServer, createServices, type AppServices } from '../../src/app/server.js';
+import { createServer, createServices, createWorkerHealthServer, type AppServices } from '../../src/app/server.js';
 import { loadConfig } from '../../src/config/index.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
 import type { SandboxPreviewUrlInput } from '../../src/sandbox/types.js';
@@ -56,6 +56,20 @@ describe('core API', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ status: 'ok', runMode: 'all' });
+  });
+
+  it('exposes only worker health routes for worker mode', async () => {
+    await closeServer(server);
+    server = createWorkerHealthServer(loadConfig({ API_AUTH_MODE: 'none', RUN_MODE: 'worker' }));
+    baseUrl = await listen(server);
+
+    const health = await fetch(`${baseUrl}/health`);
+    expect(health.status).toBe(200);
+    await expect(health.json()).resolves.toMatchObject({ status: 'ok', runMode: 'worker' });
+
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Worker should not serve API' });
+    expect(createSession.status).toBe(404);
+    await expect(createSession.json()).resolves.toMatchObject({ error: 'not_found' });
   });
 
   it('protects product session routes when bearer auth is enabled', async () => {

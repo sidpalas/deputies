@@ -523,7 +523,7 @@ interface SandboxProvider {
 Provider choices should be config-driven:
 
 ```txt
-SANDBOX_PROVIDER=fake|local|docker|daytona|kubernetes|ecs
+SANDBOX_PROVIDER=fake|unsafe-local|docker|daytona|kubernetes|ecs
 ```
 
 MVP should include `fake` for tests and one real provider.

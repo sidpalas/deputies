@@ -1,6 +1,6 @@
 export type RunMode = 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue';
-export type SandboxProviderKind = 'fake' | 'local' | 'docker' | 'daytona' | 'kubernetes' | 'ecs';
+export type SandboxProviderKind = 'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'kubernetes' | 'ecs';
 export type DockerOrchestratorMode = 'in-process' | 'http';
 export type AppStoreKind = 'memory' | 'postgres';
 export type ApiAuthMode = 'none' | 'bearer' | 'session';
@@ -13,6 +13,7 @@ export type AppConfig = {
   maxJsonBodyBytes: number;
   runCancellationPollIntervalMs: number;
   workerConcurrency: number;
+  workerPollIntervalMs: number;
   sandboxIdleTimeoutMs: number;
   sandboxStopDelayMs: number;
   sandboxRetentionMs: number;
@@ -88,6 +89,7 @@ export type AppConfig = {
   artifactStorageS3ForcePathStyle: boolean;
   artifactStorageS3CreateBucket: boolean;
   artifactToolMaxBytes: number;
+  unsafeAllowLocalHttpCallbacks: boolean;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
@@ -100,6 +102,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       'RUN_CANCELLATION_POLL_INTERVAL_MS',
     ),
     workerConcurrency: parsePositiveInteger(env.WORKER_CONCURRENCY, 4, 'WORKER_CONCURRENCY'),
+    workerPollIntervalMs: parsePositiveInteger(env.WORKER_POLL_INTERVAL_MS, 1_000, 'WORKER_POLL_INTERVAL_MS'),
     sandboxIdleTimeoutMs:
       parsePositiveInteger(env.SANDBOX_IDLE_TIMEOUT_SECONDS, 900, 'SANDBOX_IDLE_TIMEOUT_SECONDS') * 1000,
     sandboxStopDelayMs:
@@ -109,7 +112,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     runner: parseEnum(env.RUNNER, ['fake', 'flue'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'local', 'docker', 'daytona', 'kubernetes', 'ecs'],
+      ['fake', 'unsafe-local', 'docker', 'daytona', 'kubernetes', 'ecs'],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
@@ -160,6 +163,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       env.ARTIFACT_TOOL_MAX_BYTES,
       25 * 1024 * 1024,
       'ARTIFACT_TOOL_MAX_BYTES',
+    ),
+    unsafeAllowLocalHttpCallbacks: parseBoolean(
+      env.UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS,
+      false,
+      'UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS',
     ),
   };
 

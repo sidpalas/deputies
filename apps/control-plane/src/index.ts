@@ -1,5 +1,5 @@
 import { AppLifecycle, installProcessShutdownHandlers, type CloseableResource } from './app/lifecycle.js';
-import { createServer, createServices } from './app/server.js';
+import { createServer, createServices, createWorkerHealthServer } from './app/server.js';
 import { createArtifactObjectStorage } from './artifacts/storage.js';
 import { HttpCompletionCallbackSender, type CompletionCallbackSender } from './callbacks/service.js';
 import {
@@ -41,6 +41,7 @@ const sandboxProvider = createSandboxProvider();
 const artifactObjectStorage = config.artifactStorage === 'disabled' ? undefined : createArtifactObjectStorage(config);
 const services = createServices(store, {
   sandboxProvider,
+  unsafeAllowLocalHttpCallbacks: config.unsafeAllowLocalHttpCallbacks,
   ...(artifactObjectStorage ? { artifactObjectStorage } : {}),
 });
 const githubClient =
@@ -69,6 +70,11 @@ if (config.runMode === 'all' || config.runMode === 'api') {
   server.listen(config.port, () => {
     console.log(`background-agent service listening on :${config.port} (${config.runMode})`);
   });
+} else {
+  server = createWorkerHealthServer(config);
+  server.listen(config.port, () => {
+    console.log(`background-agent worker health listening on :${config.port} (${config.runMode})`);
+  });
 }
 
 if (config.runMode === 'all' || config.runMode === 'worker') {
@@ -88,7 +94,7 @@ if (config.runMode === 'all' || config.runMode === 'worker') {
       callbackSenders,
       progressNotifiers,
     });
-    return startWorkerLoop(worker);
+    return startWorkerLoop(worker, config.workerPollIntervalMs);
   });
   workerLoop = {
     wake(): void {
@@ -115,7 +121,9 @@ if (config.runMode === 'all' || config.runMode === 'worker') {
 }
 
 function createCallbackSenders(): CompletionCallbackSender[] {
-  const senders: CompletionCallbackSender[] = [new HttpCompletionCallbackSender()];
+  const senders: CompletionCallbackSender[] = [
+    new HttpCompletionCallbackSender({ unsafeAllowLocalNetwork: config.unsafeAllowLocalHttpCallbacks }),
+  ];
   if (config.slackBotToken) {
     senders.push(
       new SlackCompletionCallbackSender(
@@ -167,9 +175,9 @@ installProcessShutdownHandlers(new AppLifecycle(lifecycleOptions));
 
 function createSandboxProvider(): SandboxProvider {
   if (config.sandboxProvider === 'fake') return new FakeSandboxProvider();
-  if (config.sandboxProvider === 'local') {
+  if (config.sandboxProvider === 'unsafe-local') {
     console.warn(
-      'WARNING: SANDBOX_PROVIDER=local is not a security boundary. Agent commands run on the API/worker host runtime; use only for trusted local development.',
+      'WARNING: SANDBOX_PROVIDER=unsafe-local is not a security boundary. Agent commands run on the API/worker host runtime; use only for trusted local development.',
     );
     return new LocalSandboxProvider(
       config.localSandboxAllowedCommands.length ? { allowedCommands: config.localSandboxAllowedCommands } : {},

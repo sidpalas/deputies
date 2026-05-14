@@ -5,7 +5,9 @@ import { runMigrations } from '../../src/db/migrate.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 const uatPort = 4593;
+const workerHealthPort = 4594;
 let server: ChildProcess | undefined;
+let worker: ChildProcess | undefined;
 
 describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
   let pool: Pool;
@@ -23,10 +25,7 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
   });
 
   afterEach(async () => {
-    if (!server) return;
-    server.kill();
-    await new Promise<void>((resolve) => server?.once('exit', () => resolve()));
-    server = undefined;
+    await stopProcesses();
   });
 
   afterAll(async () => {
@@ -54,6 +53,85 @@ describe.skipIf(!testDatabaseUrl)('built server UAT', () => {
       'agent_response_final',
       'message_completed',
     ]);
+  });
+
+  it('completes messages with split API and worker processes', async () => {
+    await stopProcesses();
+    await startWorker({ WORKER_POLL_INTERVAL_MS: '60000' });
+    await startServer({ RUN_MODE: 'api' });
+
+    const createSession = await postJson('/sessions', { title: 'Split server UAT' });
+    expect(createSession.status).toBe(201);
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const createMessage = await postJson(`/sessions/${session.id}/messages`, { prompt: 'complete from split app' });
+    expect(createMessage.status).toBe(202);
+
+    const events = await waitForEvents(session.id, ['message_completed'], {}, 3_000);
+    expect(events.map((event) => event.type)).toEqual([
+      'session_created',
+      'message_created',
+      'message_started',
+      'sandbox_starting',
+      'sandbox_ready',
+      'run_started',
+      'agent_text_delta',
+      'run_completed',
+      'agent_response_final',
+      'message_completed',
+    ]);
+  });
+
+  it('does not process queued work in API-only mode', async () => {
+    await stopProcesses();
+    await startServer({ RUN_MODE: 'api' });
+
+    const createSession = await postJson('/sessions', { title: 'API-only UAT' });
+    expect(createSession.status).toBe(201);
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const createMessage = await postJson(`/sessions/${session.id}/messages`, { prompt: 'stay queued' });
+    expect(createMessage.status).toBe(202);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const messagesResponse = await fetch(`http://127.0.0.1:${uatPort}/sessions/${session.id}/messages`);
+    expect(messagesResponse.status).toBe(200);
+    await expect(messagesResponse.json()).resolves.toMatchObject({ messages: [{ status: 'pending' }] });
+
+    const events = await waitForEvents(session.id, []);
+    expect(events.map((event) => event.type)).toEqual(['session_created', 'message_created']);
+  });
+
+  it('exposes worker health without product API routes and processes existing work', async () => {
+    await stopProcesses();
+    await startServer({ RUN_MODE: 'api' });
+
+    const createSession = await postJson('/sessions', { title: 'Worker-only UAT' });
+    expect(createSession.status).toBe(201);
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    const createMessage = await postJson(`/sessions/${session.id}/messages`, { prompt: 'worker only completion' });
+    expect(createMessage.status).toBe(202);
+
+    await stopServer();
+    await startWorker();
+
+    const health = await fetch(`http://127.0.0.1:${workerHealthPort}/health`);
+    expect(health.status).toBe(200);
+    await expect(health.json()).resolves.toMatchObject({ status: 'ok', runMode: 'worker' });
+
+    const productRoute = await fetch(`http://127.0.0.1:${workerHealthPort}/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Blocked on worker' }),
+    });
+    expect(productRoute.status).toBe(404);
+
+    await waitFor(async () => {
+      const { rows } = await pool.query<{ status: string }>('SELECT status FROM messages WHERE session_id = $1', [
+        session.id,
+      ]);
+      return rows[0]?.status === 'completed';
+    });
   });
 
   it('accepts a generic webhook and completes it through the worker', async () => {
@@ -268,6 +346,8 @@ async function startServer(extraEnv: Record<string, string> = {}): Promise<void>
       PORT: String(uatPort),
       RUN_MODE: 'all',
       RUNNER: 'fake',
+      API_AUTH_MODE: 'none',
+      UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS: 'true',
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -275,12 +355,48 @@ async function startServer(extraEnv: Record<string, string> = {}): Promise<void>
   await waitForHealth();
 }
 
+async function startWorker(extraEnv: Record<string, string> = {}): Promise<void> {
+  worker = spawn(process.execPath, ['dist/index.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      APP_STORE: 'postgres',
+      DATABASE_URL: testDatabaseUrl!,
+      PORT: String(workerHealthPort),
+      RUN_MODE: 'worker',
+      RUNNER: 'fake',
+      API_AUTH_MODE: 'none',
+      UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS: 'true',
+      ...extraEnv,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  await waitForHealth(workerHealthPort);
+}
+
 async function restartServer(extraEnv: Record<string, string>): Promise<void> {
-  if (server) {
-    server.kill();
-    await new Promise<void>((resolve) => server?.once('exit', () => resolve()));
-  }
+  await stopServer();
   await startServer(extraEnv);
+}
+
+async function stopProcesses(): Promise<void> {
+  await Promise.all([stopServer(), stopWorker()]);
+}
+
+async function stopServer(): Promise<void> {
+  if (!server) return;
+  const current = server;
+  server = undefined;
+  current.kill();
+  await new Promise<void>((resolve) => current.once('exit', () => resolve()));
+}
+
+async function stopWorker(): Promise<void> {
+  if (!worker) return;
+  const current = worker;
+  worker = undefined;
+  current.kill();
+  await new Promise<void>((resolve) => current.once('exit', () => resolve()));
 }
 
 function postJson(path: string, body: unknown, bearerToken?: string): Promise<Response> {
@@ -311,9 +427,9 @@ function patchJson(path: string, body: unknown, bearerToken?: string): Promise<R
   });
 }
 
-async function waitForHealth(): Promise<void> {
+async function waitForHealth(port = uatPort): Promise<void> {
   await waitFor(async () => {
-    const response = await fetch(`http://127.0.0.1:${uatPort}/health`).catch(() => null);
+    const response = await fetch(`http://127.0.0.1:${port}/health`).catch(() => null);
     return response?.ok === true;
   });
 }
@@ -324,6 +440,7 @@ async function waitForEvents(
   sessionId: string,
   terminalTypes: string[],
   options: { bearerToken?: string } = {},
+  timeoutMs = 10_000,
 ): Promise<UatEvent[]> {
   let lastEvents: UatEvent[] = [];
   await waitFor(async () => {
@@ -333,7 +450,7 @@ async function waitForEvents(
     const body = (await response.json()) as { events: UatEvent[] };
     lastEvents = body.events;
     return terminalTypes.every((type) => lastEvents.some((event) => event.type === type));
-  });
+  }, timeoutMs);
 
   return lastEvents;
 }

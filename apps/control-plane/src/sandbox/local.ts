@@ -91,7 +91,7 @@ export const localCapabilities: SandboxCapabilities = {
 };
 
 export class LocalSandboxProvider implements SandboxProvider {
-  readonly name = 'local';
+  readonly name = 'unsafe-local';
   readonly capabilities = localCapabilities;
 
   constructor(private readonly options: LocalSandboxProviderOptions = {}) {}

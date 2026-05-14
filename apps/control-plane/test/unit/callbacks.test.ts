@@ -95,6 +95,24 @@ describe('HttpCompletionCallbackSender', () => {
     expect(requests).toEqual([{ timeoutMs: 1234, body: JSON.stringify(payload) }]);
   });
 
+  it('allows local callback targets only when explicitly enabled', async () => {
+    const requests: Array<{ url: string; addresses: unknown[] }> = [];
+    const sender = new HttpCompletionCallbackSender({
+      unsafeAllowLocalNetwork: true,
+      request: async (input) => {
+        requests.push({ url: input.url.toString(), addresses: input.addresses });
+        return { statusCode: 204 };
+      },
+    });
+
+    await expect(
+      sender.deliver({ type: 'http', target: { url: 'http://127.0.0.1:1234/callback' } }, payload),
+    ).resolves.toBeUndefined();
+    expect(requests).toEqual([
+      { url: 'http://127.0.0.1:1234/callback', addresses: [{ address: '127.0.0.1', family: 4 }] },
+    ]);
+  });
+
   it('surfaces timeout failures as retryable delivery errors', async () => {
     const sender = new HttpCompletionCallbackSender({
       timeoutMs: 1,
