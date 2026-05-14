@@ -129,7 +129,9 @@ export class FlueRunner implements Runner {
       if (input.signal?.aborted) throw new Error('Operation aborted');
       let response;
       try {
-        response = await session.prompt(withToolGuidance(input.prompt, Boolean(repositoryServices)));
+        response = await session.prompt(
+          withToolGuidance(input.prompt, Boolean(this.options.artifacts), Boolean(repositoryServices)),
+        );
       } finally {
         if (input.signal?.aborted) await this.restoreSessionSnapshot(input.sessionId, sessionSnapshot);
       }
@@ -208,7 +210,7 @@ export class FlueRunner implements Runner {
   }
 }
 
-function withToolGuidance(prompt: string, includeRepository: boolean): string {
+function withToolGuidance(prompt: string, includeArtifacts: boolean, includeRepository: boolean): string {
   const lines = [
     'Preview tool guidance:',
     '- If you start or identify a web server the user should open, call preview({ action: "publish", port, label, path }) after confirming the server is running.',
@@ -217,17 +219,27 @@ function withToolGuidance(prompt: string, includeRepository: boolean): string {
     '- For Vite dev servers published as previews, do not hard-code server.hmr.host, server.hmr.clientPort, or server.hmr.protocol to localhost; let Vite infer the browser preview URL unless the user specifically asks otherwise.',
     '',
   ];
+  if (includeArtifacts) {
+    lines.push(
+      'Artifact tool guidance:',
+      '- Use artifact({ action: "create", ... }) for files the user should view or download, including screenshots, images, reports, logs, and videos.',
+      '- If you mention a created artifact in your final response, use the markdownLink returned by the artifact tool as-is, or use its downloadUrl as the markdown href. Do not wrap artifact download URLs in the session URL.',
+      '- Use artifact type=video only for browser-playable MP4 files. If you create AVI, MOV, MKV, or another video format, publish it as type=file so it is download-only.',
+      '',
+    );
+  }
   if (includeRepository) {
     lines.push(
-    'Repository tool guidance:',
-    '- Before doing repository-specific work, use repository({ action: "status" }) to inspect the active repo.',
-    '- If a repository is already active and the user did not ask to switch, use it.',
-    '- If the user clearly names or chooses a repo for ongoing work, use repository({ action: "set", owner, repo, reason }) and then repository({ action: "prepare" }) in the same turn.',
-    '- Do not stop after setting the repo when the next useful step is obviously preparation; prepare immediately unless the user only asked to inspect or select repos.',
-    '- If the repo is unclear, use repository({ action: "list" }) and ask the user to choose instead of guessing.',
-    '- Use repository({ action: "prepare" }) before reading or editing files in the repo.',
-    '- Use normal file and shell tools for local code changes and commits, git for authenticated remote git operations, and gh for GitHub issues, comments, and pull requests.',
-    '');
+      'Repository tool guidance:',
+      '- Before doing repository-specific work, use repository({ action: "status" }) to inspect the active repo.',
+      '- If a repository is already active and the user did not ask to switch, use it.',
+      '- If the user clearly names or chooses a repo for ongoing work, use repository({ action: "set", owner, repo, reason }) and then repository({ action: "prepare" }) in the same turn.',
+      '- Do not stop after setting the repo when the next useful step is obviously preparation; prepare immediately unless the user only asked to inspect or select repos.',
+      '- If the repo is unclear, use repository({ action: "list" }) and ask the user to choose instead of guessing.',
+      '- Use repository({ action: "prepare" }) before reading or editing files in the repo.',
+      '- Use normal file and shell tools for local code changes and commits, git for authenticated remote git operations, and gh for GitHub issues, comments, and pull requests.',
+      '',
+    );
   }
   lines.push('User request:', prompt);
   return lines.join('\n');

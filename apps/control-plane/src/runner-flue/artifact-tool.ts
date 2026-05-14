@@ -3,7 +3,7 @@ import type { ToolDef } from '@flue/sdk';
 import type { ArtifactService } from '../artifacts/service.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 
-const allowedTypes = new Set(['file', 'log', 'screenshot', 'report', 'image']);
+const allowedTypes = new Set(['file', 'log', 'screenshot', 'report', 'image', 'video']);
 const maxStringLength = 512;
 
 export type ArtifactToolServices = {
@@ -20,7 +20,7 @@ export function createArtifactTool(services: ArtifactToolServices): ToolDef {
     name: 'artifact',
     description:
       'Manage durable artifacts visible in the product UI. Use action=create to publish a file from the current sandbox for screenshots, generated images, reports, large logs, and other files the user should be able to view or download. ' +
-      'For create, provide a sandbox file path, artifact type, and optional title/content type. Use a user-facing title such as "Generated image", "Screenshot", or "Test report", not process context like "retry attempt". Prefer kebab-case download filenames with a useful extension, such as generated-image.png, test-report.md, or run-log.txt. The tool returns an artifact ID and product download URL you can mention in your response.',
+      'For create, provide a sandbox file path, artifact type, and optional title/content type. Use a user-facing title such as "Generated image", "Screenshot", or "Test report", not process context like "retry attempt". Prefer kebab-case download filenames with a useful extension, such as generated-image.png, test-report.md, run-log.txt, or browser-video.mp4. Use type=video only for browser-playable MP4 artifacts; publish AVI, MOV, MKV, and other non-browser-playable videos as type=file. The tool returns an artifact ID, downloadUrl, and markdownLink. If you mention the artifact in your response, use markdownLink as-is or use downloadUrl as the markdown href; do not wrap it in the session URL.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -31,14 +31,15 @@ export function createArtifactTool(services: ArtifactToolServices): ToolDef {
         type: {
           type: 'string',
           enum: [...allowedTypes],
-          description: 'Artifact type: file, log, screenshot, report, or image.',
+          description: 'Artifact type: file, log, screenshot, report, image, or video.',
         },
         title: { type: 'string', maxLength: maxStringLength, description: 'Human-readable title for the artifact.' },
         contentType: { type: 'string', maxLength: 128, description: 'MIME type, for example image/png or text/plain.' },
         fileName: {
           type: 'string',
           maxLength: maxStringLength,
-          description: 'Download filename to show users. Prefer kebab-case with a useful extension, for example generated-image.png or run-log.txt.',
+          description:
+            'Download filename to show users. Prefer kebab-case with a useful extension, for example generated-image.png or run-log.txt.',
         },
       },
     },
@@ -46,7 +47,9 @@ export function createArtifactTool(services: ArtifactToolServices): ToolDef {
       const action = typeof params.action === 'string' ? params.action : '';
       if (action !== 'create') throw new Error('artifact action must be one of: create');
       const input = validateParams(params);
-      if (!services.sandbox.fs) throw new Error(`Sandbox provider "${services.sandbox.provider}" does not expose files`);
+      if (!services.sandbox.fs)
+        throw new Error(`Sandbox provider "${services.sandbox.provider}" does not expose files`);
+      validateVideoArtifact(input);
 
       const stat = await services.sandbox.fs.stat(input.path);
       if (!stat.isFile) throw new Error('artifact create path must point to a regular file');
@@ -72,10 +75,19 @@ export function createArtifactTool(services: ArtifactToolServices): ToolDef {
         artifactId: artifact.id,
         type: artifact.type,
         ...(artifact.title ? { title: artifact.title } : {}),
-        downloadUrl: `/sessions/${services.sessionId}/artifacts/${artifact.id}/download`,
+        downloadUrl: artifactDownloadUrl(services.sessionId, artifact.id),
+        markdownLink: `[${artifactLinkLabel(artifact.title ?? fileName)}](${artifactDownloadUrl(services.sessionId, artifact.id)})`,
       });
     },
   };
+}
+
+function artifactDownloadUrl(sessionId: string, artifactId: string): string {
+  return `/sessions/${sessionId}/artifacts/${artifactId}/download`;
+}
+
+function artifactLinkLabel(value: string): string {
+  return value.replace(/[\[\]\r\n]/g, '').trim() || 'Download artifact';
 }
 
 function validateParams(params: Record<string, unknown>): {
@@ -97,6 +109,18 @@ function validateParams(params: Record<string, unknown>): {
   if (contentType) Object.assign(result, { contentType });
   if (fileName) Object.assign(result, { fileName });
   return result;
+}
+
+function validateVideoArtifact(input: { path: string; type: string; contentType?: string; fileName?: string }) {
+  if (input.type !== 'video') return;
+  const fileName = input.fileName ?? path.basename(input.path);
+  const extension = path.extname(fileName).toLowerCase();
+  const contentType = input.contentType?.split(';')[0]?.trim().toLowerCase();
+  if (extension === '.mp4' && (!contentType || contentType === 'video/mp4')) return;
+  if (extension === '.m4v' && (!contentType || contentType === 'video/mp4' || contentType === 'video/x-m4v')) return;
+  throw new Error(
+    'artifact create type=video requires a browser-playable MP4 file. Publish this file as type=file or transcode it to MP4/H.264/yuv420p first.',
+  );
 }
 
 function readString(value: unknown, name: string, maxLength: number): string {

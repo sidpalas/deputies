@@ -1,5 +1,6 @@
 import { FlueRunner } from '../../src/runner-flue/runner.js';
 import { RealFlueAgentFactory } from '../../src/runner-flue/agent-factory.js';
+import { createArtifactTool } from '../../src/runner-flue/artifact-tool.js';
 import type { FlueAgentFactory } from '../../src/runner-flue/types.js';
 import type { SessionData, SessionStore } from '@flue/sdk';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -265,6 +266,36 @@ describe('FlueRunner', () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it('rejects non-browser-playable video artifacts as type video', async () => {
+    const store = new MemoryStore();
+    const eventsService = new EventService(store);
+    const artifacts = new ArtifactService(
+      store,
+      eventsService,
+      new FilesystemArtifactObjectStorage('/tmp/deputies-test-artifacts'),
+    );
+    const sandbox = createFilesystemSandbox('session-1');
+    await sandbox.fs!.writeFile('/workspace/small-video.avi', 'fake avi');
+    const tool = createArtifactTool({
+      artifacts,
+      sandbox,
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      maxBytes: 1024,
+    });
+
+    await expect(
+      tool.execute({
+        action: 'create',
+        path: '/workspace/small-video.avi',
+        type: 'video',
+        title: 'Small AVI video',
+        contentType: 'video/x-msvideo',
+      }),
+    ).rejects.toThrow('type=video requires a browser-playable MP4 file');
   });
 
   it('restores persisted Flue session state after abort', async () => {

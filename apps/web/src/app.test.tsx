@@ -598,9 +598,87 @@ it('renders stored image artifacts inline and in the artifacts pane', async () =
 
   expect(await screen.findByText('Here is the image.')).toBeInTheDocument();
   const images = await screen.findAllByRole('img', { name: 'Generated image' });
-  expect(images[0]).toHaveAttribute('src', `${window.location.origin}/sessions/${session.id}/artifacts/artifact-1/download`);
+  expect(images[0]).toHaveAttribute(
+    'src',
+    `${window.location.origin}/sessions/${session.id}/artifacts/artifact-1/download`,
+  );
   expect(screen.getAllByText('image · Generated image').length).toBeGreaterThan(0);
-  expect(screen.getAllByText('Open image')).toHaveLength(1);
+  expect(screen.getAllByText('Download image')).toHaveLength(1);
+});
+
+it('renders video artifacts as click-to-load inline players', async () => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  mockApi({
+    messages: [
+      messageFixture({ id: '00000000-0000-4000-8000-000000000124', sequence: 1, status: 'completed', prompt: 'video' }),
+    ],
+    events: [
+      eventFixture({
+        sequence: 1,
+        type: 'agent_text_delta',
+        runId: '00000000-0000-4000-8000-000000000224',
+        messageId: '00000000-0000-4000-8000-000000000124',
+        payload: { text: 'Video created.' },
+      }),
+    ],
+    artifacts: [
+      {
+        id: 'video-artifact',
+        sessionId: session.id,
+        runId: '00000000-0000-4000-8000-000000000224',
+        messageId: '00000000-0000-4000-8000-000000000124',
+        type: 'file',
+        title: 'Demo video',
+        storageKey: 'video-key',
+        payload: { contentType: 'video/mp4', fileName: 'demo.mp4', sizeBytes: 2048 },
+        createdAt: '2026-05-05T12:02:00.000Z',
+      },
+    ],
+  });
+  render(<App />);
+
+  expect(await screen.findByText('Video created.')).toBeInTheDocument();
+  expect(screen.getByText('Video streams from artifact storage after you press play.')).toBeInTheDocument();
+  expect(screen.queryByRole('application')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /Play video/ }));
+
+  const video = await waitFor(() => document.querySelector('video'));
+  expect(video).toHaveAttribute(
+    'src',
+    `${window.location.origin}/sessions/${session.id}/artifacts/video-artifact/download?disposition=inline`,
+  );
+  expect(video).toHaveAttribute('playsinline');
+});
+
+it('downloads markdown artifact links through the blob downloader', async () => {
+  const createObjectUrl = vi.fn(() => 'blob:markdown-artifact');
+  const append = vi.spyOn(document.body, 'append');
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl });
+  Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+  mockApi({
+    messages: [
+      messageFixture({ id: '00000000-0000-4000-8000-000000000125', sequence: 1, status: 'completed', prompt: 'link' }),
+    ],
+    events: [
+      eventFixture({
+        sequence: 1,
+        type: 'agent_text_delta',
+        runId: '00000000-0000-4000-8000-000000000225',
+        messageId: '00000000-0000-4000-8000-000000000125',
+        payload: { text: `[download](/sessions/${session.id}/artifacts/video-artifact/download)` },
+      }),
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('link', { name: 'download' }));
+
+  await waitFor(() => expect(createObjectUrl).toHaveBeenCalled());
+  const link = append.mock.calls.at(-1)?.[0] as HTMLAnchorElement;
+  expect(link.download).toBe('demo.mp4');
+  expect(link.href).toBe('blob:markdown-artifact');
 });
 
 it('skips large inline image autoload and lazy-loads text previews', async () => {
@@ -1318,7 +1396,12 @@ it('caps long diagnostic commands inside a scrollable panel', async () => {
         type: 'tool_finished',
         runId: '00000000-0000-4000-8000-000000000228',
         messageId: '00000000-0000-4000-8000-000000000128',
-        payload: { toolName: 'shell', toolCallId: 'tool-1', isError: true, result: 'ModuleNotFoundError: No module named PIL' },
+        payload: {
+          toolName: 'shell',
+          toolCallId: 'tool-1',
+          isError: true,
+          result: 'ModuleNotFoundError: No module named PIL',
+        },
       }),
     ],
   });
@@ -1794,13 +1877,23 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname.match(/^\/sessions\/[^/]+\/artifacts\/[^/]+\/preview$/)) {
-      if (options.artifactPreviewStatus) return jsonResponse({ error: 'not_found', message: 'Request failed with 404' }, options.artifactPreviewStatus);
+      if (options.artifactPreviewStatus)
+        return jsonResponse({ error: 'not_found', message: 'Request failed with 404' }, options.artifactPreviewStatus);
       return jsonResponse({
         preview: options.artifactPreview ?? {
           text: 'preview text',
           contentType: 'text/plain',
           truncated: false,
           sizeBytes: 12,
+        },
+      });
+    }
+
+    if (url.pathname.match(/^\/sessions\/[^/]+\/artifacts\/[^/]+\/download$/)) {
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          'content-type': 'video/mp4',
+          'content-disposition': 'attachment; filename="demo.mp4"; filename*=UTF-8\'\'demo.mp4',
         },
       });
     }

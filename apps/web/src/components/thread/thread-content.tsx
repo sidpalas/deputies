@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ToggleEvent } from 'react';
-import { Check, ChevronDown, Copy, ExternalLink, RotateCcw, X } from 'lucide-react';
+import type { AnchorHTMLAttributes, MouseEvent, ToggleEvent } from 'react';
+import { Check, ChevronDown, Copy, Download, ExternalLink, Play, RotateCcw, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { AgentEvent, Artifact, ArtifactPreview, CallbackDelivery, Message, SandboxPreview } from '../../api.js';
@@ -113,11 +113,19 @@ function InlinePreviews(props: { previews: SandboxPreview[] }) {
   );
 }
 
-function InlineArtifacts(props: { artifacts: Artifact[]; onLoadArtifactPreview: (artifact: Artifact) => Promise<ArtifactPreview> }) {
+function InlineArtifacts(props: {
+  artifacts: Artifact[];
+  onLoadArtifactPreview: (artifact: Artifact) => Promise<ArtifactPreview>;
+}) {
   return (
     <div className="grid gap-2" aria-label="Inline artifacts">
       {props.artifacts.map((artifact) => (
-        <ArtifactPreviewCard artifact={artifact} compact key={artifact.id} onLoadArtifactPreview={props.onLoadArtifactPreview} />
+        <ArtifactPreviewCard
+          artifact={artifact}
+          compact
+          key={artifact.id}
+          onLoadArtifactPreview={props.onLoadArtifactPreview}
+        />
       ))}
     </div>
   );
@@ -218,17 +226,7 @@ function MarkdownText(props: { text: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        a: ({ className, ...props }) => (
-          <a
-            className={cn(
-              'text-primary underline decoration-primary/60 underline-offset-2 hover:text-primary/80',
-              className,
-            )}
-            target="_blank"
-            rel="noreferrer"
-            {...props}
-          />
-        ),
+        a: ({ className, ...props }) => <MarkdownLink className={className} {...props} />,
         blockquote: ({ className, ...props }) => (
           <blockquote className={cn('border-l-2 border-border pl-3 text-muted-foreground', className)} {...props} />
         ),
@@ -289,6 +287,40 @@ function MarkdownText(props: { text: string }) {
     >
       {props.text}
     </ReactMarkdown>
+  );
+}
+
+function MarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
+  const { className, href, onClick, ...rest } = props;
+  const [downloading, setDownloading] = useState(false);
+  const artifactDownload = href ? artifactDownloadUrlFromHref(href) : null;
+
+  async function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+    onClick?.(event);
+    if (event.defaultPrevented || !artifactDownload) return;
+    event.preventDefault();
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const { url, fileName } = await loadArtifactBlob({ downloadUrl: artifactDownload });
+      triggerBrowserDownload(url, fileName);
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <a
+      className={cn('text-primary underline decoration-primary/60 underline-offset-2 hover:text-primary/80', className)}
+      href={href}
+      target={artifactDownload ? undefined : '_blank'}
+      rel="noreferrer"
+      onClick={handleClick}
+      {...rest}
+    >
+      {downloading ? 'Downloading...' : props.children}
+    </a>
   );
 }
 
@@ -395,7 +427,13 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
 }
 
 function JsonPayload(props: { value: unknown }) {
-  return <DiagnosticCode code={JSON.stringify(props.value, null, 2)} language="json" label="Scrollable diagnostic debug details" />;
+  return (
+    <DiagnosticCode
+      code={JSON.stringify(props.value, null, 2)}
+      language="json"
+      label="Scrollable diagnostic debug details"
+    />
+  );
 }
 
 type DiagnosticActivity = {
@@ -508,7 +546,9 @@ function DiagnosticActivityCard(props: { activity: DiagnosticActivity }) {
         </div>
         <Badge className={diagnosticStatusClass(activity.status)}>{diagnosticStatusLabel(activity.status)}</Badge>
       </div>
-      {activity.command ? <DiagnosticCode code={activity.command} language="bash" label="Scrollable diagnostic command" /> : null}
+      {activity.command ? (
+        <DiagnosticCode code={activity.command} language="bash" label="Scrollable diagnostic command" />
+      ) : null}
       {activity.detail ? <DiagnosticText text={activity.detail} /> : null}
       {activity.error ? <DiagnosticText text={activity.error} tone="error" /> : null}
       <details className="mt-2 min-w-0">
@@ -968,8 +1008,8 @@ function ArtifactPreviewCard(props: ArtifactPreviewCardProps) {
   const { artifact } = props;
   const name = artifactName(artifact);
   const downloadUrl = artifactDownloadUrl(artifact);
-  const openUrl = downloadUrl ?? artifact.url;
   const image = isImageArtifact(artifact);
+  const video = isBrowserPlayableVideoArtifact(artifact);
   const sizeBytes = artifactSizeBytes(artifact);
   const largeImage = image && (!sizeBytes || sizeBytes > inlineImageMaxBytes);
   const textPreviewable = isTextPreviewableArtifact(artifact);
@@ -987,14 +1027,10 @@ function ArtifactPreviewCard(props: ArtifactPreviewCardProps) {
           <span className="min-w-0 truncate text-muted-foreground">
             {artifact.type} · {name}
           </span>
-          {openUrl ? (
-            <a
-              className="text-primary hover:text-primary/80"
-              href={openUrl}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(event) => event.stopPropagation()}
-            >
+          {downloadUrl ? (
+            <ArtifactDownloadLink artifact={artifact} downloadUrl={downloadUrl} label="Download" />
+          ) : artifact.url ? (
+            <a className="text-primary hover:text-primary/80" href={artifact.url} target="_blank" rel="noreferrer">
               Open
             </a>
           ) : null}
@@ -1018,13 +1054,8 @@ function ArtifactPreviewCard(props: ArtifactPreviewCardProps) {
         {artifact.type} · {formatDate(artifact.createdAt)}
       </span>
       <strong className="mt-1 block break-words text-sm font-medium">
-        {openUrl ? (
-          <a
-            className="text-primary hover:text-primary/80"
-            href={openUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
+        {artifact.url ? (
+          <a className="text-primary hover:text-primary/80" href={artifact.url} target="_blank" rel="noreferrer">
             {name}
           </a>
         ) : (
@@ -1042,21 +1073,27 @@ function ArtifactPreviewCard(props: ArtifactPreviewCardProps) {
         </a>
       ) : null}
       {largeImage ? (
-        <p className="mt-2 text-sm text-muted-foreground">
-          Large image preview skipped. Open the image to view it.
-        </p>
+        <p className="mt-2 text-sm text-muted-foreground">Large image preview skipped. Open the image to view it.</p>
       ) : null}
+      {video && downloadUrl ? <VideoArtifactPreview artifact={artifact} downloadUrl={downloadUrl} /> : null}
       {textPreviewable && props.onLoadArtifactPreview ? (
         <TextArtifactPreview artifact={artifact} onLoadArtifactPreview={props.onLoadArtifactPreview} />
       ) : null}
       <div className="mt-2 flex flex-wrap gap-2">
         {downloadUrl ? (
-          <a className="text-sm font-medium text-primary hover:text-primary/80" href={downloadUrl} target="_blank" rel="noreferrer">
-            {image ? 'Open image' : 'Download artifact'}
-          </a>
+          <ArtifactDownloadLink
+            artifact={artifact}
+            downloadUrl={downloadUrl}
+            label={image ? 'Download image' : 'Download artifact'}
+          />
         ) : null}
         {artifact.url ? (
-          <a className="text-sm font-medium text-primary hover:text-primary/80" href={artifact.url} target="_blank" rel="noreferrer">
+          <a
+            className="text-sm font-medium text-primary hover:text-primary/80"
+            href={artifact.url}
+            target="_blank"
+            rel="noreferrer"
+          >
             Open external link
           </a>
         ) : null}
@@ -1103,6 +1140,73 @@ function TextArtifactPreview(props: TextArtifactPreviewProps) {
         ) : null}
       </div>
     </details>
+  );
+}
+
+function ArtifactDownloadLink(props: { artifact: Artifact; downloadUrl: string; label: string }) {
+  const [downloading, setDownloading] = useState(false);
+
+  async function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const { url, fileName } = await loadArtifactBlob({ artifact: props.artifact, downloadUrl: props.downloadUrl });
+      triggerBrowserDownload(url, fileName);
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <a
+      className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:text-primary/80"
+      href={props.downloadUrl}
+      onClick={handleClick}
+    >
+      <Download className="h-3.5 w-3.5" /> {downloading ? 'Downloading...' : props.label}
+    </a>
+  );
+}
+
+function VideoArtifactPreview(props: { artifact: Artifact; downloadUrl: string }) {
+  const [showPlayer, setShowPlayer] = useState(false);
+  const [error, setError] = useState('');
+  const name = artifactName(props.artifact);
+
+  if (showPlayer) {
+    return (
+      <div className="mt-3 grid gap-2">
+        <video
+          className="max-h-[28rem] w-full rounded-md border border-border bg-black shadow-sm"
+          src={artifactMediaUrl(props.downloadUrl)}
+          controls
+          playsInline
+          autoPlay
+          onError={() => setError('This video cannot be played by this browser. Download it and try a local player.')}
+        />
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 grid min-h-48 place-items-center rounded-md border border-dashed border-border bg-muted/30 p-4 text-center">
+      <div className="grid gap-2 justify-items-center">
+        <div className="rounded-full border border-border bg-background p-3 text-primary shadow-sm">
+          <Play className="h-5 w-5 fill-current" aria-hidden="true" />
+        </div>
+        <p className="text-sm font-medium text-foreground">{name}</p>
+        <p className="max-w-sm text-xs text-muted-foreground">
+          Video streams from artifact storage after you press play.
+        </p>
+        <Button size="sm" variant="secondary" onClick={() => setShowPlayer(true)}>
+          <Play className="h-3.5 w-3.5" /> Play video
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -1194,7 +1298,8 @@ function groupMessagesByRun(messages: Message[], events: AgentEvent[]): MessageG
 function artifactsForGroup(artifacts: Artifact[], group: MessageGroup): Artifact[] {
   const messageIds = new Set(group.messages.map((message) => message.id));
   return artifacts.filter((artifact) => {
-    if (!isImageArtifact(artifact) && !isTextPreviewableArtifact(artifact)) return false;
+    if (!isImageArtifact(artifact) && !isBrowserPlayableVideoArtifact(artifact) && !isTextPreviewableArtifact(artifact))
+      return false;
     if (group.runId && artifact.runId === group.runId) return true;
     return Boolean(artifact.messageId && messageIds.has(artifact.messageId));
   });
@@ -1203,6 +1308,18 @@ function artifactsForGroup(artifacts: Artifact[], group: MessageGroup): Artifact
 function artifactDownloadUrl(artifact: Artifact): string | undefined {
   if (!artifact.storageKey) return undefined;
   return `${getApiBaseUrl()}/sessions/${artifact.sessionId}/artifacts/${artifact.id}/download`;
+}
+
+function artifactDownloadUrlFromHref(href: string): string | null {
+  const url = new URL(href, window.location.origin);
+  if (!url.pathname.match(/^\/sessions\/[^/]+\/artifacts\/[^/]+\/download$/)) return null;
+  return `${getApiBaseUrl()}${url.pathname}`;
+}
+
+function artifactMediaUrl(downloadUrl: string): string {
+  const url = new URL(downloadUrl);
+  url.searchParams.set('disposition', 'inline');
+  return url.toString();
 }
 
 function artifactName(artifact: Artifact): string {
@@ -1214,19 +1331,31 @@ function isImageArtifact(artifact: Artifact): boolean {
   return artifact.type === 'image' || artifact.type === 'screenshot' || Boolean(contentType?.startsWith('image/'));
 }
 
+function isBrowserPlayableVideoArtifact(artifact: Artifact): boolean {
+  const contentType = stringPayloadValue(artifact.payload.contentType)?.split(';')[0]?.trim().toLowerCase();
+  const extension = fileExtension(stringPayloadValue(artifact.payload.fileName) ?? artifactName(artifact));
+  return contentType === 'video/mp4' || extension === '.mp4' || extension === '.m4v';
+}
+
 function isTextPreviewableArtifact(artifact: Artifact): boolean {
   if (!artifact.storageKey) return false;
   const contentType = stringPayloadValue(artifact.payload.contentType)?.split(';')[0]?.trim().toLowerCase() ?? '';
   if (!isTextContentType(contentType)) return false;
   if (artifact.type === 'log' || artifact.type === 'report') return true;
-  return previewableTextExtensions.has(fileExtension(stringPayloadValue(artifact.payload.fileName) ?? artifactName(artifact)));
+  return previewableTextExtensions.has(
+    fileExtension(stringPayloadValue(artifact.payload.fileName) ?? artifactName(artifact)),
+  );
 }
 
 function isTextContentType(contentType: string): boolean {
   if (contentType.startsWith('text/')) return true;
-  return ['application/json', 'application/xml', 'application/yaml', 'application/x-yaml', 'application/javascript'].includes(
-    contentType,
-  );
+  return [
+    'application/json',
+    'application/xml',
+    'application/yaml',
+    'application/x-yaml',
+    'application/javascript',
+  ].includes(contentType);
 }
 
 const previewableTextExtensions = new Set([
@@ -1255,6 +1384,46 @@ function fileExtension(fileName: string): string {
 
 function artifactSizeBytes(artifact: Artifact): number | undefined {
   return typeof artifact.payload.sizeBytes === 'number' ? artifact.payload.sizeBytes : undefined;
+}
+
+async function loadArtifactBlob(input: {
+  artifact?: Artifact;
+  downloadUrl: string;
+}): Promise<{ url: string; fileName: string }> {
+  const { artifact, downloadUrl } = input;
+  const response = await fetch(downloadUrl, { credentials: 'include' });
+  if (!response.ok) throw new Error(`Download failed with ${response.status}`);
+  const blob = await response.blob();
+  return {
+    url: URL.createObjectURL(blob),
+    fileName:
+      fileNameFromContentDisposition(response.headers.get('content-disposition')) ??
+      (artifact ? artifactFileName(artifact) : 'artifact'),
+  };
+}
+
+function triggerBrowserDownload(url: string, fileName: string) {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.rel = 'noreferrer';
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+function artifactFileName(artifact: Artifact): string {
+  return (
+    stringPayloadValue(artifact.payload.fileName) ??
+    `${artifactName(artifact).replace(/[^A-Za-z0-9._-]/g, '_') || artifact.id}`
+  );
+}
+
+function fileNameFromContentDisposition(value: string | null): string | undefined {
+  const encoded = value?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) return decodeURIComponent(encoded);
+  const quoted = value?.match(/filename="([^"]+)"/i)?.[1];
+  return quoted || undefined;
 }
 
 function stringPayloadValue(value: unknown): string | undefined {

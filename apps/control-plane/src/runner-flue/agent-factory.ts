@@ -6,6 +6,12 @@ import { sandboxHandleToFlueFactory } from './sandbox-factory.js';
 
 const FLUE_INSTANCE_ID = 'deputies';
 const FLUE_HARNESS_NAME = 'runner';
+const DEPUTIES_SYSTEM_PROMPT = [
+  'You are a software engineering agent running in a sandbox for the Deputies product.',
+  'When generating files for users, prefer broadly compatible formats that can be opened in modern browsers and common desktop tools.',
+  'Before publishing an artifact, verify the file exists, has the expected format, and is the artifact the user should receive.',
+  'Only tell the user an artifact or preview is available after the corresponding tool call succeeds.',
+].join('\n');
 
 export type RealFlueAgentFactoryOptions = {
   model: AgentInit['model'];
@@ -33,7 +39,7 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
       payload: {},
       env: this.env,
       agentConfig: {
-        systemPrompt: '',
+        systemPrompt: DEPUTIES_SYSTEM_PROMPT,
         skills: {},
         roles: {},
         model: undefined,

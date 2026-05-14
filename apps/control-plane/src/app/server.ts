@@ -600,13 +600,15 @@ export function createApp(config: AppConfig, services = createServices()) {
 
     try {
       const download = await services.artifacts.getDownload({ sessionId, artifactId: c.req.param('artifactId') });
-      return new Response(download.body, {
-        headers: {
-          'content-type': download.contentType,
-          'content-length': String(download.body.byteLength),
-          'content-disposition': contentDisposition(download.fileName),
-        },
-      });
+      const headers: Record<string, string> = {
+        'content-type': download.contentType,
+        'content-length': String(download.body.byteLength),
+        'content-disposition': contentDisposition(
+          download.fileName,
+          c.req.query('disposition') === 'inline' ? 'inline' : 'attachment',
+        ),
+      };
+      return new Response(download.body, { headers });
     } catch (error) {
       if (error instanceof ArtifactServiceError && error.code === 'not_found')
         return writeError(c, 404, 'not_found', error.message);
@@ -722,14 +724,14 @@ export function createServer(config: AppConfig, services = createServices()) {
   return server;
 }
 
-function contentDisposition(fileName: string): string {
+function contentDisposition(fileName: string, disposition: 'attachment' | 'inline' = 'attachment'): string {
   const fallback = fileName
     .replace(/[\\/\r\n\t\0]/g, '_')
     .replace(/[";]/g, '')
     .trim()
     .slice(0, 120);
   const safeFallback = fallback || 'artifact';
-  return `attachment; filename="${safeFallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+  return `${disposition}; filename="${safeFallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 function requestIdMiddleware(): MiddlewareHandler<{ Variables: AppVariables }> {
