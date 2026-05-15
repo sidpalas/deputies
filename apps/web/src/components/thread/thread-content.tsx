@@ -160,7 +160,7 @@ function UserMessageCard(props: {
     <Card className="border-primary/50 bg-primary/10 p-3" role="article" aria-label={`Message ${message.sequence}`}>
       <div className="mb-1 flex items-center justify-between gap-2">
         <h3 className="text-xs font-medium text-muted-foreground">
-          {messageLabel(message)}{' '}
+          {messageLabel(message)}{message.authorName ? ` from ${message.authorName}` : ''}{' '}
           <Badge className={statusTextClass(message.status)}>{messageStatusLabel(message)}</Badge>
         </h3>
         {message.status === 'pending' && props.editingMessageId !== message.id ? (

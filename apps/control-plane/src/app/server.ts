@@ -516,6 +516,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       const message = await services.messages.enqueue({
         sessionId,
         prompt,
+        ...(await messageAuthor(c, config, services.store)),
         ...(repository ? { context: { repository } } : {}),
       });
       return c.json({ message }, 202);
@@ -811,6 +812,17 @@ function allowedCorsOrigin(config: AppConfig): (origin: string) => string | unde
 
 function writeError(c: Context, statusCode: number, error: string, message: string) {
   return c.json({ error, message }, statusCode as never);
+}
+
+async function messageAuthor(
+  c: Context,
+  config: AppConfig,
+  store: AppStore,
+): Promise<{ authorUserId: string; authorName: string } | Record<string, never>> {
+  if (config.apiAuthMode !== 'session') return {};
+  const sessionId = readSessionId(c);
+  const user = sessionId ? await store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
+  return user ? { authorUserId: user.id, authorName: user.username } : {};
 }
 
 async function setAuthSessionCookie(c: Context, config: AppConfig, store: AppStore, userId: string): Promise<void> {

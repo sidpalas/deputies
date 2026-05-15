@@ -79,6 +79,8 @@ export type MessageRecord = {
   status: MessageStatus;
   prompt: string;
   createdAt: Date;
+  authorUserId?: string;
+  authorName?: string;
   source?: string;
   context?: Record<string, unknown>;
 };
@@ -232,6 +234,8 @@ export type CreateMessageRecord = {
   status: MessageStatus;
   prompt: string;
   createdAt: Date;
+  authorUserId?: string;
+  authorName?: string;
   source?: string;
   context?: Record<string, unknown>;
 };

@@ -161,7 +161,18 @@ describe('core API', () => {
       body: JSON.stringify({ title: 'Cookie session' }),
     });
     expect(createSession.status).toBe(201);
-    expectSessionResponse(await createSession.json());
+    const createSessionBody = await createSession.json();
+    expectSessionResponse(createSessionBody);
+
+    const createMessage = await fetch(`${baseUrl}/sessions/${createSessionBody.session.id}/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: cookie!, origin: baseUrl },
+      body: JSON.stringify({ prompt: 'Authored by static user' }),
+    });
+    expect(createMessage.status).toBe(202);
+    await expect(createMessage.json()).resolves.toMatchObject({
+      message: { authorUserId: expect.any(String), authorName: 'dev' },
+    });
 
     const crossSiteLogout = await fetch(`${baseUrl}/auth/logout`, {
       method: 'POST',

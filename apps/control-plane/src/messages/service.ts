@@ -5,6 +5,8 @@ import type { MessageRecord, MessageStore } from '../store/types.js';
 export type EnqueueMessageInput = {
   sessionId: string;
   prompt: string;
+  authorUserId?: string;
+  authorName?: string;
   source?: string;
   context?: Record<string, unknown>;
 };
@@ -53,6 +55,8 @@ export class MessageService {
       createdAt: new Date(),
     };
 
+    if (input.authorUserId) record.authorUserId = input.authorUserId;
+    if (input.authorName) record.authorName = input.authorName;
     if (input.source) record.source = input.source;
     if (context) record.context = context;
 
@@ -84,6 +88,8 @@ export class MessageService {
       prompt: input.prompt,
       createdAt: new Date(),
     };
+    if (input.authorUserId) record.authorUserId = input.authorUserId;
+    if (input.authorName) record.authorName = input.authorName;
     if (input.source) record.source = input.source;
     if (input.context) record.context = input.context;
 
@@ -145,6 +151,8 @@ export class MessageService {
     return this.enqueue({
       sessionId: input.sessionId,
       prompt: failedMessage.prompt,
+      ...(failedMessage.authorUserId ? { authorUserId: failedMessage.authorUserId } : {}),
+      ...(failedMessage.authorName ? { authorName: failedMessage.authorName } : {}),
       ...(failedMessage.source ? { source: failedMessage.source } : {}),
       ...(failedMessage.context ? { context: failedMessage.context } : {}),
     });

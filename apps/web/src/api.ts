@@ -26,6 +26,8 @@ export type Message = {
   status: string;
   prompt: string;
   createdAt: string;
+  authorUserId?: string;
+  authorName?: string;
   source?: string;
   context?: Record<string, unknown>;
 };

@@ -67,6 +67,8 @@ type MessageRow = QueryResultRow & {
   sequence: PgInteger;
   status: MessageStatus;
   prompt: string;
+  author_user_id: string | null;
+  author_name: string | null;
   source: string | null;
   context: Record<string, unknown> | null;
   created_at: Date;
@@ -443,15 +445,17 @@ export class PostgresStore implements AppStore {
   async createMessage(record: CreateMessageRecord): Promise<MessageRecord> {
     return this.transaction(async (client) => {
       const result = await client.query<MessageRow>(
-        `INSERT INTO messages (id, session_id, sequence, status, prompt, source, context, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
+        `INSERT INTO messages (id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
         [
           record.id,
           record.sessionId,
           record.sequence,
           record.status,
           record.prompt,
+          record.authorUserId ?? null,
+          record.authorName ?? null,
           record.source ?? null,
           record.context ?? null,
           record.createdAt,
@@ -478,7 +482,7 @@ export class PostgresStore implements AppStore {
 
   async getMessages(sessionId: string): Promise<MessageRecord[]> {
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, session_id, sequence, status, prompt, source, context, created_at
+      `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
        FROM messages
        WHERE session_id = $1
        ORDER BY sequence ASC`,
@@ -495,7 +499,7 @@ export class PostgresStore implements AppStore {
   }): Promise<MessageRecord | null> {
     const result = await this.pool.query<MessageRow>(
       `UPDATE messages SET prompt = $3 WHERE session_id = $1 AND id = $2 AND status = 'pending'
-       RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
+       RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
       [input.sessionId, input.messageId, input.prompt],
     );
     return result.rows[0] ? toMessage(result.rows[0]) : null;
@@ -511,7 +515,7 @@ export class PostgresStore implements AppStore {
 
       const result = await client.query<MessageRow>(
         `UPDATE messages SET status = 'cancelled' WHERE session_id = $1 AND id = $2 AND status = 'pending'
-         RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
+         RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
         [input.sessionId, input.messageId],
       );
       if (!result.rows[0]) return null;
@@ -578,7 +582,7 @@ export class PostgresStore implements AppStore {
         `UPDATE messages
          SET status = 'processing'
          WHERE session_id = $1 AND status = 'pending'
-         RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
+          RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
         [sessionId],
       );
       const messages = updatedMessages.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence);
@@ -688,7 +692,7 @@ export class PostgresStore implements AppStore {
           `UPDATE messages
            SET status = 'pending'
           WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
-           RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
+            RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
           [messageIds],
         );
 
@@ -762,7 +766,7 @@ export class PostgresStore implements AppStore {
         `UPDATE messages
          SET status = 'cancelling'
          WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
-         RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
+          RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
         [messageIds],
       );
 
@@ -1392,7 +1396,7 @@ export class PostgresStore implements AppStore {
         `UPDATE messages
          SET status = $2
           WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
-           RETURNING id, session_id, sequence, status, prompt, source, context, created_at`,
+            RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
         [messageIds, status],
       );
 
@@ -1478,7 +1482,9 @@ function toMessage(row: MessageRow): MessageRecord {
     prompt: row.prompt,
     createdAt: row.created_at,
   };
+  if (row.author_user_id) record.authorUserId = row.author_user_id;
   if (row.source) record.source = row.source;
+  if (row.author_name) record.authorName = row.author_name;
   if (row.context) record.context = row.context;
   return record;
 }

@@ -129,6 +129,7 @@ export async function enqueueIntegrationMessage(
   return messages.enqueue({
     sessionId: session.id,
     prompt: input.prompt,
+    ...(input.actor ? { authorName: input.actor.displayName ?? input.actor.externalId } : {}),
     source: input.messageSource ?? input.source,
     context: integrationMessageContext(input),
   });
