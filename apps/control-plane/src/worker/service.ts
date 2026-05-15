@@ -200,7 +200,7 @@ export class WorkerService {
       payload: { provider: this.options.sandboxProvider.name },
     });
     const lifecycle = new SandboxLifecycleService(this.options.store, this.options.sandboxProvider);
-    const { sandbox, record, created } = await lifecycle.ensure(primary.sessionId);
+    const { sandbox, record, created, restarted } = await lifecycle.ensure(primary.sessionId);
     await this.options.store.updateSandbox({ ...record, updatedAt: new Date() });
     await this.appendOwnedRunEvent({
       sessionId: primary.sessionId,
@@ -211,13 +211,14 @@ export class WorkerService {
         provider: sandbox.provider,
         providerSandboxId: sandbox.providerSandboxId,
         created,
+        ...(restarted ? { restarted } : {}),
         workspacePath: sandbox.workspacePath,
       },
     });
     try {
       const session = await this.options.store.getSession(primary.sessionId);
       if (!session) throw new Error(`Session not found: ${primary.sessionId}`);
-      const sessionContext = await this.clearSessionPreviewsForRun(session, claimed);
+      const sessionContext = created || restarted ? await this.clearSessionPreviewsForRun(session, claimed) : (session.context ?? {});
       let runContext = { ...sessionContext, ...buildBatchContext(claimed.messages) };
       const result = await this.options.runner.run({
         sessionId: primary.sessionId,
@@ -286,7 +287,8 @@ export class WorkerService {
         artifactRecords: artifacts,
       });
     } finally {
-      await this.options.store.updateSandbox({ ...record, updatedAt: new Date() });
+      const current = await this.options.store.getActiveSandbox(primary.sessionId, record.provider);
+      if (current?.id === record.id) await this.options.store.updateSandbox({ ...current, updatedAt: new Date() });
     }
   }
 

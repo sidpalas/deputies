@@ -69,6 +69,10 @@ export const publicApiResponseSchemas = {
     description: 'Published sandbox preview list envelope.',
     fields: { previews: 'array' },
   },
+  sandbox: {
+    description: 'Sandbox lifecycle status envelope.',
+    fields: { sandbox: 'object' },
+  },
   artifactPreview: {
     description: 'Text preview for a stored artifact.',
     fields: {

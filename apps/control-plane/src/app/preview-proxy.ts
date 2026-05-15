@@ -51,12 +51,16 @@ export function serializePreview(
   sessionId: string,
   preview: SandboxPreviewUrl,
   metadata: { label?: string; path?: string } = {},
+  sandboxTiming: { shutdownAt?: Date; keepaliveUntil?: Date; maxKeepaliveUntil?: Date } = {},
 ) {
   const url = previewUrl(c, config, sessionId, preview.port, metadata.path);
   return {
     port: preview.port,
     url,
     status: 'available',
+    ...(sandboxTiming.shutdownAt ? { shutdownAt: sandboxTiming.shutdownAt.toISOString() } : {}),
+    ...(sandboxTiming.keepaliveUntil ? { keepaliveUntil: sandboxTiming.keepaliveUntil.toISOString() } : {}),
+    ...(sandboxTiming.maxKeepaliveUntil ? { maxKeepaliveUntil: sandboxTiming.maxKeepaliveUntil.toISOString() } : {}),
     ...(metadata.label ? { label: metadata.label } : {}),
     ...(metadata.path ? { path: metadata.path } : {}),
   };

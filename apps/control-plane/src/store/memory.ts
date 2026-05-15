@@ -449,6 +449,7 @@ export class MemoryStore implements AppStore {
       .filter((sandbox) => sandbox.provider === input.provider)
       .filter(isActiveSandbox)
       .filter((sandbox) => sandbox.updatedAt <= input.idleBefore)
+      .filter((sandbox) => !sandbox.keepaliveUntil || sandbox.keepaliveUntil <= new Date())
       .filter((sandbox) => !isSessionBusy(this.sessions.get(sandbox.sessionId)?.status))
       .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
       .slice(0, input.limit);
@@ -459,6 +460,7 @@ export class MemoryStore implements AppStore {
       .filter((sandbox) => sandbox.provider === input.provider)
       .filter((sandbox) => !sandbox.destroyedAt && sandbox.status === 'ready')
       .filter((sandbox) => sandbox.updatedAt <= input.idleBefore)
+      .filter((sandbox) => !sandbox.keepaliveUntil || sandbox.keepaliveUntil <= new Date())
       .filter((sandbox) => !isSessionBusy(this.sessions.get(sandbox.sessionId)?.status))
       .filter(
         (sandbox) => !(this.messages.get(sandbox.sessionId) ?? []).some((message) => message.status === 'pending'),

@@ -649,6 +649,7 @@ describe('core API', () => {
       metadata: {},
       createdAt: now,
       updatedAt: now,
+      keepaliveUntil: new Date(now.getTime() + 600_000),
     });
 
     const archiveSession = await postJson(`${baseUrl}/sessions/${session.id}/archive`, {});
@@ -689,7 +690,11 @@ describe('core API', () => {
       if (!storedSession) throw new Error('Expected session');
       await store.updateSession({
         ...storedSession,
-        context: { previews: [{ port: 3000, label: 'Vite app', path: '/' }] },
+        context: {
+          previews: [
+            { port: 3000, label: 'Vite app', path: '/', providerSandboxId: sandbox.providerSandboxId, runtimeId: 'runtime-1' },
+          ],
+        },
       });
       const now = new Date();
       await store.createSandbox({
@@ -699,7 +704,7 @@ describe('core API', () => {
         providerSandboxId: sandbox.providerSandboxId,
         status: 'ready',
         workspacePath: '/workspace',
-        metadata: {},
+        metadata: { runtimeId: 'runtime-1' },
         createdAt: now,
         updatedAt: now,
       });
@@ -762,7 +767,7 @@ describe('core API', () => {
         providerSandboxId: sandbox.providerSandboxId,
         status: 'ready',
         workspacePath: '/workspace',
-        metadata: {},
+        metadata: { runtimeId: 'runtime-1' },
         createdAt: now,
         updatedAt: now,
       });
@@ -775,6 +780,145 @@ describe('core API', () => {
           previews: [{ port: 3000 }],
         },
       );
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  it('extends an active sandbox and returns preview shutdown timing', async () => {
+    const upstream = createPreviewUpstream();
+    const upstreamBaseUrl = await listen(upstream);
+    await closeServer(server);
+    const provider = new PreviewSandboxProvider(upstreamBaseUrl);
+    server = createServer(
+      loadConfig({ API_AUTH_MODE: 'none', SANDBOX_STOP_DELAY_SECONDS: '60', SANDBOX_KEEPALIVE_MAX_EXTENSION_SECONDS: '600' }),
+      createServices(store, { sandboxProvider: provider }),
+    );
+    baseUrl = await listen(server);
+
+    try {
+      const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Extend preview' });
+      const { session } = (await createSession.json()) as { session: { id: string } };
+      const sandbox = await provider.create({ sessionId: session.id });
+      const now = new Date();
+      await store.createSandbox({
+        id: '00000000-0000-4000-8000-000000000504',
+        sessionId: session.id,
+        provider: provider.name,
+        providerSandboxId: sandbox.providerSandboxId,
+        status: 'ready',
+        workspacePath: '/workspace',
+        metadata: { runtimeId: 'runtime-1' },
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const extend = await postJson(`${baseUrl}/sessions/${session.id}/sandbox/extend`, { seconds: 300, port: 3000 });
+      expect(extend.status).toBe(200);
+      const extendBody = (await extend.json()) as { sandbox: { keepaliveUntil: string; providerSync: string } };
+      expect(extendBody.sandbox.providerSync).toBe('ok');
+      expect(new Date(extendBody.sandbox.keepaliveUntil).getTime()).toBeGreaterThan(Date.now() + 250_000);
+      const secondExtend = await postJson(`${baseUrl}/sessions/${session.id}/sandbox/extend`, { seconds: 300, port: 3000 });
+      expect(secondExtend.status).toBe(200);
+      const secondExtendBody = (await secondExtend.json()) as { sandbox: { keepaliveUntil: string; providerSync: string } };
+      expect(new Date(secondExtendBody.sandbox.keepaliveUntil).getTime()).toBeGreaterThan(
+        new Date(extendBody.sandbox.keepaliveUntil).getTime() + 250_000,
+      );
+      expect(new Date(secondExtendBody.sandbox.keepaliveUntil).getTime()).toBeLessThanOrEqual(Date.now() + 600_000);
+      const cappedExtend = await postJson(`${baseUrl}/sessions/${session.id}/sandbox/extend`, { seconds: 300, port: 3000 });
+      expect(cappedExtend.status).toBe(200);
+      const cappedExtendBody = (await cappedExtend.json()) as { sandbox: { keepaliveUntil: string } };
+      expect(provider.keepaliveRefreshes).toEqual([
+        { providerSandboxId: sandbox.providerSandboxId, durationMs: 300_000 },
+        { providerSandboxId: sandbox.providerSandboxId, durationMs: 300_000 },
+        { providerSandboxId: sandbox.providerSandboxId, durationMs: 300_000 },
+      ]);
+
+      const previews = (await (await fetch(`${baseUrl}/sessions/${session.id}/previews?port=3000`)).json()) as {
+        previews: Array<{ shutdownAt: string; keepaliveUntil: string }>;
+      };
+      expect(previews.previews[0]?.keepaliveUntil).toBe(cappedExtendBody.sandbox.keepaliveUntil);
+      expect(previews.previews[0]?.shutdownAt).toBe(cappedExtendBody.sandbox.keepaliveUntil);
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  it('does not list published previews from an old sandbox', async () => {
+    const upstream = createPreviewUpstream();
+    const upstreamBaseUrl = await listen(upstream);
+    await closeServer(server);
+    const provider = new PreviewSandboxProvider(upstreamBaseUrl);
+    server = createServer(loadConfig({ API_AUTH_MODE: 'none' }), createServices(store, { sandboxProvider: provider }));
+    baseUrl = await listen(server);
+
+    try {
+      const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Stale preview' });
+      const { session } = (await createSession.json()) as { session: { id: string; createdAt: string; updatedAt: string } };
+      await store.updateSession({
+        ...session,
+        status: 'idle',
+        createdAt: new Date(session.createdAt),
+        updatedAt: new Date(session.updatedAt),
+        context: { previews: [{ port: 3000, providerSandboxId: 'old-sandbox' }] },
+      });
+      const sandbox = await provider.create({ sessionId: session.id });
+      const now = new Date();
+      await store.createSandbox({
+        id: '00000000-0000-4000-8000-000000000505',
+        sessionId: session.id,
+        provider: provider.name,
+        providerSandboxId: sandbox.providerSandboxId,
+        status: 'ready',
+        workspacePath: '/workspace',
+        metadata: {},
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await expect((await fetch(`${baseUrl}/sessions/${session.id}/previews`)).json()).resolves.toEqual({
+        previews: [],
+      });
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  it('does not list published previews from an old sandbox runtime', async () => {
+    const upstream = createPreviewUpstream();
+    const upstreamBaseUrl = await listen(upstream);
+    await closeServer(server);
+    const provider = new PreviewSandboxProvider(upstreamBaseUrl);
+    server = createServer(loadConfig({ API_AUTH_MODE: 'none' }), createServices(store, { sandboxProvider: provider }));
+    baseUrl = await listen(server);
+
+    try {
+      const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Stale runtime preview' });
+      const { session } = (await createSession.json()) as { session: { id: string; createdAt: string; updatedAt: string } };
+      const sandbox = await provider.create({ sessionId: session.id });
+      await store.updateSession({
+        ...session,
+        status: 'idle',
+        createdAt: new Date(session.createdAt),
+        updatedAt: new Date(session.updatedAt),
+        context: { previews: [{ port: 3000, providerSandboxId: sandbox.providerSandboxId, runtimeId: 'old-runtime' }] },
+      });
+      const now = new Date();
+      await store.createSandbox({
+        id: '00000000-0000-4000-8000-000000000506',
+        sessionId: session.id,
+        provider: provider.name,
+        providerSandboxId: sandbox.providerSandboxId,
+        status: 'ready',
+        workspacePath: '/workspace',
+        metadata: { runtimeId: 'new-runtime' },
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await expect((await fetch(`${baseUrl}/sessions/${session.id}/previews`)).json()).resolves.toEqual({
+        previews: [],
+      });
     } finally {
       await closeServer(upstream);
     }
@@ -1319,6 +1463,8 @@ async function listen(server: Server): Promise<string> {
 }
 
 class PreviewSandboxProvider extends FakeSandboxProvider {
+  keepaliveRefreshes: Array<{ providerSandboxId: string; durationMs: number }> = [];
+
   override readonly capabilities = {
     persistentFilesystem: true,
     snapshots: false,
@@ -1337,6 +1483,10 @@ class PreviewSandboxProvider extends FakeSandboxProvider {
 
   async getPreviewUrl(input: SandboxPreviewUrlInput) {
     return { port: input.port, targetUrl: this.upstreamBaseUrl };
+  }
+
+  async refreshKeepalive(input: { providerSandboxId: string; durationMs: number }) {
+    this.keepaliveRefreshes.push({ providerSandboxId: input.providerSandboxId, durationMs: input.durationMs });
   }
 }
 

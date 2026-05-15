@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
   last_health_check_at timestamptz,
+  keepalive_until timestamptz,
   destroyed_at timestamptz,
   UNIQUE (provider, provider_sandbox_id)
 );

@@ -45,6 +45,8 @@ export type DaytonaSandboxLike = Pick<DaytonaSandbox, 'id' | 'state' | 'errorRea
   getPreviewLink?(port: number): Promise<string | DaytonaPreviewLink>;
   getPreviewUrl?(port: number): Promise<string | DaytonaPreviewLink>;
   getPublicUrl?(port: number): Promise<string | DaytonaPreviewLink>;
+  refreshActivity?(): Promise<void>;
+  setAutostopInterval?(interval: number): Promise<void>;
 };
 
 export type DaytonaPreviewLink = {
@@ -146,6 +148,14 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     const sandbox = await this.client.get(input.providerSandboxId);
     const preview = await resolveDaytonaPreviewUrl(sandbox, input.port);
     return preview ? { port: input.port, ...preview } : null;
+  }
+
+  async refreshKeepalive(input: SandboxRef & { durationMs: number }): Promise<void> {
+    const sandbox = await this.client.get(input.providerSandboxId);
+    const requestedMinutes = Math.max(1, Math.ceil(input.durationMs / 60_000));
+    const fallbackMinutes = this.options.idleTimeoutMs ? Math.max(1, Math.ceil(this.options.idleTimeoutMs / 60_000)) : 0;
+    if (sandbox.setAutostopInterval && requestedMinutes > fallbackMinutes) await sandbox.setAutostopInterval(requestedMinutes);
+    await sandbox.refreshActivity?.();
   }
 
   private createParams(input: CreateSandboxInput): Record<string, unknown> {

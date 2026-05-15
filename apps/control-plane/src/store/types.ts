@@ -170,6 +170,7 @@ export type SandboxRecord = {
   createdAt: Date;
   updatedAt: Date;
   lastHealthCheckAt?: Date;
+  keepaliveUntil?: Date;
   destroyedAt?: Date;
 };
 
@@ -261,6 +262,7 @@ export type CreateSandboxRecord = {
   metadata: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
+  keepaliveUntil?: Date;
 };
 
 export type CreateArtifactRecord = {

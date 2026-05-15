@@ -16,6 +16,7 @@ import {
   cancelMessage,
   createSession,
   enqueueMessage,
+  extendSandbox,
   getCurrentUser,
   getArtifactPreview,
   getHealth,
@@ -346,6 +347,14 @@ export function App() {
               if (event.sessionId === activeSessionId && detailLoadedSessionIdRef.current === activeSessionId) {
                 eventCursor.current = Math.max(eventCursor.current, event.sequence);
                 setEvents((current) => upsertEvent(current, event));
+                if (
+                  (event.type === 'sandbox_ready' &&
+                    (event.payload.created === true || event.payload.restarted === true)) ||
+                  event.type === 'sandbox_stopped' ||
+                  event.type === 'sandbox_destroyed'
+                ) {
+                  setPreviews([]);
+                }
                 if (shouldRefreshSessionDetail(event.type)) {
                   refreshSessionOutputs(activeSessionId).catch(() => undefined);
                 }
@@ -927,6 +936,17 @@ export function App() {
     }
   }
 
+  async function handleExtendSandbox(port?: number) {
+    if (!selectedSessionId) return;
+    setError('');
+    try {
+      await extendSandbox({ sessionId: selectedSessionId, token, seconds: 600, ...(port ? { port } : {}) });
+      await refreshSessionOutputs(selectedSessionId);
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
   function handleApiError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) signOut();
     setError(errorMessage(err));
@@ -1054,6 +1074,7 @@ export function App() {
                                   previews={previews}
                                   externalResources={externalResources}
                                   callbacks={callbacks}
+                                  onExtendSandbox={handleExtendSandbox}
                                   onReplayCallback={handleReplayCallback}
                                 />
                                 <ChatPanel
@@ -1071,6 +1092,7 @@ export function App() {
                                   onMessageDraftChange={setMessageDraft}
                                   onRetryFailedMessages={retryFailedMessages}
                                   onSaveEdit={saveMessageEdit}
+                                  onExtendSandbox={handleExtendSandbox}
                                   onLoadArtifactPreview={(artifact) =>
                                     getArtifactPreview({
                                       sessionId: artifact.sessionId,
@@ -1112,6 +1134,7 @@ export function App() {
                           previews={previews}
                           externalResources={externalResources}
                           callbacks={callbacks}
+                          onExtendSandbox={handleExtendSandbox}
                           onReplayCallback={handleReplayCallback}
                         />
                       )}
@@ -1172,6 +1195,9 @@ function shouldRefreshSessionDetail(eventType: string): boolean {
     'message_completed',
     'message_failed',
     'message_cancelled',
+    'sandbox_ready',
+    'sandbox_stopped',
+    'sandbox_destroyed',
     'session_updated',
     'run_cancel_requested',
     'run_cancelled',

@@ -40,17 +40,17 @@ import { verifySlackSignature } from '../integrations/slack/auth.js';
 import { SlackIntegrationError, SlackIntegrationService } from '../integrations/slack/service.js';
 import type { SlackEventEnvelope } from '../integrations/slack/types.js';
 import { MessageService, MessageServiceError } from '../messages/service.js';
-import { SandboxCleanupService } from '../sandbox/service.js';
+import { SandboxCleanupService, SandboxKeepaliveService } from '../sandbox/service.js';
+import { sandboxRuntimeId } from '../sandbox/runtime.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import { readPreviews } from '../sessions/previews.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
-import type { AppStore, AuthUserRecord } from '../store/types.js';
+import type { AppStore, AuthUserRecord, SandboxRecord } from '../store/types.js';
 import { writeGlobalEventStream, writeSessionEventStream } from './event-stream.js';
 import {
   getSessionPreview,
   handlePreviewUpgrade,
-  isActivePreviewSandbox,
   isAuthorizedRequest,
   parsePreviewHostFromRequest,
   parsePreviewPort,
@@ -81,6 +81,7 @@ export type AppServices = {
   callbacks: CallbackService;
   sandboxProvider?: SandboxProvider;
   sandboxCleanup?: SandboxCleanupService;
+  sandboxKeepalive?: SandboxKeepaliveService;
   githubReactionSender?: Pick<GitHubReactionSender, 'addEyes'>;
   githubIssueContextFetcher?: Pick<GitHubIssueContextFetcher, 'listIssueComments'>;
   githubArchivedSessionNotifier?: Pick<GitHubArchivedSessionNotifier, 'postNotice' | 'postRecoveryAcknowledgement'>;
@@ -113,6 +114,7 @@ export function createServices(
   if (options.sandboxProvider) {
     services.sandboxProvider = options.sandboxProvider;
     services.sandboxCleanup = new SandboxCleanupService(store, events, options.sandboxProvider);
+    services.sandboxKeepalive = new SandboxKeepaliveService(store, events, options.sandboxProvider);
   }
   return services;
 }
@@ -686,13 +688,44 @@ export function createApp(config: AppConfig, services = createServices()) {
     const published = readPreviews(session.context ?? {});
     const requested = requestedPort ? [{ port: requestedPort }] : published;
     const previews = [];
+    const sandbox = services.sandboxProvider
+      ? await services.store.getActiveSandbox(sessionId, services.sandboxProvider.name)
+      : null;
+    const runtimeId = sandbox ? sandboxRuntimeId(sandbox) : undefined;
     for (const item of requested) {
-      if (item.providerSandboxId && !(await isActivePreviewSandbox(services, sessionId, item.providerSandboxId)))
+      if (
+        !requestedPort &&
+        (!item.providerSandboxId ||
+          item.providerSandboxId !== sandbox?.providerSandboxId ||
+          !item.runtimeId ||
+          item.runtimeId !== runtimeId)
+      )
         continue;
       const preview = await getSessionPreview(config, services, sessionId, item.port);
-      if (preview) previews.push(serializePreview(c, config, sessionId, preview, item));
+      if (preview) previews.push(serializePreview(c, config, sessionId, preview, item, sandboxTiming(config, sandbox)));
     }
     return c.json({ previews });
+  });
+
+  app.post('/sessions/:sessionId/sandbox/extend', async (c) => {
+    if (!services.sandboxKeepalive) return writeError(c, 404, 'not_found', 'Sandbox provider is not configured');
+    const sessionId = c.req.param('sessionId');
+    const session = await services.sessions.get(sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    const seconds = parseKeepaliveSeconds(body.seconds ?? body.ttlSeconds);
+    const port = body.port === undefined ? undefined : parsePreviewPort(String(body.port));
+    if (body.port !== undefined && !port) return writeError(c, 400, 'invalid_request', 'Invalid preview port');
+
+    const result = await services.sandboxKeepalive.extend({
+      sessionId,
+      durationMs: seconds * 1000,
+      maxDurationMs: config.sandboxKeepaliveMaxExtensionMs,
+      ...(port ? { port } : {}),
+    });
+    if (!result) return writeError(c, 404, 'not_found', 'Active sandbox is not available');
+    return c.json({ sandbox: serializeSandboxKeepalive(config, result.record, result.providerSync) });
   });
 
   const handlePreviewProxy = async (c: Context) => {
@@ -822,6 +855,49 @@ function allowedCorsOrigin(config: AppConfig): (origin: string) => string | unde
 
 function writeError(c: Context, statusCode: number, error: string, message: string) {
   return c.json({ error, message }, statusCode as never);
+}
+
+function parseKeepaliveSeconds(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new HttpRequestError(400, 'invalid_request', 'Expected positive integer seconds');
+  }
+  return value;
+}
+
+function sandboxTiming(config: AppConfig, sandbox: SandboxRecord | null): { shutdownAt?: Date; keepaliveUntil?: Date; maxKeepaliveUntil?: Date } {
+  if (!sandbox || sandbox.status !== 'ready') return {};
+  const now = new Date();
+  const stopAt = new Date(sandbox.updatedAt.getTime() + config.sandboxStopDelayMs);
+  const shutdownAt = sandbox.keepaliveUntil ?? stopAt;
+  return {
+    shutdownAt,
+    maxKeepaliveUntil: new Date(now.getTime() + config.sandboxKeepaliveMaxExtensionMs),
+    ...(sandbox.keepaliveUntil ? { keepaliveUntil: sandbox.keepaliveUntil } : {}),
+  };
+}
+
+function serializeSandboxKeepalive(
+  config: AppConfig,
+  sandbox: SandboxRecord,
+  providerSync: 'not_supported' | 'ok' | 'failed',
+) {
+  return {
+    id: sandbox.id,
+    provider: sandbox.provider,
+    providerSandboxId: sandbox.providerSandboxId,
+    status: sandbox.status,
+    providerSync,
+    ...serializeSandboxTiming(config, sandbox),
+  };
+}
+
+function serializeSandboxTiming(config: AppConfig, sandbox: SandboxRecord) {
+  const timing = sandboxTiming(config, sandbox);
+  return {
+    ...(timing.shutdownAt ? { shutdownAt: timing.shutdownAt.toISOString() } : {}),
+    ...(timing.keepaliveUntil ? { keepaliveUntil: timing.keepaliveUntil.toISOString() } : {}),
+    ...(timing.maxKeepaliveUntil ? { maxKeepaliveUntil: timing.maxKeepaliveUntil.toISOString() } : {}),
+  };
 }
 
 function clearSessionCookies(c: Context, config: AppConfig): void {

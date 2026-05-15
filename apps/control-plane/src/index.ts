@@ -247,5 +247,7 @@ async function createRunner(): Promise<Runner> {
     ...(artifactObjectStorage ? { artifacts: services.artifacts } : {}),
     externalResources: services.externalResources,
     artifactToolMaxBytes: config.artifactToolMaxBytes,
+    ...(services.sandboxKeepalive ? { sandboxKeepalive: services.sandboxKeepalive } : {}),
+    sandboxKeepaliveMaxExtensionMs: config.sandboxKeepaliveMaxExtensionMs,
   });
 }

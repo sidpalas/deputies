@@ -80,6 +80,20 @@ export type SandboxPreview = {
   status?: 'available' | 'unavailable' | 'unknown';
   label?: string;
   path?: string;
+  shutdownAt?: string;
+  keepaliveUntil?: string;
+  maxKeepaliveUntil?: string;
+};
+
+export type SandboxKeepalive = {
+  id: string;
+  provider: string;
+  providerSandboxId: string;
+  status: string;
+  providerSync: 'not_supported' | 'ok' | 'failed';
+  shutdownAt?: string;
+  keepaliveUntil?: string;
+  maxKeepaliveUntil?: string;
 };
 
 export type ExternalResource = {
@@ -315,6 +329,20 @@ export async function getArtifactPreview(input: {
 export async function listPreviews(sessionId: string, token: string): Promise<SandboxPreview[]> {
   const body = await request<{ previews: SandboxPreview[] }>(`/sessions/${sessionId}/previews`, { token });
   return body.previews;
+}
+
+export async function extendSandbox(input: {
+  sessionId: string;
+  token: string;
+  seconds: number;
+  port?: number;
+}): Promise<SandboxKeepalive> {
+  const body = await request<{ sandbox: SandboxKeepalive }>(`/sessions/${input.sessionId}/sandbox/extend`, {
+    method: 'POST',
+    token: input.token,
+    body: { seconds: input.seconds, ...(input.port ? { port: input.port } : {}) },
+  });
+  return body.sandbox;
 }
 
 export async function listExternalResources(sessionId: string, token: string): Promise<ExternalResource[]> {

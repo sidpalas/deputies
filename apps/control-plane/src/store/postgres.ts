@@ -113,6 +113,7 @@ type SandboxRow = QueryResultRow & {
   created_at: Date;
   updated_at: Date;
   last_health_check_at: Date | null;
+  keepalive_until: Date | null;
   destroyed_at: Date | null;
 };
 
@@ -796,7 +797,7 @@ export class PostgresStore implements AppStore {
   async listActiveSandboxes(sessionId: string, provider: string): Promise<SandboxRecord[]> {
     const result = await this.pool.query<SandboxRow>(
       `SELECT id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata,
-              created_at, updated_at, last_health_check_at, destroyed_at
+              created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at
        FROM sandboxes
        WHERE session_id = $1
          AND provider = $2
@@ -812,14 +813,15 @@ export class PostgresStore implements AppStore {
   async listIdleSandboxes(input: { provider: string; idleBefore: Date; limit: number }): Promise<SandboxRecord[]> {
     const result = await this.pool.query<SandboxRow>(
       `SELECT sb.id, sb.session_id, sb.provider, sb.provider_sandbox_id, sb.status, sb.workspace_path, sb.metadata,
-              sb.created_at, sb.updated_at, sb.last_health_check_at, sb.destroyed_at
+              sb.created_at, sb.updated_at, sb.last_health_check_at, sb.keepalive_until, sb.destroyed_at
        FROM sandboxes sb
        JOIN sessions s ON s.id = sb.session_id
        WHERE sb.provider = $1
          AND sb.destroyed_at IS NULL
-         AND sb.status IN ('ready', 'stopped', 'unhealthy')
-         AND sb.updated_at <= $2
-         AND s.status NOT IN ('active', 'queued')
+          AND sb.status IN ('ready', 'stopped', 'unhealthy')
+          AND sb.updated_at <= $2
+          AND (sb.keepalive_until IS NULL OR sb.keepalive_until <= now())
+          AND s.status NOT IN ('active', 'queued')
        ORDER BY sb.updated_at ASC
        LIMIT $3`,
       [input.provider, input.idleBefore, input.limit],
@@ -830,14 +832,15 @@ export class PostgresStore implements AppStore {
   async listStoppableSandboxes(input: { provider: string; idleBefore: Date; limit: number }): Promise<SandboxRecord[]> {
     const result = await this.pool.query<SandboxRow>(
       `SELECT sb.id, sb.session_id, sb.provider, sb.provider_sandbox_id, sb.status, sb.workspace_path, sb.metadata,
-              sb.created_at, sb.updated_at, sb.last_health_check_at, sb.destroyed_at
+              sb.created_at, sb.updated_at, sb.last_health_check_at, sb.keepalive_until, sb.destroyed_at
        FROM sandboxes sb
        JOIN sessions s ON s.id = sb.session_id
        WHERE sb.provider = $1
          AND sb.destroyed_at IS NULL
-         AND sb.status = 'ready'
-         AND sb.updated_at <= $2
-         AND s.status NOT IN ('active', 'queued')
+          AND sb.status = 'ready'
+          AND sb.updated_at <= $2
+          AND (sb.keepalive_until IS NULL OR sb.keepalive_until <= now())
+          AND s.status NOT IN ('active', 'queued')
          AND NOT EXISTS (
            SELECT 1 FROM messages m
            WHERE m.session_id = sb.session_id AND m.status = 'pending'
@@ -851,10 +854,10 @@ export class PostgresStore implements AppStore {
 
   async createSandbox(record: CreateSandboxRecord): Promise<SandboxRecord> {
     const result = await this.pool.query<SandboxRow>(
-      `INSERT INTO sandboxes (id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO sandboxes (id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata, created_at, updated_at, keepalive_until)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata,
-                 created_at, updated_at, last_health_check_at, destroyed_at`,
+                 created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at`,
       [
         record.id,
         record.sessionId,
@@ -865,6 +868,7 @@ export class PostgresStore implements AppStore {
         record.metadata,
         record.createdAt,
         record.updatedAt,
+        record.keepaliveUntil ?? null,
       ],
     );
     return toSandbox(result.rows[0]!);
@@ -876,12 +880,13 @@ export class PostgresStore implements AppStore {
        SET status = $2,
            workspace_path = $3,
            metadata = $4,
-           updated_at = $5,
-           last_health_check_at = $6,
-           destroyed_at = $7
-       WHERE id = $1
+            updated_at = $5,
+            last_health_check_at = $6,
+            keepalive_until = $7,
+            destroyed_at = $8
+        WHERE id = $1
        RETURNING id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata,
-                 created_at, updated_at, last_health_check_at, destroyed_at`,
+                  created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at`,
       [
         record.id,
         record.status,
@@ -889,6 +894,7 @@ export class PostgresStore implements AppStore {
         record.metadata,
         record.updatedAt,
         record.lastHealthCheckAt ?? null,
+        record.keepaliveUntil ?? null,
         record.destroyedAt ?? null,
       ],
     );
@@ -1536,6 +1542,7 @@ function toSandbox(row: SandboxRow): SandboxRecord {
     updatedAt: row.updated_at,
   };
   if (row.last_health_check_at) record.lastHealthCheckAt = row.last_health_check_at;
+  if (row.keepalive_until) record.keepaliveUntil = row.keepalive_until;
   if (row.destroyed_at) record.destroyedAt = row.destroyed_at;
   return record;
 }

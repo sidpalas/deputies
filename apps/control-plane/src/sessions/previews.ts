@@ -6,6 +6,7 @@ export type PublishedPreview = {
   label?: string;
   path?: string;
   providerSandboxId?: string;
+  runtimeId?: string;
 };
 
 export function readPreviews(context: Record<string, unknown>): PublishedPreview[] {
@@ -24,6 +25,7 @@ export function readPreviews(context: Record<string, unknown>): PublishedPreview
     if (typeof record.providerSandboxId === 'string' && record.providerSandboxId.trim()) {
       preview.providerSandboxId = record.providerSandboxId;
     }
+    if (typeof record.runtimeId === 'string' && record.runtimeId.trim()) preview.runtimeId = record.runtimeId;
     previews.push(preview);
   }
   return previews;

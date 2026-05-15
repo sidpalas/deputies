@@ -2,6 +2,7 @@ import type { FlueEvent } from '@flue/sdk';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ArtifactService } from '../artifacts/service.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
+import type { SandboxKeepaliveService } from '../sandbox/service.js';
 import {
   prepareRepositoryShellSetup,
   type RepositoryAccessProvider,
@@ -22,6 +23,8 @@ export type FlueRunnerOptions = {
   artifacts?: ArtifactService;
   externalResources?: ExternalResourceService;
   artifactToolMaxBytes?: number;
+  sandboxKeepalive?: SandboxKeepaliveService;
+  sandboxKeepaliveMaxExtensionMs?: number;
 };
 
 export class FlueRunner implements Runner {
@@ -89,11 +92,16 @@ export class FlueRunner implements Runner {
         createPreviewTool({
           sessionId: input.sessionId,
           providerSandboxId: input.sandbox.providerSandboxId,
+          sandboxMetadata: input.sandbox.metadata,
           updateSessionContext: input.updateSessionContext,
           getContext: () => repositoryState.context,
           setContext: (context) => {
             repositoryState.context = context;
           },
+          ...(this.options.sandboxKeepalive ? { keepalive: this.options.sandboxKeepalive } : {}),
+          ...(this.options.sandboxKeepaliveMaxExtensionMs
+            ? { keepaliveMaxExtensionMs: this.options.sandboxKeepaliveMaxExtensionMs }
+            : {}),
         }),
       );
     }
@@ -220,8 +228,8 @@ export class FlueRunner implements Runner {
 function withToolGuidance(prompt: string, includeArtifacts: boolean, includeRepository: boolean): string {
   const lines = [
     'Preview tool guidance:',
-    '- If you start or identify a web server the user should open, call preview({ action: "publish", port, label, path }) after confirming the server is running.',
-    '- Use preview({ action: "list" }) to inspect published previews and preview({ action: "unpublish", port }) to remove stale links.',
+    '- If you start or identify a web server the user should open, call preview({ action: "publish", port, label, path, ttlSeconds }) after confirming the server is running. Use ttlSeconds of at least 300 for interactive previews so the sandbox stays alive long enough for the user to open it. Multiple previews may be visible at the same time.',
+    '- Use preview({ action: "extend", port, ttlSeconds }) to keep an existing preview sandbox alive longer, preview({ action: "list" }) to inspect published previews, and preview({ action: "unpublish", port }) to remove stale links.',
     '- Do not publish ports that are not serving an app or useful HTTP endpoint.',
     '- For Vite dev servers published as previews, do not hard-code server.hmr.host, server.hmr.clientPort, or server.hmr.protocol to localhost; let Vite infer the browser preview URL unless the user specifically asks otherwise.',
     '',

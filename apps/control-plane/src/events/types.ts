@@ -27,7 +27,13 @@ export type NormalizedEventPayloadMap = {
   message_started: { sequences: number[]; batchSize: number };
   run_started: { runner: string };
   sandbox_starting: { provider: string };
-  sandbox_ready: { provider: string; providerSandboxId: string; created: boolean; workspacePath: string };
+  sandbox_ready: { provider: string; providerSandboxId: string; created: boolean; restarted?: boolean; workspacePath: string };
+  sandbox_keepalive_extended: SandboxLifecyclePayload & {
+    keepaliveUntil: string;
+    extendedBySeconds: number;
+    providerSync: 'not_supported' | 'ok' | 'failed';
+    port?: number;
+  };
   sandbox_destroyed: SandboxLifecyclePayload;
   sandbox_destroy_failed: SandboxLifecyclePayload & { error: string };
   sandbox_stopped: SandboxLifecyclePayload;
@@ -128,6 +134,7 @@ export type NormalizedEventType =
   | 'run_started'
   | 'sandbox_starting'
   | 'sandbox_ready'
+  | 'sandbox_keepalive_extended'
   | 'sandbox_destroyed'
   | 'sandbox_destroy_failed'
   | 'sandbox_stopped'

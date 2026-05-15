@@ -52,6 +52,10 @@ export type SandboxPreviewUrlInput = SandboxRef & {
   port: number;
 };
 
+export type SandboxKeepaliveInput = SandboxRef & {
+  durationMs: number;
+};
+
 export type SandboxPreviewUrl = {
   port: number;
   targetUrl: string;
@@ -96,4 +100,5 @@ export interface SandboxProvider {
   destroy(input: SandboxRef): Promise<void>;
   health(input: SandboxRef): Promise<SandboxHealth>;
   getPreviewUrl?(input: SandboxPreviewUrlInput): Promise<SandboxPreviewUrl | null>;
+  refreshKeepalive?(input: SandboxKeepaliveInput): Promise<void>;
 }

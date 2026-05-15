@@ -34,6 +34,7 @@ export function ChatPanel(props: {
   onMessageDraftChange: (value: string) => void;
   onRetryFailedMessages: (messageIds: string[]) => void;
   onSaveEdit: () => void;
+  onExtendSandbox: (port?: number) => void;
   onLoadArtifactPreview: (artifact: Artifact) => Promise<ArtifactPreview>;
 }) {
   const assistantText = buildAssistantText(props.events);
@@ -100,7 +101,7 @@ export function ChatPanel(props: {
               <InlineArtifacts artifacts={inlineArtifacts} onLoadArtifactPreview={props.onLoadArtifactPreview} />
             ) : null}
             {props.previews.length > 0 && group.key === groups.at(-1)?.key ? (
-              <InlinePreviews previews={props.previews} />
+              <InlinePreviews previews={props.previews} onExtendSandbox={props.onExtendSandbox} />
             ) : null}
             <Diagnostics events={groupDiagnostics} />
           </div>
@@ -111,11 +112,11 @@ export function ChatPanel(props: {
   );
 }
 
-function InlinePreviews(props: { previews: SandboxPreview[] }) {
+function InlinePreviews(props: { previews: SandboxPreview[]; onExtendSandbox: (port?: number) => void }) {
   return (
     <div className="grid gap-2" aria-label="Inline previews">
       {props.previews.map((preview) => (
-        <PreviewCard compact key={preview.port} preview={preview} />
+        <PreviewCard compact key={preview.port} preview={preview} onExtendSandbox={props.onExtendSandbox} />
       ))}
     </div>
   );
@@ -848,6 +849,7 @@ export function MobileContextPanel(props: {
   previews: SandboxPreview[];
   externalResources: ExternalResource[];
   callbacks: CallbackDelivery[];
+  onExtendSandbox: (port?: number) => void;
   onReplayCallback: (callbackId: string) => void;
 }) {
   return (
@@ -864,6 +866,7 @@ export function DesktopContextPanel(props: {
   previews: SandboxPreview[];
   externalResources: ExternalResource[];
   callbacks: CallbackDelivery[];
+  onExtendSandbox: (port?: number) => void;
   onReplayCallback: (callbackId: string) => void;
 }) {
   return (
@@ -884,6 +887,7 @@ function ContextPanelContent(props: {
   previews: SandboxPreview[];
   externalResources: ExternalResource[];
   callbacks: CallbackDelivery[];
+  onExtendSandbox: (port?: number) => void;
   onReplayCallback: (callbackId: string) => void;
 }) {
   return (
@@ -914,7 +918,7 @@ function ContextPanelContent(props: {
       </div>
       <div className="mt-3 grid gap-2">
         {props.previews.map((preview) => (
-          <PreviewCard key={preview.port} preview={preview} />
+          <PreviewCard key={preview.port} preview={preview} onExtendSandbox={props.onExtendSandbox} />
         ))}
         {!props.previews.length ? <p className="text-sm text-muted-foreground">No live preview available.</p> : null}
       </div>
@@ -1002,29 +1006,88 @@ type ArtifactPreviewCardProps = {
   onLoadArtifactPreview?: (artifact: Artifact) => Promise<ArtifactPreview>;
 };
 
-function PreviewCard(props: { preview: SandboxPreview; compact?: boolean }) {
+function PreviewCard(props: { preview: SandboxPreview; compact?: boolean; onExtendSandbox: (port?: number) => void }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!props.preview.shutdownAt) return;
+    const schedule = () => {
+      const deadline = new Date(props.preview.shutdownAt!).getTime();
+      const remainingMs = deadline - Date.now();
+      const delayMs = remainingMs > 60_000 ? 30_000 : 1_000;
+      return window.setTimeout(() => {
+        setNow(Date.now());
+        timer = schedule();
+      }, delayMs);
+    };
+    let timer = schedule();
+    return () => window.clearTimeout(timer);
+  }, [props.preview.shutdownAt]);
+  const shutdownLabel = props.preview.shutdownAt ? formatRelativeDeadline(props.preview.shutdownAt, now) : null;
+  const extensionLabel = previewExtensionLabel(props.preview, now);
+  const extensionAtMax = extensionLabel === previewExtensionMaxLabel;
   return (
     <Card className={cn('min-w-0 p-3', props.compact ? 'bg-card/80' : 'bg-card/70')}>
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <strong className="text-sm text-foreground">{props.preview.label ?? 'Live app preview'}</strong>
+      <div className="grid min-w-0 gap-2">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <strong className="min-w-0 text-sm leading-5 text-foreground">{props.preview.label ?? 'Live app preview'}</strong>
+          <Button asChild className="shrink-0" size="sm" variant="secondary">
+            <a href={props.preview.url} target="_blank" rel="noreferrer">
+              <ExternalLink className="h-3.5 w-3.5" /> Open
+            </a>
+          </Button>
+        </div>
+        <div className="min-w-0 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge>:{props.preview.port}</Badge>
             {props.preview.status ? <Badge className="text-muted-foreground">{props.preview.status}</Badge> : null}
           </div>
-          <p className="mt-1 truncate text-xs text-muted-foreground">
-            Authenticated sandbox preview{props.preview.path ? ` · ${props.preview.path}` : ''}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">If it fails to load, the server may still be starting.</p>
+          <p className="mt-1 truncate">Authenticated sandbox preview{props.preview.path ? ` · ${props.preview.path}` : ''}</p>
+          {shutdownLabel ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Sandbox can shut down {shutdownLabel}.{' '}
+              {extensionAtMax ? (
+                <span className="text-muted-foreground">{extensionLabel}</span>
+              ) : (
+                <button
+                  className="font-medium text-primary hover:underline"
+                  type="button"
+                  onClick={() => props.onExtendSandbox(props.preview.port)}
+                >
+                  {extensionLabel}
+                </button>
+              )}
+            </p>
+          ) : null}
         </div>
-        <Button asChild size="sm" variant="secondary">
-          <a href={props.preview.url} target="_blank" rel="noreferrer">
-            <ExternalLink className="h-3.5 w-3.5" /> Open
-          </a>
-        </Button>
       </div>
     </Card>
   );
+}
+
+function formatRelativeDeadline(value: string, now: number): string {
+  const deadline = new Date(value).getTime();
+  if (!Number.isFinite(deadline)) return 'soon';
+  const remainingSeconds = Math.max(0, Math.floor((deadline - now) / 1000));
+  if (remainingSeconds <= 0) return 'now';
+  if (remainingSeconds < 60) return `in ${remainingSeconds}s`;
+  const remainingMinutes = Math.floor(remainingSeconds / 60);
+  if (remainingMinutes < 60) return `in ${remainingMinutes}m`;
+  const remainingHours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  return minutes ? `in ${remainingHours}h ${minutes}m` : `in ${remainingHours}h`;
+}
+
+const previewExtensionSeconds = 600;
+const previewExtensionMaxLabel = '(2hr max)';
+const previewExtensionCapBufferMs = 30_000;
+
+function previewExtensionLabel(preview: SandboxPreview, now: number): string {
+  const maxKeepaliveUntil = preview.maxKeepaliveUntil ? new Date(preview.maxKeepaliveUntil).getTime() : undefined;
+  if (!maxKeepaliveUntil || !Number.isFinite(maxKeepaliveUntil)) return 'Extend by 10m';
+  const currentUntil = preview.keepaliveUntil ? new Date(preview.keepaliveUntil).getTime() : now;
+  const baseUntil = Number.isFinite(currentUntil) && currentUntil > now ? currentUntil : now;
+  if (baseUntil >= maxKeepaliveUntil - previewExtensionCapBufferMs) return previewExtensionMaxLabel;
+  return 'Extend by 10m';
 }
 
 function ExternalResourceCard(props: { resource: ExternalResource }) {

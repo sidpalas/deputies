@@ -99,6 +99,50 @@ describe('DaytonaSandboxProvider', () => {
     });
   });
 
+  it('refreshes activity and extends autostop when keepalive exceeds fallback', async () => {
+    const sandbox = createMockDaytonaSandbox();
+    sandbox.refreshActivity = vi.fn(async () => {});
+    sandbox.setAutostopInterval = vi.fn(async () => {});
+    const provider = new DaytonaSandboxProvider({
+      idleTimeoutMs: 120_000,
+      client: {
+        async create() {
+          return sandbox;
+        },
+        async get() {
+          return sandbox;
+        },
+      },
+    });
+
+    await provider.refreshKeepalive({ providerSandboxId: 'sandbox-1', sessionId: 'session-1', durationMs: 300_000 });
+
+    expect(sandbox.setAutostopInterval).toHaveBeenCalledWith(5);
+    expect(sandbox.refreshActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes activity without extending autostop when fallback is already long enough', async () => {
+    const sandbox = createMockDaytonaSandbox();
+    sandbox.refreshActivity = vi.fn(async () => {});
+    sandbox.setAutostopInterval = vi.fn(async () => {});
+    const provider = new DaytonaSandboxProvider({
+      idleTimeoutMs: 600_000,
+      client: {
+        async create() {
+          return sandbox;
+        },
+        async get() {
+          return sandbox;
+        },
+      },
+    });
+
+    await provider.refreshKeepalive({ providerSandboxId: 'sandbox-1', sessionId: 'session-1', durationMs: 300_000 });
+
+    expect(sandbox.setAutostopInterval).not.toHaveBeenCalled();
+    expect(sandbox.refreshActivity).toHaveBeenCalledTimes(1);
+  });
+
   it('deletes a created sandbox if handle setup fails and preserves the setup error', async () => {
     const setupError = new Error('workdir unavailable');
     const sandbox = createMockDaytonaSandbox();

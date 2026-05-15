@@ -17,6 +17,7 @@ export type AppConfig = {
   sandboxIdleTimeoutMs: number;
   sandboxStopDelayMs: number;
   sandboxRetentionMs: number;
+  sandboxKeepaliveMaxExtensionMs: number;
   runMode: RunMode;
   runner: RunnerKind;
   sandboxProvider: SandboxProviderKind;
@@ -108,6 +109,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     sandboxStopDelayMs:
       parseNonNegativeInteger(env.SANDBOX_STOP_DELAY_SECONDS, 60, 'SANDBOX_STOP_DELAY_SECONDS') * 1000,
     sandboxRetentionMs: parsePositiveInteger(env.SANDBOX_RETENTION_SECONDS, 3600, 'SANDBOX_RETENTION_SECONDS') * 1000,
+    sandboxKeepaliveMaxExtensionMs:
+      parsePositiveInteger(env.SANDBOX_KEEPALIVE_MAX_EXTENSION_SECONDS, 7200, 'SANDBOX_KEEPALIVE_MAX_EXTENSION_SECONDS') *
+      1000,
     runMode: parseEnum(env.RUN_MODE, ['all', 'api', 'worker'], 'all'),
     runner: parseEnum(env.RUNNER, ['fake', 'flue'], 'fake'),
     sandboxProvider: parseEnum(
