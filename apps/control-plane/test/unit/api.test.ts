@@ -112,6 +112,8 @@ describe('core API', () => {
         AUTH_STATIC_USERNAME: 'dev',
         AUTH_STATIC_PASSWORD: 'password',
         AUTH_SESSION_SECRET: 'test-secret',
+        AUTH_COOKIE_DOMAIN: '.deputies.localhost',
+        AUTH_SUCCESS_REDIRECT_URL: 'https://deputies.localhost',
       }),
     );
     baseUrl = await listen(server);
@@ -179,6 +181,13 @@ describe('core API', () => {
       headers: { cookie: cookie!, origin: 'https://evil.example' },
     });
     expect(crossSiteLogout.status).toBe(403);
+
+    const browserLogout = await fetch(`${baseUrl}/auth/logout`, { headers: { cookie: cookie! }, redirect: 'manual' });
+    expect(browserLogout.status).toBe(302);
+    expect(browserLogout.headers.get('location')).toBe('https://deputies.localhost');
+    const browserLogoutCookie = browserLogout.headers.get('set-cookie');
+    expect(browserLogoutCookie).toContain('Max-Age=0');
+    expect(browserLogoutCookie).toContain('Domain=.deputies.localhost');
 
     const logout = await fetch(`${baseUrl}/auth/logout`, { method: 'POST', headers: { cookie: cookie! } });
     expect(logout.headers.get('set-cookie')).toContain('Max-Age=0');

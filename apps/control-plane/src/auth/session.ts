@@ -17,6 +17,10 @@ export function clearSessionCookie(config: AppConfig): string {
   return `${sessionCookieName}=; Path=/; Max-Age=0; HttpOnly; SameSite=${formatSameSite(config)}${formatDomain(config)}${config.authCookieSecure ? '; Secure' : ''}`;
 }
 
+export function clearHostSessionCookie(config: AppConfig): string {
+  return `${sessionCookieName}=; Path=/; Max-Age=0; HttpOnly; SameSite=${formatSameSite(config)}${config.authCookieSecure ? '; Secure' : ''}`;
+}
+
 export function readSessionId(c: Context): string | null {
   return parseCookies(c.req.header('cookie') ?? '')[sessionCookieName] ?? null;
 }

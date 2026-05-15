@@ -11,6 +11,7 @@ import { apiAuthMiddleware, isTrustedCookieAuthRequest } from '../auth/middlewar
 import { oauthSuccessHtml } from '../auth/oauth-success-page.js';
 import {
   clearSessionCookie,
+  clearHostSessionCookie,
   createSessionCookie,
   createSessionId,
   readSessionId,
@@ -248,9 +249,18 @@ export function createApp(config: AppConfig, services = createServices()) {
         return writeError(c, 403, 'forbidden', 'Untrusted browser request');
       }
       if (sessionId) await services.store.deleteAuthSession(sessionId);
-      c.header('set-cookie', clearSessionCookie(config));
+      clearSessionCookies(c, config);
     }
     return c.json({ ok: true });
+  });
+
+  app.get('/auth/logout', async (c) => {
+    if (config.apiAuthMode === 'session') {
+      const sessionId = readSessionId(c);
+      if (sessionId) await services.store.deleteAuthSession(sessionId);
+      clearSessionCookies(c, config);
+    }
+    return c.redirect(config.authSuccessRedirectUrl ?? '/', 302);
   });
 
   app.get('/auth/me', async (c) => {
@@ -812,6 +822,11 @@ function allowedCorsOrigin(config: AppConfig): (origin: string) => string | unde
 
 function writeError(c: Context, statusCode: number, error: string, message: string) {
   return c.json({ error, message }, statusCode as never);
+}
+
+function clearSessionCookies(c: Context, config: AppConfig): void {
+  c.header('set-cookie', clearSessionCookie(config));
+  if (config.authCookieDomain) c.header('set-cookie', clearHostSessionCookie(config), { append: true });
 }
 
 async function messageAuthor(
