@@ -8,6 +8,18 @@ This file is a compliance checkpoint for contributors and coding agents. It is n
 
 ## Referenced Prior Art
 
+## Excluded Source-Available Material
+
+The following source-available material must not be used as open source prior art for Deputies implementation work:
+
+### OpenHands Enterprise
+
+- Upstream repository: https://github.com/OpenHands/OpenHands
+- License observed: PolyForm Free Trial License 1.0.0
+- Copyright notice observed: `Copyright (c) 2026 All Hands AI`
+
+Do not copy code, schemas, prompts, tests, configuration, architecture details, or implementation patterns from `enterprise/` into Deputies unless a separate commercial/legal review explicitly approves that use. OpenHands may be mentioned only as a non-open-source hosted-agent product reference in `docs/prior-art.md`.
+
 ### Junior
 
 - Upstream repository: https://github.com/getsentry/junior

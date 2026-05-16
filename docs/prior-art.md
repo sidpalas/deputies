@@ -25,6 +25,16 @@ See [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) before copying impl
 | Integrations        | Thin adapters with source-specific normalized inputs | Slack/GitHub/Linear bots call control plane         | Webhooks normalize into LangGraph thread IDs      | Rich Slack routing, outbound, OAuth contracts    |
 | Testing             | Agent-first layered tests + emulate                  | Strong production code, infra-specific tests/docs   | Python tests around utility/webhook behavior      | MSW Slack tests + rubric evals                   |
 
+## Non-Open-Source References
+
+Several hosted background-agent products are relevant for product comparison, but are not used as open source prior art in this document.
+
+- OpenHands Cloud / OpenHands Enterprise: OpenHands has MIT-licensed non-`enterprise/` code, but the pieces that make it more similar to a hosted agent are described as cloud/enterprise features, including SaaS or self-hosting in your VPC and Enterprise SAML/SSO. The `enterprise/LICENSE` is PolyForm Free Trial, not MIT or Apache-2.0.
+- Ona: relevant as a hosted background-agent product reference, but not available as MIT or Apache-2.0 open source prior art.
+- Devin: relevant as a hosted background-agent product reference, but not available as MIT or Apache-2.0 open source prior art.
+
+These systems can inform product expectations at a high level, but Deputies should not use their non-open-source or source-available implementation details as prior art for code, schemas, prompts, tests, or architecture.
+
 ## What We Should Adopt From Open-Inspect
 
 Deputies has implemented patterns similar to several Open-Inspect control-plane ideas. Keep these as architectural guardrails, not as a request to recreate Cloudflare Durable Objects or OpenCode-specific runtime pieces.

@@ -14,7 +14,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Integrations](./integrations.md): generic webhook, GitHub, Slack, Linear, callbacks, auth, and external thread mapping.
 - [Web UI](./web-ui.md): separate Vite React operator UI, browser auth, and static deployment notes.
 - [Testing Strategy](./testing-strategy.md): unit, integration, e2e, UAT, adversarial, prompt/context, and emulator-backed tests.
-- [Prior Art](./prior-art.md): comparison with Open-Inspect/background-agents, Open SWE, and Junior, including what to adopt or avoid.
+- [Prior Art](./prior-art.md): comparison with Open-Inspect/background-agents, Open SWE, and Junior, plus non-open-source hosted-agent references.
 - [Roadmap](./roadmap.md): phased implementation sequence and acceptance criteria.
 - [Product Documentation](./product/): PRDs, technical specs, research notes, and durable product decisions.
 - [Third Party Notices](../THIRD_PARTY_NOTICES.md): license and attribution checkpoint for referenced prior-art projects.
