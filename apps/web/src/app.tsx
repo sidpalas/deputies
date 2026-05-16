@@ -116,6 +116,7 @@ export function App() {
   const [newThreadBranch, setNewThreadBranch] = useState('');
   const [newThreadPrompt, setNewThreadPrompt] = useState('');
   const [newThreadRepository, setNewThreadRepository] = useState('');
+  const [defaultModel, setDefaultModel] = useState('');
   const [followUpRepository, setFollowUpRepository] = useState('');
   const [followUpBranch, setFollowUpBranch] = useState('');
   const [followUpModel, setFollowUpModel] = useState('');
@@ -171,6 +172,7 @@ export function App() {
   );
   const selectedRepository = repositoryLabel(selectedSession?.context?.repository);
   const selectedSessionModel = typeof selectedSession?.context?.model === 'string' ? selectedSession.context.model : '';
+  const selectedFollowUpModel = resolveSelectableModel(followUpModel, selectedSessionModel, defaultModel, modelOptions);
   const selectedSessionBranch =
     typeof selectedSession?.context?.branch === 'string' ? selectedSession.context.branch : '';
   const selectedSessionArchived = selectedSession?.status === 'archived';
@@ -202,6 +204,7 @@ export function App() {
         if (cancelled) return;
         setRepositoryOptions(repositories);
         setModelOptions(models.models);
+        setDefaultModel(models.defaultModel ?? models.models[0] ?? '');
         setNewThreadModel((current) => {
           if (current && models.models.includes(current)) return current;
           return models.defaultModel ?? models.models[0] ?? '';
@@ -654,7 +657,7 @@ export function App() {
         prompt: messagePrompt,
         token,
         ...(followUpRepository.trim() ? { repository: followUpRepository.trim() } : {}),
-        ...(followUpModel ? { model: followUpModel } : {}),
+        ...(selectedFollowUpModel ? { model: selectedFollowUpModel } : {}),
         ...(followUpBranch ? { branch: followUpBranch } : {}),
       });
       setMessages((current) => [...current, message]);
@@ -1265,8 +1268,8 @@ export function App() {
                             branchOptions={branchOptions}
                             branchOptionsLoading={branchOptionsLoading}
                             branchOptionsError={branchOptionsError}
-                            model={followUpModel}
-                            inheritedModel={selectedSessionModel}
+                            model={selectedFollowUpModel}
+                            inheritedModel={selectedSessionModel || defaultModel}
                             modelOptions={modelOptions}
                             onBranchChange={setFollowUpBranch}
                             onModelChange={setFollowUpModel}
@@ -1403,6 +1406,13 @@ function repositoryLabel(value: unknown): string | null {
   const owner = typeof repository.owner === 'string' ? repository.owner : '';
   const repo = typeof repository.repo === 'string' ? repository.repo : '';
   return owner && repo ? `${owner}/${repo}` : null;
+}
+
+function resolveSelectableModel(current: string, inherited: string, fallback: string, options: string[]): string {
+  for (const model of [current, inherited, fallback]) {
+    if (model && options.includes(model)) return model;
+  }
+  return options[0] ?? '';
 }
 
 function titleFromPrompt(prompt: string): string {

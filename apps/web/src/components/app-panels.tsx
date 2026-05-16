@@ -727,8 +727,7 @@ export function MessageComposer(props: {
             label="Model"
             value={props.model}
             options={props.modelOptions.map((model) => ({ value: model, label: formatModelLabel(model) }))}
-            emptyLabel={props.inheritedModel ? `Inherit ${formatModelLabel(props.inheritedModel)}` : 'Default model'}
-            allowEmpty={Boolean(props.model)}
+            emptyLabel={props.inheritedModel ? formatModelLabel(props.inheritedModel) : 'Default model'}
             onChange={props.onModelChange}
             disabled={props.archived || props.modelOptions.length <= 1}
           />

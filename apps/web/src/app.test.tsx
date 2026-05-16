@@ -84,7 +84,7 @@ it('submits composer text on Enter and preserves Shift Enter for newlines', asyn
   await waitFor(() => expect(submittedPrompts).toEqual(['follow up']));
 });
 
-it('does not submit inherited session context as follow-up overrides', async () => {
+it('submits the selected model without inherited repo or branch overrides', async () => {
   const submittedMessageBodies: unknown[] = [];
   mockApi({
     submittedMessageBodies,
@@ -99,11 +99,12 @@ it('does not submit inherited session context as follow-up overrides', async () 
   render(<App />);
 
   const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  expect(await screen.findByText('gpt 4.1')).toBeInTheDocument();
   fireEvent.change(composer, { target: { value: 'follow up' } });
   fireEvent.keyDown(composer, { key: 'Enter' });
 
   await waitFor(() => expect(submittedMessageBodies).toHaveLength(1));
-  expect(submittedMessageBodies[0]).toEqual({ prompt: 'follow up' });
+  expect(submittedMessageBodies[0]).toEqual({ prompt: 'follow up', model: 'openai/gpt-4.1' });
 });
 
 it('allows starting a session without repository options', async () => {
