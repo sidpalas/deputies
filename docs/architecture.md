@@ -7,6 +7,7 @@ The system is a portable background-agent control plane with Flue as the agent r
 The system should be deployable to:
 
 - Railway: one service plus Postgres, with optional object storage and Redis later.
+- VM or bare metal host(s): Docker Compose for the control plane and durable infrastructure, with the Docker orchestrator managing sandbox containers through a colocated or remote Docker daemon.
 - ECS Fargate + RDS: one task/service plus RDS, optionally split into API and worker services.
 - Kubernetes: one Deployment plus Postgres and object storage, optionally split into multiple Deployments.
 
