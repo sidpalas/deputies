@@ -38,7 +38,7 @@
     "web:test": "pnpm --dir apps/web test",
     "web:test:watch": "pnpm --dir apps/web test:watch",
     "web:typecheck": "pnpm --dir apps/web typecheck",
-    "prepare": "husky",
+    "prepare": "node -e \"const fs=require('fs'); if (fs.existsSync('.git') && process.env.NODE_ENV !== 'production') require('child_process').execFileSync('pnpm', ['exec', 'husky'], { stdio: 'inherit' })\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "pnpm format:check && pnpm sandbox-bridge:typecheck && pnpm sandbox-bridge:test && pnpm control-plane:typecheck && pnpm control-plane:test && pnpm web:typecheck && pnpm web:test"
