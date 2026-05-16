@@ -686,6 +686,9 @@ describe('core API', () => {
     const archiveSession = await postJson(`${baseUrl}/sessions/${session.id}/archive`, {});
 
     expect(archiveSession.status).toBe(200);
+    await expect(archiveSession.json()).resolves.toMatchObject({
+      session: { sandbox: { status: 'destroyed', destroyedAt: expect.any(String) } },
+    });
     expect(provider.destroys).toBe(1);
     await expect(store.getActiveSandbox(session.id, provider.name)).resolves.toBeNull();
 

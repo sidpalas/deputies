@@ -12,11 +12,21 @@ export type Health = {
 export type Session = {
   id: string;
   status: string;
+  displayStatus?: string;
+  displayStatusTooltip?: string;
   createdAt: string;
   updatedAt: string;
   title?: string;
   queuePausedAt?: string;
   context?: Record<string, unknown>;
+  sandbox?: {
+    id: string;
+    provider: string;
+    providerSandboxId: string;
+    status: string;
+    updatedAt: string;
+    destroyedAt?: string;
+  };
 };
 
 export type Message = {

@@ -437,6 +437,14 @@ export class MemoryStore implements AppStore {
     return (await this.listActiveSandboxes(sessionId, provider))[0] ?? null;
   }
 
+  async getLatestSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null> {
+    return (
+      Array.from(this.sandboxes.values())
+        .filter((sandbox) => sandbox.sessionId === sessionId && sandbox.provider === provider)
+        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null
+    );
+  }
+
   async listActiveSandboxes(sessionId: string, provider: string): Promise<SandboxRecord[]> {
     return Array.from(this.sandboxes.values())
       .filter((sandbox) => sandbox.sessionId === sessionId && sandbox.provider === provider)

@@ -794,6 +794,20 @@ export class PostgresStore implements AppStore {
     return (await this.listActiveSandboxes(sessionId, provider))[0] ?? null;
   }
 
+  async getLatestSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null> {
+    const result = await this.pool.query<SandboxRow>(
+      `SELECT id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata,
+              created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at
+       FROM sandboxes
+       WHERE session_id = $1
+         AND provider = $2
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+      [sessionId, provider],
+    );
+    return result.rows[0] ? toSandbox(result.rows[0]) : null;
+  }
+
   async listActiveSandboxes(sessionId: string, provider: string): Promise<SandboxRecord[]> {
     const result = await this.pool.query<SandboxRow>(
       `SELECT id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata,

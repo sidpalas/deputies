@@ -51,7 +51,7 @@ import type { SandboxProvider } from '../sandbox/types.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
-import type { AppStore, AuthUserRecord, SandboxRecord } from '../store/types.js';
+import type { AppStore, AuthUserRecord, SandboxRecord, SessionRecord } from '../store/types.js';
 import { writeGlobalEventStream, writeSessionEventStream } from './event-stream.js';
 import {
   getSessionService,
@@ -309,12 +309,14 @@ export function createApp(config: AppConfig, services = createServices()) {
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const title = optionalString(body.title);
     const session = await services.sessions.create(title ? { title } : {});
-    return c.json({ session }, 201);
+    return c.json({ session: await serializeSessionWithSandbox(config, services, session) }, 201);
   });
 
   app.get('/sessions', async (c) => {
     const sessions = await services.sessions.list();
-    return c.json({ sessions });
+    return c.json({
+      sessions: await Promise.all(sessions.map((session) => serializeSessionWithSandbox(config, services, session))),
+    });
   });
 
   app.get('/repositories', async (c) => {
@@ -492,7 +494,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.get('/sessions/:sessionId', async (c) => {
     const session = await services.sessions.get(c.req.param('sessionId'));
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
-    return c.json({ session });
+    return c.json({ session: await serializeSessionWithSandbox(config, services, session) });
   });
 
   app.patch('/sessions/:sessionId', async (c) => {
@@ -503,7 +505,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
     try {
       const session = await services.sessions.update({ id: c.req.param('sessionId'), ...(title ? { title } : {}) });
-      return c.json({ session });
+      return c.json({ session: await serializeSessionWithSandbox(config, services, session) });
     } catch (error) {
       if (error instanceof SessionServiceError && error.code === 'not_found') {
         return writeError(c, 404, 'not_found', 'Session not found');
@@ -516,7 +518,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     try {
       const session = await services.sessions.archive(c.req.param('sessionId'));
       await services.sandboxCleanup?.destroySessionSandboxes(session.id);
-      return c.json({ session });
+      return c.json({ session: await serializeSessionWithSandbox(config, services, session) });
     } catch (error) {
       if (error instanceof SessionServiceError && error.code === 'not_found') {
         return writeError(c, 404, 'not_found', 'Session not found');
@@ -528,7 +530,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.post('/sessions/:sessionId/unarchive', async (c) => {
     try {
       const session = await services.sessions.unarchive(c.req.param('sessionId'));
-      return c.json({ session });
+      return c.json({ session: await serializeSessionWithSandbox(config, services, session) });
     } catch (error) {
       if (error instanceof SessionServiceError && error.code === 'not_found') {
         return writeError(c, 404, 'not_found', 'Session not found');
@@ -540,7 +542,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.post('/sessions/:sessionId/queue/pause', async (c) => {
     try {
       const session = await services.sessions.pauseQueue(c.req.param('sessionId'));
-      return c.json({ session });
+      return c.json({ session: await serializeSessionWithSandbox(config, services, session) });
     } catch (error) {
       if (error instanceof SessionServiceError && error.code === 'not_found')
         return writeError(c, 404, 'not_found', 'Session not found');
@@ -551,7 +553,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.post('/sessions/:sessionId/queue/resume', async (c) => {
     try {
       const session = await services.sessions.resumeQueue(c.req.param('sessionId'));
-      return c.json({ session });
+      return c.json({ session: await serializeSessionWithSandbox(config, services, session) });
     } catch (error) {
       if (error instanceof SessionServiceError && error.code === 'not_found')
         return writeError(c, 404, 'not_found', 'Session not found');
@@ -980,6 +982,56 @@ function serializeSandboxKeepalive(
     providerSync,
     ...serializeSandboxTiming(config, sandbox),
   };
+}
+
+type SessionDisplayStatus = { status: string; tooltip: string };
+
+async function serializeSessionWithSandbox(config: AppConfig, services: AppServices, session: SessionRecord) {
+  const sandbox = await services.store.getLatestSandbox(session.id, config.sandboxProvider);
+  const display = sessionDisplayStatus(session, sandbox);
+  const serialized = {
+    ...session,
+    displayStatus: display.status,
+    displayStatusTooltip: display.tooltip,
+  };
+
+  if (!sandbox) return serialized;
+  return { ...serialized, sandbox: serializeSandboxSummary(sandbox) };
+}
+
+function serializeSandboxSummary(sandbox: SandboxRecord) {
+  return {
+    id: sandbox.id,
+    provider: sandbox.provider,
+    providerSandboxId: sandbox.providerSandboxId,
+    status: sandbox.status,
+    updatedAt: sandbox.updatedAt,
+    ...(sandbox.destroyedAt ? { destroyedAt: sandbox.destroyedAt } : {}),
+  };
+}
+
+const sessionDisplayTooltips: Partial<Record<SessionRecord['status'], string>> = {
+  archived: 'This session is archived and read-only until restored.',
+  active: 'Deputy is working on the current message.',
+  cancelled: 'The latest message was cancelled.',
+  failed: 'The latest message failed.',
+  queued: 'Waiting for a worker to pick up the next message.',
+};
+
+const sandboxDisplayStatus: Partial<Record<SandboxRecord['status'], SessionDisplayStatus>> = {
+  destroyed: { status: 'expired', tooltip: 'Sandbox expired to control costs. Filesystem state was not preserved.' },
+  ready: { status: 'ready', tooltip: 'Sandbox is active. Filesystem state and exposed services are available.' },
+  stopped: { status: 'stopped', tooltip: 'Sandbox stopped to control costs. Exposed services are not running.' },
+};
+
+function sessionDisplayStatus(session: SessionRecord, sandbox: SandboxRecord | null): SessionDisplayStatus {
+  const sessionTooltip = sessionDisplayTooltips[session.status];
+  if (sessionTooltip) return { status: session.status, tooltip: sessionTooltip };
+
+  const sandboxDisplay = sandbox ? sandboxDisplayStatus[sandbox.status] : undefined;
+  if (sandboxDisplay) return sandboxDisplay;
+
+  return { status: session.status, tooltip: `Session is ${session.status}.` };
 }
 
 function serializeSandboxTiming(config: AppConfig, sandbox: SandboxRecord) {

@@ -33,7 +33,12 @@ type MockApiOptions = {
   artifactPreviewStatus?: number;
   sessions?: unknown[];
   callbacks?: unknown[];
-  sessionOverride?: Partial<typeof session> & { context?: Record<string, unknown> };
+  sessionOverride?: Partial<typeof session> & {
+    context?: Record<string, unknown>;
+    displayStatus?: string;
+    displayStatusTooltip?: string;
+    sandbox?: Record<string, unknown>;
+  };
   onCancelRun?: () => void;
   onRetryMessage?: (messageId: string) => void;
   onReplayCallback?: (callbackId: string) => void;
@@ -383,6 +388,54 @@ it('refreshes sessions when a queued message starts processing', async () => {
   );
 
   expect(await screen.findAllByText('active')).not.toHaveLength(0);
+});
+
+it('shows derived session display statuses', async () => {
+  const sandboxSession = {
+    ...session,
+    displayStatus: 'ready',
+    displayStatusTooltip: 'Sandbox is active. Filesystem state and exposed services are available.',
+    sandbox: {
+      id: 'sandbox-1',
+      provider: 'fake',
+      providerSandboxId: 'fake-1',
+      status: 'ready',
+      updatedAt: '2026-05-05T12:10:00.000Z',
+    },
+  };
+  const sessions = [sandboxSession];
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    sessions,
+    sessionOverride: sandboxSession,
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findAllByText('ready')).not.toHaveLength(0);
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+
+  sessions[0] = {
+    ...sessions[0]!,
+    displayStatus: 'stopped',
+    displayStatusTooltip: 'Sandbox stopped to control costs. Exposed services are not running.',
+    sandbox: { ...sessions[0]!.sandbox, status: 'stopped' },
+  };
+  pushGlobalEvent?.(eventFixture({ id: 2, sequence: 2, type: 'sandbox_stopped', payload: {} }));
+
+  expect(await screen.findAllByText('stopped')).not.toHaveLength(0);
+
+  sessions[0] = {
+    ...sessions[0]!,
+    displayStatus: 'expired',
+    displayStatusTooltip: 'Sandbox expired to control costs. Filesystem state was not preserved.',
+    sandbox: { ...sessions[0]!.sandbox, status: 'destroyed' },
+  };
+  pushGlobalEvent?.(eventFixture({ id: 3, sequence: 3, type: 'sandbox_destroyed', payload: {} }));
+
+  expect(await screen.findAllByText('expired')).not.toHaveLength(0);
 });
 
 it('coalesces rapid global session refresh events into one sessions request', async () => {

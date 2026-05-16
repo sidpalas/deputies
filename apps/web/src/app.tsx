@@ -1375,6 +1375,9 @@ function shouldRefreshSessions(eventType: string): boolean {
     'message_cancelled',
     'run_failed',
     'run_cancelled',
+    'sandbox_ready',
+    'sandbox_stopped',
+    'sandbox_destroyed',
   ]).has(eventType);
 }
 

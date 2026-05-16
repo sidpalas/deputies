@@ -319,6 +319,9 @@ function SessionButton(props: {
   onArchive?: (sessionId: string) => void;
   onUnarchive?: (sessionId: string) => void;
 }) {
+  const displayStatus = sessionDisplayStatus(props.session);
+  const displayTooltip = sessionDisplayTooltip(props.session);
+
   return (
     <div
       className={cn(
@@ -334,8 +337,8 @@ function SessionButton(props: {
         <strong className="block w-full truncate text-sm font-medium text-foreground">
           {props.session.title || 'Untitled session'}
         </strong>
-        <span className="block w-full truncate text-xs text-muted-foreground">
-          <span className={statusTextClass(props.session.status)}>{props.session.status}</span> ·{' '}
+        <span className="block w-full truncate text-xs text-muted-foreground" title={displayTooltip}>
+          <span className={statusTextClass(displayStatus)}>{displayStatus}</span> ·{' '}
           {formatDate(props.session.updatedAt)}
         </span>
       </button>
@@ -1068,8 +1071,11 @@ export function ThreadHeader(props: {
         </div>
       </div>
       <div className="grid min-h-9 shrink-0 grid-cols-[auto_auto] items-center justify-items-end gap-2 justify-self-end">
-        <Badge className={cn('col-start-1', statusTextClass(props.selectedSession.status))}>
-          {props.selectedSession.status}
+        <Badge
+          className={cn('col-start-1', statusTextClass(sessionDisplayStatus(props.selectedSession)))}
+          title={sessionDisplayTooltip(props.selectedSession)}
+        >
+          {sessionDisplayStatus(props.selectedSession)}
         </Badge>
         <div className="col-start-2 flex justify-end gap-2">
           {props.selectedSession.status !== 'archived' ? (
@@ -1116,10 +1122,24 @@ function filterSessions(sessions: Session[], search: string): Session[] {
   const query = search.trim().toLowerCase();
   if (!query) return sessions;
   return sessions
-    .map((session) => ({ session, score: fuzzyScore(`${session.title ?? ''} ${session.status} ${session.id}`, query) }))
+    .map((session) => ({
+      session,
+      score: fuzzyScore(
+        `${session.title ?? ''} ${session.status} ${sessionDisplayStatus(session)} ${session.id}`,
+        query,
+      ),
+    }))
     .filter((match) => match.score !== null)
     .sort((a, b) => a.score! - b.score!)
     .map((match) => match.session);
+}
+
+function sessionDisplayStatus(session: Session): string {
+  return session.displayStatus ?? session.status;
+}
+
+function sessionDisplayTooltip(session: Session): string {
+  return session.displayStatusTooltip ?? `Session is ${session.status}.`;
 }
 
 function fuzzyScore(value: string, query: string): number | null {
@@ -1140,13 +1160,31 @@ function fuzzyScore(value: string, query: string): number | null {
   return score;
 }
 
+const statusTextClasses: Record<string, string> = {
+  active: 'text-info',
+  archived: 'text-muted-foreground',
+  cancelled: 'text-destructive',
+  cancelling: 'text-info',
+  completed: 'text-success',
+  created: 'text-warning',
+  destroyed: 'text-destructive',
+  expired: 'text-destructive',
+  failed: 'text-destructive',
+  idle: 'text-muted-foreground',
+  missing: 'text-destructive',
+  ok: 'text-success',
+  pending: 'text-warning',
+  processing: 'text-info',
+  queued: 'text-warning',
+  ready: 'text-success',
+  running: 'text-info',
+  starting: 'text-info',
+  stopped: 'text-warning',
+  unhealthy: 'text-destructive',
+};
+
 function statusTextClass(status: string): string {
-  if (['completed', 'ready', 'ok'].includes(status)) return 'text-success';
-  if (['active', 'processing', 'running', 'starting', 'cancelling'].includes(status)) return 'text-info';
-  if (['pending', 'queued', 'created', 'stopped'].includes(status)) return 'text-warning';
-  if (['failed', 'cancelled', 'unhealthy', 'destroyed', 'missing'].includes(status)) return 'text-destructive';
-  if (status === 'idle' || status === 'archived') return 'text-muted-foreground';
-  return 'text-foreground';
+  return statusTextClasses[status] ?? 'text-foreground';
 }
 
 function submitOnEnter(event: KeyboardEvent<HTMLTextAreaElement>): void {

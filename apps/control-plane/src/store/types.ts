@@ -390,6 +390,7 @@ export interface RunStore {
 
 export interface SandboxStore {
   getActiveSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null>;
+  getLatestSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null>;
   listActiveSandboxes(sessionId: string, provider: string): Promise<SandboxRecord[]>;
   listIdleSandboxes(input: { provider: string; idleBefore: Date; limit: number }): Promise<SandboxRecord[]>;
   listStoppableSandboxes(input: { provider: string; idleBefore: Date; limit: number }): Promise<SandboxRecord[]>;
