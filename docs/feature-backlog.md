@@ -66,6 +66,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - ECS/Fargate provider with bridge sidecar.
 - Provider conformance test suite.
 - Sandbox metrics for create/connect/start/stop/destroy latency.
+- Persist or recover Docker sandbox bridge tokens so existing sandboxes can reconnect after control-plane/orchestrator restarts.
 - Let published live previews extend or hold sandbox idle timeout while users are actively viewing them, with provider-neutral limits and clear cleanup behavior.
 - Object storage integration for large logs/artifacts.
 - Repository-aware Daytona image or snapshot selection so common repos can use pre-baked dependencies instead of the global `DAYTONA_IMAGE` default.
