@@ -120,6 +120,14 @@ export type SandboxKeepalive = {
   maxKeepaliveUntil?: string;
 };
 
+export type WorkspaceToolId = 'ide' | 'diff';
+
+export type WorkspaceToolOpenResponse = {
+  tool: { id: WorkspaceToolId; label: string };
+  service: SandboxService;
+  session: Session;
+};
+
 export type ExternalResource = {
   id: string;
   sessionId: string;
@@ -392,6 +400,18 @@ export async function extendSandbox(input: {
     body: { seconds: input.seconds, ...(input.port ? { port: input.port } : {}) },
   });
   return body.sandbox;
+}
+
+export async function openWorkspaceTool(input: {
+  sessionId: string;
+  toolId: WorkspaceToolId;
+  token: string;
+}): Promise<WorkspaceToolOpenResponse> {
+  return request<WorkspaceToolOpenResponse>(`/sessions/${input.sessionId}/workspace-tools/${input.toolId}/open`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
 }
 
 export async function listExternalResources(sessionId: string, token: string): Promise<ExternalResource[]> {

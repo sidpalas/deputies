@@ -1033,9 +1033,10 @@ function ServiceCard(props: { service: SandboxService; compact?: boolean; onExte
   const shutdownLabel = props.service.shutdownAt ? formatRelativeDeadline(props.service.shutdownAt, now) : null;
   const extensionLabel = serviceExtensionLabel(props.service, now);
   const extensionAtMax = extensionLabel === serviceExtensionMaxLabel;
+  const servicePathLabel = visibleServicePath(props.service.path);
   return (
     <Card className={cn('min-w-0 p-3', props.compact ? 'bg-card/80' : 'bg-card/70')}>
-      <div className="grid min-w-0 gap-2">
+      <div className="grid min-w-0 gap-1.5">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <strong className="min-w-0 text-sm leading-5 text-foreground">
             {props.service.label ?? 'Sandbox service'}
@@ -1047,16 +1048,14 @@ function ServiceCard(props: { service: SandboxService; compact?: boolean; onExte
           </Button>
         </div>
         <div className="min-w-0 text-xs text-muted-foreground">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <Badge>:{props.service.port}</Badge>
             {props.service.status ? <Badge className="text-muted-foreground">{props.service.status}</Badge> : null}
+            {servicePathLabel ? <span className="min-w-0 truncate">{servicePathLabel}</span> : null}
           </div>
-          <p className="mt-1 truncate">
-            Authenticated sandbox service{props.service.path ? ` · ${props.service.path}` : ''}
-          </p>
           {shutdownLabel ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              Sandbox can shut down {shutdownLabel}.{' '}
+              Shuts down {shutdownLabel}.{' '}
               {extensionAtMax ? (
                 <span className="text-muted-foreground">{extensionLabel}</span>
               ) : (
@@ -1074,6 +1073,11 @@ function ServiceCard(props: { service: SandboxService; compact?: boolean; onExte
       </div>
     </Card>
   );
+}
+
+function visibleServicePath(path: string | undefined): string {
+  if (!path || path.startsWith('/?folder=')) return '';
+  return path;
 }
 
 function formatRelativeDeadline(value: string, now: number): string {

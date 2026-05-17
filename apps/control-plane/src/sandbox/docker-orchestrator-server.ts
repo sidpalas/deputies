@@ -7,7 +7,7 @@ const handler = createDockerOrchestratorHttpHandler(
   new InProcessDockerOrchestrator(
     optional({
       image: process.env.DOCKER_SANDBOX_IMAGE,
-      workspacePath: process.env.DOCKER_SANDBOX_WORKSPACE_PATH,
+      workspacePath: process.env.SANDBOX_WORKSPACE_PATH,
       bridgeHost: process.env.DOCKER_SANDBOX_BRIDGE_HOST,
       network: process.env.DOCKER_SANDBOX_NETWORK,
       memory: process.env.DOCKER_SANDBOX_MEMORY,

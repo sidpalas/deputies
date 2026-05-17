@@ -18,6 +18,8 @@ FROM ubuntu:24.04
 # Daytona keeps the container alive while Daytona supplies exec/filesystem APIs;
 # Docker starts the Deputies sandbox bridge.
 ARG INSTALL_PLAYWRIGHT=false
+ARG CODE_SERVER_VERSION=4.118.0
+ARG HUNKDIFF_VERSION=0.12.1
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PGDATA=/home/sandbox/.deputies/postgres
 ENV PATH=/usr/lib/postgresql/16/bin:$PATH
@@ -39,6 +41,7 @@ RUN apt-get update \
     postgresql-contrib \
     rsync \
     sudo \
+    ttyd \
     vim \
     zsh \
   && apt-get clean \
@@ -48,6 +51,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
   && apt-get update \
   && apt-get install -y --no-install-recommends nodejs \
   && corepack enable \
+  && curl -fsSL https://code-server.dev/install.sh | sh -s -- --version "${CODE_SERVER_VERSION}" \
+  && npm install -g "hunkdiff@${HUNKDIFF_VERSION}" \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 

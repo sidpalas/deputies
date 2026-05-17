@@ -32,6 +32,7 @@ import {
   listServices,
   listSessions,
   logout,
+  openWorkspaceTool,
   pauseQueue,
   replayCallback,
   resumeQueue,
@@ -44,6 +45,7 @@ import {
   type AuthUser,
   type BranchOption,
   type RepositoryOption,
+  type WorkspaceToolId,
 } from './api.js';
 import { Button } from './components/ui/button.js';
 import {
@@ -1075,6 +1077,34 @@ export function App() {
     }
   }
 
+  async function handleOpenWorkspaceTool(toolId: WorkspaceToolId) {
+    if (!selectedSessionId) return;
+    setError('');
+    const opened = window.open('about:blank', '_blank');
+    writeWorkspaceToolTabMessage(
+      opened,
+      'Starting workspace tool...',
+      'The sandbox tool is starting. This can take a few seconds.',
+    );
+    try {
+      const result = await openWorkspaceTool({ sessionId: selectedSessionId, toolId, token });
+      setSessions((current) =>
+        current.map((candidate) => (candidate.id === result.session.id ? result.session : candidate)),
+      );
+      setServices((current) => [result.service, ...current.filter((service) => service.port !== result.service.port)]);
+      if (opened) {
+        opened.opener = null;
+        opened.location.href = result.service.url;
+      } else {
+        window.open(result.service.url, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err) {
+      if (isWorkspaceToolPreflightError(err)) opened?.close();
+      else writeWorkspaceToolTabMessage(opened, 'Workspace tool failed to open', errorMessage(err));
+      handleApiError(err);
+    }
+  }
+
   function handleApiError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) signOut();
     setError(errorMessage(err));
@@ -1188,6 +1218,7 @@ export function App() {
                       onArchive={handleArchiveSession}
                       onOpenSidebar={expandSidebar}
                       onUpdateTitle={handleUpdateTitle}
+                      onOpenWorkspaceTool={handleOpenWorkspaceTool}
                     />
                     <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]">
                       <section className="flex min-h-0 min-w-0 flex-col px-3 pt-4 md:px-8 xl:px-20">
@@ -1432,4 +1463,46 @@ function blurFocusedTextControl(): void {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unexpected error';
+}
+
+function isWorkspaceToolPreflightError(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 404 || err.status === 409 || err.status === 401);
+}
+
+function writeWorkspaceToolTabMessage(tab: Window | null, title: string, message: string): void {
+  if (!tab) return;
+  tab.document.title = title;
+  tab.document.body.innerHTML = '';
+  tab.document.body.style.margin = '0';
+  tab.document.body.style.fontFamily = 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
+  tab.document.body.style.background = '#0f172a';
+  tab.document.body.style.color = '#e2e8f0';
+
+  const container = tab.document.createElement('main');
+  container.style.minHeight = '100vh';
+  container.style.display = 'grid';
+  container.style.placeItems = 'center';
+  container.style.padding = '24px';
+
+  const card = tab.document.createElement('section');
+  card.style.maxWidth = '520px';
+  card.style.border = '1px solid rgba(148, 163, 184, 0.35)';
+  card.style.borderRadius = '12px';
+  card.style.background = 'rgba(15, 23, 42, 0.92)';
+  card.style.padding = '24px';
+
+  const heading = tab.document.createElement('h1');
+  heading.textContent = title;
+  heading.style.margin = '0 0 8px';
+  heading.style.fontSize = '18px';
+
+  const body = tab.document.createElement('p');
+  body.textContent = message;
+  body.style.margin = '0';
+  body.style.color = '#cbd5e1';
+  body.style.lineHeight = '1.5';
+
+  card.append(heading, body);
+  container.append(card);
+  tab.document.body.append(container);
 }

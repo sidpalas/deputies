@@ -193,7 +193,7 @@ function createSandboxProvider(): SandboxProvider {
         : new InProcessDockerOrchestrator(
             optional({
               image: config.dockerSandboxImage,
-              workspacePath: config.dockerSandboxWorkspacePath,
+              workspacePath: config.sandboxWorkspacePath,
               bridgeHost: config.dockerSandboxBridgeHost,
               network: config.dockerSandboxNetwork,
               memory: config.dockerSandboxMemory,
@@ -212,6 +212,7 @@ function createSandboxProvider(): SandboxProvider {
     if (config.daytonaTarget) Object.assign(options, { target: config.daytonaTarget });
     if (config.daytonaImage) Object.assign(options, { image: config.daytonaImage });
     if (config.daytonaSnapshot) Object.assign(options, { snapshot: config.daytonaSnapshot });
+    Object.assign(options, { workspacePath: config.sandboxWorkspacePath });
     return new DaytonaSandboxProvider(options);
   }
 

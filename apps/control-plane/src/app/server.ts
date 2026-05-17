@@ -45,7 +45,7 @@ import { verifySlackSignature } from '../integrations/slack/auth.js';
 import { SlackIntegrationError, SlackIntegrationService } from '../integrations/slack/service.js';
 import type { SlackEventEnvelope } from '../integrations/slack/types.js';
 import { MessageService, MessageServiceError } from '../messages/service.js';
-import { SandboxCleanupService, SandboxKeepaliveService } from '../sandbox/service.js';
+import { SandboxCleanupService, SandboxKeepaliveService, SandboxLifecycleService } from '../sandbox/service.js';
 import { sandboxRuntimeId } from '../sandbox/runtime.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import { readServices } from '../sessions/services.js';
@@ -72,6 +72,17 @@ import {
   readJsonBody,
   readRawBody,
 } from './request.js';
+import {
+  destroyedSandboxWorkspaceMessage,
+  publishWorkspaceToolService,
+  startWorkspaceTool,
+  type WorkspaceToolPublishInput,
+  workspaceTool,
+  workspaceToolKeepaliveMs,
+  workspaceToolServiceMetadata,
+  workspaceToolServicePath,
+  workspaceToolWorkingDirectory,
+} from './workspace-tools.js';
 
 type AppVariables = {
   requestId: string;
@@ -89,6 +100,7 @@ export type AppServices = {
   sandboxProvider?: SandboxProvider;
   sandboxCleanup?: SandboxCleanupService;
   sandboxKeepalive?: SandboxKeepaliveService;
+  sandboxLifecycle?: SandboxLifecycleService;
   githubReactionSender?: Pick<GitHubReactionSender, 'addEyes'>;
   githubIssueContextFetcher?: Pick<GitHubIssueContextFetcher, 'listIssueComments'>;
   githubArchivedSessionNotifier?: Pick<GitHubArchivedSessionNotifier, 'postNotice' | 'postRecoveryAcknowledgement'>;
@@ -121,6 +133,7 @@ export function createServices(
   };
   if (options.sandboxProvider) {
     services.sandboxProvider = options.sandboxProvider;
+    services.sandboxLifecycle = new SandboxLifecycleService(store, options.sandboxProvider);
     services.sandboxCleanup = new SandboxCleanupService(store, events, options.sandboxProvider);
     services.sandboxKeepalive = new SandboxKeepaliveService(store, events, options.sandboxProvider);
   }
@@ -791,6 +804,88 @@ export function createApp(config: AppConfig, services = createServices()) {
     });
     if (!result) return writeError(c, 404, 'not_found', 'Active sandbox is not available');
     return c.json({ sandbox: serializeSandboxKeepalive(config, result.record, result.providerSync) });
+  });
+
+  app.post('/sessions/:sessionId/workspace-tools/:toolId/open', async (c) => {
+    if (!services.sandboxProvider || !services.sandboxLifecycle || !services.sandboxKeepalive) {
+      return writeError(c, 404, 'not_found', 'Sandbox provider is not configured');
+    }
+    const sessionId = c.req.param('sessionId');
+    const session = await services.sessions.get(sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+
+    const tool = workspaceTool(c.req.param('toolId'));
+    if (!tool) return writeError(c, 404, 'not_found', 'Workspace tool not found');
+
+    const latest = await services.store.getLatestSandbox(sessionId, services.sandboxProvider.name);
+    if (!latest)
+      return writeError(c, 409, 'sandbox_unavailable', 'No sandbox workspace is available yet. Start a run first.');
+    if (latest.status === 'destroyed') {
+      return writeError(c, 409, 'sandbox_destroyed', destroyedSandboxWorkspaceMessage);
+    }
+    const latestHealth = await services.sandboxProvider.health(latest);
+    if (latestHealth.status === 'missing') {
+      const destroyedAt = new Date();
+      await services.store.updateSandbox({ ...latest, status: 'destroyed', updatedAt: destroyedAt, destroyedAt });
+      return writeError(c, 409, 'sandbox_destroyed', destroyedSandboxWorkspaceMessage);
+    }
+
+    const ensured = await services.sandboxLifecycle.ensure(sessionId, { allowCreate: false });
+    if (!ensured) {
+      const health = await services.sandboxProvider.health(latest);
+      if (health.status === 'missing') {
+        const destroyedAt = new Date();
+        await services.store.updateSandbox({ ...latest, status: 'destroyed', updatedAt: destroyedAt, destroyedAt });
+        return writeError(c, 409, 'sandbox_destroyed', destroyedSandboxWorkspaceMessage);
+      }
+      return writeError(c, 404, 'not_found', 'Active sandbox is not available');
+    }
+    await startWorkspaceTool(
+      ensured.sandbox,
+      tool,
+      workspaceToolWorkingDirectory(tool, session.context ?? {}, ensured.sandbox.workspacePath),
+    );
+    const keepalive = await services.sandboxKeepalive.extend({
+      sessionId,
+      durationMs: workspaceToolKeepaliveMs,
+      maxDurationMs: config.sandboxKeepaliveMaxExtensionMs,
+      port: tool.port,
+    });
+    if (!keepalive) return writeError(c, 404, 'not_found', 'Active sandbox is not available');
+
+    const publishInput: WorkspaceToolPublishInput = {
+      session,
+      store: services.store,
+      tool,
+      providerSandboxId: ensured.record.providerSandboxId,
+    };
+    const servicePath = workspaceToolServicePath(tool, ensured.sandbox.workspacePath);
+    if (servicePath) publishInput.path = servicePath;
+    const runtimeId = sandboxRuntimeId(ensured.record);
+    if (runtimeId) publishInput.runtimeId = runtimeId;
+    const updatedSession = await publishWorkspaceToolService(publishInput);
+    const preview = await getSessionService(config, services, sessionId, tool.port);
+    if (!preview) {
+      return writeError(
+        c,
+        503,
+        'service_unreachable',
+        'Workspace tool service is unreachable. The process may still be starting, exited, or listening on another port.',
+      );
+    }
+
+    return c.json({
+      tool: { id: tool.id, label: tool.label },
+      service: serializeService(
+        c,
+        config,
+        sessionId,
+        preview,
+        workspaceToolServiceMetadata(tool, servicePath),
+        sandboxTiming(config, keepalive.record),
+      ),
+      session: await serializeSessionWithSandbox(config, services, updatedSession),
+    });
   });
 
   const handleServiceProxy = async (c: Context) => {

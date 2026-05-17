@@ -34,6 +34,7 @@ export type AppConfig = {
   sandboxStopDelayMs: number;
   sandboxRetentionMs: number;
   sandboxKeepaliveMaxExtensionMs: number;
+  sandboxWorkspacePath: string;
   runMode: RunMode;
   runner: RunnerKind;
   sandboxProvider: SandboxProviderKind;
@@ -42,7 +43,6 @@ export type AppConfig = {
   dockerOrchestratorUrl?: string;
   dockerOrchestratorToken?: string;
   dockerSandboxImage: string;
-  dockerSandboxWorkspacePath: string;
   dockerSandboxBridgeHost: string;
   dockerSandboxNetwork?: string;
   dockerSandboxMemory?: string;
@@ -133,6 +133,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
         7200,
         'SANDBOX_KEEPALIVE_MAX_EXTENSION_SECONDS',
       ) * 1000,
+    sandboxWorkspacePath: env.SANDBOX_WORKSPACE_PATH ?? '/workspace',
     runMode: parseEnum(env.RUN_MODE, ['all', 'api', 'worker'], 'all'),
     runner: parseEnum(env.RUNNER, ['fake', 'flue'], 'fake'),
     sandboxProvider: parseEnum(
@@ -143,7 +144,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
     dockerOrchestratorMode: parseEnum(env.DOCKER_ORCHESTRATOR_MODE, ['in-process', 'http'], 'in-process'),
     dockerSandboxImage: env.DOCKER_SANDBOX_IMAGE ?? 'deputies-sandbox:local',
-    dockerSandboxWorkspacePath: env.DOCKER_SANDBOX_WORKSPACE_PATH ?? '/workspace',
     dockerSandboxBridgeHost: env.DOCKER_SANDBOX_BRIDGE_HOST ?? '127.0.0.1',
     dockerCliTimeoutMs: parsePositiveInteger(env.DOCKER_CLI_TIMEOUT_MS, 30_000, 'DOCKER_CLI_TIMEOUT_MS'),
     appStore: parseEnum(env.APP_STORE, ['memory', 'postgres'], 'memory'),

@@ -8,7 +8,7 @@ import { createServer, createServices, createWorkerHealthServer, type AppService
 import { loadConfig } from '../../src/config/index.js';
 import { GitHubApiError } from '../../src/integrations/github/client.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
-import type { SandboxPreviewUrlInput } from '../../src/sandbox/types.js';
+import type { CreateSandboxInput, SandboxHealth, SandboxPreviewUrlInput, SandboxRef } from '../../src/sandbox/types.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import {
   expectArtifactPreviewResponse,
@@ -896,6 +896,123 @@ describe('core API', () => {
     }
   });
 
+  it('opens workspace tools through published sandbox services', async () => {
+    const upstream = createPreviewUpstream();
+    const upstreamBaseUrl = await listen(upstream);
+    await closeServer(server);
+    const provider = new ServiceSandboxProvider(upstreamBaseUrl);
+    server = createServer(
+      loadConfig({ API_AUTH_MODE: 'none', SANDBOX_KEEPALIVE_MAX_EXTENSION_SECONDS: '600' }),
+      createServices(store, { sandboxProvider: provider }),
+    );
+    baseUrl = await listen(server);
+
+    try {
+      const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Workspace tool' });
+      const { session } = (await createSession.json()) as { session: { id: string } };
+      const sandbox = await provider.create({ sessionId: session.id });
+      const now = new Date();
+      await store.createSandbox({
+        id: '00000000-0000-4000-8000-000000000508',
+        sessionId: session.id,
+        provider: provider.name,
+        providerSandboxId: sandbox.providerSandboxId,
+        status: 'ready',
+        workspacePath: '/workspace',
+        metadata: { runtimeId: 'runtime-1' },
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const response = await postJson(`${baseUrl}/sessions/${session.id}/workspace-tools/ide/open`, {});
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { tool: { id: string }; service: { port: number; label: string } };
+      expect(body.tool.id).toBe('ide');
+      expect(body.service).toMatchObject({ port: 8080, label: 'VS Code' });
+      expect(provider.keepaliveRefreshes).toEqual([
+        { providerSandboxId: sandbox.providerSandboxId, durationMs: 600_000 },
+      ]);
+
+      const services = (await (await fetch(`${baseUrl}/sessions/${session.id}/services`)).json()) as {
+        services: Array<{ port: number; label: string }>;
+      };
+      expect(services.services).toMatchObject([{ port: 8080, label: 'VS Code' }]);
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  it('does not create a fresh workspace when the previous sandbox is missing', async () => {
+    const upstream = createPreviewUpstream();
+    const upstreamBaseUrl = await listen(upstream);
+    await closeServer(server);
+    const provider = new ServiceSandboxProvider(upstreamBaseUrl);
+    server = createServer(loadConfig({ API_AUTH_MODE: 'none' }), createServices(store, { sandboxProvider: provider }));
+    baseUrl = await listen(server);
+
+    try {
+      const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Destroyed workspace' });
+      const { session } = (await createSession.json()) as { session: { id: string } };
+      const sandbox = await provider.create({ sessionId: session.id });
+      const now = new Date();
+      await store.createSandbox({
+        id: '00000000-0000-4000-8000-000000000509',
+        sessionId: session.id,
+        provider: provider.name,
+        providerSandboxId: sandbox.providerSandboxId,
+        status: 'ready',
+        workspacePath: '/workspace',
+        metadata: { runtimeId: 'runtime-1' },
+        createdAt: now,
+        updatedAt: now,
+      });
+      await provider.destroy(sandbox);
+
+      const response = await postJson(`${baseUrl}/sessions/${session.id}/workspace-tools/ide/open`, {});
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: 'sandbox_destroyed',
+        message: expect.stringContaining('Filesystem state is not persisted'),
+      });
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  it('does not create a fresh workspace when a sandbox disappears during tool startup', async () => {
+    const upstream = createPreviewUpstream();
+    const upstreamBaseUrl = await listen(upstream);
+    await closeServer(server);
+    const provider = new DisappearingServiceSandboxProvider(upstreamBaseUrl);
+    server = createServer(loadConfig({ API_AUTH_MODE: 'none' }), createServices(store, { sandboxProvider: provider }));
+    baseUrl = await listen(server);
+
+    try {
+      const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Destroyed during open' });
+      const { session } = (await createSession.json()) as { session: { id: string } };
+      const sandbox = await provider.create({ sessionId: session.id });
+      const now = new Date();
+      await store.createSandbox({
+        id: '00000000-0000-4000-8000-000000000510',
+        sessionId: session.id,
+        provider: provider.name,
+        providerSandboxId: sandbox.providerSandboxId,
+        status: 'ready',
+        workspacePath: '/workspace',
+        metadata: { runtimeId: 'runtime-1' },
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const response = await postJson(`${baseUrl}/sessions/${session.id}/workspace-tools/ide/open`, {});
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ error: 'sandbox_destroyed' });
+      expect(provider.creates).toBe(1);
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
   it('does not list published services from an old sandbox', async () => {
     const upstream = createPreviewUpstream();
     const upstreamBaseUrl = await listen(upstream);
@@ -1543,6 +1660,22 @@ class ServiceSandboxProvider extends FakeSandboxProvider {
 
   async refreshKeepalive(input: { providerSandboxId: string; durationMs: number }) {
     this.keepaliveRefreshes.push({ providerSandboxId: input.providerSandboxId, durationMs: input.durationMs });
+  }
+}
+
+class DisappearingServiceSandboxProvider extends ServiceSandboxProvider {
+  creates = 0;
+  private healthChecks = 0;
+
+  override async create(input: CreateSandboxInput) {
+    this.creates += 1;
+    return super.create(input);
+  }
+
+  override async health(input: SandboxRef): Promise<SandboxHealth> {
+    this.healthChecks += 1;
+    if (this.healthChecks > 1) return { status: 'missing', checkedAt: new Date() };
+    return super.health(input);
   }
 }
 

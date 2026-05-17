@@ -11,18 +11,28 @@ export type EnsureSandboxResult = {
   restarted: boolean;
 };
 
+export type EnsureSandboxOptions = {
+  allowCreate?: boolean;
+};
+
 export class SandboxLifecycleService {
   constructor(
     private readonly store: SandboxStore,
     private readonly provider: SandboxProvider,
   ) {}
 
-  async ensure(sessionId: string): Promise<EnsureSandboxResult> {
+  async ensure(sessionId: string): Promise<EnsureSandboxResult>;
+  async ensure(
+    sessionId: string,
+    options: EnsureSandboxOptions & { allowCreate: false },
+  ): Promise<EnsureSandboxResult | null>;
+  async ensure(sessionId: string, options: EnsureSandboxOptions = {}): Promise<EnsureSandboxResult | null> {
     const existing = await this.store.getActiveSandbox(sessionId, this.provider.name);
     if (existing) {
       const connected = await this.tryConnect(existing);
       if (connected) return { ...connected, created: false };
     }
+    if (options.allowCreate === false) return null;
 
     const sandbox = await this.provider.create({ sessionId });
     let record: SandboxRecord;

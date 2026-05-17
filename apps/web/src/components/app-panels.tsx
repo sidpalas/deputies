@@ -14,6 +14,8 @@ import {
   AlertTriangle,
   Archive,
   ChevronDown,
+  Code2,
+  GitCompare,
   Monitor,
   Moon,
   PanelLeftClose,
@@ -25,7 +27,15 @@ import {
   Sun,
   X,
 } from 'lucide-react';
-import { BranchOption, getApiBaseUrl, githubLoginUrl, Health, RepositoryOption, Session } from '../api.js';
+import {
+  BranchOption,
+  getApiBaseUrl,
+  githubLoginUrl,
+  Health,
+  RepositoryOption,
+  Session,
+  type WorkspaceToolId,
+} from '../api.js';
 import { Badge } from './ui/badge.js';
 import { Button } from './ui/button.js';
 import { Card } from './ui/card.js';
@@ -990,20 +1000,58 @@ function formatModelLabel(model: string): string {
   return model.replace(/^[^/]+\//, '').replace(/-/g, ' ');
 }
 
-export function ThreadHeader(props: {
+function workspaceToolUnavailableReason(session: Session): string {
+  if (!session.sandbox) return 'Start a run to create a workspace before opening tools.';
+  if (session.sandbox.status === 'destroyed') return 'This workspace was destroyed. Start a fresh run to use tools.';
+  return '';
+}
+
+type ThreadHeaderProps = {
   selectedSession: Session;
   showOpenSidebar: boolean;
   onArchive: () => void;
   onOpenSidebar: () => void;
   onUpdateTitle: (title: string) => Promise<boolean>;
-}) {
+  onOpenWorkspaceTool: (toolId: WorkspaceToolId) => Promise<void>;
+};
+
+const workspaceToolOptions = [
+  { id: 'ide' as const, label: 'VS Code', Icon: Code2 },
+  { id: 'diff' as const, label: 'Hunk Diff', Icon: GitCompare },
+];
+
+export function ThreadHeader(props: ThreadHeaderProps) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(props.selectedSession.title ?? '');
+  const [workspaceToolsOpen, setWorkspaceToolsOpen] = useState(false);
+  const [openingWorkspaceTool, setOpeningWorkspaceTool] = useState<WorkspaceToolId | ''>('');
+  const workspaceToolsRef = useRef<HTMLDivElement>(null);
+  const workspaceUnavailableReason = workspaceToolUnavailableReason(props.selectedSession);
 
   useEffect(() => {
     setEditingTitle(false);
     setTitleDraft(props.selectedSession.title ?? '');
   }, [props.selectedSession.id, props.selectedSession.title]);
+
+  useEffect(() => {
+    if (!workspaceToolsOpen) return;
+
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (event.target instanceof Node && workspaceToolsRef.current?.contains(event.target)) return;
+      setWorkspaceToolsOpen(false);
+    }
+
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape') setWorkspaceToolsOpen(false);
+    }
+
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [workspaceToolsOpen]);
 
   function startEditingTitle() {
     setTitleDraft(props.selectedSession.title ?? '');
@@ -1014,6 +1062,16 @@ export function ThreadHeader(props: {
     event.preventDefault();
     const saved = await props.onUpdateTitle(titleDraft);
     if (saved) setEditingTitle(false);
+  }
+
+  async function openWorkspaceTool(toolId: WorkspaceToolId) {
+    setWorkspaceToolsOpen(false);
+    setOpeningWorkspaceTool(toolId);
+    try {
+      await props.onOpenWorkspaceTool(toolId);
+    } finally {
+      setOpeningWorkspaceTool('');
+    }
   }
 
   return (
@@ -1077,6 +1135,49 @@ export function ThreadHeader(props: {
           {sessionDisplayStatus(props.selectedSession)}
         </Badge>
         <div className="col-start-2 flex justify-end gap-2">
+          <div className="relative" ref={workspaceToolsRef}>
+            <Button
+              className="h-9 gap-2"
+              type="button"
+              variant="secondary"
+              disabled={Boolean(openingWorkspaceTool)}
+              onClick={() => setWorkspaceToolsOpen((open) => !open)}
+              aria-expanded={workspaceToolsOpen}
+              aria-haspopup="menu"
+              title="Workspace Tools"
+            >
+              <Monitor className="h-4 w-4" />
+              <span className="hidden sm:inline">{openingWorkspaceTool ? 'Opening...' : 'Workspace Tools'}</span>
+              <ChevronDown className="h-3.5 w-3.5" />
+            </Button>
+            {workspaceToolsOpen ? (
+              <div
+                className="absolute right-0 top-11 z-30 w-56 rounded-md border border-border bg-card p-1 text-sm text-card-foreground shadow-lg"
+                role="menu"
+              >
+                {workspaceUnavailableReason ? (
+                  <p className="px-2 py-2 text-muted-foreground">{workspaceUnavailableReason}</p>
+                ) : (
+                  workspaceToolOptions.map(({ id, label, Icon }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={Boolean(openingWorkspaceTool)}
+                      role="menuitem"
+                      onClick={() => openWorkspaceTool(id)}
+                    >
+                      <Icon className="h-4 w-4" />
+                      <span className="min-w-0 flex-1">{label}</span>
+                      {openingWorkspaceTool === id ? (
+                        <span className="text-xs text-muted-foreground">Opening...</span>
+                      ) : null}
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : null}
+          </div>
           {props.selectedSession.status !== 'archived' ? (
             <Button
               className="h-9 w-9 p-0"

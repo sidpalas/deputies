@@ -85,6 +85,10 @@ export const publicApiResponseSchemas = {
     description: 'Sandbox lifecycle status envelope.',
     fields: { sandbox: 'object' },
   },
+  workspaceToolOpen: {
+    description: 'Opened workspace tool service envelope.',
+    fields: { tool: 'object', service: 'object', session: 'object' },
+  },
   artifactPreview: {
     description: 'Text preview for a stored artifact.',
     fields: {

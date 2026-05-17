@@ -8,6 +8,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PGDATA=/home/daytona/.deputies/postgres
 ENV PATH=/usr/lib/postgresql/16/bin:$PATH
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ARG CODE_SERVER_VERSION=4.118.0
+ARG HUNKDIFF_VERSION=0.12.1
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -22,6 +24,7 @@ RUN apt-get update \
     postgresql-contrib \
     rsync \
     sudo \
+    ttyd \
     vim \
     zsh \
   && apt-get clean \
@@ -31,6 +34,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
   && apt-get update \
   && apt-get install -y --no-install-recommends nodejs \
   && corepack enable \
+  && curl -fsSL https://code-server.dev/install.sh | sh -s -- --version "${CODE_SERVER_VERSION}" \
+  && npm install -g "hunkdiff@${HUNKDIFF_VERSION}" \
   && curl -fsSL https://mise.run | sh \
   && mv /root/.local/bin/mise /usr/local/bin/mise \
   && apt-get clean \
