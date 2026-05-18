@@ -25,6 +25,7 @@ import {
   RefreshCw,
   RotateCcw,
   Sun,
+  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -1023,9 +1024,9 @@ const workspaceToolOptions = [
 export function ThreadHeader(props: ThreadHeaderProps) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(props.selectedSession.title ?? '');
-  const [workspaceToolsOpen, setWorkspaceToolsOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [openingWorkspaceTool, setOpeningWorkspaceTool] = useState<WorkspaceToolId | ''>('');
-  const workspaceToolsRef = useRef<HTMLDivElement>(null);
+  const toolsRef = useRef<HTMLDivElement>(null);
   const workspaceUnavailableReason = workspaceToolUnavailableReason(props.selectedSession);
 
   useEffect(() => {
@@ -1034,15 +1035,15 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   }, [props.selectedSession.id, props.selectedSession.title]);
 
   useEffect(() => {
-    if (!workspaceToolsOpen) return;
+    if (!toolsOpen) return;
 
     function closeOnOutsideClick(event: MouseEvent) {
-      if (event.target instanceof Node && workspaceToolsRef.current?.contains(event.target)) return;
-      setWorkspaceToolsOpen(false);
+      if (event.target instanceof Node && toolsRef.current?.contains(event.target)) return;
+      setToolsOpen(false);
     }
 
     function closeOnEscape(event: globalThis.KeyboardEvent) {
-      if (event.key === 'Escape') setWorkspaceToolsOpen(false);
+      if (event.key === 'Escape') setToolsOpen(false);
     }
 
     document.addEventListener('mousedown', closeOnOutsideClick);
@@ -1051,7 +1052,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
       document.removeEventListener('mousedown', closeOnOutsideClick);
       document.removeEventListener('keydown', closeOnEscape);
     };
-  }, [workspaceToolsOpen]);
+  }, [toolsOpen]);
 
   function startEditingTitle() {
     setTitleDraft(props.selectedSession.title ?? '');
@@ -1065,13 +1066,18 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   }
 
   async function openWorkspaceTool(toolId: WorkspaceToolId) {
-    setWorkspaceToolsOpen(false);
+    setToolsOpen(false);
     setOpeningWorkspaceTool(toolId);
     try {
       await props.onOpenWorkspaceTool(toolId);
     } finally {
       setOpeningWorkspaceTool('');
     }
+  }
+
+  function archiveSession() {
+    setToolsOpen(false);
+    props.onArchive();
   }
 
   return (
@@ -1135,26 +1141,26 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           {sessionDisplayStatus(props.selectedSession)}
         </Badge>
         <div className="col-start-2 flex justify-end gap-2">
-          <div className="relative" ref={workspaceToolsRef}>
+          <div className="relative" ref={toolsRef}>
             <Button
               className="h-9 gap-2"
               type="button"
               variant="secondary"
-              disabled={Boolean(openingWorkspaceTool)}
-              onClick={() => setWorkspaceToolsOpen((open) => !open)}
-              aria-expanded={workspaceToolsOpen}
+              onClick={() => setToolsOpen((open) => !open)}
+              aria-expanded={toolsOpen}
               aria-haspopup="menu"
-              title="Workspace Tools"
+              title="Tools"
             >
-              <Monitor className="h-4 w-4" />
-              <span className="hidden sm:inline">{openingWorkspaceTool ? 'Opening...' : 'Workspace Tools'}</span>
+              <Wrench className="h-4 w-4" />
+              <span className="hidden sm:inline">Tools</span>
               <ChevronDown className="h-3.5 w-3.5" />
             </Button>
-            {workspaceToolsOpen ? (
+            {toolsOpen ? (
               <div
                 className="absolute right-0 top-11 z-30 w-56 rounded-md border border-border bg-card p-1 text-sm text-card-foreground shadow-lg"
                 role="menu"
               >
+                <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Workspace Tools</p>
                 {workspaceUnavailableReason ? (
                   <p className="px-2 py-2 text-muted-foreground">{workspaceUnavailableReason}</p>
                 ) : (
@@ -1175,22 +1181,23 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                     </button>
                   ))
                 )}
+                {props.selectedSession.status !== 'archived' ? (
+                  <>
+                    <div className="my-1 h-px bg-border" />
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60"
+                      role="menuitem"
+                      onClick={archiveSession}
+                    >
+                      <Archive className="h-4 w-4" />
+                      <span className="min-w-0 flex-1">Archive session</span>
+                    </button>
+                  </>
+                ) : null}
               </div>
             ) : null}
           </div>
-          {props.selectedSession.status !== 'archived' ? (
-            <Button
-              className="h-9 w-9 p-0"
-              type="button"
-              variant="secondary"
-              size="icon"
-              onClick={props.onArchive}
-              aria-label="Archive session"
-              title="Archive session"
-            >
-              <Archive className="h-4 w-4" />
-            </Button>
-          ) : null}
         </div>
       </div>
     </section>

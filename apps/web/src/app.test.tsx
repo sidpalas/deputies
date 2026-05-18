@@ -277,7 +277,7 @@ it('keeps the sidebar archive action exposed on mobile', async () => {
   expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
 });
 
-it('uses an icon-only archive action in the session header', async () => {
+it('groups header session actions in a tools menu', async () => {
   mockApi();
   render(<App />);
 
@@ -285,8 +285,10 @@ it('uses an icon-only archive action in the session header', async () => {
   const header = heading.closest('section');
   expect(header).toBeInTheDocument();
 
-  const archiveButton = within(header as HTMLElement).getByRole('button', { name: 'Archive session' });
-  expect(archiveButton).toHaveTextContent('');
+  fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Tools' }));
+
+  expect(within(header as HTMLElement).getByText('Workspace Tools')).toBeInTheDocument();
+  expect(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' })).toBeInTheDocument();
 });
 
 it('archives the selected session before waiting for the archive request', async () => {
@@ -295,7 +297,8 @@ it('archives the selected session before waiting for the archive request', async
 
   const heading = await screen.findByRole('heading', { name: 'Existing session' });
   const header = heading.closest('section');
-  fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Archive session' }));
+  fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Tools' }));
+  fireEvent.click(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' }));
 
   expect(screen.getByText('What needs doing?')).toBeInTheDocument();
   expect(localStorage.getItem('deputies-selected-session-id')).toBeNull();
