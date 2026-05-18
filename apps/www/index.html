@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Deputies is a control plane for delegating engineering work to background agents."
+    />
+    <title>Deputies | Background agent control plane</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <nav class="nav" aria-label="Primary navigation">
+        <a class="brand" href="/" aria-label="Deputies home">
+          <span class="brand-mark">D</span>
+          <span>Deputies</span>
+        </a>
+        <div class="nav-links">
+          <a href="https://github.com/sidpalas/deputies">
+            <svg class="github-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M12 2C6.48 2 2 6.59 2 12.25c0 4.52 2.87 8.35 6.84 9.7.5.09.68-.22.68-.49v-1.9c-2.78.62-3.37-1.22-3.37-1.22-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.67.35-1.12.63-1.38-2.22-.26-4.55-1.14-4.55-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.3 9.3 0 0 1 12 6.95c.85 0 1.7.12 2.5.34 1.9-1.33 2.74-1.05 2.74-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.8-4.57 5.05.36.32.68.94.68 1.9v2.81c0 .27.18.59.69.49A10.08 10.08 0 0 0 22 12.25C22 6.59 17.52 2 12 2Z"
+              />
+            </svg>
+            GitHub
+          </a>
+        </div>
+      </nav>
+
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <h1 id="hero-title">Engineering agents for delegated work.</h1>
+          <p class="hero-text">
+            Assign work, track each step, and inspect the final output. Deputies is a Flue-powered background-agent
+            control plane that deploys on your existing infrastructure: Node, Postgres, and a static web frontend.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="https://github.com/sidpalas/deputies">
+              <svg class="github-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M12 2C6.48 2 2 6.59 2 12.25c0 4.52 2.87 8.35 6.84 9.7.5.09.68-.22.68-.49v-1.9c-2.78.62-3.37-1.22-3.37-1.22-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.67.35-1.12.63-1.38-2.22-.26-4.55-1.14-4.55-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.3 9.3 0 0 1 12 6.95c.85 0 1.7.12 2.5.34 1.9-1.33 2.74-1.05 2.74-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.8-4.57 5.05.36.32.68.94.68 1.9v2.81c0 .27.18.59.69.49A10.08 10.08 0 0 0 22 12.25C22 6.59 17.52 2 12 2Z"
+                />
+              </svg>
+              View on GitHub
+            </a>
+            <span class="button placeholder" aria-disabled="true">Deploy on Railway soon</span>
+          </div>
+        </div>
+
+        <div class="session-card" aria-label="Deputies session preview">
+          <div class="window-bar">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="session-header">
+            <span class="status-dot"></span>
+            <span>Issue triage session</span>
+            <strong>running</strong>
+          </div>
+          <div class="session-list">
+            <p><span>1</span> Clone repository and load project context</p>
+            <p><span>2</span> Reproduce failing integration test</p>
+            <p><span>3</span> Patch session queue handling</p>
+            <p class="active"><span>4</span> Stream diagnostics and artifact links</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="features-section" aria-labelledby="features-title">
+        <div class="section-heading">
+          <p class="eyebrow">Features</p>
+          <h2 id="features-title">What works today and what is next.</h2>
+        </div>
+        <div class="feature-columns">
+          <article>
+            <p class="eyebrow">Available now</p>
+            <ul>
+              <li>Persistent agent sessions</li>
+              <li>Live events, diagnostics, artifacts, and callbacks</li>
+              <li>Follow-up prompts and queueing</li>
+              <li>GitHub repository context and PR creation</li>
+              <li>Slack, GitHub, and generic webhook integrations</li>
+              <li>Multi-service app previews with HTTP and WebSocket support</li>
+              <li>Interactive IDE and diff viewer for reviewing or editing agent output</li>
+              <li>Daytona sandbox provider for fast-starting, cloud-scalable sandboxes</li>
+              <li>Docker sandbox provider for bare-metal and on-prem deployments</li>
+              <li>Deployment docs for Railway and Docker Compose</li>
+            </ul>
+          </article>
+          <article>
+            <p class="eyebrow">Coming soon</p>
+            <ul>
+              <li>Recurring and proactive tasks</li>
+              <li>More sandbox providers</li>
+              <li>More source control providers, including GitLab</li>
+              <li>More deployment target documentation</li>
+              <li>Richer GitHub workflow helpers</li>
+              <li>RBAC for teams, repositories, and agent access</li>
+              <li>Richer reporting and review workflows</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="faq" aria-labelledby="faq-title">
+        <p class="eyebrow">FAQ</p>
+        <h2 id="faq-title">Questions people usually ask first.</h2>
+        <article class="faq-item">
+          <h3>What is a background agent?</h3>
+          <p>
+            A <a href="https://background-agents.com/">background agent</a> is an AI coding agent that runs
+            asynchronously instead of sitting inside your terminal. You hand it a task, it works in its own environment,
+            and you come back to review progress, artifacts, logs, callbacks, and the final result.
+          </p>
+          <p>
+            Deputies is built for teams that want to hand off real engineering work to agents while keeping visibility,
+            access control, history, callbacks, and deployment concerns in one place. Inbound events can trigger new
+            work, and recurring tasks can turn the system from a passive queue into something more proactive.
+          </p>
+        </article>
+        <article class="faq-item">
+          <h3>What other systems like this exist?</h3>
+          <p>
+            The space includes open-source projects like
+            <a href="https://github.com/ColeMurray/background-agents">Open-Inspect</a> and
+            <a href="https://github.com/langchain-ai/open-swe">Open SWE</a>, hosted or enterprise-oriented products like
+            OpenHands, Ona, and Devin, and vendor-native cloud agents like Claude Code and OpenAI Codex. Deputies is
+            another take on the same broad category, with a stronger focus on self-hostable deployment alongside your
+            existing infrastructure.
+          </p>
+        </article>
+        <article class="faq-item">
+          <h3>Why would I want my background agent to be open source?</h3>
+          <p>
+            Background agents need access to your code, secrets, development environments, issue trackers, and deploy
+            workflows. Open source lets you self-host the control plane inside the same security boundary as your other
+            systems, while keeping it inspectable, auditable, and adaptable to the deployment patterns your team already
+            uses.
+          </p>
+          <p>
+            It also gives you an escape hatch. You can change integrations, add providers, debug the full system, and
+            connect to non-standard internal systems with custom adapters instead of waiting for a vendor or treating
+            the agent runtime as a black box.
+          </p>
+        </article>
+        <article class="faq-item">
+          <h3>Does it work with my LLM subscription?</h3>
+          <p>
+            Deputies works with ChatGPT Pro through <code>@earendil-works/pi-ai/oauth</code>, because Flue uses Pi under
+            the hood. Any LLM provider supported by Pi should be supported by Deputies, or at least be easy to add.
+          </p>
+        </article>
+        <article class="faq-item">
+          <h3>Why another background agent?</h3>
+          <p>
+            After working with and extending Open-Inspect and Open SWE, I was excited by the background-agent workflow
+            but frustrated by their deployment constraints. Open-Inspect is tied to Cloudflare, while Open SWE pushes
+            users toward LangChain's hosted LangSmith platform.
+          </p>
+          <p>
+            When Flue came out, it looked like the right foundation for my take on a background agent: one built with
+            deployability front and center. These systems should run wherever the rest of your infrastructure already
+            runs, so teams can keep secure access patterns intact without introducing a new deployment model.
+          </p>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

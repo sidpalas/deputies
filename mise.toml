@@ -34,9 +34,13 @@ run = "railway up --service control-plane --detach -m 'deploy control-plane'"
 description = "Deploy the web service to Railway"
 run = "railway up --service web --detach -m 'deploy web'"
 
+[tasks.deploy-www]
+description = "Deploy the root-domain marketing site to Railway"
+run = "railway up --service www --detach -m 'deploy www'"
+
 [tasks.deploy]
-description = "Deploy control-plane and web services to Railway"
-depends = ["deploy-control-plane", "deploy-web"]
+description = "Deploy control-plane, web, and www services to Railway"
+depends = ["deploy-control-plane", "deploy-web", "deploy-www"]
 
 [tasks.daytona-image-build]
 description = "Build the Daytona sandbox image"

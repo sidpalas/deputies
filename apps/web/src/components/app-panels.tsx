@@ -410,7 +410,7 @@ export function BearerAuthPanel(props: {
           Engineering agents for delegated work.
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Assign follow-ups, watch the work trail, and inspect the results.
+          Assign work, track each step, and inspect the final output.
         </p>
         <form className="mt-6 grid gap-3" onSubmit={props.saveToken}>
           <div>
@@ -541,7 +541,7 @@ export function NewThreadPanel(props: {
           Engineering agents for delegated work.
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Assign follow-ups, watch the work trail, and inspect the results.
+          Assign work, track each step, and inspect the final output.
         </p>
         <h2 className="mt-6 text-xl font-semibold">What needs doing?</h2>
         <form className="mt-4 grid gap-3" onSubmit={props.onSubmit}>

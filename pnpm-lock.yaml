@@ -128,6 +128,12 @@ importers:
         specifier: ^4.1.5
         version: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(jsdom@29.1.1)(vite@7.3.2(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.4))
 
+  apps/www:
+    devDependencies:
+      vite:
+        specifier: ^7.3.0
+        version: 7.3.2(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.4)
+
   packages/sandbox-bridge:
     devDependencies:
       '@types/node':
