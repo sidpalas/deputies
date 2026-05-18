@@ -53,6 +53,7 @@ import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
 import type { AppStore, AuthUserRecord, SandboxRecord, SessionRecord } from '../store/types.js';
 import { writeGlobalEventStream, writeSessionEventStream } from './event-stream.js';
+import { buildSetupStatus } from './setup-status.js';
 import {
   getSessionService,
   handleServiceUpgrade,
@@ -170,6 +171,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       apiAuthMode: config.apiAuthMode,
       authProvider: config.apiAuthMode === 'session' ? config.authProvider : undefined,
       sandboxProvider: config.sandboxProvider,
+      hideSetupPage: config.hideSetupPage,
     }),
   );
 
@@ -300,6 +302,8 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('/repositories/*', apiAuthMiddleware(config, services.store));
   app.use('/repositories', apiAuthMiddleware(config, services.store));
   app.use('/models', apiAuthMiddleware(config, services.store));
+  app.use('/setup/*', apiAuthMiddleware(config, services.store));
+  app.use('/setup', apiAuthMiddleware(config, services.store));
   app.use('/events/*', apiAuthMiddleware(config, services.store));
   app.use('/events', apiAuthMiddleware(config, services.store));
 
@@ -375,6 +379,8 @@ export function createApp(config: AppConfig, services = createServices()) {
         : [];
     return c.json({ models, defaultModel: config.flueModel ?? models[0] ?? null });
   });
+
+  app.get('/setup/status', async (c) => c.json(await buildSetupStatus(config)));
 
   app.get('/events', async (c) => {
     const after = parseCursor(c.req.query('after') ?? null);

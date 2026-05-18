@@ -21,6 +21,7 @@ import {
   getArtifactPreview,
   getHealth,
   getModelOptions,
+  getSetupStatus,
   listBranches,
   login,
   listArtifacts,
@@ -45,6 +46,7 @@ import {
   type AuthUser,
   type BranchOption,
   type RepositoryOption,
+  type SetupStatus,
   type WorkspaceToolId,
 } from './api.js';
 import { Button } from './components/ui/button.js';
@@ -85,6 +87,7 @@ import {
   MessageComposer,
   NewThreadPanel,
   SessionAuthPanel,
+  SetupGuidePanel,
   StartupLoadingPanel,
   ThreadHeader,
   ThreadSidebar,
@@ -110,6 +113,10 @@ export function App() {
   const [repositoryOptions, setRepositoryOptions] = useState<RepositoryOption[]>([]);
   const [branchOptions, setBranchOptions] = useState<BranchOption[]>([]);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [setupStatusLoading, setSetupStatusLoading] = useState(false);
+  const [setupStatusError, setSetupStatusError] = useState('');
+  const [setupGuideOpen, setSetupGuideOpen] = useState(false);
   const [repositoryOptionsLoading, setRepositoryOptionsLoading] = useState(false);
   const [repositoryOptionsError, setRepositoryOptionsError] = useState('');
   const [branchOptionsLoading, setBranchOptionsLoading] = useState(false);
@@ -161,12 +168,17 @@ export function App() {
   const detailRefreshInFlightRef = useRef<string | null>(null);
   const detailRefreshQueuedSessionIdRef = useRef<string | null>(null);
   const branchOptionsRepositoryRef = useRef('');
+  const defaultSetupGuideOpenedRef = useRef(false);
 
   const bearerAuthRequired = health?.apiAuthMode === 'bearer';
   const sessionAuthRequired = health?.apiAuthMode === 'session';
   const waitingForAuth = !healthChecked || (health && sessionAuthRequired && !authChecked);
   const canCallApi =
     Boolean(health) && (!bearerAuthRequired || Boolean(token)) && (!sessionAuthRequired || Boolean(currentUser));
+  const defaultSetupGuidePending = Boolean(
+    canCallApi && health && !health.hideSetupPage && !defaultSetupGuideOpenedRef.current,
+  );
+  const showingSetupGuide = setupGuideOpen || defaultSetupGuidePending;
   const startupLoading = waitingForAuth || (canCallApi && !sessionsLoaded);
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) ?? null,
@@ -223,6 +235,17 @@ export function App() {
       cancelled = true;
     };
   }, [canCallApi, token]);
+
+  useEffect(() => {
+    if (!canCallApi || !health || health.hideSetupPage || defaultSetupGuideOpenedRef.current) return;
+    defaultSetupGuideOpenedRef.current = true;
+    setSetupGuideOpen(true);
+  }, [canCallApi, health]);
+
+  useEffect(() => {
+    if (!canCallApi || !showingSetupGuide) return;
+    void refreshSetupStatus();
+  }, [canCallApi, showingSetupGuide, token]);
 
   useEffect(() => {
     const repository =
@@ -849,9 +872,13 @@ export function App() {
     setServices([]);
     setExternalResources([]);
     setCallbacks([]);
+    setSetupGuideOpen(false);
+    setSetupStatus(null);
+    setSetupStatusError('');
   }
 
   function startNewThread() {
+    setSetupGuideOpen(false);
     setSidebarOpen(false);
     setSidebarCollapsed(false);
     localStorage.removeItem(selectedSessionStorageKey);
@@ -872,6 +899,7 @@ export function App() {
   }
 
   function selectSession(sessionId: string) {
+    setSetupGuideOpen(false);
     autoScrolledSessionId.current = '';
     localStorage.setItem(selectedSessionStorageKey, sessionId);
     setSessionSearchParam(sessionId);
@@ -882,6 +910,25 @@ export function App() {
     setFollowUpBranch('');
     setFollowUpModel('');
     setSidebarOpen(false);
+  }
+
+  function openSetupGuide() {
+    setSetupGuideOpen(true);
+    setSidebarOpen(false);
+  }
+
+  async function refreshSetupStatus() {
+    if (!canCallApi || setupStatusLoading) return;
+    setSetupStatusLoading(true);
+    setSetupStatusError('');
+    try {
+      setSetupStatus(await getSetupStatus(token));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) signOut();
+      setSetupStatusError(errorMessage(err));
+    } finally {
+      setSetupStatusLoading(false);
+    }
   }
 
   function setThreadAutoFollowEnabled(enabled: boolean) {
@@ -1174,6 +1221,7 @@ export function App() {
                   onArchivedSessionsOpenChange={setArchivedSessionsOpen}
                   onCollapse={collapseSidebar}
                   onNewThread={startNewThread}
+                  onOpenSetup={openSetupGuide}
                   onRefresh={refreshSessions}
                   onSelect={selectSession}
                   onSignOut={signOut}
@@ -1187,7 +1235,15 @@ export function App() {
             <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">
               {health?.sandboxProvider === 'unsafe-local' ? <LocalSandboxWarning /> : null}
               <div className="min-h-0 flex-1 overflow-hidden">
-                {isCreatingThread || !selectedSession ? (
+                {showingSetupGuide ? (
+                  <SetupGuidePanel
+                    loading={setupStatusLoading}
+                    setupStatus={setupStatus}
+                    setupError={setupStatusError}
+                    onRefresh={refreshSetupStatus}
+                    onStartNewThread={startNewThread}
+                  />
+                ) : isCreatingThread || !selectedSession ? (
                   <NewThreadPanel
                     canCallApi={canCallApi}
                     loading={loading}

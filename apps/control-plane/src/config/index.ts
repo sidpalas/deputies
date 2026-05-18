@@ -109,6 +109,7 @@ export type AppConfig = {
   artifactStorageS3CreateBucket: boolean;
   artifactToolMaxBytes: number;
   unsafeAllowLocalHttpCallbacks: boolean;
+  hideSetupPage: boolean;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
@@ -195,6 +196,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       false,
       'UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS',
     ),
+    hideSetupPage: parseBoolean(env.HIDE_SETUP_PAGE, false, 'HIDE_SETUP_PAGE'),
   };
 
   if (env.API_BEARER_TOKEN) config.apiBearerToken = env.API_BEARER_TOKEN;

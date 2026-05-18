@@ -7,6 +7,7 @@ export type Health = {
   apiAuthMode: ApiAuthMode;
   authProvider?: AuthProvider;
   sandboxProvider?: string;
+  hideSetupPage?: boolean;
 };
 
 export type Session = {
@@ -60,6 +61,24 @@ export type BranchOption = { name: string };
 export type ModelOptions = {
   models: string[];
   defaultModel: string | null;
+};
+
+export type SetupStatusState = 'configured' | 'limited' | 'missing' | 'warning' | 'error';
+
+export type SetupStatusItem = {
+  id: string;
+  label: string;
+  state: SetupStatusState;
+  summary: string;
+  guidance?: string | undefined;
+  guidanceItems?: string[] | undefined;
+  details?: string[] | undefined;
+  docsPath: string;
+};
+
+export type SetupStatus = {
+  checkedAt: string;
+  items: SetupStatusItem[];
 };
 
 export type AgentEvent = {
@@ -234,6 +253,10 @@ export async function listBranches(input: { repository: string; token: string })
 
 export async function getModelOptions(token: string): Promise<ModelOptions> {
   return request<ModelOptions>('/models', { token });
+}
+
+export async function getSetupStatus(token: string): Promise<SetupStatus> {
+  return request<SetupStatus>('/setup/status', { token });
 }
 
 export async function createSession(input: { title?: string; token: string }): Promise<Session> {

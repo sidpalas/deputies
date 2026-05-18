@@ -23,6 +23,7 @@ export const publicApiResponseSchemas = {
       apiAuthMode: 'string',
       authProvider: 'optional:string',
       sandboxProvider: 'string',
+      hideSetupPage: 'boolean',
     },
   },
   authConfig: {
