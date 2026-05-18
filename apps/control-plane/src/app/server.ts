@@ -317,8 +317,8 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('/sessions/:sessionId/workspace-tools/*', apiAdminMiddleware(config, services.store));
   app.use('/sessions/*', apiUnsafeMethodAdminMiddleware(config, services.store));
   app.use('/sessions', apiUnsafeMethodAdminMiddleware(config, services.store));
-  app.use('/setup/*', apiAdminMiddleware(config, services.store));
-  app.use('/setup', apiAdminMiddleware(config, services.store));
+  app.use('/setup/*', apiUnsafeMethodAdminMiddleware(config, services.store));
+  app.use('/setup', apiUnsafeMethodAdminMiddleware(config, services.store));
 
   app.use('*', async (c, next) => {
     const serviceHost = parseServiceHostFromRequest(config, c);

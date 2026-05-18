@@ -178,8 +178,9 @@ export function App() {
   const canCallApi =
     Boolean(health) && (!bearerAuthRequired || Boolean(token)) && (!sessionAuthRequired || Boolean(currentUser));
   const canAdmin = canCallApi && (!sessionAuthRequired || currentUser?.role === 'admin');
+  const canViewSetup = canCallApi;
   const defaultSetupGuidePending = Boolean(
-    canAdmin && health && !health.hideSetupPage && !defaultSetupGuideOpenedRef.current,
+    canViewSetup && health && !health.hideSetupPage && !defaultSetupGuideOpenedRef.current,
   );
   const showingSetupGuide = setupGuideOpen || defaultSetupGuidePending;
   const startupLoading = waitingForAuth || (canCallApi && !sessionsLoaded);
@@ -251,15 +252,15 @@ export function App() {
   }, [canCallApi, token]);
 
   useEffect(() => {
-    if (!canAdmin || !health || health.hideSetupPage || defaultSetupGuideOpenedRef.current) return;
+    if (!canViewSetup || !health || health.hideSetupPage || defaultSetupGuideOpenedRef.current) return;
     defaultSetupGuideOpenedRef.current = true;
     setSetupGuideOpen(true);
-  }, [canAdmin, health]);
+  }, [canViewSetup, health]);
 
   useEffect(() => {
-    if (!canAdmin || !showingSetupGuide) return;
+    if (!canViewSetup || !showingSetupGuide) return;
     void refreshSetupStatus();
-  }, [canAdmin, showingSetupGuide, token]);
+  }, [canViewSetup, showingSetupGuide, token]);
 
   useEffect(() => {
     const repository =
@@ -934,7 +935,7 @@ export function App() {
   }
 
   async function refreshSetupStatus() {
-    if (!canAdmin || setupStatusLoading) return;
+    if (!canViewSetup || setupStatusLoading) return;
     setSetupStatusLoading(true);
     setSetupStatusError('');
     try {
@@ -1235,6 +1236,7 @@ export function App() {
                   authRequired={bearerAuthRequired || sessionAuthRequired}
                   canCallApi={canCallApi}
                   canAdmin={canAdmin}
+                  canViewSetup={canViewSetup}
                   health={health}
                   connectionStatus={connectionStatus}
                   loading={loading}

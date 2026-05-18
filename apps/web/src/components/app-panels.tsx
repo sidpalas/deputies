@@ -121,6 +121,7 @@ export function ThreadSidebar(props: {
   authRequired: boolean;
   canAdmin: boolean;
   canCallApi: boolean;
+  canViewSetup: boolean;
   connectionStatus: ConnectionStatus;
   health: Health | null;
   loading: boolean;
@@ -255,6 +256,7 @@ export function ThreadSidebar(props: {
       <ApiStatusFooter
         authRequired={props.authRequired}
         canAdmin={props.canAdmin}
+        canViewSetup={props.canViewSetup}
         connectionStatus={props.connectionStatus}
         health={props.health}
         token={props.token}
@@ -437,6 +439,7 @@ function SetupStatusCard(props: { item: SetupStatusItem }) {
 function ApiStatusFooter(props: {
   authRequired: boolean;
   canAdmin: boolean;
+  canViewSetup: boolean;
   connectionStatus: ConnectionStatus;
   health: Health | null;
   token: string;
@@ -458,7 +461,7 @@ function ApiStatusFooter(props: {
         </p>
       ) : null}
       <div className="mt-2 flex flex-wrap gap-2">
-        {props.canAdmin ? (
+        {props.canViewSetup ? (
           <Button variant="secondary" size="sm" onClick={props.onOpenSetup}>
             Setup
           </Button>

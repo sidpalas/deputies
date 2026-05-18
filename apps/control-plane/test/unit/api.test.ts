@@ -406,6 +406,9 @@ describe('core API', () => {
     const listSessions = await fetch(`${baseUrl}/sessions`, { headers: { cookie: cookie! } });
     expect(listSessions.status).toBe(200);
 
+    const setupStatus = await fetch(`${baseUrl}/setup/status`, { headers: { cookie: cookie! } });
+    expect(setupStatus.status).toBe(200);
+
     const session = await services.sessions.create({ title: 'Existing session' });
     const listServices = await fetch(`${baseUrl}/sessions/${session.id}/services`, { headers: { cookie: cookie! } });
     expect(listServices.status).toBe(200);
