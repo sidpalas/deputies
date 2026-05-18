@@ -1,8 +1,10 @@
-import net from 'node:net';
+import net, { isIP } from 'node:net';
+import { lookup } from 'node:dns/promises';
 import tls from 'node:tls';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Context } from 'hono';
+import { isTrustedCookieAuthRequest } from '../auth/middleware.js';
 import { readSessionId, sessionCookieName } from '../auth/session.js';
 import { requireApiBearerToken, type AppConfig } from '../config/index.js';
 import type { SandboxPreviewUrl, SandboxProvider } from '../sandbox/types.js';
@@ -31,7 +33,7 @@ export async function getSessionService(
     sessionId,
     port,
   });
-  return preview && isAllowedPreviewTarget(config, provider.name, preview.targetUrl) ? preview : null;
+  return preview && (await isAllowedPreviewTarget(config, provider.name, preview.targetUrl)) ? preview : null;
 }
 
 export async function isActiveServiceSandbox(
@@ -103,6 +105,7 @@ export async function isAuthorizedRequest(
   if (config.apiAuthMode === 'none') return true;
   if (config.apiAuthMode === 'bearer')
     return c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
+  if (!isTrustedCookieAuthRequest(c, config)) return false;
   const authSessionId = readSessionId(c);
   const user = authSessionId ? await store.getAuthUserBySession({ sessionId: authSessionId, now: new Date() }) : null;
   return Boolean(user && (!options.role || user.role === options.role));
@@ -123,7 +126,10 @@ export async function handleServiceUpgrade(
   }
 
   const { sessionId, port } = hostPreview;
-  if (!(await isAuthorizedUpgrade(config, services, request, { role: 'admin' }))) {
+  if (
+    !isTrustedUpgradeRequest(config, request) ||
+    !(await isAuthorizedUpgrade(config, services, request, { role: 'admin' }))
+  ) {
     socket.destroy();
     return;
   }
@@ -162,7 +168,7 @@ export function parseServicePort(value: string | undefined): number | null {
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
 }
 
-function isAllowedPreviewTarget(config: AppConfig, provider: string, value: string): boolean {
+async function isAllowedPreviewTarget(config: AppConfig, provider: string, value: string): Promise<boolean> {
   let target: URL;
   try {
     target = new URL(value);
@@ -172,8 +178,8 @@ function isAllowedPreviewTarget(config: AppConfig, provider: string, value: stri
   if (target.protocol !== 'http:' && target.protocol !== 'https:') return false;
   if (provider === 'fake') return target.protocol === 'http:';
   if (provider === 'docker') return isAllowedDockerPreviewTarget(config, target);
-  if (provider === 'daytona') return target.protocol === 'https:' && !isLocalOrPrivateHostname(target.hostname);
-  return !isLocalOrPrivateHostname(target.hostname);
+  if (provider === 'daytona') return target.protocol === 'https:' && (await isAllowedPublicHostname(target.hostname));
+  return isAllowedPublicHostname(target.hostname);
 }
 
 function isAllowedDockerPreviewTarget(config: AppConfig, target: URL): boolean {
@@ -182,18 +188,58 @@ function isAllowedDockerPreviewTarget(config: AppConfig, target: URL): boolean {
 }
 
 function isLocalOrPrivateHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase();
+  const host = normalizeHostname(hostname);
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (host === '0.0.0.0' || host.startsWith('127.') || host.startsWith('10.') || host.startsWith('192.168.'))
-    return true;
-  const parts = host.split('.').map((part) => Number(part));
-  if (parts.length === 4 && parts.every((part) => Number.isInteger(part))) {
-    const first = parts[0]!;
-    const second = parts[1]!;
-    if (first === 172 && second >= 16 && second <= 31) return true;
-    if (first === 169 && second === 254) return true;
+
+  const ipVersion = isIP(host);
+  if (ipVersion === 4) return isLocalOrPrivateIpv4(host);
+  if (ipVersion === 6) return isLocalOrPrivateIpv6(host);
+
+  return false;
+}
+
+async function isAllowedPublicHostname(hostname: string): Promise<boolean> {
+  const host = normalizeHostname(hostname);
+  if (isLocalOrPrivateHostname(host)) return false;
+  if (isIP(host)) return true;
+
+  try {
+    const addresses = await lookup(host, { all: true, verbatim: true });
+    return addresses.length > 0 && addresses.every((address) => !isLocalOrPrivateHostname(address.address));
+  } catch {
+    return false;
   }
-  return host === '::1' || host.startsWith('fc') || host.startsWith('fd');
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[(.*)]$/, '$1');
+}
+
+function isLocalOrPrivateIpv4(host: string): boolean {
+  const parts = host.split('.').map((part) => Number(part));
+  if (parts.length !== 4 || !parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
+    return true;
+  }
+  const [first, second] = parts as [number, number, number, number];
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isLocalOrPrivateIpv6(host: string): boolean {
+  return (
+    host === '::' ||
+    host === '::1' ||
+    host.startsWith('fc') ||
+    host.startsWith('fd') ||
+    host.toLowerCase().startsWith('fe80:')
+  );
 }
 
 function previewTargetUrl(c: Context, targetUrl: string): string {
@@ -351,6 +397,28 @@ async function isAuthorizedUpgrade(
     ? await services.store.getAuthUserBySession({ sessionId: authSessionId, now: new Date() })
     : null;
   return Boolean(user && (!options.role || user.role === options.role));
+}
+
+function isTrustedUpgradeRequest(config: AppConfig, request: IncomingMessage): boolean {
+  if (config.apiAuthMode !== 'session') return true;
+  const secFetchSite = stringHeader(request.headers['sec-fetch-site'])?.toLowerCase();
+  if (secFetchSite === 'cross-site') return false;
+
+  const origin = stringHeader(request.headers.origin);
+  if (!origin) return true;
+  return trustedUpgradeOrigins(config, request).has(origin);
+}
+
+function trustedUpgradeOrigins(config: AppConfig, request: IncomingMessage): Set<string> {
+  const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
+  const requestHost = stringHeader(request.headers.host);
+  if (requestHost) origins.add(new URL(request.url ?? '/', `http://${requestHost}`).origin);
+  if (config.webBaseUrl) origins.add(new URL(config.webBaseUrl).origin);
+  return origins;
+}
+
+function stringHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function proxyPreviewUpgrade(input: {

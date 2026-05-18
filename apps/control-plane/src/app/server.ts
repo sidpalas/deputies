@@ -291,11 +291,6 @@ export function createApp(config: AppConfig, services = createServices()) {
   });
 
   app.get('/auth/logout', async (c) => {
-    if (config.apiAuthMode === 'session') {
-      const sessionId = readSessionId(c);
-      if (sessionId) await services.store.deleteAuthSession(sessionId);
-      clearSessionCookies(c, config);
-    }
     return c.redirect(config.authSuccessRedirectUrl ?? '/', 302);
   });
 

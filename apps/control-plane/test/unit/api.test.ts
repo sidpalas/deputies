@@ -293,9 +293,10 @@ describe('core API', () => {
     const browserLogout = await fetch(`${baseUrl}/auth/logout`, { headers: { cookie: cookie! }, redirect: 'manual' });
     expect(browserLogout.status).toBe(302);
     expect(browserLogout.headers.get('location')).toBe('https://deputies.localhost');
-    const browserLogoutCookie = browserLogout.headers.get('set-cookie');
-    expect(browserLogoutCookie).toContain('Max-Age=0');
-    expect(browserLogoutCookie).toContain('Domain=.deputies.localhost');
+    expect(browserLogout.headers.get('set-cookie')).toBeNull();
+
+    const stillLoggedIn = await fetch(`${baseUrl}/auth/me`, { headers: { cookie: cookie! } });
+    expect(stillLoggedIn.status).toBe(200);
 
     const logout = await fetch(`${baseUrl}/auth/logout`, { method: 'POST', headers: { cookie: cookie! } });
     expect(logout.headers.get('set-cookie')).toContain('Max-Age=0');
@@ -924,6 +925,87 @@ describe('core API', () => {
     } finally {
       await closeServer(upstream);
     }
+  });
+
+  it('rejects cross-site unsafe service host requests with session cookies', async () => {
+    const upstream = createPreviewUpstream();
+    const upstreamBaseUrl = await listen(upstream);
+    await closeServer(server);
+    const provider = new ServiceSandboxProvider(upstreamBaseUrl);
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_STATIC_USERNAME: 'dev',
+        AUTH_STATIC_PASSWORD: 'password',
+        AUTH_SESSION_SECRET: 'test-secret',
+        AUTH_SUCCESS_REDIRECT_URL: 'https://deputies.localhost',
+        WEB_BASE_URL: 'https://deputies.localhost',
+        SERVICE_TRUST_FORWARDED_HOSTS: 'true',
+      }),
+      createServices(store, { sandboxProvider: provider }),
+    );
+    baseUrl = await listen(server);
+
+    try {
+      const login = await postJson(`${baseUrl}/auth/login`, { username: 'dev', password: 'password' });
+      const cookie = login.headers.get('set-cookie');
+      const session = await services.sessions.create({ title: 'Service CSRF' });
+      const sandbox = await provider.create({ sessionId: session.id });
+      const now = new Date();
+      await store.createSandbox({
+        id: '00000000-0000-4000-8000-000000000512',
+        sessionId: session.id,
+        provider: provider.name,
+        providerSandboxId: sandbox.providerSandboxId,
+        status: 'ready',
+        workspacePath: '/workspace',
+        metadata: { runtimeId: 'runtime-1' },
+        createdAt: now,
+        updatedAt: now,
+      });
+      const serviceHost = `s-3000-${session.id}.deputies.localhost`;
+
+      const trustedGet = await fetch(`${baseUrl}/`, { headers: { cookie: cookie!, 'x-forwarded-host': serviceHost } });
+      expect(trustedGet.status).toBe(200);
+
+      const crossSitePost = await fetch(`${baseUrl}/`, {
+        method: 'POST',
+        headers: { cookie: cookie!, 'x-forwarded-host': serviceHost, origin: 'https://evil.example' },
+      });
+      expect(crossSitePost.status).toBe(403);
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  it('rejects private IPv6 preview targets for non-docker providers', async () => {
+    await closeServer(server);
+    const provider = new DaytonaTargetServiceSandboxProvider('https://[::1]:3000');
+    server = createServer(
+      loadConfig({ API_AUTH_MODE: 'none', SERVICE_BASE_DOMAIN: 'deputies.localhost' }),
+      createServices(store, { sandboxProvider: provider }),
+    );
+    baseUrl = await listen(server);
+
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Private target' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    const sandbox = await provider.create({ sessionId: session.id });
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000513',
+      sessionId: session.id,
+      provider: provider.name,
+      providerSandboxId: sandbox.providerSandboxId,
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: { runtimeId: 'runtime-1' },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await expect((await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`)).json()).resolves.toEqual({
+      services: [],
+    });
   });
 
   it('does not list a default service when none has been published', async () => {
@@ -1807,6 +1889,14 @@ class ServiceSandboxProvider extends FakeSandboxProvider {
 
   async refreshKeepalive(input: { providerSandboxId: string; durationMs: number }) {
     this.keepaliveRefreshes.push({ providerSandboxId: input.providerSandboxId, durationMs: input.durationMs });
+  }
+}
+
+class DaytonaTargetServiceSandboxProvider extends ServiceSandboxProvider {
+  override readonly name = 'daytona' as 'fake';
+
+  constructor(upstreamBaseUrl: string) {
+    super(upstreamBaseUrl);
   }
 }
 

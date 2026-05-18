@@ -1198,6 +1198,7 @@ function serviceExtensionLabel(service: SandboxService, now: number): string {
 
 function ExternalResourceCard(props: { resource: ExternalResource }) {
   const { resource } = props;
+  const resourceUrl = safeExternalHref(resource.url);
   const owner = stringPayloadValue(resource.metadata.owner);
   const repo = stringPayloadValue(resource.metadata.repo);
   const number = numberPayloadValue(resource.metadata.number);
@@ -1215,11 +1216,13 @@ function ExternalResourceCard(props: { resource: ExternalResource }) {
           <p className="mt-1 truncate text-xs text-muted-foreground">{description}</p>
           <p className="mt-1 text-xs text-muted-foreground">Created: {formatDate(resource.createdAt)}</p>
         </div>
-        <Button asChild size="sm" variant="secondary">
-          <a href={resource.url} target="_blank" rel="noreferrer">
-            <ExternalLink className="h-3.5 w-3.5" /> Open
-          </a>
-        </Button>
+        {resourceUrl ? (
+          <Button asChild size="sm" variant="secondary">
+            <a href={resourceUrl} target="_blank" rel="noreferrer">
+              <ExternalLink className="h-3.5 w-3.5" /> Open
+            </a>
+          </Button>
+        ) : null}
       </div>
     </Card>
   );
@@ -1229,6 +1232,7 @@ function ArtifactPreviewCard(props: ArtifactPreviewCardProps) {
   const { artifact } = props;
   const name = artifactName(artifact);
   const downloadUrl = artifactDownloadUrl(artifact);
+  const externalUrl = safeExternalHref(artifact.url);
   const image = isImageArtifact(artifact);
   const video = isBrowserPlayableVideoArtifact(artifact);
   const sizeBytes = artifactSizeBytes(artifact);
@@ -1250,8 +1254,8 @@ function ArtifactPreviewCard(props: ArtifactPreviewCardProps) {
           </span>
           {downloadUrl ? (
             <ArtifactDownloadLink artifact={artifact} downloadUrl={downloadUrl} label="Download" />
-          ) : artifact.url ? (
-            <a className="text-primary hover:text-primary/80" href={artifact.url} target="_blank" rel="noreferrer">
+          ) : externalUrl ? (
+            <a className="text-primary hover:text-primary/80" href={externalUrl} target="_blank" rel="noreferrer">
               Open
             </a>
           ) : null}
@@ -1275,8 +1279,8 @@ function ArtifactPreviewCard(props: ArtifactPreviewCardProps) {
         {artifact.type} · {formatDate(artifact.createdAt)}
       </span>
       <strong className="mt-1 block break-words text-sm font-medium">
-        {artifact.url ? (
-          <a className="text-primary hover:text-primary/80" href={artifact.url} target="_blank" rel="noreferrer">
+        {externalUrl ? (
+          <a className="text-primary hover:text-primary/80" href={externalUrl} target="_blank" rel="noreferrer">
             {name}
           </a>
         ) : (
@@ -1308,10 +1312,10 @@ function ArtifactPreviewCard(props: ArtifactPreviewCardProps) {
             label={image ? 'Download image' : 'Download artifact'}
           />
         ) : null}
-        {artifact.url ? (
+        {externalUrl ? (
           <a
             className="text-sm font-medium text-primary hover:text-primary/80"
-            href={artifact.url}
+            href={externalUrl}
             target="_blank"
             rel="noreferrer"
           >
@@ -1545,6 +1549,18 @@ function artifactMediaUrl(downloadUrl: string): string {
 
 function artifactName(artifact: Artifact): string {
   return artifact.title || stringPayloadValue(artifact.payload.fileName) || artifact.url || artifact.id;
+}
+
+function safeExternalHref(value: string | undefined): string | null {
+  if (!value) return null;
+  if (!value.startsWith('/') && !/^https?:\/\//i.test(value)) return null;
+  try {
+    const url = new URL(value, window.location.origin);
+    if (url.origin === window.location.origin && value.startsWith('/')) return value;
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function isImageArtifact(artifact: Artifact): boolean {
