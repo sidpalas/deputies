@@ -98,7 +98,7 @@ export function ChatPanel(props: {
                 <h3 className="mb-1 text-xs font-medium text-muted-foreground">
                   {activeRun ? 'Deputy progress' : 'Deputy response'}
                 </h3>
-                <MarkdownText text={formatAssistantDisplayText(response)} />
+                <MarkdownText text={formatAssistantDisplayText(response)} highlightCode={!activeRun} />
               </Card>
             ) : null}
             {inlineArtifacts.length ? (
@@ -250,7 +250,8 @@ function PlainText(props: { text: string }) {
   return <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{props.text}</p>;
 }
 
-function MarkdownText(props: { text: string }) {
+function MarkdownText(props: { text: string; highlightCode?: boolean }) {
+  const highlightCode = props.highlightCode ?? true;
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -263,7 +264,7 @@ function MarkdownText(props: { text: string }) {
           const code = String(children).replace(/\n$/, '');
           const language = className?.match(/language-(\S+)/)?.[1];
           if (language || String(children).includes('\n'))
-            return <HighlightedCode code={code} {...(language ? { language } : {})} />;
+            return <HighlightedCode code={code} highlight={highlightCode} {...(language ? { language } : {})} />;
           return (
             <code
               className={cn(
@@ -378,11 +379,42 @@ function codeHighlightTheme(theme: ResolvedColorTheme): 'github-light-default' |
   return theme === 'dark' ? 'github-dark-default' : 'github-light-default';
 }
 
-function HighlightedCode(props: { code: string; language?: string; wrap?: boolean; chrome?: boolean }) {
-  const [html, setHtml] = useState('');
+const HIGHLIGHTED_CODE_HTML_CACHE_LIMIT = 100;
+const highlightedCodeHtmlCache = new Map<string, string>();
+let shikiCodeToHtmlPromise: Promise<typeof import('shiki').codeToHtml> | null = null;
+
+function highlightedCodeCacheKey(code: string, language: string | undefined, theme: ResolvedColorTheme): string {
+  return `${theme}\0${language ?? 'text'}\0${code}`;
+}
+
+function loadShikiCodeToHtml() {
+  shikiCodeToHtmlPromise ??= import('shiki').then(({ codeToHtml }) => codeToHtml);
+  return shikiCodeToHtmlPromise;
+}
+
+function cacheHighlightedCodeHtml(key: string, html: string) {
+  if (highlightedCodeHtmlCache.has(key)) highlightedCodeHtmlCache.delete(key);
+  highlightedCodeHtmlCache.set(key, html);
+  while (highlightedCodeHtmlCache.size > HIGHLIGHTED_CODE_HTML_CACHE_LIMIT) {
+    const oldestKey = highlightedCodeHtmlCache.keys().next().value;
+    if (!oldestKey) return;
+    highlightedCodeHtmlCache.delete(oldestKey);
+  }
+}
+
+function HighlightedCode(props: {
+  code: string;
+  language?: string;
+  wrap?: boolean;
+  chrome?: boolean;
+  highlight?: boolean;
+}) {
+  const colorTheme = useResolvedColorTheme();
+  const highlight = props.highlight ?? true;
+  const cacheKey = highlightedCodeCacheKey(props.code, props.language, colorTheme);
+  const [html, setHtml] = useState(() => (highlight ? (highlightedCodeHtmlCache.get(cacheKey) ?? '') : ''));
   const [copied, setCopied] = useState(false);
   const copiedResetTimer = useRef<number | null>(null);
-  const colorTheme = useResolvedColorTheme();
 
   useEffect(() => {
     return () => {
@@ -391,12 +423,25 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
   }, []);
 
   useEffect(() => {
+    if (!highlight) {
+      setHtml('');
+      return;
+    }
+
+    const cachedHtml = highlightedCodeHtmlCache.get(cacheKey);
+    if (cachedHtml) {
+      setHtml(cachedHtml);
+      return;
+    }
+
     let cancelled = false;
-    import('shiki')
-      .then(({ codeToHtml }) =>
+    setHtml('');
+    loadShikiCodeToHtml()
+      .then((codeToHtml) =>
         codeToHtml(props.code, { lang: props.language ?? 'text', theme: codeHighlightTheme(colorTheme) }),
       )
       .then((nextHtml) => {
+        cacheHighlightedCodeHtml(cacheKey, nextHtml);
         if (!cancelled) setHtml(nextHtml);
       })
       .catch(() => {
@@ -405,7 +450,7 @@ function HighlightedCode(props: { code: string; language?: string; wrap?: boolea
     return () => {
       cancelled = true;
     };
-  }, [props.code, props.language, colorTheme]);
+  }, [cacheKey, highlight, props.code, props.language, colorTheme]);
 
   async function copyCode() {
     await navigator.clipboard.writeText(props.code);
