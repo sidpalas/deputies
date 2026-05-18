@@ -15,7 +15,7 @@ COPY apps/www apps/www
 
 RUN pnpm --dir apps/www build
 
-FROM caddy:2.10-alpine AS runtime
+FROM caddy:2.11-alpine AS runtime
 
 ENV PORT=8080
 
