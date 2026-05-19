@@ -414,6 +414,10 @@ h1 {
   font-size: 0.925rem;
 }
 
+.faq-item .faq-note {
+  font-size: 0.84rem;
+}
+
 .feature-columns ul {
   display: grid;
   gap: 0.55rem;
