@@ -148,7 +148,9 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
       <ThreadHeader
         selectedSession={session}
         canAdmin={false}
+        canOpenWorkspaceTools
         showOpenSidebar
+        workspaceToolsUnavailableReason=""
         onArchive={() => undefined}
         onOpenSidebar={props.onOpenSidebar}
         onUpdateTitle={async () => false}

@@ -1190,8 +1190,10 @@ function workspaceToolUnavailableReason(session: Session): string {
 
 type ThreadHeaderProps = {
   canAdmin: boolean;
+  canOpenWorkspaceTools?: boolean;
   selectedSession: Session;
   showOpenSidebar: boolean;
+  workspaceToolsUnavailableReason?: string;
   onArchive: () => void;
   onOpenSidebar: () => void;
   onUpdateTitle: (title: string) => Promise<boolean>;
@@ -1209,7 +1211,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   const [toolsOpen, setToolsOpen] = useState(false);
   const [openingWorkspaceTool, setOpeningWorkspaceTool] = useState<WorkspaceToolId | ''>('');
   const toolsRef = useRef<HTMLDivElement>(null);
-  const workspaceUnavailableReason = workspaceToolUnavailableReason(props.selectedSession);
+  const canOpenWorkspaceTools = props.canOpenWorkspaceTools ?? props.canAdmin;
+  const workspaceUnavailableReason =
+    props.workspaceToolsUnavailableReason ?? workspaceToolUnavailableReason(props.selectedSession);
 
   useEffect(() => {
     setEditingTitle(false);
@@ -1250,7 +1254,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
 
   async function openWorkspaceTool(toolId: WorkspaceToolId) {
     setToolsOpen(false);
-    if (!props.canAdmin) return;
+    if (!canOpenWorkspaceTools) return;
     setOpeningWorkspaceTool(toolId);
     try {
       await props.onOpenWorkspaceTool(toolId);
@@ -1328,7 +1332,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           {sessionDisplayStatus(props.selectedSession)}
         </Badge>
         <div className="col-start-2 flex justify-end gap-2">
-          {props.canAdmin ? (
+          {canOpenWorkspaceTools ? (
             <div className="relative" ref={toolsRef}>
               <Button
                 className="h-9 gap-2"
