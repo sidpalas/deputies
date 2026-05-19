@@ -17,7 +17,7 @@ const fallbackPreview: ArtifactPreview = {
 export function StaticDemoApp() {
   const [data, setData] = useState<StaticDemoData | null>(null);
   const [error, setError] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() => shouldOpenSessionsOnMobile());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [themePreference, setThemePreference] = useState<ThemePreference>('system');
@@ -261,6 +261,11 @@ function repositoryLabel(value: unknown): string | null {
 
 function modelOption(model: string): ModelOption {
   return { value: model, label: model.replace(/^[^/]+\//, '').replace(/-/g, ' '), available: true };
+}
+
+function shouldOpenSessionsOnMobile(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('openSessionsOnMobile') === '1' && (window.matchMedia?.('(max-width: 767px)').matches ?? false);
 }
 
 function resolveThemePreference(theme: ThemePreference): 'light' | 'dark' {
