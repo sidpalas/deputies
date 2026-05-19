@@ -68,7 +68,7 @@ export function StaticDemoApp() {
   }
 
   return (
-    <main className="flex h-screen min-h-[42rem] flex-col overflow-hidden bg-background text-foreground">
+    <main className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
       <div className="flex items-center gap-3 border-b border-border bg-card/90 px-4 py-3">
         <Button
           className="h-9 w-9 shrink-0 p-0 md:hidden"
@@ -158,8 +158,8 @@ function StaticSessionView(props: { demoSession: StaticDemoSession }) {
   const services = props.demoSession.services ?? [];
 
   return (
-    <section className="grid min-h-0 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]">
-      <section className="flex min-h-0 min-w-0 flex-col px-3 pt-4 md:px-8 xl:px-16">
+    <section className="grid min-h-0 overflow-hidden grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]">
+      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden px-3 pt-4 md:px-8 xl:px-16">
         <div className="mb-4 rounded-md border border-border bg-card p-4 shadow-sm">
           <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{session.status}</p>
           <h2 className="mt-1 text-xl font-semibold">{session.title || titleFromSession(session)}</h2>
