@@ -20,7 +20,7 @@ export function StaticDemoApp() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState('');
-  const [themePreference, setThemePreference] = useState<ThemePreference>('light');
+  const [themePreference, setThemePreference] = useState<ThemePreference>('system');
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', resolveThemePreference(themePreference) === 'dark');

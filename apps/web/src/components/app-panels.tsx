@@ -1381,6 +1381,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                       <button
                         type="button"
                         className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={!props.canAdmin}
                         role="menuitem"
                         onClick={archiveSession}
                       >
