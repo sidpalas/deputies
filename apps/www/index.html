@@ -34,9 +34,12 @@
         <div class="hero-copy">
           <h1 id="hero-title">Engineering agents for delegated work.</h1>
           <p class="hero-text">
-            Assign work, track each step, and inspect the final output. Deputies is a Flue-powered background-agent
-            control plane that runs on your existing infrastructure: a Node API, Postgres database, and static React
-            frontend.
+            Deputies is a Flue-powered background-agent control plane that runs on your existing infrastructure: a Node
+            API, Postgres database, and static React frontend.
+          </p>
+          <p class="hero-text">
+            Run agents in sandboxes tailored to your dev environment, with the right repositories, tools, services, and
+            context sources attached.
           </p>
           <div class="hero-actions">
             <a class="button primary" href="https://github.com/sidpalas/deputies">
@@ -52,22 +55,33 @@
           </div>
         </div>
 
-        <div class="session-card" aria-label="Deputies session preview">
+        <div class="delegation-flow" aria-label="Deputies delegation flow">
           <div class="window-bar">
             <span></span>
             <span></span>
             <span></span>
           </div>
-          <div class="session-header">
-            <span class="status-dot"></span>
-            <span>Issue triage session</span>
-            <strong>running</strong>
-          </div>
-          <div class="session-list">
-            <p><span>1</span> Clone repository and load project context</p>
-            <p><span>2</span> Reproduce failing integration test</p>
-            <p><span>3</span> Patch session queue handling</p>
-            <p class="active"><span>4</span> Stream diagnostics and artifact links</p>
+          <div class="flow-steps">
+            <article>
+              <span>1</span>
+              <h2>Assign work</h2>
+              <p>Send a prompt from the web UI, Slack, GitHub, or a webhook.</p>
+            </article>
+            <article>
+              <span>2</span>
+              <h2>Agent runs</h2>
+              <p>Deputies manages the sandbox, work queue, logs, services, and artifacts.</p>
+            </article>
+            <article>
+              <span>3</span>
+              <h2>Review output</h2>
+              <p>Inspect the transcript, open tools, download artifacts, and follow up.</p>
+            </article>
+            <article>
+              <span>4</span>
+              <h2>Ship or iterate</h2>
+              <p>Queue a follow-up, publish a pull request, or merge the finished work.</p>
+            </article>
           </div>
         </div>
       </section>

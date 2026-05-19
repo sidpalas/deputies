@@ -62,9 +62,7 @@ a {
 
 .brand,
 .nav-links,
-.hero-actions,
-.session-header,
-.session-list p {
+.hero-actions {
   display: flex;
   align-items: center;
 }
@@ -200,7 +198,7 @@ h1 {
   color: var(--muted-foreground);
 }
 
-.session-card,
+.delegation-flow,
 .feature-columns article,
 .faq-item {
   border: 1px solid var(--border);
@@ -208,7 +206,7 @@ h1 {
   color: var(--card-foreground);
 }
 
-.session-card {
+.delegation-flow {
   overflow: hidden;
   border-radius: 0.75rem;
   box-shadow: 0 24px 60px oklch(0.208 0.042 265.755 / 13%);
@@ -229,45 +227,42 @@ h1 {
   background: var(--border);
 }
 
-.session-header {
-  gap: 0.625rem;
-  padding: 1rem;
-  border-bottom: 1px solid var(--border);
+.flow-steps {
+  position: relative;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
 }
 
-.session-header strong {
-  margin-left: auto;
-  border-radius: 999px;
-  background: oklch(0.596 0.145 163.225 / 12%);
-  color: var(--success);
-  padding: 0.2rem 0.5rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+.flow-steps::before {
+  position: absolute;
+  top: 1.85rem;
+  bottom: 1.85rem;
+  left: 2rem;
+  width: 1px;
+  background: var(--border);
+  content: '';
 }
 
-.status-dot {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 999px;
-  background: var(--success);
-}
-
-.session-list {
-  padding: 0.65rem;
-}
-
-.session-list p {
-  gap: 0.65rem;
+.flow-steps article {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.15rem 0.65rem;
   margin: 0;
   border-radius: 0.5rem;
-  padding: 0.75rem;
+  padding: 0.65rem;
+  background: linear-gradient(135deg, oklch(0.929 0.013 255.508 / 48%), oklch(1 0 0 / 72%));
   color: var(--muted-foreground);
-  font-size: 0.925rem;
 }
 
-.session-list span {
+.flow-steps article:nth-child(2) {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.flow-steps span {
+  grid-row: span 2;
   display: grid;
   width: 1.5rem;
   height: 1.5rem;
@@ -281,9 +276,16 @@ h1 {
   font-weight: 600;
 }
 
-.session-list .active {
-  background: var(--accent);
-  color: var(--accent-foreground);
+.flow-steps h2 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 0.95rem;
+  letter-spacing: -0.02em;
+}
+
+.flow-steps p {
+  margin: 0;
+  font-size: 0.875rem;
 }
 
 .features-section,
