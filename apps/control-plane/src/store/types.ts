@@ -178,6 +178,8 @@ export type SandboxRecord = {
   destroyedAt?: Date;
 };
 
+export type SandboxSecrets = Record<string, string>;
+
 export type ArtifactRecord = {
   id: string;
   sessionId: string;
@@ -399,7 +401,10 @@ export interface SandboxStore {
   listIdleSandboxes(input: { provider: string; idleBefore: Date; limit: number }): Promise<SandboxRecord[]>;
   listStoppableSandboxes(input: { provider: string; idleBefore: Date; limit: number }): Promise<SandboxRecord[]>;
   createSandbox(record: CreateSandboxRecord): Promise<SandboxRecord>;
+  createSandboxWithSecrets(record: CreateSandboxRecord, secrets: SandboxSecrets): Promise<SandboxRecord>;
   updateSandbox(record: SandboxRecord): Promise<SandboxRecord>;
+  getSandboxSecrets(sandboxId: string): Promise<SandboxSecrets>;
+  setSandboxSecrets(sandboxId: string, secrets: SandboxSecrets): Promise<void>;
 }
 
 export interface CallbackStore {

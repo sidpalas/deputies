@@ -26,12 +26,14 @@ import type {
   RunRecord,
   RunStatus,
   SandboxRecord,
+  SandboxSecrets,
   SandboxStatus,
   SessionRecord,
   SessionStatus,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
+import { SecretCipher } from './encrypted-secrets.js';
 
 type SessionRow = QueryResultRow & {
   id: string;
@@ -203,9 +205,12 @@ export type PostgresEventListener = {
 
 export class PostgresStore implements AppStore {
   private readonly pool: Pool;
+  private readonly secretCipher?: SecretCipher;
 
-  constructor(databaseUrl: string | Pool) {
+  constructor(databaseUrl: string | Pool, options: { appSecretEncryptionKey?: string } = {}) {
     this.pool = typeof databaseUrl === 'string' ? new Pool({ connectionString: databaseUrl }) : databaseUrl;
+    if (options.appSecretEncryptionKey)
+      this.secretCipher = new SecretCipher(options.appSecretEncryptionKey, 'sandbox-secrets');
   }
 
   async close(): Promise<void> {
@@ -889,6 +894,41 @@ export class PostgresStore implements AppStore {
     return toSandbox(result.rows[0]!);
   }
 
+  async createSandboxWithSecrets(record: CreateSandboxRecord, secrets: SandboxSecrets): Promise<SandboxRecord> {
+    if (!Object.keys(secrets).length) return this.createSandbox(record);
+    const cipher = this.requireSandboxSecretCipher();
+    const now = new Date();
+    return this.transaction(async (client) => {
+      const sandboxResult = await client.query<SandboxRow>(
+        `INSERT INTO sandboxes (id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata, created_at, updated_at, keepalive_until)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata,
+                   created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at`,
+        [
+          record.id,
+          record.sessionId,
+          record.provider,
+          record.providerSandboxId,
+          record.status,
+          record.workspacePath,
+          record.metadata,
+          record.createdAt,
+          record.updatedAt,
+          record.keepaliveUntil ?? null,
+        ],
+      );
+      for (const [name, value] of Object.entries(secrets)) {
+        const encrypted = cipher.encrypt(value);
+        await client.query(
+          `INSERT INTO sandbox_secrets (sandbox_id, name, ciphertext, iv, tag, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [record.id, name, encrypted.ciphertext, encrypted.iv, encrypted.tag, now, now],
+        );
+      }
+      return toSandbox(sandboxResult.rows[0]!);
+    });
+  }
+
   async updateSandbox(record: SandboxRecord): Promise<SandboxRecord> {
     const result = await this.pool.query<SandboxRow>(
       `UPDATE sandboxes
@@ -915,6 +955,44 @@ export class PostgresStore implements AppStore {
     );
     if (!result.rows[0]) throw new Error(`Sandbox does not exist: ${record.id}`);
     return toSandbox(result.rows[0]);
+  }
+
+  async getSandboxSecrets(sandboxId: string): Promise<SandboxSecrets> {
+    const result = await this.pool.query<{
+      name: string;
+      ciphertext: string;
+      iv: string;
+      tag: string;
+    }>(`SELECT name, ciphertext, iv, tag FROM sandbox_secrets WHERE sandbox_id = $1`, [sandboxId]);
+    if (!result.rows.length) return {};
+    const cipher = this.requireSandboxSecretCipher();
+    return Object.fromEntries(
+      result.rows.map((row) => [row.name, cipher.decrypt({ ciphertext: row.ciphertext, iv: row.iv, tag: row.tag })]),
+    );
+  }
+
+  async setSandboxSecrets(sandboxId: string, secrets: SandboxSecrets): Promise<void> {
+    if (!Object.keys(secrets).length) return;
+    const cipher = this.requireSandboxSecretCipher();
+    const now = new Date();
+    for (const [name, value] of Object.entries(secrets)) {
+      const encrypted = cipher.encrypt(value);
+      await this.pool.query(
+        `INSERT INTO sandbox_secrets (sandbox_id, name, ciphertext, iv, tag, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (sandbox_id, name) DO UPDATE
+         SET ciphertext = EXCLUDED.ciphertext,
+             iv = EXCLUDED.iv,
+             tag = EXCLUDED.tag,
+             updated_at = EXCLUDED.updated_at`,
+        [sandboxId, name, encrypted.ciphertext, encrypted.iv, encrypted.tag, now, now],
+      );
+    }
+  }
+
+  private requireSandboxSecretCipher(): SecretCipher {
+    if (!this.secretCipher) throw new Error('APP_SECRET_ENCRYPTION_KEY is required for sandbox secrets');
+    return this.secretCipher;
   }
 
   async createArtifact(record: CreateArtifactRecord): Promise<ArtifactRecord> {

@@ -61,7 +61,7 @@ export type HttpDockerOrchestratorClientOptions = {
 
 export type DockerCreateSandboxInput = CreateSandboxInput;
 export type DockerConnectSandboxInput = ConnectSandboxInput;
-export type DockerSandboxRef = SandboxRef;
+export type DockerSandboxRef = SandboxRef & { secrets?: Record<string, string> };
 
 export type DockerExecInput = DockerSandboxRef & SandboxExecInput;
 export type DockerFileInput = DockerSandboxRef & { path: string };
@@ -124,15 +124,17 @@ export class DockerSandboxProvider implements SandboxProvider {
 
   private toHandle(descriptor: DockerSandboxDescriptor): SandboxHandle {
     const ref = { providerSandboxId: descriptor.providerSandboxId, sessionId: descriptor.sessionId };
+    const secrets = { bridgeToken: descriptor.bridgeToken };
     return {
       provider: this.name,
       providerSandboxId: descriptor.providerSandboxId,
       sessionId: descriptor.sessionId,
       workspacePath: descriptor.workspacePath,
       metadata: descriptor.metadata,
+      secrets,
       capabilities: this.capabilities,
-      fs: createDockerFileSystem(this.options.orchestrator, ref),
-      exec: (input) => this.options.orchestrator.exec({ ...ref, ...input }),
+      fs: createDockerFileSystem(this.options.orchestrator, { ...ref, secrets }),
+      exec: (input) => this.options.orchestrator.exec({ ...ref, secrets, ...input }),
     };
   }
 }
@@ -206,12 +208,13 @@ export class InProcessDockerOrchestrator implements DockerOrchestrator {
     const inspected = await this.inspect(input.providerSandboxId);
     const metadata = readMetadata(input.metadata ?? {});
     const bridgeUrl = metadata.bridgeUrl ?? (await this.bridgeUrl(input.providerSandboxId));
-    if (!metadata.bridgeToken) throw new Error('Docker sandbox metadata is missing bridgeToken');
+    const bridgeToken = input.secrets?.bridgeToken ?? metadata.bridgeToken;
+    if (!bridgeToken) throw new Error('Docker sandbox secrets are missing bridgeToken');
     const descriptor = this.descriptor({
       providerSandboxId: inspected.id,
       sessionId: input.sessionId,
       bridgeUrl,
-      bridgeToken: metadata.bridgeToken,
+      bridgeToken,
       metadata: input.metadata ?? {},
     });
     await waitForBridge(descriptor);
@@ -313,7 +316,12 @@ export class InProcessDockerOrchestrator implements DockerOrchestrator {
   private async connectedDescriptor(input: DockerSandboxRef): Promise<DockerSandboxDescriptor> {
     const existing = this.descriptors.get(input.providerSandboxId);
     if (existing) return existing;
-    return this.connect({ providerSandboxId: input.providerSandboxId, sessionId: input.sessionId });
+    const connectInput: DockerConnectSandboxInput = {
+      providerSandboxId: input.providerSandboxId,
+      sessionId: input.sessionId,
+    };
+    if (input.secrets) connectInput.secrets = input.secrets;
+    return this.connect(connectInput);
   }
 
   private descriptor(input: Omit<DockerSandboxDescriptor, 'workspacePath'>): DockerSandboxDescriptor {
@@ -326,7 +334,6 @@ export class InProcessDockerOrchestrator implements DockerOrchestrator {
         image: this.image,
         workspacePath: this.workspacePath,
         bridgeUrl: input.bridgeUrl,
-        bridgeToken: input.bridgeToken,
       },
     };
   }
@@ -495,9 +502,14 @@ export function createDockerOrchestratorHttpHandler(
       if (request.method !== 'POST' || !match) return jsonResponse(404, { error: 'not_found' });
       const body = readObject(await request.json());
       const ref = { providerSandboxId: decodeURIComponent(match[1]!), sessionId: readSessionId(body) };
+      const secrets = readStringRecordOrUndefined(body.secrets);
+      const refWithSecrets = secrets ? { ...ref, secrets } : ref;
       switch (match[2]) {
         case 'connect':
-          return jsonResponse(200, await orchestrator.connect({ ...ref, metadata: readObject(body.metadata ?? {}) }));
+          return jsonResponse(
+            200,
+            await orchestrator.connect({ ...refWithSecrets, metadata: readObject(body.metadata ?? {}) }),
+          );
         case 'health':
           return jsonResponse(200, await orchestrator.health(ref));
         case 'start':
@@ -510,36 +522,40 @@ export function createDockerOrchestratorHttpHandler(
           await orchestrator.destroy(ref);
           return jsonResponse(200, { ok: true });
         case 'exec':
-          return jsonResponse(200, await orchestrator.exec(dockerExecInput(ref, body)));
+          return jsonResponse(200, await orchestrator.exec(dockerExecInput(refWithSecrets, body)));
         case 'fs/read':
           return jsonResponse(200, {
             contentBase64: Buffer.from(
-              await orchestrator.readFile({ ...ref, path: readString(body.path, 'path') }),
+              await orchestrator.readFile({ ...refWithSecrets, path: readString(body.path, 'path') }),
             ).toString('base64'),
           });
         case 'fs/write':
           await orchestrator.writeFile({
-            ...ref,
+            ...refWithSecrets,
             path: readString(body.path, 'path'),
             content: Buffer.from(readString(body.contentBase64, 'contentBase64'), 'base64'),
           });
           return jsonResponse(200, { ok: true });
         case 'fs/stat':
-          return jsonResponse(200, await orchestrator.stat({ ...ref, path: readString(body.path, 'path') }));
+          return jsonResponse(200, await orchestrator.stat({ ...refWithSecrets, path: readString(body.path, 'path') }));
         case 'fs/readdir':
           return jsonResponse(200, {
-            entries: await orchestrator.readdir({ ...ref, path: readString(body.path, 'path') }),
+            entries: await orchestrator.readdir({ ...refWithSecrets, path: readString(body.path, 'path') }),
           });
         case 'fs/exists':
           return jsonResponse(200, {
-            exists: await orchestrator.exists({ ...ref, path: readString(body.path, 'path') }),
+            exists: await orchestrator.exists({ ...refWithSecrets, path: readString(body.path, 'path') }),
           });
         case 'fs/mkdir':
-          await orchestrator.mkdir({ ...ref, path: readString(body.path, 'path'), recursive: body.recursive === true });
+          await orchestrator.mkdir({
+            ...refWithSecrets,
+            path: readString(body.path, 'path'),
+            recursive: body.recursive === true,
+          });
           return jsonResponse(200, { ok: true });
         case 'fs/rm':
           await orchestrator.rm({
-            ...ref,
+            ...refWithSecrets,
             path: readString(body.path, 'path'),
             recursive: body.recursive === true,
             force: body.force === true,
@@ -547,7 +563,7 @@ export function createDockerOrchestratorHttpHandler(
           return jsonResponse(200, { ok: true });
         case 'preview-url': {
           const port = readNumber(body.port, 'port');
-          const preview = (await orchestrator.getPreviewUrl?.({ ...ref, port })) ?? null;
+          const preview = (await orchestrator.getPreviewUrl?.({ ...refWithSecrets, port })) ?? null;
           return jsonResponse(200, preview ?? { port, targetUrl: null });
         }
         default:
@@ -763,6 +779,10 @@ function readStringRecord(value: unknown, name: string): Record<string, string> 
   const record = optionalStringRecord(value);
   if (!record) throw new Error(`${name} must be a string record`);
   return record;
+}
+
+function readStringRecordOrUndefined(value: unknown): Record<string, string> | undefined {
+  return value === undefined ? undefined : readStringRecord(value, 'secrets');
 }
 
 function readSessionId(body: Record<string, unknown>): string {

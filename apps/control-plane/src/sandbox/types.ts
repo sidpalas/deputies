@@ -19,6 +19,7 @@ export type ConnectSandboxInput = {
   providerSandboxId: string;
   sessionId: string;
   metadata?: Record<string, unknown>;
+  secrets?: Record<string, string>;
 };
 
 export type SandboxRef = {
@@ -50,6 +51,7 @@ export type SandboxExecResult = {
 
 export type SandboxPreviewUrlInput = SandboxRef & {
   port: number;
+  secrets?: Record<string, string>;
 };
 
 export type SandboxKeepaliveInput = SandboxRef & {
@@ -85,6 +87,7 @@ export type SandboxHandle = SandboxRef & {
   provider: string;
   workspacePath: string;
   metadata: Record<string, unknown>;
+  secrets?: Record<string, string>;
   capabilities: SandboxCapabilities;
   fs?: SandboxFileSystem;
   exec(input: SandboxExecInput): Promise<SandboxExecResult>;

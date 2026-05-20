@@ -37,7 +37,10 @@ import { PostgresStore } from './store/postgres.js';
 import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from './worker/service.js';
 
 const config = loadConfig(process.env);
-const store = config.appStore === 'postgres' ? new PostgresStore(requireDatabaseUrl(config)) : new MemoryStore();
+const store =
+  config.appStore === 'postgres'
+    ? new PostgresStore(requireDatabaseUrl(config), postgresStoreOptions())
+    : new MemoryStore();
 const sandboxProvider = createSandboxProvider();
 const artifactObjectStorage = config.artifactStorage === 'disabled' ? undefined : createArtifactObjectStorage(config);
 const services = createServices(store, {
@@ -222,6 +225,12 @@ function createSandboxProvider(): SandboxProvider {
 
 function optional<T extends Record<string, unknown>>(input: T): T {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T;
+}
+
+function postgresStoreOptions(): { appSecretEncryptionKey?: string } {
+  const options: { appSecretEncryptionKey?: string } = {};
+  if (config.appSecretEncryptionKey) options.appSecretEncryptionKey = config.appSecretEncryptionKey;
+  return options;
 }
 
 async function createRunner(): Promise<Runner> {

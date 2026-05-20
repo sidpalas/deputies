@@ -23,6 +23,7 @@ const OPENAI_CODEX_FLUE_MODELS = [
   'openai-codex/gpt-5.3-codex-spark',
   'openai-codex/gpt-5.5',
 ];
+const appSecretEncryptionKeyPlaceholder = 'replace-with-random-app-secret';
 
 export type AppConfig = {
   port: number;
@@ -48,6 +49,7 @@ export type AppConfig = {
   dockerSandboxMemory?: string;
   dockerSandboxCpus?: string;
   dockerCliTimeoutMs: number;
+  appSecretEncryptionKey?: string;
   appStore: AppStoreKind;
   apiAuthMode: ApiAuthMode;
   apiBearerToken?: string;
@@ -233,6 +235,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.DOCKER_SANDBOX_NETWORK) config.dockerSandboxNetwork = env.DOCKER_SANDBOX_NETWORK;
   if (env.DOCKER_SANDBOX_MEMORY) config.dockerSandboxMemory = env.DOCKER_SANDBOX_MEMORY;
   if (env.DOCKER_SANDBOX_CPUS) config.dockerSandboxCpus = env.DOCKER_SANDBOX_CPUS;
+  if (env.APP_SECRET_ENCRYPTION_KEY) config.appSecretEncryptionKey = env.APP_SECRET_ENCRYPTION_KEY;
   if (env.DAYTONA_API_KEY) config.daytonaApiKey = env.DAYTONA_API_KEY;
   if (env.DAYTONA_API_URL) config.daytonaApiUrl = env.DAYTONA_API_URL;
   if (env.DAYTONA_TARGET) config.daytonaTarget = env.DAYTONA_TARGET;
@@ -255,6 +258,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
 
   validateProductAuthConfig(config);
   validateArtifactStorageConfig(config);
+  validateSandboxSecretConfig(config, env);
 
   if (config.slackSigningSecret && !config.unsafeAllowAllSlackIds && !hasAnySlackAllowlist(config)) {
     throw new Error(
@@ -273,6 +277,15 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   }
 
   return config;
+}
+
+function validateSandboxSecretConfig(config: AppConfig, env: NodeJS.ProcessEnv): void {
+  if (config.appStore === 'postgres' && config.sandboxProvider === 'docker' && !config.appSecretEncryptionKey) {
+    throw new Error('APP_SECRET_ENCRYPTION_KEY is required when APP_STORE=postgres and SANDBOX_PROVIDER=docker');
+  }
+  if (env.NODE_ENV === 'production' && config.appSecretEncryptionKey === appSecretEncryptionKeyPlaceholder) {
+    throw new Error('APP_SECRET_ENCRYPTION_KEY must not use the .env.example placeholder in production');
+  }
 }
 
 function validateArtifactStorageConfig(config: AppConfig): void {

@@ -28,10 +28,12 @@ export async function getSessionService(
   if (!sandbox) return null;
   const health = await provider.health(sandbox);
   if (health.status !== 'ready') return null;
+  const secrets = await services.store.getSandboxSecrets(sandbox.id);
   const preview = await provider.getPreviewUrl({
     providerSandboxId: sandbox.providerSandboxId,
     sessionId,
     port,
+    secrets,
   });
   return preview && (await isAllowedPreviewTarget(config, provider.name, preview.targetUrl)) ? preview : null;
 }

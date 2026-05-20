@@ -22,7 +22,8 @@ describe('DockerSandboxProvider', () => {
       providerSandboxId: 'docker-session-1',
       sessionId: 'session-1',
       workspacePath: '/workspace',
-      metadata: { owner: 'test', bridgeToken: 'token-session-1' },
+      metadata: { owner: 'test' },
+      secrets: { bridgeToken: 'token-session-1' },
       capabilities: dockerCapabilities,
     });
 
@@ -351,7 +352,7 @@ class FakeDockerOrchestrator implements DockerOrchestrator {
       workspacePath: '/workspace',
       bridgeUrl: `https://bridge.test/${input.sessionId}`,
       bridgeToken: `token-${input.sessionId}`,
-      metadata: { ...input.metadata, bridgeToken: `token-${input.sessionId}` },
+      metadata: { ...input.metadata },
     };
     this.sandboxes.set(descriptor.providerSandboxId, descriptor);
     this.files.set(descriptor.providerSandboxId, new Map());

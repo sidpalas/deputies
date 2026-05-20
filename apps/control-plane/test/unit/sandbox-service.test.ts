@@ -69,6 +69,93 @@ describe('SandboxLifecycleService', () => {
     expect(sandboxRuntimeId({ metadata: result.sandbox.metadata })).toBe(sandboxRuntimeId(result.record));
   });
 
+  it('persists provider secrets and supplies them on reconnect', async () => {
+    const store = new MemoryStore();
+    const handle = createHandle('sandbox-1');
+    handle.secrets = { bridgeToken: 'token-1' };
+    const provider = createProvider(handle);
+    const lifecycle = new SandboxLifecycleService(store, provider);
+
+    const created = await lifecycle.ensure('session-1');
+    expect(await store.getSandboxSecrets(created.record.id)).toEqual({ bridgeToken: 'token-1' });
+
+    const reconnected = createHandle('sandbox-1');
+    vi.mocked(provider.connect).mockResolvedValueOnce(reconnected);
+    await lifecycle.ensure('session-1');
+
+    expect(provider.connect).toHaveBeenCalledWith(expect.objectContaining({ secrets: { bridgeToken: 'token-1' } }));
+  });
+
+  it('destroys and recreates when sandbox secrets cannot be loaded', async () => {
+    const store = new FailingGetSandboxSecretsStore(new Error('decrypt failed'));
+    const consoleWarnMock = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000003',
+      sessionId: 'session-1',
+      provider: 'fake',
+      providerSandboxId: 'sandbox-1',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    const replacement = createHandle('sandbox-2');
+    const provider = createProvider(replacement);
+    const lifecycle = new SandboxLifecycleService(store, provider);
+
+    try {
+      const result = await lifecycle.ensure('session-1');
+
+      expect(result.created).toBe(true);
+      expect(result.sandbox.providerSandboxId).toBe('sandbox-2');
+      expect(provider.destroy).toHaveBeenCalledWith(expect.objectContaining({ providerSandboxId: 'sandbox-1' }));
+      expect(provider.connect).not.toHaveBeenCalled();
+      expect(provider.create).toHaveBeenCalled();
+      expect(consoleWarnMock).toHaveBeenCalledWith(expect.stringContaining('decrypt failed'));
+    } finally {
+      consoleWarnMock.mockRestore();
+    }
+  });
+
+  it('surfaces sandbox secret read failures when creation is disabled', async () => {
+    const store = new FailingGetSandboxSecretsStore(new Error('decrypt failed'));
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000004',
+      sessionId: 'session-1',
+      provider: 'fake',
+      providerSandboxId: 'sandbox-1',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    const provider = createProvider(createHandle('sandbox-1'));
+    const lifecycle = new SandboxLifecycleService(store, provider);
+
+    await expect(lifecycle.ensure('session-1', { allowCreate: false })).rejects.toThrow('decrypt failed');
+
+    expect(provider.destroy).not.toHaveBeenCalled();
+    expect(provider.connect).not.toHaveBeenCalled();
+    expect(provider.create).not.toHaveBeenCalled();
+  });
+
+  it('does not persist a sandbox record when transactional secret persistence fails', async () => {
+    const store = new FailingSetSandboxSecretsStore(new Error('secret store unavailable'));
+    const handle = createHandle('sandbox-1');
+    handle.secrets = { bridgeToken: 'token-1' };
+    const provider = createProvider(handle);
+    const lifecycle = new SandboxLifecycleService(store, provider);
+
+    await expect(lifecycle.ensure('session-1')).rejects.toThrow('secret store unavailable');
+
+    expect(provider.destroy).toHaveBeenCalledWith(handle);
+    await expect(store.getLatestSandbox('session-1', 'fake')).resolves.toBeNull();
+  });
+
   it('skips stopping a sandbox that gained keepalive after being selected for cleanup', async () => {
     const store = new MemoryStore();
     const events = new EventService(store);
@@ -120,6 +207,26 @@ class StaleIdleSandboxStore extends MemoryStore {
 
   override async appendEventWithNextSequence(event: Parameters<MemoryStore['appendEventWithNextSequence']>[0]) {
     return this.currentStore.appendEventWithNextSequence(event);
+  }
+}
+
+class FailingGetSandboxSecretsStore extends MemoryStore {
+  constructor(private readonly error: Error) {
+    super();
+  }
+
+  override async getSandboxSecrets(): Promise<Record<string, string>> {
+    throw this.error;
+  }
+}
+
+class FailingSetSandboxSecretsStore extends MemoryStore {
+  constructor(private readonly error: Error) {
+    super();
+  }
+
+  override async setSandboxSecrets(): Promise<void> {
+    throw this.error;
   }
 }
 
@@ -177,7 +284,17 @@ class FailingCreateSandboxStore implements SandboxStore {
     throw this.error;
   }
 
+  async createSandboxWithSecrets(record: CreateSandboxRecord): Promise<SandboxRecord> {
+    return this.createSandbox(record);
+  }
+
   async updateSandbox(record: SandboxRecord): Promise<SandboxRecord> {
     return record;
   }
+
+  async getSandboxSecrets(): Promise<Record<string, string>> {
+    return {};
+  }
+
+  async setSandboxSecrets(): Promise<void> {}
 }

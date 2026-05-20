@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { EventService } from '../events/service.js';
-import type { SandboxRecord, SandboxStore } from '../store/types.js';
+import type { CreateSandboxRecord, SandboxRecord, SandboxStore } from '../store/types.js';
 import { withNewSandboxRuntime, withSandboxRuntimeMetadata } from './runtime.js';
 import type { SandboxHandle, SandboxProvider } from './types.js';
 
@@ -29,17 +29,17 @@ export class SandboxLifecycleService {
   async ensure(sessionId: string, options: EnsureSandboxOptions = {}): Promise<EnsureSandboxResult | null> {
     const existing = await this.store.getActiveSandbox(sessionId, this.provider.name);
     if (existing) {
-      const connected = await this.tryConnect(existing);
+      const connected = await this.tryConnect(existing, options);
       if (connected) return { ...connected, created: false };
     }
     if (options.allowCreate === false) return null;
 
     const sandbox = await this.provider.create({ sessionId });
-    let record: SandboxRecord;
+    let record: SandboxRecord | undefined;
     try {
       const now = new Date();
       const metadata = withSandboxRuntimeMetadata(sandbox.metadata);
-      record = await this.store.createSandbox({
+      const createRecord: CreateSandboxRecord = {
         id: randomUUID(),
         sessionId,
         provider: this.provider.name,
@@ -49,16 +49,28 @@ export class SandboxLifecycleService {
         metadata,
         createdAt: now,
         updatedAt: now,
-      });
+      };
+      record = sandbox.secrets
+        ? await this.store.createSandboxWithSecrets(createRecord, sandbox.secrets)
+        : await this.store.createSandbox(createRecord);
     } catch (error) {
       await this.provider.destroy(sandbox).catch(() => undefined);
+      if (record) {
+        const destroyedAt = new Date();
+        await this.store
+          .updateSandbox({ ...record, status: 'destroyed', updatedAt: destroyedAt, destroyedAt })
+          .catch(() => undefined);
+      }
       throw error;
     }
 
     return { sandbox: { ...sandbox, metadata: record.metadata }, record, created: true, restarted: false };
   }
 
-  private async tryConnect(record: SandboxRecord): Promise<Omit<EnsureSandboxResult, 'created'> | null> {
+  private async tryConnect(
+    record: SandboxRecord,
+    options: EnsureSandboxOptions,
+  ): Promise<Omit<EnsureSandboxResult, 'created'> | null> {
     const checkedAt = new Date();
     const health = await this.provider.health(record);
     let restarted = record.status === 'stopped';
@@ -78,27 +90,56 @@ export class SandboxLifecycleService {
       return null;
     }
 
+    const secrets = await this.getSandboxSecretsForReconnect(record, checkedRecord, options);
+    if (!secrets) return null;
+    let sandbox: SandboxHandle;
     try {
-      const sandbox = await this.provider.connect({
+      sandbox = await this.provider.connect({
         providerSandboxId: record.providerSandboxId,
         sessionId: record.sessionId,
         metadata: record.metadata,
+        secrets,
       });
-      const baseRecord = restarted ? withNewSandboxRuntime(checkedRecord) : checkedRecord;
-      const updated = await this.store.updateSandbox({
-        ...baseRecord,
-        status: 'ready',
-        workspacePath: sandbox.workspacePath,
-        metadata: { ...sandbox.metadata, ...baseRecord.metadata },
-        updatedAt: new Date(),
-      });
-      return { sandbox: { ...sandbox, metadata: updated.metadata }, record: updated, restarted };
     } catch {
       await this.store.updateSandbox({
         ...checkedRecord,
         status: 'unhealthy',
         updatedAt: new Date(),
       });
+      return null;
+    }
+
+    if (sandbox.secrets) await this.store.setSandboxSecrets(record.id, sandbox.secrets);
+    const baseRecord = restarted ? withNewSandboxRuntime(checkedRecord) : checkedRecord;
+    const updated = await this.store.updateSandbox({
+      ...baseRecord,
+      status: 'ready',
+      workspacePath: sandbox.workspacePath,
+      metadata: { ...sandbox.metadata, ...baseRecord.metadata },
+      updatedAt: new Date(),
+    });
+    return { sandbox: { ...sandbox, metadata: updated.metadata }, record: updated, restarted };
+  }
+
+  private async getSandboxSecretsForReconnect(
+    record: SandboxRecord,
+    checkedRecord: SandboxRecord,
+    options: EnsureSandboxOptions,
+  ): Promise<Record<string, string> | null> {
+    try {
+      return await this.store.getSandboxSecrets(record.id);
+    } catch (error) {
+      if (options.allowCreate === false) throw error;
+      await this.provider.destroy(record).catch(() => undefined);
+      const destroyedAt = new Date();
+      await this.store
+        .updateSandbox({ ...checkedRecord, status: 'destroyed', updatedAt: destroyedAt, destroyedAt })
+        .catch(() => undefined);
+      console.warn(
+        `Destroyed ${this.provider.name} sandbox ${record.providerSandboxId} after failing to load sandbox secrets: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
       return null;
     }
   }

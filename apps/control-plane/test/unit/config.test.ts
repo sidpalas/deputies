@@ -230,6 +230,37 @@ describe('loadConfig', () => {
     });
   });
 
+  it('requires an app secret encryption key for postgres-backed Docker sandboxes', () => {
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        APP_STORE: 'postgres',
+        SANDBOX_PROVIDER: 'docker',
+      }),
+    ).toThrow('APP_SECRET_ENCRYPTION_KEY is required');
+  });
+
+  it('allows the app secret placeholder locally but rejects it in production', () => {
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        APP_STORE: 'postgres',
+        SANDBOX_PROVIDER: 'docker',
+        APP_SECRET_ENCRYPTION_KEY: 'replace-with-random-app-secret',
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'production',
+        API_AUTH_MODE: 'none',
+        APP_STORE: 'postgres',
+        SANDBOX_PROVIDER: 'docker',
+        APP_SECRET_ENCRYPTION_KEY: 'replace-with-random-app-secret',
+      }),
+    ).toThrow('APP_SECRET_ENCRYPTION_KEY must not use the .env.example placeholder in production');
+  });
+
   it('validates artifact storage provider requirements', () => {
     expect(() => loadConfig({ API_AUTH_MODE: 'none', ARTIFACT_STORAGE_PROVIDER: 'filesystem' })).toThrow(
       'ARTIFACT_STORAGE_FILESYSTEM_PATH is required',

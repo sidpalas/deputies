@@ -78,10 +78,17 @@ describe.skipIf(!enabled)('real Docker sandbox UAT', () => {
 
 class MemorySandboxStore implements SandboxStore {
   private record: SandboxRecord | undefined;
+  private readonly secrets = new Map<string, Record<string, string>>();
 
   async createSandbox(input: CreateSandboxRecord): Promise<SandboxRecord> {
     this.record = { ...input };
     return this.record;
+  }
+
+  async createSandboxWithSecrets(input: CreateSandboxRecord, secrets: Record<string, string>): Promise<SandboxRecord> {
+    const record = await this.createSandbox(input);
+    await this.setSandboxSecrets(record.id, secrets);
+    return record;
   }
 
   async getActiveSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null> {
@@ -117,6 +124,14 @@ class MemorySandboxStore implements SandboxStore {
 
   async listStoppableSandboxes(): Promise<SandboxRecord[]> {
     return [];
+  }
+
+  async getSandboxSecrets(sandboxId: string): Promise<Record<string, string>> {
+    return { ...(this.secrets.get(sandboxId) ?? {}) };
+  }
+
+  async setSandboxSecrets(sandboxId: string, secrets: Record<string, string>): Promise<void> {
+    this.secrets.set(sandboxId, { ...secrets });
   }
 }
 

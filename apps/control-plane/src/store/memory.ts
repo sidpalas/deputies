@@ -23,6 +23,7 @@ import type {
   RecoveredRun,
   RunRecord,
   SandboxRecord,
+  SandboxSecrets,
   SessionRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
@@ -40,6 +41,7 @@ export class MemoryStore implements AppStore {
   private readonly events = new Map<string, EventRecord[]>();
   private nextEventId = 1;
   private readonly sandboxes = new Map<string, SandboxRecord>();
+  private readonly sandboxSecrets = new Map<string, SandboxSecrets>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly externalResources = new Map<string, ExternalResourceRecord>();
   private readonly callbacks = new Map<string, CallbackDeliveryRecord>();
@@ -484,10 +486,31 @@ export class MemoryStore implements AppStore {
     return record;
   }
 
+  async createSandboxWithSecrets(record: CreateSandboxRecord, secrets: SandboxSecrets): Promise<SandboxRecord> {
+    const created = await this.createSandbox(record);
+    try {
+      await this.setSandboxSecrets(created.id, secrets);
+      return created;
+    } catch (error) {
+      this.sandboxes.delete(created.id);
+      this.sandboxSecrets.delete(created.id);
+      throw error;
+    }
+  }
+
   async updateSandbox(record: SandboxRecord): Promise<SandboxRecord> {
     if (!this.sandboxes.has(record.id)) throw new Error(`Sandbox does not exist: ${record.id}`);
     this.sandboxes.set(record.id, record);
     return record;
+  }
+
+  async getSandboxSecrets(sandboxId: string): Promise<SandboxSecrets> {
+    return { ...(this.sandboxSecrets.get(sandboxId) ?? {}) };
+  }
+
+  async setSandboxSecrets(sandboxId: string, secrets: SandboxSecrets): Promise<void> {
+    if (!this.sandboxes.has(sandboxId)) throw new Error(`Sandbox does not exist: ${sandboxId}`);
+    this.sandboxSecrets.set(sandboxId, { ...secrets });
   }
 
   async createArtifact(record: CreateArtifactRecord): Promise<ArtifactRecord> {
