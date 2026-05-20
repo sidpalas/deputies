@@ -13,6 +13,7 @@ import type {
   SandboxPreviewUrl,
   SandboxPreviewUrlInput,
   SandboxProvider,
+  SandboxProviderCheck,
   SandboxRef,
 } from './types.js';
 
@@ -87,6 +88,20 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   constructor(private readonly options: DaytonaSandboxProviderOptions = {}) {
     this.client = options.client ?? createDaytonaClient(options);
+  }
+
+  async check(): Promise<SandboxProviderCheck> {
+    try {
+      await this.client.get('__deputies_setup_connectivity_check__');
+      return { status: 'ready', checkedAt: new Date() };
+    } catch (error) {
+      if (isNotFoundError(error)) return { status: 'ready', checkedAt: new Date() };
+      return {
+        status: 'unhealthy',
+        message: error instanceof Error ? error.message : 'Unknown Daytona connectivity error',
+        checkedAt: new Date(),
+      };
+    }
   }
 
   async create(input: CreateSandboxInput): Promise<SandboxHandle> {

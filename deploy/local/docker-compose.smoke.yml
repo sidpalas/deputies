@@ -70,7 +70,8 @@ services:
   seaweedfs:
     ports: !reset []
     healthcheck:
-      test: ['CMD', 'wget', '-q', '-O', '-', 'http://127.0.0.1:8333/']
+      test:
+        ['CMD-SHELL', 'wget -q -O - http://127.0.0.1:8333/ >/dev/null; code=$$?; [ $$code -eq 0 ] || [ $$code -eq 8 ]']
       interval: 1s
       timeout: 5s
       retries: 30

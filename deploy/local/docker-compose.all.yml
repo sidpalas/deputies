@@ -29,8 +29,6 @@ services:
       ARTIFACT_STORAGE_PROVIDER: s3
       ARTIFACT_STORAGE_S3_ENDPOINT: http://seaweedfs:8333
       ARTIFACT_STORAGE_S3_BUCKET: deputies-artifacts
-      ARTIFACT_STORAGE_S3_ACCESS_KEY_ID: seaweed
-      ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY: seaweed
       ARTIFACT_STORAGE_S3_CREATE_BUCKET: 'true'
     ports:
       - '3583:3583'

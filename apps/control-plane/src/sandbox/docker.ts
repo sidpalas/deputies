@@ -13,6 +13,7 @@ import type {
   SandboxPreviewUrl,
   SandboxPreviewUrlInput,
   SandboxProvider,
+  SandboxProviderCheck,
   SandboxRef,
 } from './types.js';
 
@@ -71,6 +72,7 @@ export type DockerRmInput = DockerFileInput & { recursive?: boolean; force?: boo
 export type DockerPreviewUrlInput = DockerSandboxRef & { port: number };
 
 export interface DockerOrchestrator {
+  check?(): Promise<SandboxProviderCheck>;
   create(input: DockerCreateSandboxInput): Promise<DockerSandboxDescriptor>;
   connect(input: DockerConnectSandboxInput): Promise<DockerSandboxDescriptor>;
   health(input: DockerSandboxRef): Promise<SandboxHealth>;
@@ -93,6 +95,11 @@ export class DockerSandboxProvider implements SandboxProvider {
   readonly capabilities = dockerCapabilities;
 
   constructor(private readonly options: DockerSandboxProviderOptions) {}
+
+  async check(): Promise<SandboxProviderCheck> {
+    if (!this.options.orchestrator.check) return { status: 'ready', checkedAt: new Date() };
+    return this.options.orchestrator.check();
+  }
 
   async create(input: CreateSandboxInput): Promise<SandboxHandle> {
     return this.toHandle(await this.options.orchestrator.create(input));
@@ -151,6 +158,11 @@ export class InProcessDockerOrchestrator implements DockerOrchestrator {
     this.workspacePath = options.workspacePath ?? '/workspace';
     this.bridgeHost = options.bridgeHost ?? '127.0.0.1';
     this.dockerCliTimeoutMs = options.dockerCliTimeoutMs ?? defaultDockerCliTimeoutMs;
+  }
+
+  async check(): Promise<SandboxProviderCheck> {
+    await this.docker(['info', '--format', '{{.ServerVersion}}']);
+    return { status: 'ready', checkedAt: new Date() };
   }
 
   async create(input: DockerCreateSandboxInput): Promise<DockerSandboxDescriptor> {
@@ -377,6 +389,24 @@ export class HttpDockerOrchestratorClient implements DockerOrchestrator {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
   }
 
+  async check(): Promise<SandboxProviderCheck> {
+    const response = await fetch(`${this.baseUrl}/health`, { headers: this.headers() });
+    const text = await response.text();
+    const parsed = text ? (JSON.parse(text) as unknown) : {};
+    if (!response.ok) {
+      const error = readObject(parsed).error;
+      throw new Error(
+        typeof error === 'string' ? error : `Docker orchestrator health check failed: ${response.status}`,
+      );
+    }
+    const body = readObject(parsed);
+    return {
+      status: body.status === 'ready' ? 'ready' : 'unhealthy',
+      ...(typeof body.message === 'string' ? { message: body.message } : {}),
+      checkedAt: typeof body.checkedAt === 'string' ? new Date(body.checkedAt) : new Date(),
+    };
+  }
+
   create(input: DockerCreateSandboxInput): Promise<DockerSandboxDescriptor> {
     return this.post('/sandboxes', input) as Promise<DockerSandboxDescriptor>;
   }
@@ -497,6 +527,12 @@ export function createDockerOrchestratorHttpHandler(
         return jsonResponse(401, { error: 'unauthorized' });
       const url = new URL(request.url);
       const match = url.pathname.match(/^\/sandboxes\/([^/]+)\/(.+)$/);
+      if (request.method === 'GET' && url.pathname === '/health') {
+        const check = orchestrator.check
+          ? await orchestrator.check()
+          : { status: 'ready' as const, checkedAt: new Date() };
+        return jsonResponse(200, check);
+      }
       if (request.method === 'POST' && url.pathname === '/sandboxes')
         return jsonResponse(200, await orchestrator.create((await request.json()) as DockerCreateSandboxInput));
       if (request.method !== 'POST' || !match) return jsonResponse(404, { error: 'not_found' });

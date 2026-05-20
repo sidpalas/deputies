@@ -33,6 +33,12 @@ export type SandboxHealth = {
   checkedAt: Date;
 };
 
+export type SandboxProviderCheck = {
+  status: 'ready' | 'unhealthy';
+  message?: string;
+  checkedAt: Date;
+};
+
 export type SandboxExecInput = {
   command: string;
   cwd?: string;
@@ -96,6 +102,7 @@ export type SandboxHandle = SandboxRef & {
 export interface SandboxProvider {
   readonly name: string;
   readonly capabilities: SandboxCapabilities;
+  check?(): Promise<SandboxProviderCheck>;
   create(input: CreateSandboxInput): Promise<SandboxHandle>;
   connect(input: ConnectSandboxInput): Promise<SandboxHandle>;
   start?(input: SandboxRef): Promise<void>;

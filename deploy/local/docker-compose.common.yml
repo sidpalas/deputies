@@ -50,6 +50,9 @@ services:
   seaweedfs:
     image: chrislusf/seaweedfs:3.97
     command: ['server', '-s3', '-s3.port=8333', '-dir=/data']
+    environment:
+      AWS_ACCESS_KEY_ID: seaweed
+      AWS_SECRET_ACCESS_KEY: seaweed
     ports:
       - '8333:8333'
     volumes:

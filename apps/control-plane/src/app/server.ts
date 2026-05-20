@@ -393,7 +393,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     });
   });
 
-  app.get('/setup/status', async (c) => c.json(await buildSetupStatus(config)));
+  app.get('/setup/status', async (c) => c.json(await buildSetupStatus(config, services)));
 
   app.get('/events', async (c) => {
     const after = parseCursor(c.req.query('after') ?? null);

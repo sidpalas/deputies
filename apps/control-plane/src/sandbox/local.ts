@@ -14,6 +14,7 @@ import type {
   SandboxHandle,
   SandboxHealth,
   SandboxProvider,
+  SandboxProviderCheck,
   SandboxRef,
 } from './types.js';
 
@@ -95,6 +96,11 @@ export class LocalSandboxProvider implements SandboxProvider {
   readonly capabilities = localCapabilities;
 
   constructor(private readonly options: LocalSandboxProviderOptions = {}) {}
+
+  async check(): Promise<SandboxProviderCheck> {
+    await this.ensureRootDir();
+    return { status: 'ready', checkedAt: new Date() };
+  }
 
   async create(input: CreateSandboxInput): Promise<SandboxHandle> {
     const rootDir = await this.ensureRootDir();

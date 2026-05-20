@@ -70,7 +70,8 @@ curl http://localhost:5173/health
 
 ## Artifact Storage
 
-The local Compose stacks enable stored artifacts by default with SeaweedFS' S3-compatible API:
+The local Compose stacks enable stored artifacts by default with SeaweedFS' S3-compatible API.
+The SeaweedFS container enables S3 authentication with `AWS_ACCESS_KEY_ID=seaweed` and `AWS_SECRET_ACCESS_KEY=seaweed`:
 
 ```txt
 ARTIFACT_STORAGE_PROVIDER=s3

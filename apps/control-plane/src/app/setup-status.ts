@@ -1,8 +1,11 @@
-import { readdir } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, mkdir, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HeadBucketCommand, S3Client } from '@aws-sdk/client-s3';
 import { Pool } from 'pg';
 import type { AppConfig } from '../config/index.js';
+import type { AppServices } from './server.js';
 
 export type SetupStatusState = 'configured' | 'limited' | 'missing' | 'warning' | 'error';
 
@@ -22,16 +25,19 @@ export type SetupStatusResponse = {
   items: SetupStatusItem[];
 };
 
-export async function buildSetupStatus(config: AppConfig): Promise<SetupStatusResponse> {
+export async function buildSetupStatus(
+  config: AppConfig,
+  services?: Pick<AppServices, 'sandboxProvider'>,
+): Promise<SetupStatusResponse> {
   const items: SetupStatusItem[] = [
     authStatus(config),
     slackIntegrationStatus(config),
     githubWebhookStatus(config),
     runnerStatus(config),
-    sandboxStatus(config),
+    await sandboxStatus(config, services),
     githubAppStatus(config),
     modelProviderStatus(config),
-    objectStoreStatus(config),
+    await objectStoreStatus(config),
     await postgresStatus(config),
   ];
 
@@ -108,7 +114,10 @@ function runnerStatus(config: AppConfig): SetupStatusItem {
   };
 }
 
-function sandboxStatus(config: AppConfig): SetupStatusItem {
+async function sandboxStatus(
+  config: AppConfig,
+  services?: Pick<AppServices, 'sandboxProvider'>,
+): Promise<SetupStatusItem> {
   const missingDaytona = config.sandboxProvider === 'daytona' && !config.daytonaApiKey;
   const missingDockerOrchestrator =
     config.sandboxProvider === 'docker' && config.dockerOrchestratorMode === 'http' && !config.dockerOrchestratorUrl;
@@ -119,20 +128,62 @@ function sandboxStatus(config: AppConfig): SetupStatusItem {
         ? 'warning'
         : 'configured';
 
-  return {
-    id: 'sandbox',
-    label: 'Sandbox Provider',
-    state,
-    summary: `${config.sandboxProvider} sandbox provider selected.`,
-    guidance:
-      state === 'missing'
-        ? 'Provide the required credentials/endpoint for the selected sandbox provider.'
-        : config.sandboxProvider === 'fake'
-          ? 'Use docker or daytona for real agent work.'
-          : undefined,
-    details: [`Provider: ${config.sandboxProvider}`],
-    docsPath: 'docs/sandbox-providers.md',
-  };
+  if (state !== 'configured') {
+    return {
+      id: 'sandbox',
+      label: 'Sandbox Provider',
+      state,
+      summary: `${config.sandboxProvider} sandbox provider selected.`,
+      guidance:
+        state === 'missing'
+          ? 'Provide the required credentials/endpoint for the selected sandbox provider.'
+          : config.sandboxProvider === 'fake'
+            ? 'Use docker or daytona for real agent work.'
+            : undefined,
+      details: [`Provider: ${config.sandboxProvider}`],
+      docsPath: 'docs/sandbox-providers.md',
+    };
+  }
+
+  if (!services?.sandboxProvider?.check) {
+    return {
+      id: 'sandbox',
+      label: 'Sandbox Provider',
+      state: 'warning',
+      summary: `${config.sandboxProvider} sandbox provider is configured, but no connectivity check is available.`,
+      details: [`Provider: ${config.sandboxProvider}`],
+      docsPath: 'docs/sandbox-providers.md',
+    };
+  }
+
+  try {
+    const check = await services.sandboxProvider.check();
+    return {
+      id: 'sandbox',
+      label: 'Sandbox Provider',
+      state: check.status === 'ready' ? 'configured' : 'error',
+      summary:
+        check.status === 'ready'
+          ? `${config.sandboxProvider} sandbox provider is reachable.`
+          : `${config.sandboxProvider} sandbox provider health check failed.`,
+      guidance: check.status === 'ready' ? undefined : 'Check sandbox provider credentials and network reachability.',
+      details: [`Provider: ${config.sandboxProvider}`, ...(check.message ? [check.message] : [])],
+      docsPath: 'docs/sandbox-providers.md',
+    };
+  } catch (error) {
+    return {
+      id: 'sandbox',
+      label: 'Sandbox Provider',
+      state: 'error',
+      summary: `${config.sandboxProvider} sandbox provider health check failed.`,
+      guidance: 'Check sandbox provider credentials and network reachability.',
+      details: [
+        `Provider: ${config.sandboxProvider}`,
+        error instanceof Error ? error.message : 'Unknown sandbox error',
+      ],
+      docsPath: 'docs/sandbox-providers.md',
+    };
+  }
 }
 
 function githubAppStatus(config: AppConfig): SetupStatusItem {
@@ -178,31 +229,75 @@ function modelProviders(config: AppConfig): string[] {
   return providers;
 }
 
-function objectStoreStatus(config: AppConfig): SetupStatusItem {
+async function objectStoreStatus(config: AppConfig): Promise<SetupStatusItem> {
+  if (config.artifactStorage === 'filesystem') {
+    try {
+      await mkdir(config.artifactStorageFilesystemPath!, { recursive: true });
+      await access(config.artifactStorageFilesystemPath!, constants.R_OK | constants.W_OK);
+      return {
+        id: 'object-store',
+        label: 'Artifact Storage',
+        state: 'configured',
+        summary: 'Filesystem artifact storage is writable.',
+        details: [`Provider: ${config.artifactStorage}`, `Path: ${config.artifactStorageFilesystemPath}`],
+        docsPath: 'README.md',
+      };
+    } catch (error) {
+      return objectStoreErrorStatus(config, error, 'Filesystem artifact storage check failed.');
+    }
+  }
+
+  if (config.artifactStorage === 's3') {
+    const client = new S3Client({
+      region: config.artifactStorageS3Region,
+      forcePathStyle: config.artifactStorageS3ForcePathStyle,
+      credentials: {
+        accessKeyId: config.artifactStorageS3AccessKeyId!,
+        secretAccessKey: config.artifactStorageS3SecretAccessKey!,
+      },
+      ...(config.artifactStorageS3Endpoint ? { endpoint: config.artifactStorageS3Endpoint } : {}),
+    });
+    try {
+      await client.send(new HeadBucketCommand({ Bucket: config.artifactStorageS3Bucket! }));
+      return {
+        id: 'object-store',
+        label: 'Artifact Storage',
+        state: 'configured',
+        summary: 'S3 compatible artifact storage bucket is reachable.',
+        details: [`Provider: ${config.artifactStorage}`, `Bucket: ${config.artifactStorageS3Bucket}`],
+        docsPath: 'README.md',
+      };
+    } catch (error) {
+      return objectStoreErrorStatus(config, error, 'S3 compatible artifact storage check failed.');
+    }
+  }
+
   return {
     id: 'object-store',
     label: 'Artifact Storage',
-    state: config.artifactStorage === 'disabled' ? 'missing' : 'configured',
-    summary:
-      config.artifactStorage === 'disabled'
-        ? 'Object storage is disabled.'
-        : config.artifactStorage === 's3'
-          ? 's3 compatible artifact storage configured.'
-          : `${config.artifactStorage} artifact storage configured.`,
+    state: 'missing',
+    summary: 'Object storage is disabled.',
     guidance:
-      config.artifactStorage === 'disabled'
-        ? 'Set ARTIFACT_STORAGE_PROVIDER=s3 and provide the S3 bucket and credentials to persist downloadable artifacts.'
-        : undefined,
-    guidanceItems:
-      config.artifactStorage === 'disabled'
-        ? [
-            'ARTIFACT_STORAGE_PROVIDER=s3',
-            'ARTIFACT_STORAGE_S3_BUCKET',
-            'ARTIFACT_STORAGE_S3_ACCESS_KEY_ID',
-            'ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY',
-          ]
-        : undefined,
+      'Set ARTIFACT_STORAGE_PROVIDER=s3 and provide the S3 bucket and credentials to persist downloadable artifacts.',
+    guidanceItems: [
+      'ARTIFACT_STORAGE_PROVIDER=s3',
+      'ARTIFACT_STORAGE_S3_BUCKET',
+      'ARTIFACT_STORAGE_S3_ACCESS_KEY_ID',
+      'ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY',
+    ],
     details: [`Provider: ${config.artifactStorage}`],
+    docsPath: 'README.md',
+  };
+}
+
+function objectStoreErrorStatus(config: AppConfig, error: unknown, summary: string): SetupStatusItem {
+  return {
+    id: 'object-store',
+    label: 'Artifact Storage',
+    state: 'error',
+    summary,
+    guidance: 'Check artifact storage credentials and network reachability.',
+    details: [`Provider: ${config.artifactStorage}`, error instanceof Error ? error.message : 'Unknown storage error'],
     docsPath: 'README.md',
   };
 }
