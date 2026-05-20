@@ -19,7 +19,9 @@ describe('FakeRunner', () => {
       },
     });
 
-    expect(result.text).toBe('Fake response for: hello');
+    expect(result.text).toBe(
+      'Fake response for: hello\n\nThis is a fake runner response. Configure the RUNNER, SANDBOX_PROVIDER, and model credential environment variables to run real agent work.',
+    );
     expect(events.map((event) => event.type)).toEqual(['run_started', 'agent_text_delta', 'run_completed']);
   });
 

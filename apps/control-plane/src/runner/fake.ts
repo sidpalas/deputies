@@ -4,6 +4,8 @@ export class FakeRunner implements Runner {
   constructor(private readonly options: { artifact?: Record<string, unknown> } = {}) {}
 
   async run(input: RunnerInput): Promise<RunnerResult> {
+    const text = `Fake response for: ${input.prompt}\n\nThis is a fake runner response. Configure the RUNNER, SANDBOX_PROVIDER, and model credential environment variables to run real agent work.`;
+
     await input.emit({
       sessionId: input.sessionId,
       runId: input.runId,
@@ -18,7 +20,7 @@ export class FakeRunner implements Runner {
       runId: input.runId,
       messageId: input.messageId,
       type: 'agent_text_delta',
-      payload: { text: `Fake response for: ${input.prompt}` },
+      payload: { text },
       createdAt: new Date(),
     });
 
@@ -31,7 +33,7 @@ export class FakeRunner implements Runner {
       createdAt: new Date(),
     });
 
-    const result: RunnerResult = { text: `Fake response for: ${input.prompt}` };
+    const result: RunnerResult = { text };
     const artifact = input.context.fakeArtifact ?? getNestedFakeArtifact(input.context) ?? this.options.artifact;
     if (artifact && typeof artifact === 'object' && !Array.isArray(artifact)) {
       const type = 'type' in artifact && typeof artifact.type === 'string' ? artifact.type : 'external_link';
