@@ -192,12 +192,6 @@ h1 {
   background: oklch(0.929 0.013 255.508 / 80%);
 }
 
-.button.placeholder {
-  cursor: default;
-  background: var(--secondary);
-  color: var(--muted-foreground);
-}
-
 .delegation-flow,
 .feature-columns article,
 .faq-item {
