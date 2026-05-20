@@ -11,17 +11,27 @@ Deputies is a control plane for delegating engineering work to [background agent
 - Uses [Flue](https://github.com/withastro/flue) under the hood to run and resume agent work.
 - Supports Slack and GitHub integrations for issue, thread, and callback-driven workflows.
 - Supports GitHub OAuth login for browser access control.
-- Works with [Daytona](https://www.daytona.io/) as a remote sandbox provider, with unsafe local sandbox support for trusted development (more sandbox providers coming soon!)
+- Works with [Daytona](https://www.daytona.io/) and Docker as sandbox providers, plus fake and unsafe local providers for tests and trusted development.
 - Supports standard LLM API-key configuration and OpenAI Codex/ChatGPT subscriptions.
 - Tracks artifacts, callback deliveries, repositories, sandbox status, and queued messages.
-- Easy to deploy anywhere: a React client, Node control plane, and Postgres-backed persistence.
+- Deploys as portable Node, Caddy, Postgres, and optional S3-compatible object storage services.
+
+## Deployment
+
+Deployment configuration is available for:
+
+- Railway: the public template at `https://railway.com/deploy/ZYSsM8` provisions the app services and supporting infrastructure.
+- Docker Compose: `deploy/local/` contains local production-style Compose stacks for all-in-one and split API/worker/orchestrator deployments.
+
+More deployment targets are expected over time. See `deploy/README.md` and target-specific docs for details.
 
 ## Project Layout
 
 - `apps/`: independently runnable and deployable applications/services.
 - `apps/control-plane/`: backend control-plane API, event stream, stores, integrations, workers, and sandbox providers.
 - `apps/web/`: React frontend for session management and agent progress review.
-- `packages/`: reusable libraries shared by apps. Empty for now; see `packages/README.md`.
+- `apps/www/`: static root-domain website with an embedded public demo build.
+- `packages/`: reusable libraries shared by apps, including the Docker sandbox bridge.
 - `deploy/`: deployment and local runtime configuration.
 - `docs/`: architecture, domain notes, testing strategy, and feature backlog.
 
