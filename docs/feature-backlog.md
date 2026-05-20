@@ -73,6 +73,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 ## Scale And Operations
 
+- Generate `docs/configuration.md` from `apps/control-plane/src/config/index.ts` as the env source of truth, with `Name`, `Required When`, `Default`, `Values`, and `Description` columns, including conditional requirements such as `APP_SECRET_ENCRYPTION_KEY` for Postgres-backed Docker sandboxes, `GITHUB_TRIGGER_PHRASES` when GitHub webhooks are enabled, and Slack allowlists when `SLACK_SIGNING_SECRET` is set.
 - Multiple product users and organizations with separate auth, session ownership, quotas, and audit trails.
 - Session participants, including `createdByUserId` and users who send messages or otherwise participate.
 - Session tags as a general metadata layer, starting with API/manual tags and later integration-derived tags such as `github:owner/repo`, `slack:channel`, and `repo:owner/name`.

@@ -10,7 +10,7 @@ const allowedHosts = process.env.VITE_DEV_ALLOWED_HOSTS
       .map((host) => host.trim())
       .filter(Boolean)
   : ['.localhost', '.ngrok-free.app', '.ngrok-free.dev', '.ngrok.io'];
-const apiProxy = { target: apiProxyTarget, ws: true };
+const apiProxy = { target: apiProxyTarget };
 const serviceProxy = {
   target: apiProxyTarget,
   ws: true,

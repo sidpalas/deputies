@@ -123,7 +123,7 @@ export async function handleServiceUpgrade(
   const incoming = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
   const hostPreview = parsePreviewHostFromNodeRequest(config, request);
   if (!hostPreview) {
-    socket.destroy();
+    rejectUpgrade(socket, 404, 'Service preview not found');
     return;
   }
 
@@ -132,17 +132,17 @@ export async function handleServiceUpgrade(
     !isTrustedUpgradeRequest(config, request) ||
     !(await isAuthorizedUpgrade(config, services, request, { role: 'admin' }))
   ) {
-    socket.destroy();
+    rejectUpgrade(socket, 403, 'Forbidden');
     return;
   }
   const session = await services.sessions.get(sessionId);
   if (!session) {
-    socket.destroy();
+    rejectUpgrade(socket, 404, 'Session not found');
     return;
   }
   const preview = await getSessionService(config, services, sessionId, port);
   if (!preview) {
-    socket.destroy();
+    rejectUpgrade(socket, 404, 'Service preview not found');
     return;
   }
 
@@ -162,6 +162,17 @@ export async function handleServiceUpgrade(
   };
   if (preview.targetHeaders) upgradeInput.targetHeaders = preview.targetHeaders;
   proxyPreviewUpgrade(upgradeInput);
+}
+
+function rejectUpgrade(socket: Duplex, status: number, message: string): void {
+  socket.end(
+    `HTTP/1.1 ${status} ${message}\r\n` +
+      'Connection: close\r\n' +
+      'Content-Type: text/plain; charset=utf-8\r\n' +
+      `Content-Length: ${Buffer.byteLength(message)}\r\n` +
+      '\r\n' +
+      message,
+  );
 }
 
 export function parseServicePort(value: string | undefined): number | null {
