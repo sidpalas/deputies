@@ -1,6 +1,35 @@
 name: deputies
 
-# Default local stack: all-in-one control plane with API + workers in one process.
-# Use docker-compose.split.yml to run API, workers, and Docker orchestration separately.
-include:
-  - docker-compose.all.yml
+# Local contributor support services only. Full app Docker Compose deployments live in deploy/docker-compose/.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: flue
+      POSTGRES_PASSWORD: flue
+      POSTGRES_DB: flue
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init-test-db.sql:/docker-entrypoint-initdb.d/10-init-test-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U flue -d flue']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.97
+    command: ['server', '-s3', '-s3.port=8333', '-dir=/data']
+    environment:
+      AWS_ACCESS_KEY_ID: seaweed
+      AWS_SECRET_ACCESS_KEY: seaweed
+    ports:
+      - '8333:8333'
+    volumes:
+      - seaweedfs-data:/data
+
+volumes:
+  postgres-data:
+  seaweedfs-data:

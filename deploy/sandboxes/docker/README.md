@@ -8,37 +8,39 @@ It intentionally mirrors the Daytona sandbox tooling so agent tasks see a simila
 
 - Ubuntu 24.04 base
 - Node.js 24 and Corepack/pnpm
-- Postgres and PostgreSQL client tools
+- Postgres and PostgreSQL client tools installed on top of the base for this repo's test workflow
+- Playwright Chromium and Linux browser dependencies
 - Git, Git LFS, SSH, jq, rsync, zsh, vim, and sudo
 
-Playwright Chromium is intentionally optional because it adds significant image size. Build with `--build-arg INSTALL_PLAYWRIGHT=true` when browser e2e support is required inside Docker sandboxes.
+The shared base leaves Postgres and Playwright out by default. This Docker-provider example image includes both because this repo's full checks need database and browser test support. Derivative images may remove or replace them if their workload does not need them.
 
-Build locally:
+Use the published image for normal local development:
 
 ```sh
-docker build -f deploy/docker/Dockerfile -t deputies-sandbox:local .
+docker pull ghcr.io/sidpalas/deputies-docker-sandbox:latest
 ```
 
-Build with Playwright browser support:
+Build locally only when changing this image:
 
 ```sh
-docker build -f deploy/docker/Dockerfile --build-arg INSTALL_PLAYWRIGHT=true -t deputies-sandbox:playwright .
+docker build -f deploy/sandboxes/base/Dockerfile -t deputies-sandbox-base:local .
+docker build -f deploy/sandboxes/docker/Dockerfile -t deputies-sandbox:local .
 ```
 
 Run a smoke-test container:
 
 ```sh
-docker run --rm -p 3584:3584 -e DEPUTIES_SANDBOX_TOKEN=test-token deputies-sandbox:local
+docker run --rm -p 3584:3584 -e DEPUTIES_SANDBOX_TOKEN=test-token ghcr.io/sidpalas/deputies-docker-sandbox:latest
 ```
 
 The bridge listens on port `3584` and requires `Authorization: Bearer <DEPUTIES_SANDBOX_TOKEN>` for every request.
 
 ## Relationship To Daytona Image
 
-This image and `deploy/daytona/Dockerfile` intentionally share the same Ubuntu base and core toolset. They differ at the provider boundary and browser default:
+This image and `deploy/sandboxes/daytona/Dockerfile` intentionally build on the same base image and add the same broad browser-test support. They differ primarily at the provider runtime contract:
 
 - Daytona uses `CMD ["sleep", "infinity"]` because Daytona supplies exec/filesystem APIs outside the container.
 - Docker uses `CMD ["node", "/opt/deputies/sandbox-bridge/dist/server.js"]` because the Docker provider talks to the in-container bridge.
-- Daytona installs Playwright browsers by default for full sandbox checks; Docker makes that optional to keep local provider images smaller.
+- The provider images use different default users and provider-specific environment variables.
 
 They could be collapsed into one image with provider-specific command overrides, but keeping sibling Dockerfiles makes each provider's startup contract explicit while preserving a consistent sandbox environment.

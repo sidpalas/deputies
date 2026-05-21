@@ -61,7 +61,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 ## Sandboxes
 
-- Local Docker provider, distinct from the existing `local` host-subprocess development provider.
+- Local Docker provider, distinct from the existing `unsafe-local` host-subprocess development provider.
 - Kubernetes provider.
 - ECS/Fargate provider with bridge sidecar.
 - Provider conformance test suite.

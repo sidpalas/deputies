@@ -7,14 +7,14 @@ The system must support multiple sandbox providers without changing session, mes
 Initial providers may include:
 
 - `fake`: deterministic tests.
-- `local`: local development with host subprocess execution in a temp workspace. This is convenient for getting started but is not a security sandbox. Commands inherit a minimal environment and discover executables through an allowlisted `.deputies-bin` path; configure `LOCAL_SANDBOX_ALLOWED_COMMANDS` to replace the built-in development allowlist.
+- `unsafe-local`: local development with host subprocess execution in a temp workspace. This is convenient for getting started but is not a security sandbox. Commands inherit a minimal environment and discover executables through an allowlisted `.deputies-bin` path; configure `LOCAL_SANDBOX_ALLOWED_COMMANDS` to replace the built-in development allowlist.
 - `docker`: planned Docker Engine backed sandboxes. This can use a local or remote Docker daemon depending on deployment configuration.
 - `daytona`: hosted persistent development sandboxes.
 - `kubernetes`: pods/jobs inside a cluster.
 - `ecs`: Fargate tasks in AWS.
 - `modal` or others later, if desired.
 
-Daytona sandboxes are created from OCI images, but agents should not assume nested Docker or Docker Compose is available inside those sandboxes. The repo-owned Daytona image and scripts in `deploy/daytona/` install Postgres directly and expose `./deploy/daytona/start-postgres.sh` for Postgres-backed tests.
+Some sandbox providers create sandboxes from OCI/container images without supporting nested Docker or Docker Compose inside the sandbox. For those providers, Postgres-backed tests should start Postgres directly in the sandbox. The repo-owned Daytona image and scripts in `deploy/sandboxes/daytona/` install Postgres directly and expose `./deploy/sandboxes/daytona/start-postgres.sh` for this path.
 
 > **Warning:** `SANDBOX_PROVIDER=unsafe-local` is for trusted local development only. It is not a security boundary; agent commands run on the API/worker host runtime in a temporary workspace.
 
@@ -458,9 +458,9 @@ The sandbox container does not need outbound connectivity back to the control pl
 Current bridge implementation:
 
 - `packages/sandbox-bridge` contains the in-container HTTP bridge process.
-- `deploy/docker/Dockerfile` builds a sandbox image that runs the bridge as the non-root `sandbox` user.
+- `deploy/sandboxes/docker/Dockerfile` builds a sandbox image that runs the bridge as the non-root `sandbox` user.
 - The Docker sandbox image mirrors the Daytona sandbox core tooling: Ubuntu 24.04, Postgres, Git LFS, SSH, jq, rsync, zsh, vim, sudo, Node.js 24, and Corepack/pnpm. Playwright browsers are optional in Docker builds because they add significant image size.
-- `deploy/docker/README.md` documents local image build and smoke-test commands.
+- `deploy/sandboxes/docker/README.md` documents local image build and smoke-test commands.
 
 Current provider implementation:
 
@@ -671,7 +671,7 @@ Rules:
 
 ## MVP Recommendation
 
-Current implemented providers are `fake`, `local`, and `daytona`. Future provider work should add `docker`, then Kubernetes or ECS depending on deployment needs. Docker should be named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
+Current implemented providers are `fake`, `unsafe-local`, `docker`, and `daytona`. Future provider work should add Kubernetes or ECS depending on deployment needs. Docker is named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
 
 Docker MVP order:
 
@@ -680,7 +680,7 @@ Docker MVP order:
 3. Add `DockerOrchestrator` with an in-process implementation.
 4. Add `DockerSandboxProvider` that wraps the orchestrator and returns normal `SandboxHandle` values.
 5. Wire `SANDBOX_PROVIDER=docker` in control-plane startup.
-6. Add conformance tests shared by `local`, `daytona` mocks, and Docker.
+6. Add conformance tests shared by `unsafe-local`, `daytona` mocks, and Docker.
 7. Add opt-in Docker integration tests that require a Docker daemon.
 8. Add `HttpDockerOrchestratorClient` and a separate orchestrator service only when production isolation is needed.
 

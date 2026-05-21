@@ -17,8 +17,8 @@ on:
         description: Build and push control-plane
         type: boolean
         default: true
-      daytona:
-        description: Build and push Daytona
+      sandbox_images:
+        description: Build and push sandbox base, Daytona, and Docker
         type: boolean
         default: true
 
@@ -28,6 +28,8 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+  SANDBOX_BASE_IMAGE: ghcr.io/sidpalas/deputies-sandbox-base
+  SANDBOX_BASE_REF: ghcr.io/sidpalas/deputies-sandbox-base:sha-${{ github.sha }}
 
 jobs:
   validate:
@@ -36,7 +38,7 @@ jobs:
     steps:
       - name: Require at least one image
         run: |
-          if [ "${{ inputs.web }}" != "true" ] && [ "${{ inputs.control_plane }}" != "true" ] && [ "${{ inputs.daytona }}" != "true" ]; then
+          if [ "${{ inputs.web }}" != "true" ] && [ "${{ inputs.control_plane }}" != "true" ] && [ "${{ inputs.sandbox_images }}" != "true" ]; then
             echo "Select at least one image to build and push."
             exit 1
           fi
@@ -62,33 +64,69 @@ jobs:
             platforms: linux/amd64,linux/arm64
             provenance: true
           - name: daytona
-            input: daytona
-            dockerfile: deploy/daytona/Dockerfile
-            image: ghcr.io/sidpalas/deputies-daytona
+            input: sandbox_images
+            dockerfile: deploy/sandboxes/daytona/Dockerfile
+            image: ghcr.io/sidpalas/deputies-daytona-sandbox
+            platforms: linux/amd64
+            provenance: false
+          - name: docker-sandbox
+            input: sandbox_images
+            dockerfile: deploy/sandboxes/docker/Dockerfile
+            image: ghcr.io/sidpalas/deputies-docker-sandbox
             platforms: linux/amd64
             provenance: false
 
     steps:
       - name: Checkout
+        if: ${{ inputs[matrix.image.input] }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # TODO: Switch to Namespace or Depot builders for faster multi-arch builds.
       - name: Set up Docker Buildx
+        if: ${{ inputs[matrix.image.input] }}
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Log in to GHCR
+        if: ${{ inputs[matrix.image.input] }}
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract sandbox base metadata
+        if: ${{ inputs.sandbox_images && (matrix.image.name == 'daytona' || matrix.image.name == 'docker-sandbox') }}
+        id: sandbox-base-meta
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
+        with:
+          images: ${{ env.SANDBOX_BASE_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=long,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and publish sandbox base image
+        if: ${{ inputs.sandbox_images && (matrix.image.name == 'daytona' || matrix.image.name == 'docker-sandbox') }}
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: deploy/sandboxes/base/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.sandbox-base-meta.outputs.tags }}
+          labels: ${{ steps.sandbox-base-meta.outputs.labels }}
+          cache-from: type=gha,scope=sandbox-base
+          cache-to: type=gha,mode=max,scope=sandbox-base
+
       - name: Extract metadata
         if: ${{ inputs[matrix.image.input] }}
         id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
-          images: ${{ matrix.image.image || format('{0}/{1}-{2}', env.REGISTRY, github.repository, matrix.image.name) }}
+          images: ${{ matrix.image.image }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -109,3 +147,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}
+          build-args: |
+            DEPUTIES_SANDBOX_BASE_IMAGE=${{ env.SANDBOX_BASE_REF }}

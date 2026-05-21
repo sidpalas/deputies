@@ -82,11 +82,11 @@ Current local policy:
 - `pnpm smoke:full-stack` is an opt-in Docker smoke that builds the local Postgres, SeaweedFS, built control-plane, and built web/Caddy stack, then drives Playwright through Caddy. It verifies deployed-style API proxying for browser routes such as `/repositories` and `/models` plus basic session creation against Postgres.
 - `pnpm check` runs API typecheck/tests and web typecheck/jsdom tests; it does not run Playwright E2E tests.
 - Real local Flue UAT is opt-in: set `RUN_REAL_LOCAL_FLUE_UAT=true`, `API_AUTH_MODE=none`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-local-flue.test.ts`.
-- Real Docker sandbox UAT is opt-in: build `deputies-sandbox:local`, set `RUN_REAL_DOCKER_SANDBOX_UAT=true`, and run `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-docker-sandbox.test.ts` to verify create, stop/start, reconnect, bridge exec/fs, live preview proxying, and cleanup against a real Docker daemon.
+- Real Docker sandbox UAT is opt-in: use `DOCKER_SANDBOX_IMAGE=ghcr.io/sidpalas/deputies-docker-sandbox:latest`, set `RUN_REAL_DOCKER_SANDBOX_UAT=true`, and run `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-docker-sandbox.test.ts` to verify create, stop/start, reconnect, bridge exec/fs, live preview proxying, and cleanup against a real Docker daemon. Build `deputies-sandbox:local` only when testing unpublished sandbox image changes.
 - Real Daytona/Flue UAT is opt-in: build first and set `RUN_REAL_DAYTONA_FLUE_UAT=true`, `API_AUTH_MODE=none`, `TEST_DATABASE_URL`, `DAYTONA_API_KEY`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm control-plane:test:uat`.
-- `pnpm db:up` starts local Postgres from `deploy/local/docker-compose.yml` and creates both `flue` and `flue_test`.
-- Daytona sandboxes should not assume nested Docker is available. Use `./deploy/daytona/start-postgres.sh` to start Postgres directly in the sandbox, then set `DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue` and `TEST_DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue_test`.
-- For broad Daytona sandbox verification, run `./deploy/daytona/full-check.sh`; it starts Postgres, installs dependencies, runs migrations, and exercises API and web checks including Playwright e2e.
+- `pnpm infra:up` starts the normal local Postgres and SeaweedFS baseline from `deploy/local/docker-compose.yml`; Postgres creates both `flue` and `flue_test`. Use `pnpm db:up` only when you need Postgres without artifact storage.
+- Sandboxes without nested virtualization should not assume Docker or Docker Compose is available. Use `./deploy/sandboxes/daytona/start-postgres.sh` to start Postgres directly in sandbox images that include the helper scripts, then set `DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue` and `TEST_DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue_test`.
+- For broad verification inside sandbox images that include the Daytona helper scripts, run `./deploy/sandboxes/daytona/full-check.sh`; it starts Postgres, installs dependencies, runs migrations, and exercises API and web checks including Playwright e2e.
 - Integration tests apply migrations to `flue_test` and truncate app tables between tests.
 - Do not run `control-plane:test:integration` and `control-plane:test:uat` concurrently against the same `TEST_DATABASE_URL`; both suites reset shared tables.
 - Do not run `control-plane:test:load` concurrently with integration or UAT tests against the same `TEST_DATABASE_URL`; it also resets shared tables.
@@ -206,8 +206,9 @@ assert message status is completed
 Use fake runner outputs to make tests deterministic:
 
 ```txt
-FAKE_RUNNER_SCRIPT=basic-success
-FAKE_SANDBOX_PROVIDER=ready
+RUNNER=fake
+SANDBOX_PROVIDER=fake
+FAKE_RUNNER_ARTIFACT_JSON={"type":"file","title":"Test Artifact","content":"hello","contentType":"text/plain","fileName":"artifact.txt"}
 ```
 
 Add failure scenarios:

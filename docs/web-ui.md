@@ -4,11 +4,11 @@ The operator UI is a separate Vite React app in `apps/web/`. It is intentionally
 
 ## Local Development
 
-With the default `.env.example` settings, start Postgres, run migrations, then run the API and web app separately:
+With the default `.env.example` settings, start Postgres plus SeaweedFS, run migrations, then run the API and web app separately:
 
 ```sh
 cp .env.example .env.local # if needed
-pnpm db:up
+pnpm infra:up
 set -a; . ./.env.local; set +a; pnpm control-plane:db:migrate
 set -a; . ./.env.local; set +a; pnpm control-plane:dev
 pnpm web:dev
@@ -91,7 +91,7 @@ The UI supports all product API auth modes exposed by `/health`:
 - `bearer`: the user enters the API bearer token in the browser. The token is stored in `localStorage` and sent as `Authorization: Bearer <token>`.
 - `session`: the user signs in through the configured provider. The API sets an opaque `dev_deputies_session` HTTP-only cookie backed by the configured app data store (`auth_sessions` in Postgres for durable deployments), and the UI sends requests with `credentials: include`.
 
-`API_AUTH_MODE` is required. Use `API_AUTH_MODE=none` only for intentional local or test no-auth runs; production-like deployments should use `bearer` or `session`.
+`API_AUTH_MODE` is required. Browser-facing deployments use `session`. Reserve `bearer` for development tooling or programmatic/internal API access, and use `none` only for intentional local or test no-auth runs.
 
 Session-cookie auth is an API access gate only. Product sessions remain multiplayer/shared by default: authenticated users can list and open the same global session set, and sessions are not currently owned by, filtered to, or authorized per authenticated user. Treat per-user session ownership/authorization as future work for a comprehensive users/organizations/RBAC push rather than a narrow session-only patch.
 
@@ -122,12 +122,11 @@ AUTH_GITHUB_ADMIN_USERS=your-github-login
 # Optional read-only viewers:
 # AUTH_GITHUB_VIEWER_USERS=teammate-login
 # AUTH_GITHUB_VIEWER_ORGANIZATIONS=your-org
-# UNSAFE_AUTH_GITHUB_ALLOW_ALL_VIEWERS=false
 ```
 
 For GitHub App login, configure the GitHub App's callback URL to exactly match `GITHUB_OAUTH_CALLBACK_URL`. The same GitHub App can also provide runtime repository access through `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`; those are separate values from the app's user-authorization client ID and client secret.
 
-GitHub users in `AUTH_GITHUB_ADMIN_*` allowlists are admins. Users in `AUTH_GITHUB_VIEWER_*` are read-only and cannot mutate sessions or access sandbox services. `UNSAFE_AUTH_GITHUB_ALLOW_ALL_VIEWERS=true` allows any GitHub account to log in as read-only.
+GitHub users in `AUTH_GITHUB_ADMIN_*` allowlists are admins. Users in `AUTH_GITHUB_VIEWER_*` are read-only and cannot mutate sessions or access sandbox services.
 
 Set `WEB_BASE_URL` to the externally reachable web UI origin when Slack/GitHub callbacks should include an “open session” link. The API appends `?session=<id>` to that URL, and the web UI opens the matching session when present.
 

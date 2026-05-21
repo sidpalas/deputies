@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$repo_root"
 
-./deploy/daytona/start-postgres.sh
+./deploy/sandboxes/daytona/start-postgres.sh
 
 export DATABASE_URL=${DATABASE_URL:-postgres://flue:flue@127.0.0.1:5432/flue}
 export TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://flue:flue@127.0.0.1:5432/flue_test}

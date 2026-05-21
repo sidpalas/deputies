@@ -51,8 +51,17 @@ docker buildx build \
   --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
   --provenance=false \
   --sbom=false \
-  -f deploy/daytona/Dockerfile \
-  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona:ubuntu24-node24-pg16-playwright1.59.1} \
+  -f deploy/sandboxes/base/Dockerfile \
+  -t deputies-sandbox-base:local \
+  --load \
+  .
+
+docker buildx build \
+  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
+  --provenance=false \
+  --sbom=false \
+  -f deploy/sandboxes/daytona/Dockerfile \
+  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1} \
   --load \
   .
 """
@@ -64,8 +73,17 @@ docker buildx build \
   --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
   --provenance=false \
   --sbom=false \
-  -f deploy/daytona/Dockerfile \
-  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona:ubuntu24-node24-pg16-playwright1.59.1} \
+  -f deploy/sandboxes/base/Dockerfile \
+  -t deputies-sandbox-base:local \
+  --load \
+  .
+
+docker buildx build \
+  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
+  --provenance=false \
+  --sbom=false \
+  -f deploy/sandboxes/daytona/Dockerfile \
+  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1} \
   --push \
   .
 """

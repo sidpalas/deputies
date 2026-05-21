@@ -139,7 +139,7 @@ async function requireDockerImage(name: string): Promise<void> {
   const result = await docker(['image', 'inspect', name], { allowFailure: true });
   if (result.exitCode !== 0)
     throw new Error(
-      `Docker image ${name} is required. Build it with: docker build -f deploy/docker/Dockerfile -t ${name} .`,
+      `Docker image ${name} is required. Build it with: docker build -f deploy/sandboxes/base/Dockerfile -t deputies-sandbox-base:local . && docker build -f deploy/sandboxes/docker/Dockerfile -t ${name} .`,
     );
 }
 

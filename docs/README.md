@@ -13,6 +13,8 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Flue Persistence](./flue-persistence.md): Postgres-backed Flue session store and how it relates to product session state.
 - [Integrations](./integrations.md): generic webhook, GitHub, Slack, Linear, callbacks, auth, and external thread mapping.
 - [Web UI](./web-ui.md): separate Vite React operator UI, browser auth, and static deployment notes.
+- [Local Development](./contributing-local-development.md): contributor setup, Postgres, Portless, Docker Compose, real Flue, and local integrations.
+- [Deployment](./deployment.md): provider-agnostic deployment topology, env vars, integrations, sandbox providers, and operations checklist.
 - [Testing Strategy](./testing-strategy.md): unit, integration, e2e, UAT, adversarial, prompt/context, and emulator-backed tests.
 - [Prior Art](./prior-art.md): comparison with Open-Inspect/background-agents, Open SWE, and Junior, plus non-open-source hosted-agent references.
 - [Roadmap](./roadmap.md): phased implementation sequence and acceptance criteria.
@@ -101,7 +103,7 @@ The current scaffold has implemented the portable control-plane foundation:
 The following MVP pieces are still planned:
 
 - contract schemas for public API responses and normalized events.
-- production deployment guides and release/migration runbooks.
+- release/migration runbooks.
 
 ## MVP Target
 

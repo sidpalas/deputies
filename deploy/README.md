@@ -9,12 +9,22 @@ Deployable source and shared Dockerfiles live under `apps/`:
 
 Deployment target docs:
 
-- `local/`: local production-style Docker Compose stack.
+- `docker-compose/`: full app Docker Compose stacks for local production-style all-in-one and split API/worker/orchestrator deployments.
+- `railway/`: Railway template notes and post-deploy variable setup.
+
+Contributor local support services:
+
+- `local/`: Postgres and SeaweedFS services used by root package scripts such as `pnpm db:up` and `pnpm infra:up`. This directory does not deploy the full Deputies app stack; use `docker-compose/` if you prefer to run the full stack locally with Docker Compose.
+
+Provider-agnostic deployment guidance lives in `../docs/deployment.md`. Contributor-focused local development guidance lives in `../docs/contributing-local-development.md`.
+
+Sandbox provider deployment assets live under `sandboxes/`. These build and verify sandbox runtime images only; they do not deploy the full Deputies app stack.
+
+- `sandboxes/docker/`: Docker sandbox image and runtime notes.
+- `sandboxes/daytona/`: Daytona image and sandbox verification notes.
 
 Add one subdirectory per deployment target or infrastructure provider, for example:
 
-- `railway/`
-- `docker/`
 - `k8s/`
 - `terraform/`
 

@@ -89,7 +89,7 @@ Use:
 SLACK_API_BASE_URL=https://slack.emulate.localhost/api
 ```
 
-Automated tests should usually start emulate programmatically with `createEmulator({ service: 'slack' })` instead of relying on a long-running process. Do not add emulate to Docker Compose by default; Docker Compose remains for durable infrastructure such as Postgres.
+Automated tests should usually start emulate programmatically with `createEmulator({ service: 'slack' })` instead of relying on a long-running process. Do not add emulate to Docker Compose by default; Docker Compose remains for durable infrastructure such as Postgres and SeaweedFS.
 
 ## Current Limits
 

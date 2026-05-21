@@ -484,7 +484,7 @@ Then point Slack client config at:
 SLACK_API_BASE_URL=https://slack.emulate.localhost/api
 ```
 
-Automated tests should prefer the programmatic `createEmulator({ service: 'slack' })` API. Do not add emulate to Docker Compose by default; Compose remains for infrastructure dependencies such as Postgres.
+Automated tests should prefer the programmatic `createEmulator({ service: 'slack' })` API. Do not add emulate to Docker Compose by default; Compose remains for infrastructure dependencies such as Postgres and SeaweedFS.
 
 ## Linear Integration
 

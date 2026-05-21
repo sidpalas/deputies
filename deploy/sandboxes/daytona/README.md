@@ -1,6 +1,6 @@
 # Daytona Sandbox Image
 
-This directory defines the Daytona image and helper scripts for running Deputies work in a sandbox with enough local tooling to run the API, web app, browser tests, and Postgres-backed integration tests.
+This directory defines the Daytona provider image and helper scripts for running Deputies work in a sandbox with enough local tooling to run the API, web app, browser tests, and Postgres-backed integration tests.
 
 ## Why Postgres Runs Directly
 
@@ -10,18 +10,31 @@ If your Daytona target supports privileged Docker, `deploy/local/docker-compose.
 
 ## Included Tooling
 
-- Ubuntu 24.04 base
+- Shared Deputies sandbox base image
 - Node.js 24 and Corepack/pnpm
 - Playwright Chromium and Linux browser dependencies installed explicitly
-- Postgres and PostgreSQL client tools
+- Postgres and PostgreSQL client tools installed explicitly
 - Git, Git LFS, SSH, jq, rsync, and zsh
+
+The Daytona and Docker provider images build on the same base and differ primarily by entrypoint/runtime contract. Daytona keeps the container alive with `sleep infinity` because Daytona supplies exec/filesystem APIs outside the container.
+
+## Published Image
+
+Use the published GHCR image for normal Daytona sandboxes:
+
+```sh
+DAYTONA_IMAGE=ghcr.io/sidpalas/deputies-daytona-sandbox:latest
+```
+
+Use a pinned tag or digest for repeatable deployments.
 
 ## Build And Publish
 
-Build from the repository root so the Docker context has access to this file:
+Build from the repository root only when changing this image or publishing a fork:
 
 ```sh
-docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/daytona/Dockerfile -t ghcr.io/<owner>/deputies-daytona:ubuntu24-node24-pg16-playwright1.59.1 --push .
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/sandboxes/base/Dockerfile -t deputies-sandbox-base:local --load .
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/sandboxes/daytona/Dockerfile -t ghcr.io/<owner>/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1 --push .
 ```
 
 Or use mise:
@@ -35,7 +48,7 @@ Daytona currently pulls `linux/amd64` images. If you build on Apple Silicon with
 To publish the `latest` tag explicitly:
 
 ```sh
-DAYTONA_IMAGE=ghcr.io/<owner>/deputies-daytona:latest mise run daytona-image-publish
+DAYTONA_IMAGE=ghcr.io/<owner>/deputies-daytona-sandbox:latest mise run daytona-image-publish
 ```
 
 Use any registry Daytona can pull from. For private registries, configure registry credentials in Daytona before using the image.
@@ -62,7 +75,7 @@ Set the control-plane service environment so new agent sandboxes use this image:
 
 ```sh
 SANDBOX_PROVIDER=daytona
-DAYTONA_IMAGE=ghcr.io/<owner>/deputies-daytona:ubuntu24-node24-pg16-playwright1.59.1
+DAYTONA_IMAGE=ghcr.io/sidpalas/deputies-daytona-sandbox:latest
 ```
 
 Keep the existing Daytona settings as needed:
@@ -88,7 +101,7 @@ The repo currently exposes image, snapshot, API URL, API key, and target setting
 Inside a Daytona sandbox after the repository is present:
 
 ```sh
-./deploy/daytona/full-check.sh
+./deploy/sandboxes/daytona/full-check.sh
 ```
 
 The script:
@@ -115,7 +128,7 @@ UAT tests that require external credentials remain opt-in. For example, `apps/co
 For manual development inside a sandbox:
 
 ```sh
-./deploy/daytona/start-postgres.sh
+./deploy/sandboxes/daytona/start-postgres.sh
 ```
 
 Then run services directly:
