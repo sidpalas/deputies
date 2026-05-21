@@ -63,7 +63,7 @@ jobs:
             image: ghcr.io/sidpalas/deputies-control-plane
             platforms: linux/amd64,linux/arm64
             provenance: true
-          - name: daytona
+          - name: daytona-sandbox
             input: sandbox_images
             dockerfile: deploy/sandboxes/daytona/Dockerfile
             image: ghcr.io/sidpalas/deputies-daytona-sandbox
@@ -95,7 +95,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract sandbox base metadata
-        if: ${{ inputs.sandbox_images && (matrix.image.name == 'daytona' || matrix.image.name == 'docker-sandbox') }}
+        if: ${{ inputs.sandbox_images && (matrix.image.name == 'daytona-sandbox' || matrix.image.name == 'docker-sandbox') }}
         id: sandbox-base-meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
@@ -108,7 +108,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and publish sandbox base image
-        if: ${{ inputs.sandbox_images && (matrix.image.name == 'daytona' || matrix.image.name == 'docker-sandbox') }}
+        if: ${{ inputs.sandbox_images && (matrix.image.name == 'daytona-sandbox' || matrix.image.name == 'docker-sandbox') }}
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
