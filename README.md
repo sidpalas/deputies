@@ -2,6 +2,9 @@
 
 Deputies is a control plane for delegating engineering work to [background agents](https://background-agents.com/). It includes a fully featured web UI where each task gets a persistent session for queueing prompts, following live progress, reviewing diagnostics, inspecting artifacts, and managing callbacks from integrations like Slack, GitHub, or webhooks.
 
+> [!NOTE]
+> Deputies is still early-stage. Expect the system to evolve quickly as real usage exposes needed changes, including occasional breaking changes.
+
 ![Deputies primary view](docs/images/deputies-primary-view.png)
 
 ## What It Does
