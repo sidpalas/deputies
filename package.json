@@ -38,6 +38,7 @@
     "www:build": "pnpm --dir apps/web build:static-demo && pnpm --dir apps/www build",
     "www:preview": "pnpm --dir apps/www preview",
     "smoke:full-stack": "./deploy/docker-compose/full-stack-smoke.sh",
+    "smoke:kubernetes": "./deploy/kubernetes/full-stack-smoke.sh",
     "web:test": "pnpm --dir apps/web test",
     "web:test:watch": "pnpm --dir apps/web test:watch",
     "web:typecheck": "pnpm --dir apps/web typecheck",

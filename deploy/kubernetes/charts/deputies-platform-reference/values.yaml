@@ -1,0 +1,56 @@
+traefik:
+  enabled: true
+  fullnameOverride: traefik
+  deployment:
+    replicas: 1
+  ingressClass:
+    enabled: true
+    isDefaultClass: false
+  service:
+    type: LoadBalancer
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 17-alpine
+    pullPolicy: IfNotPresent
+  credentials:
+    create: true
+    secretName: deputies-postgres-app
+    username: flue
+    password: flue
+    database: flue
+  testDatabase: flue_test
+  service:
+    name: postgres-rw
+    port: 5432
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClassName: ""
+  resources: {}
+  labels: {}
+  annotations: {}
+  podLabels: {}
+  podAnnotations: {}
+
+seaweedfs:
+  enabled: true
+  image:
+    repository: chrislusf/seaweedfs
+    tag: "3.97"
+    pullPolicy: IfNotPresent
+  s3:
+    accessKeyId: seaweed
+    secretAccessKey: seaweed
+    port: 8333
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClassName: ""
+  resources: {}
+  labels: {}
+  annotations: {}
+  podLabels: {}
+  podAnnotations: {}

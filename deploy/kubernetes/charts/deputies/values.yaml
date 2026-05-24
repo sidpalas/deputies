@@ -1,0 +1,135 @@
+controlPlane:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/sidpalas/deputies-control-plane
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 3583
+  resources: {}
+  labels: {}
+  annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+
+web:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/sidpalas/deputies-web
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 5173
+  resources: {}
+  labels: {}
+  annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  trustForwardedServiceHosts: false
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+postgres:
+  host: postgres-rw
+  port: 5432
+  database: flue
+  username: flue
+  password: flue
+  existingSecret: deputies-postgres-app
+  secretKeys:
+    username: username
+    password: password
+    database: database
+    host: host
+    port: port
+
+config:
+  runMode: all
+  runner: flue
+  sandboxProvider: daytona
+  sandboxWorkspacePath: /workspace
+  apiAuthMode: none
+  authProvider: static
+  authCookieDomain: ""
+  authCookieSecure: "true"
+  authCookieSameSite: lax
+  webBaseUrl: https://deputies.localhost
+  serviceBaseDomain: deputies.localhost
+  serviceTrustForwardedHosts: "true"
+  appDataStore: postgres
+  flueStateStore: postgres
+  flueModel: anthropic/claude-haiku-4-5
+  artifactStorageProvider: s3
+  artifactStorageS3Endpoint: http://seaweedfs:8333
+  artifactStorageS3Region: us-east-1
+  artifactStorageS3Bucket: deputies-artifacts
+  artifactStorageS3ForcePathStyle: "true"
+  artifactStorageS3CreateBucket: "true"
+  daytonaImage: ghcr.io/sidpalas/deputies-daytona-sandbox:latest
+  daytonaApiUrl: ""
+  daytonaTarget: ""
+  daytonaSnapshot: ""
+  hideSetupPage: "false"
+  extraEnv: {}
+
+secrets:
+  create: true
+  name: ""
+  authSessionSecret: replace-with-random-session-secret
+  authStaticUsername: dev
+  authStaticPassword: dev-secret
+  apiBearerToken: ""
+  daytonaApiKey: ""
+  anthropicApiKey: ""
+  openaiApiKey: ""
+  flueOpenaiCodexAuthBase64: ""
+  flueOpenaiCodexAuthJson: ""
+  artifactStorageS3AccessKeyId: seaweed
+  artifactStorageS3SecretAccessKey: seaweed
+  githubOAuthClientId: ""
+  githubOAuthClientSecret: ""
+  githubWebhookSecret: ""
+  githubAppId: ""
+  githubAppPrivateKey: ""
+  slackSigningSecret: ""
+  slackBotToken: ""
+
+migrations:
+  enabled: true
+  hook: true
+  hookEvents: post-install,post-upgrade
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  resources: {}
+  labels: {}
+  annotations: {}
+  podLabels: {}
+  podAnnotations: {}
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  web:
+    host: deputies.localhost
+    path: /
+    pathType: Prefix
+  services:
+    enabled: true
+    host: "*.deputies.localhost"
+    path: /
+    pathType: Prefix
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podSecurityContext: {}
+securityContext: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

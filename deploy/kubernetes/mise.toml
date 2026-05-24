@@ -1,0 +1,96 @@
+[tasks.deps]
+description = "Update Helm dependencies for Kubernetes charts"
+run = "helm dependency update charts/deputies-platform-reference"
+
+[tasks.cloud-provider-kind]
+description = "Run cloud-provider-kind for kind LoadBalancer access"
+run = "sudo cloud-provider-kind"
+
+[tasks."platform:install"]
+description = "Install the reference Kubernetes platform chart"
+depends = ["deps"]
+run = """
+helm upgrade --install deputies-platform charts/deputies-platform-reference \
+  --namespace deputies \
+  --create-namespace \
+  --wait
+"""
+
+[tasks."platform:portless"]
+description = "Configure Traefik to trust forwarded headers for Portless"
+run = """
+helm upgrade deputies-platform charts/deputies-platform-reference \
+  --namespace deputies \
+  --reuse-values \
+  --set traefik.ports.web.forwardedHeaders.insecure=true \
+  --set traefik.ports.websecure.forwardedHeaders.insecure=true \
+  --wait
+"""
+
+[tasks."app:install:fake"]
+description = "Install Deputies in fake-runner validation mode"
+run = """
+helm upgrade --install deputies charts/deputies \
+  --namespace deputies \
+  --set config.runner=fake \
+  --set config.sandboxProvider=fake \
+  --set config.hideSetupPage=true \
+  --wait
+"""
+
+[tasks."app:install:daytona"]
+description = "Install Deputies with Daytona using an existing Kubernetes Secret"
+run = """
+helm upgrade --install deputies charts/deputies \
+  --namespace deputies \
+  --set secrets.create=false \
+  --set secrets.name=${DEPUTIES_APP_SECRET_NAME:-deputies-app-secrets} \
+  --wait
+"""
+
+[tasks."app:static-auth"]
+description = "Enable static session auth using an existing Kubernetes Secret"
+run = """
+helm upgrade --install deputies charts/deputies \
+  --namespace deputies \
+  --reuse-values \
+  --set secrets.create=false \
+  --set secrets.name=${DEPUTIES_APP_SECRET_NAME:-deputies-app-secrets} \
+  --set config.apiAuthMode=session \
+  --set config.authProvider=static \
+  --set config.authCookieDomain=.deputies.localhost \
+  --wait
+"""
+
+[tasks."app:portless"]
+description = "Configure Deputies web proxy for Portless wildcard service hosts"
+run = """
+helm upgrade deputies charts/deputies \
+  --namespace deputies \
+  --reuse-values \
+  --set web.trustForwardedServiceHosts=true \
+  --wait
+"""
+
+[tasks.portless-start]
+description = "Start Portless wildcard proxy and alias Deputies to local Traefik forward"
+run = """
+pnpm dlx portless proxy start --wildcard
+pnpm dlx portless alias deputies ${DEPUTIES_K8S_LOCAL_PORT:-15173} --force
+"""
+
+[tasks.forward-traefik]
+description = "Port-forward the Traefik service to localhost:15173"
+run = "kubectl port-forward -n deputies service/traefik ${DEPUTIES_K8S_LOCAL_PORT:-15173}:80"
+
+[tasks.smoke]
+description = "Run Kubernetes smoke test with default cloud-provider-kind access"
+run = "../../deploy/kubernetes/full-stack-smoke.sh"
+
+[tasks."smoke:port-forward"]
+description = "Run Kubernetes smoke test through kubectl port-forward"
+run = "K8S_SMOKE_ACCESS_MODE=port-forward ../../deploy/kubernetes/full-stack-smoke.sh"
+
+[tasks."smoke:portless"]
+description = "Run Kubernetes smoke test through Portless"
+run = "K8S_SMOKE_ACCESS_MODE=portless ../../deploy/kubernetes/full-stack-smoke.sh"
