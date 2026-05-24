@@ -33,4 +33,4 @@ Inline secret values are acceptable for short-lived local validation, but produc
 
 By default, the chart consumes the `deputies-postgres-app` secret created by `deputies-platform-reference`. For externally managed Postgres, point `postgres.existingSecret` at your platform secret, or set it to an empty string and provide `postgres.*` values so this chart creates a simple connection secret.
 
-For static session auth with service subdomains, include `AUTH_STATIC_USERNAME` and `AUTH_STATIC_PASSWORD` in the referenced Secret, then set `config.authCookieDomain=.deputies.localhost` so the browser sends the session cookie to `s-<port>-<session>.deputies.localhost` hosts.
+For static session auth with service subdomains, include `AUTH_STATIC_USERNAME` and `AUTH_STATIC_PASSWORD` in the referenced Secret, then set `config.authCookieDomain=.deputies-k8s.localhost` so the browser sends the session cookie to `s-<port>-<session>.deputies-k8s.localhost` hosts.

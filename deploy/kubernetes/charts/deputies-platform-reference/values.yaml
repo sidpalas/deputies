@@ -28,7 +28,7 @@ postgresql:
   persistence:
     enabled: true
     size: 8Gi
-    storageClassName: ""
+    storageClassName: ''
   resources: {}
   labels: {}
   annotations: {}
@@ -39,7 +39,7 @@ seaweedfs:
   enabled: true
   image:
     repository: chrislusf/seaweedfs
-    tag: "3.97"
+    tag: '3.97'
     pullPolicy: IfNotPresent
   s3:
     accessKeyId: seaweed
@@ -48,7 +48,7 @@ seaweedfs:
   persistence:
     enabled: true
     size: 8Gi
-    storageClassName: ""
+    storageClassName: ''
   resources: {}
   labels: {}
   annotations: {}

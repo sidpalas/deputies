@@ -28,8 +28,8 @@ web:
   trustForwardedServiceHosts: false
 
 imagePullSecrets: []
-nameOverride: ""
-fullnameOverride: ""
+nameOverride: ''
+fullnameOverride: ''
 
 postgres:
   host: postgres-rw
@@ -52,12 +52,12 @@ config:
   sandboxWorkspacePath: /workspace
   apiAuthMode: none
   authProvider: static
-  authCookieDomain: ""
-  authCookieSecure: "true"
+  authCookieDomain: ''
+  authCookieSecure: 'true'
   authCookieSameSite: lax
-  webBaseUrl: https://deputies.localhost
-  serviceBaseDomain: deputies.localhost
-  serviceTrustForwardedHosts: "true"
+  webBaseUrl: https://deputies-k8s.localhost
+  serviceBaseDomain: deputies-k8s.localhost
+  serviceTrustForwardedHosts: 'true'
   appDataStore: postgres
   flueStateStore: postgres
   flueModel: anthropic/claude-haiku-4-5
@@ -65,36 +65,36 @@ config:
   artifactStorageS3Endpoint: http://seaweedfs:8333
   artifactStorageS3Region: us-east-1
   artifactStorageS3Bucket: deputies-artifacts
-  artifactStorageS3ForcePathStyle: "true"
-  artifactStorageS3CreateBucket: "true"
+  artifactStorageS3ForcePathStyle: 'true'
+  artifactStorageS3CreateBucket: 'true'
   daytonaImage: ghcr.io/sidpalas/deputies-daytona-sandbox:latest
-  daytonaApiUrl: ""
-  daytonaTarget: ""
-  daytonaSnapshot: ""
-  hideSetupPage: "false"
+  daytonaApiUrl: ''
+  daytonaTarget: ''
+  daytonaSnapshot: ''
+  hideSetupPage: 'false'
   extraEnv: {}
 
 secrets:
   create: true
-  name: ""
+  name: ''
   authSessionSecret: replace-with-random-session-secret
   authStaticUsername: dev
   authStaticPassword: dev-secret
-  apiBearerToken: ""
-  daytonaApiKey: ""
-  anthropicApiKey: ""
-  openaiApiKey: ""
-  flueOpenaiCodexAuthBase64: ""
-  flueOpenaiCodexAuthJson: ""
+  apiBearerToken: ''
+  daytonaApiKey: ''
+  anthropicApiKey: ''
+  openaiApiKey: ''
+  flueOpenaiCodexAuthBase64: ''
+  flueOpenaiCodexAuthJson: ''
   artifactStorageS3AccessKeyId: seaweed
   artifactStorageS3SecretAccessKey: seaweed
-  githubOAuthClientId: ""
-  githubOAuthClientSecret: ""
-  githubWebhookSecret: ""
-  githubAppId: ""
-  githubAppPrivateKey: ""
-  slackSigningSecret: ""
-  slackBotToken: ""
+  githubOAuthClientId: ''
+  githubOAuthClientSecret: ''
+  githubWebhookSecret: ''
+  githubAppId: ''
+  githubAppPrivateKey: ''
+  slackSigningSecret: ''
+  slackBotToken: ''
 
 migrations:
   enabled: true
@@ -113,19 +113,19 @@ ingress:
   className: traefik
   annotations: {}
   web:
-    host: deputies.localhost
+    host: deputies-k8s.localhost
     path: /
     pathType: Prefix
   services:
     enabled: true
-    host: "*.deputies.localhost"
+    host: '*.deputies-k8s.localhost'
     path: /
     pathType: Prefix
 
 serviceAccount:
   create: true
   annotations: {}
-  name: ""
+  name: ''
 
 podSecurityContext: {}
 securityContext: {}

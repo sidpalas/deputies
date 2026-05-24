@@ -109,7 +109,7 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --set secrets.name=deputies-app-secrets \
   --set config.apiAuthMode=session \
   --set config.authProvider=static \
-  --set config.authCookieDomain=.deputies.localhost \
+  --set config.authCookieDomain=.deputies-k8s.localhost \
   --wait
 ```
 
@@ -136,14 +136,14 @@ kubectl get ingress deputies-web -n deputies
 Direct test:
 
 ```sh
-curl -H 'Host: deputies.localhost' http://<TRAEFIK_EXTERNAL_IP>/health
+curl -H 'Host: deputies-k8s.localhost' http://<TRAEFIK_EXTERNAL_IP>/health
 ```
 
 For browser access without Portless, add concrete hostnames to `/etc/hosts`:
 
 ```txt
-<TRAEFIK_EXTERNAL_IP> deputies.localhost
-<TRAEFIK_EXTERNAL_IP> s-3000-<session-id>.deputies.localhost
+<TRAEFIK_EXTERNAL_IP> deputies-k8s.localhost
+<TRAEFIK_EXTERNAL_IP> s-3000-<session-id>.deputies-k8s.localhost
 ```
 
 `/etc/hosts` does not support wildcards, so dynamic exposed service hosts need either concrete entries, a wildcard-capable local DNS resolver, or Portless.
@@ -157,7 +157,13 @@ Portless aliases local ports, not arbitrary LoadBalancer IPs. Put a local forwar
 ```sh
 socat TCP-LISTEN:15173,bind=127.0.0.1,reuseaddr,fork TCP:<TRAEFIK_EXTERNAL_IP>:80
 pnpm dlx portless proxy start --wildcard
-pnpm dlx portless alias deputies 15173 --force
+pnpm dlx portless alias deputies-k8s 15173 --force
+```
+
+On macOS, install `socat` with Homebrew if needed:
+
+```sh
+brew install socat
 ```
 
 If you do not want `socat`, use `kubectl port-forward`:
@@ -165,7 +171,7 @@ If you do not want `socat`, use `kubectl port-forward`:
 ```sh
 kubectl port-forward -n deputies service/traefik 15173:80
 pnpm dlx portless proxy start --wildcard
-pnpm dlx portless alias deputies 15173 --force
+pnpm dlx portless alias deputies-k8s 15173 --force
 ```
 
 For Portless plus Traefik, configure Traefik to trust forwarded headers and configure the web Caddy proxy to route service hosts from `X-Forwarded-Host`:
@@ -187,20 +193,20 @@ helm upgrade deputies deploy/kubernetes/charts/deputies \
 
 Why both are needed:
 
-- Portless forwards wildcard requests with `X-Forwarded-Host: s-<port>-<session>.deputies.localhost` and an upstream `Host` like `127.0.0.1:15173`.
+- Portless forwards wildcard requests with `X-Forwarded-Host: s-<port>-<session>.deputies-k8s.localhost` and an upstream `Host` like `127.0.0.1:15173`.
 - Traefik must not discard the forwarded host metadata.
 - The web Caddyfile must route service hosts from `X-Forwarded-Host`, matching the Docker Compose local Caddy behavior.
 
 Open the app:
 
 ```txt
-https://deputies.localhost
+https://deputies-k8s.localhost
 ```
 
 Exposed service links use hosts like:
 
 ```txt
-https://s-3000-<session-id>.deputies.localhost
+https://s-3000-<session-id>.deputies-k8s.localhost
 ```
 
 ## Smoke Test
@@ -216,8 +222,8 @@ The smoke test installs both charts into `deputies-smoke`, runs the existing ful
 Access modes:
 
 - `K8S_SMOKE_ACCESS_MODE=cloud-provider-kind`: uses Traefik's LoadBalancer/Ingress IP. This is the default and expects `cloud-provider-kind` to be running.
-- `K8S_SMOKE_ACCESS_MODE=portless`: starts Portless and port-forwards Traefik to a local port for `https://deputies.localhost`.
-- `K8S_SMOKE_ACCESS_MODE=port-forward`: skips Portless and uses `http://127.0.0.1:15173`.
+- `K8S_SMOKE_ACCESS_MODE=portless`: starts Portless and port-forwards Traefik to a local port for `https://deputies-k8s.localhost`.
+- `K8S_SMOKE_ACCESS_MODE=port-forward`: skips Portless and uses `http://deputies-k8s.localhost:15173`.
 
 Keep resources for debugging:
 

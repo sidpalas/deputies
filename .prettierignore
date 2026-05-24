@@ -7,3 +7,4 @@ test-results
 pnpm-lock.yaml
 .env*
 !.env.example
+deploy/kubernetes/charts/**/templates/*.yaml

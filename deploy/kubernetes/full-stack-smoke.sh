@@ -10,7 +10,7 @@ INGRESS_CLASS="${K8S_SMOKE_INGRESS_CLASS:-traefik-$NAMESPACE}"
 PLATFORM_CHART="$ROOT_DIR/deploy/kubernetes/charts/deputies-platform-reference"
 APP_CHART="$ROOT_DIR/deploy/kubernetes/charts/deputies"
 FORWARD_PID=""
-SERVICE_HOST="s-3000-00000000-0000-4000-8000-000000000001.deputies.localhost"
+SERVICE_HOST="s-3000-00000000-0000-4000-8000-000000000001.deputies-k8s.localhost"
 
 cleanup() {
   if [[ -n "$FORWARD_PID" ]]; then
@@ -81,6 +81,8 @@ config:
   runner: fake
   sandboxProvider: fake
   apiAuthMode: none
+  webBaseUrl: https://deputies-k8s.localhost
+  serviceBaseDomain: deputies-k8s.localhost
   flueModel: fake/smoke-default
   hideSetupPage: "true"
   artifactStorageProvider: s3
@@ -95,9 +97,10 @@ secrets:
 ingress:
   className: $INGRESS_CLASS
   web:
-    host: ""
+    host: deputies-k8s.localhost
   services:
     enabled: true
+    host: "*.deputies-k8s.localhost"
 web:
   trustForwardedServiceHosts: true
 YAML
@@ -132,14 +135,14 @@ case "$ACCESS_MODE" in
     kubectl port-forward -n "$NAMESPACE" service/traefik 15173:80 >/tmp/deputies-k8s-smoke-port-forward.log 2>&1 &
     FORWARD_PID="$!"
     pnpm dlx portless proxy start --wildcard >/dev/null
-    pnpm dlx portless alias deputies 15173 --force >/dev/null
-    BASE_URL="https://deputies.localhost"
+    pnpm dlx portless alias deputies-k8s 15173 --force >/dev/null
+    BASE_URL="https://deputies-k8s.localhost"
     HOST_RESOLVER_RULES=""
     ;;
   port-forward)
     kubectl port-forward -n "$NAMESPACE" service/traefik 15173:80 >/tmp/deputies-k8s-smoke-port-forward.log 2>&1 &
     FORWARD_PID="$!"
-    BASE_URL="http://127.0.0.1:15173"
+    BASE_URL="http://deputies-k8s.localhost:15173"
     HOST_RESOLVER_RULES=""
     ;;
   *)
@@ -163,7 +166,12 @@ case "$ACCESS_MODE" in
     ;;
   cloud-provider-kind|port-forward)
     response_body="$(mktemp)"
-    status="$(curl -sS -H "Host: $SERVICE_HOST" -o "$response_body" -w "%{http_code}" "$BASE_URL/" || true)"
+    if [[ "$ACCESS_MODE" == "port-forward" ]]; then
+      service_url="http://$SERVICE_HOST:15173/"
+      status="$(curl -sS -o "$response_body" -w "%{http_code}" "$service_url" || true)"
+    else
+      status="$(curl -sS -H "Host: $SERVICE_HOST" -o "$response_body" -w "%{http_code}" "$BASE_URL/" || true)"
+    fi
     if [[ "$status" == "200" && "$(<"$response_body")" == *"Engineering agents for delegated work."* ]]; then
       echo "Service host was served by the web SPA instead of the service proxy" >&2
       exit 1

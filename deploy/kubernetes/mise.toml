@@ -58,7 +58,7 @@ helm upgrade --install deputies charts/deputies \
   --set secrets.name=${DEPUTIES_APP_SECRET_NAME:-deputies-app-secrets} \
   --set config.apiAuthMode=session \
   --set config.authProvider=static \
-  --set config.authCookieDomain=.deputies.localhost \
+  --set config.authCookieDomain=.deputies-k8s.localhost \
   --wait
 """
 
@@ -76,7 +76,7 @@ helm upgrade deputies charts/deputies \
 description = "Start Portless wildcard proxy and alias Deputies to local Traefik forward"
 run = """
 pnpm dlx portless proxy start --wildcard
-pnpm dlx portless alias deputies ${DEPUTIES_K8S_LOCAL_PORT:-15173} --force
+pnpm dlx portless alias deputies-k8s ${DEPUTIES_K8S_LOCAL_PORT:-15173} --force
 """
 
 [tasks.forward-traefik]
