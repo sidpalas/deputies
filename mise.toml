@@ -1,4 +1,7 @@
+experimental_monorepo_root = true
+
 [tools]
+fzf = "0.66"
 node = "24"
 pnpm = "10.33"
 
@@ -17,6 +20,46 @@ run = "pnpm typecheck"
 [tasks.check]
 description = "Run typecheck and tests"
 depends = ["typecheck", "test"]
+
+[tasks.mise-fzf]
+description = "[Mise] Pick one task; print it and copy the run command"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+LIST_CMD=(mise task ls --all)
+
+SEL="$("${LIST_CMD[@]}" \
+  | fzf --no-multi --height=90% --border --prompt='task> ' \
+        --select-1 --exit-0)"
+
+[ -n "${SEL:-}" ] || exit 0
+
+# First token only = task name
+TASK="$(awk '{print $1; exit}' <<< "$SEL")"
+
+# Build the runnable command
+CMD=$(printf 'mise run %q' "$TASK")
+
+echo "$CMD"
+
+# Print the task's usage/help
+echo ""
+mise run "$TASK" --help 2>/dev/null || true
+
+copy_to_clipboard() {
+  if command -v pbcopy >/dev/null 2>&1; then
+    pbcopy
+  # TODO: add support for linux clipboard tools
+  else
+    return 1
+  fi
+}
+
+if copy_to_clipboard <<< "$CMD"; then
+  echo "(^ copied to clipboard)"
+fi
+'''
 
 [tasks.portless-start]
 description = "Start the local HTTPS wildcard portless proxy"
