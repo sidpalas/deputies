@@ -64,7 +64,7 @@ describe('service tool', () => {
     });
   });
 
-  it('drops services from old sandbox runtimes when publishing', async () => {
+  it('preserves services from other sandbox runtimes when publishing', async () => {
     let context: Record<string, unknown> = {
       services: [
         { port: 2343, label: 'Old runtime', providerSandboxId: 'sandbox-1', runtimeId: 'old-runtime' },
@@ -90,15 +90,49 @@ describe('service tool', () => {
       tool.execute({ action: 'publish', port: 2345, label: 'New server' }).then(JSON.parse),
     ).resolves.toEqual({
       services: [
+        { port: 2343, label: 'Old runtime', providerSandboxId: 'sandbox-1', runtimeId: 'old-runtime' },
         { port: 2344, label: 'Current runtime', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
         { port: 2345, label: 'New server', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
       ],
       keepalive: { keepaliveUntil: '2026-05-15T00:00:00.000Z', providerSync: 'not_supported' },
     });
     expect(context.services).toEqual([
+      { port: 2343, label: 'Old runtime', providerSandboxId: 'sandbox-1', runtimeId: 'old-runtime' },
       { port: 2344, label: 'Current runtime', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
       { port: 2345, label: 'New server', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
     ]);
+  });
+
+  it('does not replace workspace tool services when publishing a new app service', async () => {
+    let context: Record<string, unknown> = {
+      services: [
+        { port: 8080, label: 'VS Code', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
+        { port: 7681, label: 'Hunk Diff', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
+      ],
+    };
+    const tool = createServiceTool({
+      sessionId: 'session-1',
+      providerSandboxId: 'sandbox-1',
+      sandboxMetadata: { runtimeId: 'runtime-1' },
+      keepalive: createKeepalive(),
+      getContext: () => context,
+      setContext: (next) => {
+        context = next;
+      },
+      async updateSessionContext(next) {
+        context = next;
+        return context;
+      },
+    });
+
+    await expect(tool.execute({ action: 'publish', port: 5173, label: 'Web app' }).then(JSON.parse)).resolves.toEqual({
+      services: [
+        { port: 5173, label: 'Web app', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
+        { port: 7681, label: 'Hunk Diff', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
+        { port: 8080, label: 'VS Code', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
+      ],
+      keepalive: { keepaliveUntil: '2026-05-15T00:00:00.000Z', providerSync: 'not_supported' },
+    });
   });
 
   it('extends publish keepalive to at least the default service TTL', async () => {
