@@ -61,6 +61,8 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --wait
 ```
 
+By default, the app chart creates host-matched routing for `deputies-k8s.localhost` and `*.deputies-k8s.localhost`. This is the intended shape for real clusters: use DNS records that point those hostnames at your ingress controller or Gateway load balancer. For local Portless development, use the hostless override documented below.
+
 To use Gateway API instead of Ingress with the reference Traefik chart, install the Gateway API v1.5.1 experimental CRDs first, enable Traefik's Gateway API provider in the reference platform chart, and enable Gateway API routes in the app chart:
 
 ```sh
@@ -145,7 +147,7 @@ After changing cookie domain, log out/in or clear old host-only cookies.
 
 ## Kind Host Access
 
-For kind clusters, run `cloud-provider-kind` when you want LoadBalancer-style access from the host:
+For kind clusters, run `cloud-provider-kind` when you want LoadBalancer-style access from the host while keeping real-cluster-style host-matched Ingress routing:
 
 ```sh
 go install sigs.k8s.io/cloud-provider-kind@latest
@@ -178,7 +180,7 @@ For browser access without Portless, add concrete hostnames to `/etc/hosts`:
 
 ## Portless Access
 
-Portless is useful when you want trusted local HTTPS and wildcard `.localhost` routing.
+Portless is useful when you want trusted local HTTPS and wildcard `.localhost` routing without editing `/etc/hosts` for each service hostname. This is a local-development path, not the default real-cluster routing shape.
 
 Portless aliases local ports, not arbitrary LoadBalancer IPs. Put a local forward in front of Traefik, then alias that local port:
 
@@ -202,7 +204,7 @@ pnpm dlx portless proxy start --wildcard
 pnpm dlx portless alias deputies-k8s 15173 --force
 ```
 
-For Portless plus Traefik, configure Traefik to trust forwarded headers and configure the web Caddy proxy to route service hosts from `X-Forwarded-Host`:
+For Portless plus Traefik Ingress, use a hostless app Ingress and configure the web Caddy proxy to route service hosts from `X-Forwarded-Host`:
 
 ```sh
 helm upgrade deputies-platform deploy/kubernetes/charts/deputies-platform-reference \
@@ -215,15 +217,20 @@ helm upgrade deputies-platform deploy/kubernetes/charts/deputies-platform-refere
 helm upgrade deputies deploy/kubernetes/charts/deputies \
   --namespace deputies \
   --reuse-values \
+  --set-string ingress.web.host= \
+  --set ingress.services.enabled=false \
   --set web.trustForwardedServiceHosts=true \
   --wait
 ```
 
 Why both are needed:
 
-- Portless forwards wildcard requests with `X-Forwarded-Host: s-<port>-<session>.deputies-k8s.localhost` and an upstream `Host` like `127.0.0.1:15173`.
+- Portless forwards requests to Traefik through a local port, so Traefik may see an upstream `Host` like `127.0.0.1:15173` instead of `deputies-k8s.localhost`; hostless Ingress avoids Traefik returning `404` before the request reaches the app.
+- Portless forwards wildcard service requests with `X-Forwarded-Host: s-<port>-<session>.deputies-k8s.localhost`.
 - Traefik must not discard the forwarded host metadata.
 - The web Caddyfile must route service hosts from `X-Forwarded-Host`, matching the Docker Compose local Caddy behavior.
+
+If you are using Gateway API locally with Portless, the app chart's default Gateway `HTTPRoute` hostnames are empty, so the route is already hostless. Keep the host-matched defaults for real cluster DNS/LB installs.
 
 Open the app:
 
@@ -271,7 +278,3 @@ K8S_SMOKE_KEEP=true pnpm smoke:kubernetes
 ```
 
 The fake-runner smoke validates artifacts. Exposed sandbox service creation/access requires a real sandbox provider with preview URL support, such as Daytona, so it is not part of the default fake-runner smoke path.
-
-## Future Split Topology
-
-The split control-plane deployment should be a configuration mode in the `deputies` chart, not a separate chart. It is the same application and should share image, secret, migration, web, and ingress configuration with the ALL topology.

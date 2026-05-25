@@ -15,6 +15,8 @@ For Portless plus a local Traefik forward, set `web.trustForwardedServiceHosts=t
 
 The chart renders Kubernetes `Ingress` by default. Set `routing.mode=gateway` to render Gateway API `HTTPRoute` resources instead; the default parent is a `Gateway` named `traefik-gateway` in the release namespace. Override `gateway.parentRef.name`, `gateway.parentRef.namespace`, or `gateway.parentRef.sectionName` when using a different Gateway API controller or shared Gateway.
 
+Default routing is host-matched and intended for real clusters: point DNS for `ingress.web.host` and `ingress.services.host` at your ingress controller, or set `gateway.web.host` and `gateway.services.host` when your Gateway should enforce hostnames. For local Portless development through a forwarded Traefik port, use hostless routing by setting `ingress.web.host=''` and `ingress.services.enabled=false`; Gateway API routes are hostless by default.
+
 Install with the reference platform chart:
 
 ```sh
