@@ -13,7 +13,7 @@ describe('service tool', () => {
         context = next;
       },
       async updateSessionContext(next) {
-        context = next;
+        context = { ...context, ...next };
         return context;
       },
     });
@@ -48,7 +48,7 @@ describe('service tool', () => {
         context = next;
       },
       async updateSessionContext(next) {
-        context = next;
+        context = { ...context, ...next };
         return context;
       },
     });
@@ -81,7 +81,7 @@ describe('service tool', () => {
         context = next;
       },
       async updateSessionContext(next) {
-        context = next;
+        context = { ...context, ...next };
         return context;
       },
     });
@@ -120,7 +120,7 @@ describe('service tool', () => {
         context = next;
       },
       async updateSessionContext(next) {
-        context = next;
+        context = { ...context, ...next };
         return context;
       },
     });
@@ -133,6 +133,36 @@ describe('service tool', () => {
       ],
       keepalive: { keepaliveUntil: '2026-05-15T00:00:00.000Z', providerSync: 'not_supported' },
     });
+  });
+
+  it('preserves services added after the run context was captured', async () => {
+    let runnerContext: Record<string, unknown> = {};
+    let persistedContext: Record<string, unknown> = {
+      services: [{ port: 8080, label: 'VS Code', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' }],
+    };
+    const tool = createServiceTool({
+      sessionId: 'session-1',
+      providerSandboxId: 'sandbox-1',
+      sandboxMetadata: { runtimeId: 'runtime-1' },
+      keepalive: createKeepalive(),
+      getContext: () => runnerContext,
+      setContext: (next) => {
+        runnerContext = next;
+      },
+      async updateSessionContext(next) {
+        persistedContext = { ...persistedContext, ...next };
+        return persistedContext;
+      },
+    });
+
+    await expect(tool.execute({ action: 'publish', port: 5173, label: 'Web app' }).then(JSON.parse)).resolves.toEqual({
+      services: [
+        { port: 5173, label: 'Web app', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
+        { port: 8080, label: 'VS Code', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
+      ],
+      keepalive: { keepaliveUntil: '2026-05-15T00:00:00.000Z', providerSync: 'not_supported' },
+    });
+    expect(runnerContext.services).toEqual(persistedContext.services);
   });
 
   it('extends publish keepalive to at least the default service TTL', async () => {
@@ -154,7 +184,7 @@ describe('service tool', () => {
         context = next;
       },
       async updateSessionContext(next) {
-        context = next;
+        context = { ...context, ...next };
         return context;
       },
     });

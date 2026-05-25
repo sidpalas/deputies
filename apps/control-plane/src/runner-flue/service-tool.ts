@@ -61,17 +61,24 @@ export function createServiceTool(services: ServiceToolServices): ToolDef {
       const ttlSeconds = action === 'publish' ? publishTtlSeconds(params.ttlSeconds) : undefined;
       const keepalive =
         ttlSeconds !== undefined ? await extendKeepalive(services, { ...params, ttlSeconds }, port) : undefined;
-      const current = readServices(services.getContext());
+      const latestContext = await refreshSessionContextWithoutStaleServices(services);
+      const current = readServices(latestContext);
       const next =
         action === 'publish'
           ? publishService(current, params, port, services.providerSandboxId, runtimeId)
           : unpublishService(current, port, services.providerSandboxId, runtimeId);
-      const context = { ...services.getContext(), services: next };
-      services.setContext(await services.updateSessionContext(context));
+      services.setContext(await services.updateSessionContext({ ...latestContext, services: next }));
 
       return JSON.stringify({ services: next, ...(keepalive ? { keepalive } : {}) });
     },
   };
+}
+
+async function refreshSessionContextWithoutStaleServices(
+  services: ServiceToolServices,
+): Promise<Record<string, unknown>> {
+  const { services: _staleServices, ...contextWithoutServices } = services.getContext();
+  return services.updateSessionContext(contextWithoutServices);
 }
 
 function publishService(
