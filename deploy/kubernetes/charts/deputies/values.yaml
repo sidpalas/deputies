@@ -150,11 +150,11 @@ gateway:
     namespace: ''
     sectionName: web
   web:
-    host: ''
+    host: deputies-k8s.localhost
     path: ''
   services:
     enabled: true
-    host: ''
+    host: '*.deputies-k8s.localhost'
     path: ''
 
 serviceAccount:

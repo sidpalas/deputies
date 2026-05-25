@@ -36,7 +36,7 @@ spec:
       backendRefs:
         - name: {{ $fullname }}-web
           port: {{ .Values.web.service.port }}
-{{- if and .Values.gateway.services.enabled (ne $webHost $servicesHost) }}
+{{- if .Values.gateway.services.enabled }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

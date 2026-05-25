@@ -116,6 +116,11 @@ ingress:
   services:
     enabled: true
     host: "*.deputies-k8s.localhost"
+gateway:
+  web:
+    host: ""
+  services:
+    host: ""
 web:
   trustForwardedServiceHosts: true
 topology:

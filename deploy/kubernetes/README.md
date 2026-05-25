@@ -61,7 +61,7 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --wait
 ```
 
-By default, the app chart creates host-matched routing for `deputies-k8s.localhost` and `*.deputies-k8s.localhost`. This is the intended shape for real clusters: use DNS records that point those hostnames at your ingress controller or Gateway load balancer. For local Portless development, use the hostless override documented below.
+By default, the app chart creates host-matched Ingress or Gateway API routing for `deputies-k8s.localhost` and `*.deputies-k8s.localhost`. This is the intended shape for real clusters: use DNS records that point those hostnames at your ingress controller or Gateway load balancer. For local Portless development, use the hostless override documented below.
 
 To use Gateway API instead of Ingress with the reference Traefik chart, install the Gateway API v1.5.1 experimental CRDs first, enable Traefik's Gateway API provider in the reference platform chart, and enable Gateway API routes in the app chart:
 
@@ -204,7 +204,7 @@ pnpm dlx portless proxy start --wildcard
 pnpm dlx portless alias deputies-k8s 15173 --force
 ```
 
-For Portless plus Traefik Ingress, use a hostless app Ingress and configure the web Caddy proxy to route service hosts from `X-Forwarded-Host`:
+For Portless plus Traefik, turn off host matching in the app chart and configure the web Caddy proxy to route service hosts from `X-Forwarded-Host`:
 
 ```sh
 helm upgrade deputies-platform deploy/kubernetes/charts/deputies-platform-reference \
@@ -219,18 +219,20 @@ helm upgrade deputies deploy/kubernetes/charts/deputies \
   --reuse-values \
   --set-string ingress.web.host= \
   --set ingress.services.enabled=false \
+  --set-string gateway.web.host= \
+  --set-string gateway.services.host= \
   --set web.trustForwardedServiceHosts=true \
   --wait
 ```
 
 Why both are needed:
 
-- Portless forwards requests to Traefik through a local port, so Traefik may see an upstream `Host` like `127.0.0.1:15173` instead of `deputies-k8s.localhost`; hostless Ingress avoids Traefik returning `404` before the request reaches the app.
+- Portless forwards requests to Traefik through a local port, so Traefik may see an upstream `Host` like `127.0.0.1:15173` instead of `deputies-k8s.localhost`; hostless Ingress or `HTTPRoute` matching avoids Traefik returning `404` before the request reaches the app.
 - Portless forwards wildcard service requests with `X-Forwarded-Host: s-<port>-<session>.deputies-k8s.localhost`.
 - Traefik must not discard the forwarded host metadata.
 - The web Caddyfile must route service hosts from `X-Forwarded-Host`, matching the Docker Compose local Caddy behavior.
 
-If you are using Gateway API locally with Portless, the app chart's default Gateway `HTTPRoute` hostnames are empty, so the route is already hostless. Keep the host-matched defaults for real cluster DNS/LB installs.
+Keep the host-matched defaults for real cluster DNS/LB installs. Only use the hostless override for local Portless access.
 
 Open the app:
 
