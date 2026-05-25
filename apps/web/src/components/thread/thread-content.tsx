@@ -98,7 +98,11 @@ export function ChatPanel(props: {
                 <h3 className="mb-1 text-xs font-medium text-muted-foreground">
                   {activeRun ? 'Deputy progress' : 'Deputy response'}
                 </h3>
-                <MarkdownText text={formatAssistantDisplayText(response)} highlightCode={!activeRun} />
+                {activeRun ? (
+                  <StreamingProgressText text={formatAssistantDisplayText(response)} />
+                ) : (
+                  <MarkdownText text={formatAssistantDisplayText(response)} />
+                )}
               </Card>
             ) : null}
             {inlineArtifacts.length ? (
@@ -250,8 +254,29 @@ function PlainText(props: { text: string }) {
   return <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{props.text}</p>;
 }
 
-function MarkdownText(props: { text: string; highlightCode?: boolean }) {
-  const highlightCode = props.highlightCode ?? true;
+const STREAMING_PROGRESS_MAX_CHARS = 20_000;
+
+function StreamingProgressText(props: { text: string }) {
+  const text = truncateStreamingProgressText(props.text);
+  return (
+    <div
+      className="max-h-[60vh] min-w-0 overflow-auto rounded-md border border-border/70 bg-muted/20 p-3"
+      role="region"
+      aria-label="Scrollable deputy progress"
+    >
+      <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{text}</p>
+    </div>
+  );
+}
+
+function truncateStreamingProgressText(text: string): string {
+  if (text.length <= STREAMING_PROGRESS_MAX_CHARS) return text;
+  const omitted = text.length - STREAMING_PROGRESS_MAX_CHARS;
+  return `Showing latest deputy progress; ${omitted.toLocaleString()} earlier characters hidden while the run is active.\n\n…${text.slice(-STREAMING_PROGRESS_MAX_CHARS)}`;
+}
+
+function MarkdownText(props: { text: string }) {
+  const highlightCode = true;
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}

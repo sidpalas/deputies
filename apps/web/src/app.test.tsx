@@ -518,6 +518,34 @@ it('shows cancelling state on the active message cancel action', async () => {
   expect(within(messageCard).getByRole('button', { name: 'Cancelling...' })).toBeDisabled();
 });
 
+it('renders active deputy progress without markdown code chrome', async () => {
+  mockApi({
+    sessionOverride: { status: 'active' },
+    messages: [
+      messageFixture({
+        id: '00000000-0000-4000-8000-000000000130',
+        sequence: 1,
+        status: 'processing',
+        prompt: 'stream code',
+      }),
+    ],
+    events: [
+      eventFixture({
+        sequence: 1,
+        type: 'agent_text_delta',
+        messageId: '00000000-0000-4000-8000-000000000130',
+        payload: { sequence: 1, text: 'Working...\n\n```ts\nconst mobile = true;\n```' },
+      }),
+    ],
+  });
+  render(<App />);
+
+  expect(await screen.findByText('Deputy progress')).toBeInTheDocument();
+  expect(screen.getByLabelText('Scrollable deputy progress')).toHaveTextContent('const mobile = true;');
+  expect(screen.queryByRole('button', { name: 'Copy code' })).not.toBeInTheDocument();
+  expect(codeToHtmlMock).not.toHaveBeenCalled();
+});
+
 it('retries a failed message from its message card', async () => {
   const retriedMessageIds: string[] = [];
   mockApi({
