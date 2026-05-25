@@ -52,7 +52,7 @@ The referenced Secret should contain the environment-variable keys the app needs
 
 Inline secret values are acceptable for short-lived local validation, but production users should manage secrets through their normal mechanism, such as External Secrets Operator, SOPS, Sealed Secrets, Vault, or cloud provider secret sync.
 
-By default, the chart consumes the `deputies-postgres-app` secret created by `deputies-platform-reference`. For externally managed Postgres, point `postgres.existingSecret` at your platform secret, or set it to an empty string and provide `postgres.*` values so this chart creates a simple connection secret.
+By default, the chart consumes the `deputies-postgres-app` secret created by `deputies-platform-reference`. For externally managed Postgres, point `postgres.existingSecret` at your platform secret, or set it to an empty string and provide `postgres.*` values so this chart creates a simple connection secret. Set `postgres.sslMode` when the database requires SSL, for example `postgres.sslMode=require&uselibpqcompat=true` for providers that require TLS but present a self-signed certificate chain.
 
 For static session auth with service subdomains, include `AUTH_STATIC_USERNAME` and `AUTH_STATIC_PASSWORD` in the referenced Secret, then set `config.authCookieDomain=.deputies-k8s.localhost` so the browser sends the session cookie to `s-<port>-<session>.deputies-k8s.localhost` hosts.
 

@@ -54,6 +54,7 @@ postgres:
   database: flue
   username: flue
   password: flue
+  sslMode: ''
   existingSecret: deputies-postgres-app
   secretKeys:
     username: username

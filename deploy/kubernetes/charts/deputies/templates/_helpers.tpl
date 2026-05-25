@@ -139,7 +139,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
       name: {{ include "deputies.postgresSecretName" $root }}
       key: {{ $root.Values.postgres.secretKeys.port }}
 - name: DATABASE_URL
-  value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DATABASE)
+  value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DATABASE){{ ternary (printf "?sslmode=%s" $root.Values.postgres.sslMode) "" (ne $root.Values.postgres.sslMode "") }}
 {{- range $name, $value := $root.Values.config.extraEnv }}
 - name: {{ $name }}
   value: {{ $value | quote }}
