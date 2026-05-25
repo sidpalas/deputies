@@ -1,6 +1,6 @@
 {{- if not (has .Values.routing.mode (list "ingress" "gateway")) -}}
 {{- fail "routing.mode must be one of: ingress, gateway" -}}
 {{- end -}}
-{{- if not (has .Values.topology.mode (list "all" "split")) -}}
-{{- fail "topology.mode must be one of: all, split" -}}
+{{- if not (has .Values.topology.mode (list "combined" "split")) -}}
+{{- fail "topology.mode must be one of: combined, split" -}}
 {{- end -}}

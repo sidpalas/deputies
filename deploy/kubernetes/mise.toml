@@ -100,5 +100,5 @@ description = "Run Kubernetes smoke test in split API/worker topology"
 run = "K8S_SMOKE_TOPOLOGY_MODE=split ../../deploy/kubernetes/full-stack-smoke.sh"
 
 [tasks."smoke:matrix"]
-description = "Run Kubernetes smoke tests in all and split topologies"
-run = "K8S_SMOKE_NAMESPACE=deputies-smoke-all ../../deploy/kubernetes/full-stack-smoke.sh && K8S_SMOKE_NAMESPACE=deputies-smoke-split K8S_SMOKE_TOPOLOGY_MODE=split ../../deploy/kubernetes/full-stack-smoke.sh"
+description = "Run Kubernetes smoke tests in combined and split topologies"
+run = "K8S_SMOKE_NAMESPACE=deputies-smoke-combined ../../deploy/kubernetes/full-stack-smoke.sh && K8S_SMOKE_NAMESPACE=deputies-smoke-split K8S_SMOKE_TOPOLOGY_MODE=split ../../deploy/kubernetes/full-stack-smoke.sh"

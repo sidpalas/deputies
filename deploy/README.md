@@ -9,7 +9,7 @@ Deployable source and shared Dockerfiles live under `apps/`:
 
 Deployment target docs:
 
-- `docker-compose/`: full app Docker Compose stacks for local production-style all-in-one and split API/worker/orchestrator deployments.
+- `docker-compose/`: full app Docker Compose stacks for local production-style combined and split API/worker/orchestrator deployments.
 - `kubernetes/`: Helm charts for Kubernetes deployments.
 - `railway/`: Railway template notes and post-deploy variable setup.
 

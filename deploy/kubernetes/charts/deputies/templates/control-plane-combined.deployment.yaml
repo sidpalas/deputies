@@ -1,4 +1,4 @@
-{{- if eq .Values.topology.mode "all" }}
+{{- if eq .Values.topology.mode "combined" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -53,7 +53,7 @@ spec:
             - name: http
               containerPort: {{ .Values.controlPlane.service.port }}
           env:
-            {{- include "deputies.controlPlaneEnv" (dict "root" . "runMode" "all" "port" .Values.controlPlane.service.port) | nindent 12 }}
+            {{- include "deputies.controlPlaneEnv" (dict "root" . "runMode" "combined" "port" .Values.controlPlane.service.port) | nindent 12 }}
           envFrom:
             - secretRef:
                 name: {{ include "deputies.secretName" . }}

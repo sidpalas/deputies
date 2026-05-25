@@ -17,7 +17,7 @@ describe('loadConfig', () => {
       sandboxRetentionMs: 3_600_000,
       sandboxKeepaliveMaxExtensionMs: 7_200_000,
       sandboxWorkspacePath: '/workspace',
-      runMode: 'all',
+      runMode: 'combined',
       runner: 'fake',
       sandboxProvider: 'fake',
       localSandboxAllowedCommands: [],
@@ -62,6 +62,8 @@ describe('loadConfig', () => {
   });
 
   it('parses supported run modes and providers', () => {
+    expect(loadConfig({ API_AUTH_MODE: 'none', RUN_MODE: 'all' }).runMode).toBe('all');
+
     expect(
       loadConfig({
         PORT: '4000',
@@ -448,7 +450,7 @@ describe('loadConfig', () => {
   });
 
   it('rejects invalid enum values', () => {
-    expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of all, api, worker');
+    expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of combined, all, api, worker');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'local' })).toThrow(
       'Expected one of fake, unsafe-local, docker, daytona, kubernetes, ecs',
     );

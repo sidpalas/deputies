@@ -54,7 +54,7 @@ spec:
           imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
           command: ["node", "apps/control-plane/dist/db/migrate.js"]
           env:
-            {{- include "deputies.controlPlaneEnv" (dict "root" . "runMode" "all" "port" .Values.controlPlane.service.port) | nindent 12 }}
+            {{- include "deputies.controlPlaneEnv" (dict "root" . "runMode" "combined" "port" .Values.controlPlane.service.port) | nindent 12 }}
           envFrom:
             - secretRef:
                 name: {{ include "deputies.secretName" . }}

@@ -65,12 +65,12 @@ let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
 if ('close' in store && typeof store.close === 'function') resources.push(store as CloseableResource);
 if (
   store instanceof PostgresStore &&
-  (config.runMode === 'all' || config.runMode === 'api' || config.runMode === 'worker')
+  (config.runMode === 'combined' || config.runMode === 'all' || config.runMode === 'api' || config.runMode === 'worker')
 ) {
   resources.unshift(await store.listenEvents((event) => services.events.publishExternal(event)));
 }
 
-if (config.runMode === 'all' || config.runMode === 'api') {
+if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode === 'api') {
   server = createServer(config, services);
   server.listen(config.port, () => {
     console.log(`background-agent service listening on :${config.port} (${config.runMode})`);
@@ -82,7 +82,7 @@ if (config.runMode === 'all' || config.runMode === 'api') {
   });
 }
 
-if (config.runMode === 'all' || config.runMode === 'worker') {
+if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode === 'worker') {
   const runner = await createRunner();
   const callbackSenders = createCallbackSenders();
   const progressNotifiers = createProgressNotifiers();

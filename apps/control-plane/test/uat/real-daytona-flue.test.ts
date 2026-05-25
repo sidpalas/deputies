@@ -28,7 +28,7 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Daytona + Flue UAT', () => {
         APP_DATA_STORE: 'postgres',
         DATABASE_URL: testDatabaseUrl!,
         PORT: String(uatPort),
-        RUN_MODE: 'all',
+        RUN_MODE: 'combined',
         RUNNER: 'flue',
         SANDBOX_PROVIDER: 'daytona',
         FLUE_STATE_STORE: 'postgres',

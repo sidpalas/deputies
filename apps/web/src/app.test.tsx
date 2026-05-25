@@ -1880,7 +1880,7 @@ function mockApi(options: MockApiOptions = {}) {
     if (url.pathname === '/health') {
       return jsonResponse({
         status: 'ok',
-        runMode: 'all',
+        runMode: 'combined',
         apiAuthMode: options.authMode ?? 'none',
         sandboxProvider: options.sandboxProvider ?? 'fake',
       });

@@ -4,7 +4,7 @@ This chart deploys the Deputies application components on Kubernetes.
 
 Topologies:
 
-- `topology.mode=all`: combined API and worker control-plane process in one deployment
+- `topology.mode=combined`: API and worker run in one control-plane deployment
 - `topology.mode=split`: separate API and worker deployments
 - `migrate`: one-shot database migration job, run as a Helm post-install/post-upgrade hook by default
 - `web`: static web UI served by Caddy, proxying API routes to the stable API service

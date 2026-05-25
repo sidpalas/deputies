@@ -88,15 +88,15 @@ USER daytona
 
 `RUN_MODE` controls process responsibilities:
 
-| Mode     | Behavior                                                         |
-| -------- | ---------------------------------------------------------------- |
-| `all`    | API and worker loops in one process. Good for small deployments. |
-| `api`    | API only. Use with separate worker replicas.                     |
-| `worker` | Worker only. Also exposes `/health` on `PORT`.                   |
+| Mode       | Behavior                                                         |
+| ---------- | ---------------------------------------------------------------- |
+| `combined` | API and worker loops in one process. Good for small deployments. |
+| `api`      | API only. Use with separate worker replicas.                     |
+| `worker`   | Worker only. Also exposes `/health` on `PORT`.                   |
 
 Recommended topologies:
 
-- Simple mode: one or more `RUN_MODE=all` instances with Postgres.
+- Simple mode: one or more `RUN_MODE=combined` instances with Postgres.
 - Integrated mode: one or more `RUN_MODE=api` instances plus one or more `RUN_MODE=worker` instances.
 - Scale mode: API/worker processes call separate infrastructure such as a Docker orchestrator over HTTP.
 
@@ -106,7 +106,7 @@ Every control-plane process needs:
 
 ```sh
 PORT=3583
-RUN_MODE=all
+RUN_MODE=combined
 API_AUTH_MODE=session
 APP_DATA_STORE=postgres
 DATABASE_URL=postgres://user:password@host:5432/db

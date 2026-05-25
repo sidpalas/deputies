@@ -287,7 +287,7 @@ The smoke test installs both charts into `deputies-smoke`, runs the existing ful
 
 Topology modes:
 
-- `K8S_SMOKE_TOPOLOGY_MODE=all`: deploys the default combined API/worker control-plane process.
+- `K8S_SMOKE_TOPOLOGY_MODE=combined`: deploys the default combined API/worker control-plane process.
 - `K8S_SMOKE_TOPOLOGY_MODE=split`: deploys separate API and worker deployments.
 
 Access modes:

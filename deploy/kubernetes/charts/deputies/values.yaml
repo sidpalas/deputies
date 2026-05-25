@@ -126,7 +126,7 @@ migrations:
   podAnnotations: {}
 
 topology:
-  mode: all
+  mode: combined
 
 rollout:
   revision: ''

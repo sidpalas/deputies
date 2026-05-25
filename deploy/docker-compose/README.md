@@ -9,7 +9,7 @@ Common services:
 - `control-plane-migrate`: one-shot database migration job.
 - `web`: built Vite app served by Caddy, with API routes proxied to the API service.
 
-The all-in-one variant also runs:
+The combined variant also runs:
 
 - `control-plane`: compiled API and worker process, with Docker orchestration in-process.
 
@@ -33,10 +33,10 @@ cp .env.example .env.local
 
 ## Start The Stack
 
-All-in-one:
+Combined API/worker:
 
 ```sh
-docker compose -f deploy/docker-compose/docker-compose.all.yml up -d --build
+docker compose -f deploy/docker-compose/docker-compose.combined.yml up -d --build
 ```
 
 Split API/worker/orchestrator:
@@ -84,13 +84,13 @@ Migrations run through the one-shot `control-plane-migrate` service before the A
 Run migrations manually:
 
 ```sh
-docker compose -f deploy/docker-compose/docker-compose.all.yml run --rm control-plane-migrate
+docker compose -f deploy/docker-compose/docker-compose.combined.yml run --rm control-plane-migrate
 ```
 
 View service status, including the migration exit code:
 
 ```sh
-docker compose -f deploy/docker-compose/docker-compose.all.yml ps -a
+docker compose -f deploy/docker-compose/docker-compose.combined.yml ps -a
 ```
 
 ## Codex Auth
@@ -119,22 +119,22 @@ DOCKER_SANDBOX_IMAGE=ghcr.io/sidpalas/deputies-docker-sandbox:latest
 
 Build a local image only when testing sandbox image changes.
 
-The all-in-one variant mounts `/var/run/docker.sock` into `control-plane` and uses `DOCKER_ORCHESTRATOR_MODE=in-process`.
+The combined variant mounts `/var/run/docker.sock` into `control-plane` and uses `DOCKER_ORCHESTRATOR_MODE=in-process`.
 
 The split variant mounts `/var/run/docker.sock` only into `docker-orchestrator`; `api` and `worker` call it over HTTP using `DOCKER_ORCHESTRATOR_MODE=http`.
 
 ## Logs
 
-All-in-one stack:
+Combined stack:
 
 ```sh
-docker compose -f deploy/docker-compose/docker-compose.all.yml logs -f
+docker compose -f deploy/docker-compose/docker-compose.combined.yml logs -f
 ```
 
-All-in-one control plane only:
+Combined control plane only:
 
 ```sh
-docker compose -f deploy/docker-compose/docker-compose.all.yml logs -f control-plane
+docker compose -f deploy/docker-compose/docker-compose.combined.yml logs -f control-plane
 ```
 
 Split API and worker:
@@ -148,11 +148,11 @@ docker compose -f deploy/docker-compose/docker-compose.split.yml logs -f api wor
 Stop containers while keeping volumes:
 
 ```sh
-docker compose -f deploy/docker-compose/docker-compose.all.yml down
+docker compose -f deploy/docker-compose/docker-compose.combined.yml down
 ```
 
 Reset local volumes too:
 
 ```sh
-docker compose -f deploy/docker-compose/docker-compose.all.yml down -v
+docker compose -f deploy/docker-compose/docker-compose.combined.yml down -v
 ```

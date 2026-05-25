@@ -6,7 +6,7 @@ NAMESPACE="${K8S_SMOKE_NAMESPACE:-deputies-smoke}"
 PLATFORM_RELEASE="${K8S_SMOKE_PLATFORM_RELEASE:-deputies-platform}"
 APP_RELEASE="${K8S_SMOKE_APP_RELEASE:-deputies}"
 ACCESS_MODE="${K8S_SMOKE_ACCESS_MODE:-cloud-provider-kind}"
-TOPOLOGY_MODE="${K8S_SMOKE_TOPOLOGY_MODE:-all}"
+TOPOLOGY_MODE="${K8S_SMOKE_TOPOLOGY_MODE:-combined}"
 INGRESS_CLASS="${K8S_SMOKE_INGRESS_CLASS:-traefik-$NAMESPACE}"
 PLATFORM_CHART="$ROOT_DIR/deploy/kubernetes/charts/deputies-platform-reference"
 APP_CHART="$ROOT_DIR/deploy/kubernetes/charts/deputies"
@@ -67,8 +67,8 @@ validate_service_host_proxy() {
 
 helm dependency update "$PLATFORM_CHART"
 
-if [[ "$TOPOLOGY_MODE" != "all" && "$TOPOLOGY_MODE" != "split" ]]; then
-  echo "Unsupported K8S_SMOKE_TOPOLOGY_MODE=$TOPOLOGY_MODE; expected all or split" >&2
+if [[ "$TOPOLOGY_MODE" != "combined" && "$TOPOLOGY_MODE" != "split" ]]; then
+  echo "Unsupported K8S_SMOKE_TOPOLOGY_MODE=$TOPOLOGY_MODE; expected combined or split" >&2
   exit 1
 fi
 

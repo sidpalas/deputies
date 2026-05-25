@@ -14,7 +14,7 @@ services:
       - ../../.env.local
     environment:
       PORT: 3583
-      RUN_MODE: all
+      RUN_MODE: combined
       FLUE_OPENAI_CODEX_AUTH_FILE: /run/secrets/openai-codex-auth.json
       DATABASE_URL: postgres://flue:flue@postgres:5432/flue
       TEST_DATABASE_URL: postgres://flue:flue@postgres:5432/flue_test
