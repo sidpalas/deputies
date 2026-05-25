@@ -4,10 +4,10 @@ metadata:
   name: {{ include "deputies.fullname" . }}-web
   labels:
     {{- include "deputies.labels" . | nindent 4 }}
-    app.kubernetes.io/component: web
     {{- with .Values.web.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+    app.kubernetes.io/component: web
   {{- with .Values.web.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -25,14 +25,18 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
-        {{- include "deputies.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: web
         {{- with .Values.web.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        {{- include "deputies.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: web
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- if .Values.web.trustForwardedServiceHosts }}
@@ -52,7 +56,7 @@ spec:
             - name: PORT
               value: {{ .Values.web.service.port | quote }}
             - name: API_UPSTREAM
-              value: {{ printf "http://%s-control-plane:%v" (include "deputies.fullname" .) .Values.controlPlane.service.port | quote }}
+              value: {{ printf "http://%s:%v" (include "deputies.apiServiceName" .) .Values.controlPlane.service.port | quote }}
           {{- if .Values.web.trustForwardedServiceHosts }}
           volumeMounts:
             - name: caddyfile
@@ -72,5 +76,21 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

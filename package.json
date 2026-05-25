@@ -39,6 +39,8 @@
     "www:preview": "pnpm --dir apps/www preview",
     "smoke:full-stack": "./deploy/docker-compose/full-stack-smoke.sh",
     "smoke:kubernetes": "./deploy/kubernetes/full-stack-smoke.sh",
+    "smoke:kubernetes:split": "K8S_SMOKE_TOPOLOGY_MODE=split ./deploy/kubernetes/full-stack-smoke.sh",
+    "smoke:kubernetes:matrix": "K8S_SMOKE_NAMESPACE=deputies-smoke-all ./deploy/kubernetes/full-stack-smoke.sh && K8S_SMOKE_NAMESPACE=deputies-smoke-split K8S_SMOKE_TOPOLOGY_MODE=split ./deploy/kubernetes/full-stack-smoke.sh",
     "web:test": "pnpm --dir apps/web test",
     "web:test:watch": "pnpm --dir apps/web test:watch",
     "web:typecheck": "pnpm --dir apps/web typecheck",

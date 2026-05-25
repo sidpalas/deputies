@@ -6,20 +6,28 @@ NAMESPACE="${K8S_SMOKE_NAMESPACE:-deputies-smoke}"
 PLATFORM_RELEASE="${K8S_SMOKE_PLATFORM_RELEASE:-deputies-platform}"
 APP_RELEASE="${K8S_SMOKE_APP_RELEASE:-deputies}"
 ACCESS_MODE="${K8S_SMOKE_ACCESS_MODE:-cloud-provider-kind}"
+TOPOLOGY_MODE="${K8S_SMOKE_TOPOLOGY_MODE:-all}"
 INGRESS_CLASS="${K8S_SMOKE_INGRESS_CLASS:-traefik-$NAMESPACE}"
 PLATFORM_CHART="$ROOT_DIR/deploy/kubernetes/charts/deputies-platform-reference"
 APP_CHART="$ROOT_DIR/deploy/kubernetes/charts/deputies"
 FORWARD_PID=""
+SMOKE_VALUES=""
 SERVICE_HOST="s-3000-00000000-0000-4000-8000-000000000001.deputies-k8s.localhost"
 
 cleanup() {
   if [[ -n "$FORWARD_PID" ]]; then
     kill "$FORWARD_PID" >/dev/null 2>&1 || true
   fi
+  if [[ -n "$SMOKE_VALUES" ]]; then
+    rm -f "$SMOKE_VALUES"
+  fi
+  if [[ "$ACCESS_MODE" == "portless" ]]; then
+    pnpm dlx portless alias --remove deputies-k8s >/dev/null 2>&1 || true
+  fi
   if [[ "${K8S_SMOKE_KEEP:-false}" != "true" ]]; then
     helm uninstall "$APP_RELEASE" -n "$NAMESPACE" >/dev/null 2>&1 || true
     helm uninstall "$PLATFORM_RELEASE" -n "$NAMESPACE" >/dev/null 2>&1 || true
-    kubectl delete namespace "$NAMESPACE" --wait=false >/dev/null 2>&1 || true
+    kubectl delete namespace "$NAMESPACE" --wait=true --timeout=180s >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -59,6 +67,11 @@ validate_service_host_proxy() {
 
 helm dependency update "$PLATFORM_CHART"
 
+if [[ "$TOPOLOGY_MODE" != "all" && "$TOPOLOGY_MODE" != "split" ]]; then
+  echo "Unsupported K8S_SMOKE_TOPOLOGY_MODE=$TOPOLOGY_MODE; expected all or split" >&2
+  exit 1
+fi
+
 helm upgrade --install "$PLATFORM_RELEASE" "$PLATFORM_CHART" \
   --namespace "$NAMESPACE" \
   --create-namespace \
@@ -85,6 +98,8 @@ config:
   serviceBaseDomain: deputies-k8s.localhost
   flueModel: fake/smoke-default
   hideSetupPage: "true"
+  appDataStore: postgres
+  flueStateStore: postgres
   artifactStorageProvider: s3
   extraEnv:
     FLUE_MODEL_OPTIONS: fake/smoke-default,fake/smoke-fast
@@ -97,12 +112,14 @@ secrets:
 ingress:
   className: $INGRESS_CLASS
   web:
-    host: deputies-k8s.localhost
+    host: ""
   services:
     enabled: true
     host: "*.deputies-k8s.localhost"
 web:
   trustForwardedServiceHosts: true
+topology:
+  mode: $TOPOLOGY_MODE
 YAML
 
 helm upgrade --install "$APP_RELEASE" "$APP_CHART" \
@@ -110,10 +127,16 @@ helm upgrade --install "$APP_RELEASE" "$APP_CHART" \
   -f "$SMOKE_VALUES" \
   --timeout=180s
 
-kubectl wait --namespace "$NAMESPACE" --for=condition=available deployment/$APP_RELEASE-control-plane --timeout=180s
+if [[ "$TOPOLOGY_MODE" == "split" ]]; then
+  kubectl wait --namespace "$NAMESPACE" --for=condition=available deployment/$APP_RELEASE-api --timeout=180s
+  kubectl wait --namespace "$NAMESPACE" --for=condition=available deployment/$APP_RELEASE-worker --timeout=180s
+else
+  kubectl wait --namespace "$NAMESPACE" --for=condition=available deployment/$APP_RELEASE-control-plane --timeout=180s
+fi
 kubectl wait --namespace "$NAMESPACE" --for=condition=available deployment/$APP_RELEASE-web --timeout=180s
 
 rm -f "$SMOKE_VALUES"
+SMOKE_VALUES=""
 
 case "$ACCESS_MODE" in
   cloud-provider-kind)
@@ -170,7 +193,7 @@ case "$ACCESS_MODE" in
       service_url="http://$SERVICE_HOST:15173/"
       status="$(curl -sS -o "$response_body" -w "%{http_code}" "$service_url" || true)"
     else
-      status="$(curl -sS -H "Host: $SERVICE_HOST" -o "$response_body" -w "%{http_code}" "$BASE_URL/" || true)"
+      status="$(curl -sS --resolve "$SERVICE_HOST:80:$INGRESS_IP" -o "$response_body" -w "%{http_code}" "http://$SERVICE_HOST/" || true)"
     fi
     if [[ "$status" == "200" && "$(<"$response_body")" == *"Engineering agents for delegated work."* ]]; then
       echo "Service host was served by the web SPA instead of the service proxy" >&2

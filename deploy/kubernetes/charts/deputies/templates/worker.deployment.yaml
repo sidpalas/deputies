@@ -1,37 +1,36 @@
-{{- if eq .Values.topology.mode "all" }}
+{{- if eq .Values.topology.mode "split" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "deputies.fullname" . }}-control-plane
+  name: {{ include "deputies.fullname" . }}-worker
   labels:
     {{- include "deputies.labels" . | nindent 4 }}
-    {{- with .Values.controlPlane.all.labels }}
+    {{- with .Values.controlPlane.worker.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-    app.kubernetes.io/component: control-plane
-  {{- with .Values.controlPlane.all.annotations }}
+    app.kubernetes.io/component: worker
+  {{- with .Values.controlPlane.worker.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  replicas: {{ .Values.controlPlane.all.replicaCount }}
+  replicas: {{ .Values.controlPlane.worker.replicaCount }}
   selector:
     matchLabels:
       {{- include "deputies.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: control-plane
+      app.kubernetes.io/component: worker
   template:
     metadata:
-      {{- with .Values.controlPlane.all.podAnnotations }}
+      {{- with .Values.controlPlane.worker.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
-        {{- with .Values.controlPlane.all.podLabels }}
+        {{- with .Values.controlPlane.worker.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
         {{- include "deputies.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: control-plane
-        app.kubernetes.io/role: api
+        app.kubernetes.io/component: worker
     spec:
       serviceAccountName: {{ include "deputies.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
@@ -43,14 +42,14 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: control-plane
+        - name: worker
           image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
           imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
           ports:
             - name: http
               containerPort: {{ .Values.controlPlane.service.port }}
           env:
-            {{- include "deputies.controlPlaneEnv" (dict "root" . "runMode" "all" "port" .Values.controlPlane.service.port) | nindent 12 }}
+            {{- include "deputies.controlPlaneEnv" (dict "root" . "runMode" "worker" "port" .Values.controlPlane.service.port) | nindent 12 }}
           envFrom:
             - secretRef:
                 name: {{ include "deputies.secretName" . }}
@@ -71,7 +70,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           resources:
-            {{- toYaml .Values.controlPlane.all.resources | nindent 12 }}
+            {{- toYaml .Values.controlPlane.worker.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

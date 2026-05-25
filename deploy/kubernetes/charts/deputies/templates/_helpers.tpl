@@ -48,97 +48,104 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "deputies.controlPlaneEnv" -}}
+{{- $root := .root -}}
+{{- $runMode := .runMode -}}
+{{- $port := .port -}}
 - name: PORT
-  value: {{ .Values.controlPlane.service.port | quote }}
+  value: {{ $port | quote }}
 - name: RUN_MODE
-  value: {{ .Values.config.runMode | quote }}
+  value: {{ $runMode | quote }}
 - name: RUNNER
-  value: {{ .Values.config.runner | quote }}
+  value: {{ $root.Values.config.runner | quote }}
 - name: SANDBOX_PROVIDER
-  value: {{ .Values.config.sandboxProvider | quote }}
+  value: {{ $root.Values.config.sandboxProvider | quote }}
 - name: SANDBOX_WORKSPACE_PATH
-  value: {{ .Values.config.sandboxWorkspacePath | quote }}
+  value: {{ $root.Values.config.sandboxWorkspacePath | quote }}
 - name: APP_DATA_STORE
-  value: {{ .Values.config.appDataStore | quote }}
+  value: {{ $root.Values.config.appDataStore | quote }}
 - name: FLUE_STATE_STORE
-  value: {{ .Values.config.flueStateStore | quote }}
+  value: {{ $root.Values.config.flueStateStore | quote }}
 - name: API_AUTH_MODE
-  value: {{ .Values.config.apiAuthMode | quote }}
+  value: {{ $root.Values.config.apiAuthMode | quote }}
 - name: AUTH_PROVIDER
-  value: {{ .Values.config.authProvider | quote }}
-{{- if .Values.config.authCookieDomain }}
+  value: {{ $root.Values.config.authProvider | quote }}
+{{- if $root.Values.config.authCookieDomain }}
 - name: AUTH_COOKIE_DOMAIN
-  value: {{ .Values.config.authCookieDomain | quote }}
+  value: {{ $root.Values.config.authCookieDomain | quote }}
 {{- end }}
 - name: AUTH_COOKIE_SECURE
-  value: {{ .Values.config.authCookieSecure | quote }}
+  value: {{ $root.Values.config.authCookieSecure | quote }}
 - name: AUTH_COOKIE_SAME_SITE
-  value: {{ .Values.config.authCookieSameSite | quote }}
+  value: {{ $root.Values.config.authCookieSameSite | quote }}
 - name: WEB_BASE_URL
-  value: {{ .Values.config.webBaseUrl | quote }}
+  value: {{ $root.Values.config.webBaseUrl | quote }}
 - name: SERVICE_BASE_DOMAIN
-  value: {{ .Values.config.serviceBaseDomain | quote }}
+  value: {{ $root.Values.config.serviceBaseDomain | quote }}
 - name: SERVICE_TRUST_FORWARDED_HOSTS
-  value: {{ .Values.config.serviceTrustForwardedHosts | quote }}
+  value: {{ $root.Values.config.serviceTrustForwardedHosts | quote }}
 - name: FLUE_MODEL
-  value: {{ .Values.config.flueModel | quote }}
+  value: {{ $root.Values.config.flueModel | quote }}
 - name: DAYTONA_IMAGE
-  value: {{ .Values.config.daytonaImage | quote }}
+  value: {{ $root.Values.config.daytonaImage | quote }}
 - name: HIDE_SETUP_PAGE
-  value: {{ .Values.config.hideSetupPage | quote }}
-{{- if .Values.config.daytonaApiUrl }}
+  value: {{ $root.Values.config.hideSetupPage | quote }}
+{{- if $root.Values.config.daytonaApiUrl }}
 - name: DAYTONA_API_URL
-  value: {{ .Values.config.daytonaApiUrl | quote }}
+  value: {{ $root.Values.config.daytonaApiUrl | quote }}
 {{- end }}
-{{- if .Values.config.daytonaTarget }}
+{{- if $root.Values.config.daytonaTarget }}
 - name: DAYTONA_TARGET
-  value: {{ .Values.config.daytonaTarget | quote }}
+  value: {{ $root.Values.config.daytonaTarget | quote }}
 {{- end }}
-{{- if .Values.config.daytonaSnapshot }}
+{{- if $root.Values.config.daytonaSnapshot }}
 - name: DAYTONA_SNAPSHOT
-  value: {{ .Values.config.daytonaSnapshot | quote }}
+  value: {{ $root.Values.config.daytonaSnapshot | quote }}
 {{- end }}
 - name: ARTIFACT_STORAGE_PROVIDER
-  value: {{ .Values.config.artifactStorageProvider | quote }}
+  value: {{ $root.Values.config.artifactStorageProvider | quote }}
 - name: ARTIFACT_STORAGE_S3_ENDPOINT
-  value: {{ .Values.config.artifactStorageS3Endpoint | quote }}
+  value: {{ $root.Values.config.artifactStorageS3Endpoint | quote }}
 - name: ARTIFACT_STORAGE_S3_REGION
-  value: {{ .Values.config.artifactStorageS3Region | quote }}
+  value: {{ $root.Values.config.artifactStorageS3Region | quote }}
 - name: ARTIFACT_STORAGE_S3_BUCKET
-  value: {{ .Values.config.artifactStorageS3Bucket | quote }}
+  value: {{ $root.Values.config.artifactStorageS3Bucket | quote }}
 - name: ARTIFACT_STORAGE_S3_FORCE_PATH_STYLE
-  value: {{ .Values.config.artifactStorageS3ForcePathStyle | quote }}
+  value: {{ $root.Values.config.artifactStorageS3ForcePathStyle | quote }}
 - name: ARTIFACT_STORAGE_S3_CREATE_BUCKET
-  value: {{ .Values.config.artifactStorageS3CreateBucket | quote }}
+  value: {{ $root.Values.config.artifactStorageS3CreateBucket | quote }}
 - name: POSTGRES_USER
   valueFrom:
     secretKeyRef:
-      name: {{ include "deputies.postgresSecretName" . }}
-      key: {{ .Values.postgres.secretKeys.username }}
+      name: {{ include "deputies.postgresSecretName" $root }}
+      key: {{ $root.Values.postgres.secretKeys.username }}
 - name: POSTGRES_PASSWORD
   valueFrom:
     secretKeyRef:
-      name: {{ include "deputies.postgresSecretName" . }}
-      key: {{ .Values.postgres.secretKeys.password }}
+      name: {{ include "deputies.postgresSecretName" $root }}
+      key: {{ $root.Values.postgres.secretKeys.password }}
 - name: POSTGRES_DATABASE
   valueFrom:
     secretKeyRef:
-      name: {{ include "deputies.postgresSecretName" . }}
-      key: {{ .Values.postgres.secretKeys.database }}
+      name: {{ include "deputies.postgresSecretName" $root }}
+      key: {{ $root.Values.postgres.secretKeys.database }}
 - name: POSTGRES_HOST
   valueFrom:
     secretKeyRef:
-      name: {{ include "deputies.postgresSecretName" . }}
-      key: {{ .Values.postgres.secretKeys.host }}
+      name: {{ include "deputies.postgresSecretName" $root }}
+      key: {{ $root.Values.postgres.secretKeys.host }}
 - name: POSTGRES_PORT
   valueFrom:
     secretKeyRef:
-      name: {{ include "deputies.postgresSecretName" . }}
-      key: {{ .Values.postgres.secretKeys.port }}
+      name: {{ include "deputies.postgresSecretName" $root }}
+      key: {{ $root.Values.postgres.secretKeys.port }}
 - name: DATABASE_URL
   value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DATABASE)
-{{- range $name, $value := .Values.config.extraEnv }}
+{{- range $name, $value := $root.Values.config.extraEnv }}
 - name: {{ $name }}
   value: {{ $value | quote }}
 {{- end }}
+{{- end -}}
+
+{{- define "deputies.apiServiceName" -}}
+{{- printf "%s-api" (include "deputies.fullname" .) -}}
 {{- end -}}

@@ -245,7 +245,18 @@ Run the Kubernetes smoke test against an empty kind cluster:
 pnpm smoke:kubernetes
 ```
 
+Run both supported app topologies:
+
+```sh
+pnpm smoke:kubernetes:matrix
+```
+
 The smoke test installs both charts into `deputies-smoke`, runs the existing full-stack Playwright smoke, and validates artifact creation/download through SeaweedFS-backed storage.
+
+Topology modes:
+
+- `K8S_SMOKE_TOPOLOGY_MODE=all`: deploys the default combined API/worker control-plane process.
+- `K8S_SMOKE_TOPOLOGY_MODE=split`: deploys separate API and worker deployments.
 
 Access modes:
 

@@ -94,3 +94,11 @@ run = "K8S_SMOKE_ACCESS_MODE=port-forward ../../deploy/kubernetes/full-stack-smo
 [tasks."smoke:portless"]
 description = "Run Kubernetes smoke test through Portless"
 run = "K8S_SMOKE_ACCESS_MODE=portless ../../deploy/kubernetes/full-stack-smoke.sh"
+
+[tasks."smoke:split"]
+description = "Run Kubernetes smoke test in split API/worker topology"
+run = "K8S_SMOKE_TOPOLOGY_MODE=split ../../deploy/kubernetes/full-stack-smoke.sh"
+
+[tasks."smoke:matrix"]
+description = "Run Kubernetes smoke tests in all and split topologies"
+run = "K8S_SMOKE_NAMESPACE=deputies-smoke-all ../../deploy/kubernetes/full-stack-smoke.sh && K8S_SMOKE_NAMESPACE=deputies-smoke-split K8S_SMOKE_TOPOLOGY_MODE=split ../../deploy/kubernetes/full-stack-smoke.sh"

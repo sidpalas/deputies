@@ -1,5 +1,3 @@
-- review charts for best practices
-- implement split api/worker mode
 - add k8s sandbox support
 - add app support for ambient S3 credentials through the SDK default credential chain
 - add chart support for future `artifactStorage.s3.credentials.mode=secret|ambient` after app support exists

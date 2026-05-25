@@ -2,11 +2,12 @@
 
 This chart deploys the Deputies application components on Kubernetes.
 
-Current topology:
+Topologies:
 
-- `control-plane`: ALL mode, running API and workers in one deployment
+- `topology.mode=all`: combined API and worker control-plane process in one deployment
+- `topology.mode=split`: separate API and worker deployments
 - `migrate`: one-shot database migration job, run as a Helm post-install/post-upgrade hook by default
-- `web`: static web UI served by Caddy, proxying API routes to control-plane
+- `web`: static web UI served by Caddy, proxying API routes to the stable API service
 
 The chart is currently oriented around `SANDBOX_PROVIDER=daytona` and does not mount the Docker socket.
 
@@ -26,6 +27,14 @@ Install with Gateway API routes:
 helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --namespace deputies \
   --set routing.mode=gateway
+```
+
+Install with separate API and worker deployments:
+
+```sh
+helm upgrade --install deputies deploy/kubernetes/charts/deputies \
+  --namespace deputies \
+  --set topology.mode=split
 ```
 
 For real agent work in production, reference a Kubernetes Secret instead of putting secret values in Helm values:
@@ -49,9 +58,9 @@ For static session auth with service subdomains, include `AUTH_STATIC_USERNAME` 
 
 The chart intentionally exposes generic Kubernetes hooks for cloud workload identity without modeling provider-specific auth modes before the app supports them.
 
-Use `serviceAccount.annotations` for identity bindings such as AWS IRSA, EKS Pod Identity, or GKE Workload Identity. Use `serviceAccount.create=false` and `serviceAccount.name=<name>` to run the control-plane and migration job with a platform-managed Kubernetes service account.
+Use `serviceAccount.annotations` for identity bindings such as AWS IRSA, EKS Pod Identity, or GKE Workload Identity. Use `serviceAccount.create=false` and `serviceAccount.name=<name>` to run the control-plane API/worker workloads and migration job with a platform-managed Kubernetes service account.
 
-Use per-workload pod metadata for identity systems that require labels or annotations on pods. The chart exposes `controlPlane.podLabels`, `controlPlane.podAnnotations`, `migrations.podLabels`, and `migrations.podAnnotations`. For example, Azure Workload Identity commonly requires `azure.workload.identity/use: "true"` on pods.
+Use per-workload pod metadata for identity systems that require labels or annotations on pods. The chart exposes `controlPlane.all.podLabels`, `controlPlane.all.podAnnotations`, `controlPlane.api.podLabels`, `controlPlane.api.podAnnotations`, `controlPlane.worker.podLabels`, `controlPlane.worker.podAnnotations`, `migrations.podLabels`, and `migrations.podAnnotations`. For example, Azure Workload Identity commonly requires `azure.workload.identity/use: "true"` on pods.
 
 Current app-side limitations:
 
