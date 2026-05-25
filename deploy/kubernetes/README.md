@@ -9,6 +9,10 @@ Charts:
 
 For production, prefer your organization's standard ingress, database, object storage, observability, and secret management patterns. Install `charts/deputies` against those services directly.
 
+Traefik supports Gateway API. The reference platform chart keeps Traefik as the default controller and can enable Traefik's Gateway API provider instead of adding a second controller such as Envoy Gateway. If you prefer Envoy Gateway or another Gateway API implementation, install that platform controller separately and point `charts/deputies` at its `Gateway` with `gateway.parentRef.*` values.
+
+The app chart includes generic workload identity hooks through Kubernetes service account annotations and per-workload pod labels/annotations. It does not yet provide first-class app modes for ambient S3 credentials or RDS IAM database auth; those require app-side credential handling changes before the Helm values should expose provider-specific auth modes.
+
 ## Mise Tasks
 
 Run these from `deploy/kubernetes`:
@@ -56,6 +60,30 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --set config.hideSetupPage=true \
   --wait
 ```
+
+To use Gateway API instead of Ingress with the reference Traefik chart, install the Gateway API v1.5.1 experimental CRDs first, enable Traefik's Gateway API provider in the reference platform chart, and enable Gateway API routes in the app chart:
+
+```sh
+kubectl apply --server-side=true -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/experimental-install.yaml
+
+helm upgrade --install deputies-platform deploy/kubernetes/charts/deputies-platform-reference \
+  --namespace deputies \
+  --create-namespace \
+  --set traefik.providers.kubernetesGateway.enabled=true \
+  --wait
+
+helm upgrade --install deputies deploy/kubernetes/charts/deputies \
+  --namespace deputies \
+  --set routing.mode=gateway \
+  --set config.runner=fake \
+  --set config.sandboxProvider=fake \
+  --set config.hideSetupPage=true \
+  --wait
+```
+
+With `routing.mode=gateway`, the app chart renders `HTTPRoute` resources instead of its default `Ingress` resource. The default parent is the reference platform Gateway named `traefik-gateway` in the same namespace.
+
+Traefik 3.7 watches Gateway API route kinds beyond `HTTPRoute`, so the experimental Gateway API bundle is required for this reference chart even if Deputies only creates `HTTPRoute` resources.
 
 Inline secret values are convenient for short-lived local validation. For production installs, do not put secret values in Helm values, shell history, or Git. Manage secrets the same way you manage other platform secrets, such as External Secrets Operator, SOPS, Sealed Secrets, Vault, or cloud provider secret sync. The app chart can reference the resulting Kubernetes Secret.
 

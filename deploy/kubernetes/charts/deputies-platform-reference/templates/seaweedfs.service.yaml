@@ -1,0 +1,24 @@
+{{- if .Values.seaweedfs.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs
+  labels:
+    {{- include "deputies-platform-reference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+    {{- with .Values.seaweedfs.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.seaweedfs.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ports:
+    - name: s3
+      port: {{ .Values.seaweedfs.s3.port }}
+      targetPort: s3
+  selector:
+    {{- include "deputies-platform-reference.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+{{- end }}

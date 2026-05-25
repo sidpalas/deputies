@@ -1,0 +1,3 @@
+{{- if not (has .Values.routing.mode (list "ingress" "gateway")) -}}
+{{- fail "routing.mode must be one of: ingress, gateway" -}}
+{{- end -}}

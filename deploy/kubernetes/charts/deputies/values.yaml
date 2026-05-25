@@ -108,8 +108,10 @@ migrations:
   podLabels: {}
   podAnnotations: {}
 
+routing:
+  mode: ingress
+
 ingress:
-  enabled: true
   className: traefik
   annotations: {}
   web:
@@ -121,6 +123,20 @@ ingress:
     host: '*.deputies-k8s.localhost'
     path: /
     pathType: Prefix
+
+gateway:
+  annotations: {}
+  parentRef:
+    name: traefik-gateway
+    namespace: ''
+    sectionName: web
+  web:
+    host: ''
+    path: ''
+  services:
+    enabled: true
+    host: ''
+    path: ''
 
 serviceAccount:
   create: true

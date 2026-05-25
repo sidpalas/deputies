@@ -6,11 +6,27 @@ It is not a production blueprint. Teams should use their own deployment patterns
 
 It installs:
 
-- Traefik ingress controller
+- Traefik ingress controller, optionally with Gateway API provider enabled
 - A simple Postgres StatefulSet with Deputies app credentials
 - SeaweedFS with its S3-compatible API enabled
 
 The chart uses Traefik's upstream Helm chart. Run `helm dependency update deploy/kubernetes/charts/deputies-platform-reference` before installing from a fresh checkout.
+
+Traefik supports Gateway API, so this chart does not install Envoy Gateway by default. To use Gateway API with the reference platform, install the Gateway API v1.5.1 experimental CRDs first and enable Traefik's Gateway API provider:
+
+```sh
+kubectl apply --server-side=true -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/experimental-install.yaml
+
+helm upgrade --install deputies-platform deploy/kubernetes/charts/deputies-platform-reference \
+  --namespace deputies \
+  --create-namespace \
+  --set traefik.providers.kubernetesGateway.enabled=true \
+  --wait
+```
+
+This creates a `GatewayClass` named `traefik` and a `Gateway` named `traefik-gateway`. If you prefer Envoy Gateway or another Gateway API implementation, install it outside this reference chart and configure the app chart's `gateway.parentRef.*` values to attach to that Gateway.
+
+Traefik 3.7 watches Gateway API route kinds beyond `HTTPRoute`, so the experimental Gateway API bundle is required for this reference chart even if Deputies only creates `HTTPRoute` resources.
 
 The companion `deputies` chart defaults to these service names:
 
