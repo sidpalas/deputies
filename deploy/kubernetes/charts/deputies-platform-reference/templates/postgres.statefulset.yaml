@@ -69,6 +69,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.postgresql.credentials.secretName }}
                   key: database
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", {{ .Values.postgresql.credentials.username | quote }}, "-d", {{ .Values.postgresql.credentials.database | quote }}]
