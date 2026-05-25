@@ -56,6 +56,8 @@ By default, the chart consumes the `deputies-postgres-app` secret created by `de
 
 For static session auth with service subdomains, include `AUTH_STATIC_USERNAME` and `AUTH_STATIC_PASSWORD` in the referenced Secret, then set `config.authCookieDomain=.deputies-k8s.localhost` so the browser sends the session cookie to `s-<port>-<session>.deputies-k8s.localhost` hosts.
 
+Pods roll automatically when chart-rendered config or chart-created Secrets change. If you use externally managed Secrets, bump `rollout.revision` during `helm upgrade` after changing Secret data so Kubernetes replaces pods that consume those values as environment variables.
+
 ## Workload Identity
 
 The chart intentionally exposes generic Kubernetes hooks for cloud workload identity without modeling provider-specific auth modes before the app supports them.

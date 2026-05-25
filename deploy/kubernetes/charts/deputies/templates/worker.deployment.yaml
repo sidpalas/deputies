@@ -21,10 +21,13 @@ spec:
       app.kubernetes.io/component: worker
   template:
     metadata:
-      {{- with .Values.controlPlane.worker.podAnnotations }}
       annotations:
+        checksum/app-secret: {{ include (print $.Template.BasePath "/app.secret.yaml") . | sha256sum }}
+        checksum/postgres-secret: {{ include (print $.Template.BasePath "/postgres.secret.yaml") . | sha256sum }}
+        rollout/revision: {{ .Values.rollout.revision | quote }}
+        {{- with .Values.controlPlane.worker.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- with .Values.controlPlane.worker.podLabels }}
         {{- toYaml . | nindent 8 }}

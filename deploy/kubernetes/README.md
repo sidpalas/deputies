@@ -145,6 +145,29 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
 
 After changing cookie domain, log out/in or clear old host-only cookies.
 
+## Managed Services
+
+When using managed object storage instead of the reference SeaweedFS service, override the S3 settings for your provider and keep static S3 credentials in the referenced app Secret. For example, Civo Object Store uses the provider endpoint and region, disables app-side bucket creation, and uses path-style requests:
+
+```sh
+kubectl patch secret deputies-app-secrets \
+  --namespace deputies \
+  --type merge \
+  -p '{"stringData":{"ARTIFACT_STORAGE_S3_ACCESS_KEY_ID":"<access-key-id>","ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY":"<secret-access-key>"}}'
+
+helm upgrade --install deputies deploy/kubernetes/charts/deputies \
+  --namespace deputies \
+  --reuse-values \
+  --set config.artifactStorageS3Endpoint=https://objectstore.nyc1.civo.com \
+  --set config.artifactStorageS3Region=nyc1 \
+  --set config.artifactStorageS3Bucket=deputies-artifacts \
+  --set config.artifactStorageS3ForcePathStyle=true \
+  --set config.artifactStorageS3CreateBucket=false \
+  --wait
+```
+
+Static session auth needs both Secret keys and Helm config. Put `AUTH_STATIC_USERNAME` and `AUTH_STATIC_PASSWORD` in the referenced app Secret, then set `config.apiAuthMode=session`, `config.authProvider=static`, and `config.authCookieDomain=<shared-cookie-domain>`, such as `.devdeputies.com` for `app.devdeputies.com` plus `*.devdeputies.com` service hosts.
+
 ## Kind Host Access
 
 For kind clusters, run `cloud-provider-kind` when you want LoadBalancer-style access from the host while keeping real-cluster-style host-matched Ingress routing:
