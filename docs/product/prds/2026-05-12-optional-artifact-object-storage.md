@@ -74,7 +74,7 @@ The system also needs to remain easy to run locally. Local development should no
 - Flue runs receive an `artifact` tool. The current `create` action publishes a file from the sandbox as a durable artifact; supported types are `file`, `log`, `screenshot`, `report`, and `image`.
 - The artifact tool enforces `ARTIFACT_CREATE_MAX_BYTES`, default 25 MiB, before reading the sandbox file.
 - Stored artifact metadata includes `storage: "internal"`, `sizeBytes`, `checksumSha256`, optional `contentType`, optional `fileName`, and `sourcePath` for tool-created artifacts.
-- Stored artifact objects are keyed as `artifacts/:createdAtTimestamp/sessions/:sessionId/runs/:runId/:artifactId[-fileName]`, where `createdAtTimestamp` is a compact UTC timestamp such as `20260514T024500123Z`.
+- Stored artifact objects are keyed as `artifacts/:sessionCreatedAtTimestamp/sessions/:sessionId/runs/:runId/:artifactCreatedAtTimestamp-:artifactId[-fileName]`, where timestamps are compact UTC values such as `20260514T024500123Z`.
 - Product API routes are `GET /sessions/:sessionId/artifacts`, `GET /sessions/:sessionId/artifacts/:artifactId/download`, and `GET /sessions/:sessionId/artifacts/:artifactId/preview`.
 
 ## Future Work

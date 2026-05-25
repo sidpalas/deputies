@@ -205,6 +205,7 @@ describe('FlueRunner', () => {
       const store = new MemoryStore();
       const eventsService = new EventService(store);
       const artifacts = new ArtifactService(store, eventsService, new FilesystemArtifactObjectStorage(tempDir));
+      await store.createSession({ id: 'session-1', title: 'Artifact session', createdAt: new Date(), context: {} });
       const sandbox = createFilesystemSandbox('session-1');
       await sandbox.fs!.writeFile('/workspace/report.txt', 'tool artifact');
       const events: NormalizedEvent[] = [];
@@ -276,6 +277,7 @@ describe('FlueRunner', () => {
       eventsService,
       new FilesystemArtifactObjectStorage('/tmp/deputies-test-artifacts'),
     );
+    await store.createSession({ id: 'session-1', title: 'Video session', createdAt: new Date(), context: {} });
     const sandbox = createFilesystemSandbox('session-1');
     await sandbox.fs!.writeFile('/workspace/small-video.avi', 'fake avi');
     const tool = createArtifactTool({
