@@ -1,0 +1,6 @@
+issuer: https://token.actions.githubusercontent.com
+subject: repo:sidpalas/deputies:ref:refs/heads/main
+
+permissions:
+  contents: write
+  pull_requests: write
