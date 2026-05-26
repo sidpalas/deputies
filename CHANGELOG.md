@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/sidpalas/deputies/compare/v0.1.0...v0.1.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* use bump-minor-pre-major in release please ([585a500](https://github.com/sidpalas/deputies/commit/585a500ce592e7bed881fa0152339c215367b1ed))
+
 ## 0.1.0 (2026-05-26)
 
 ### Features
