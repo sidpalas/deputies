@@ -174,9 +174,10 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
   async create(input: AgentSandboxCreateInput): Promise<AgentSandboxDescriptor> {
     const bridgeToken = randomUUID();
     const name = `deputies-${safeId(input.sessionId)}-${randomUUID().slice(0, 8)}`;
-    const resource = this.sandboxResource(name, input.sessionId, bridgeToken, input.metadata ?? {});
-    await this.kube.post(this.sandboxPath(), resource);
+    await this.kube.post(this.secretPath(), this.bridgeTokenSecret(name, input.sessionId, bridgeToken));
     try {
+      const resource = this.sandboxResource(name, input.sessionId, input.metadata ?? {});
+      await this.kube.post(this.sandboxPath(), resource);
       const descriptor = await this.descriptor({
         providerSandboxId: name,
         sessionId: input.sessionId,
@@ -245,6 +246,7 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
 
   async destroy(input: AgentSandboxRef): Promise<void> {
     const result = await this.kube.delete(this.sandboxPath(input.providerSandboxId), { allowNotFound: true });
+    await this.kube.delete(this.secretPath(input.providerSandboxId), { allowNotFound: true });
     this.descriptors.delete(input.providerSandboxId);
     if (result === null) return;
   }
@@ -374,17 +376,31 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
     return name ? `${base}/${encodeURIComponent(name)}` : base;
   }
 
-  private sandboxResource(
-    name: string,
-    sessionId: string,
-    bridgeToken: string,
-    metadata: Record<string, unknown>,
-  ): AgentSandboxResource {
-    const labels = {
+  private secretPath(name?: string): string {
+    const base = `/api/v1/namespaces/${encodeURIComponent(this.namespace)}/secrets`;
+    return name ? `${base}/${encodeURIComponent(name)}` : base;
+  }
+
+  private bridgeTokenSecret(name: string, sessionId: string, bridgeToken: string): Record<string, unknown> {
+    return {
+      apiVersion: 'v1',
+      kind: 'Secret',
+      metadata: { name, labels: this.labels(sessionId) },
+      type: 'Opaque',
+      stringData: { DEPUTIES_SANDBOX_TOKEN: bridgeToken },
+    };
+  }
+
+  private labels(sessionId: string): Record<string, string> {
+    return {
       'app.kubernetes.io/name': 'deputies-sandbox',
       'deputies.sandbox-provider': 'k8s-agent-sandbox',
       'deputies.session-id': sessionId,
     };
+  }
+
+  private sandboxResource(name: string, sessionId: string, metadata: Record<string, unknown>): AgentSandboxResource {
+    const labels = this.labels(sessionId);
     const pvcSpec: Record<string, unknown> = {
       accessModes: ['ReadWriteOnce'],
       resources: { requests: { storage: this.storageSize } },
@@ -406,7 +422,10 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
                 image: this.image,
                 ports: [{ name: 'bridge', containerPort: bridgePort }],
                 env: [
-                  { name: 'DEPUTIES_SANDBOX_TOKEN', value: bridgeToken },
+                  {
+                    name: 'DEPUTIES_SANDBOX_TOKEN',
+                    valueFrom: { secretKeyRef: { name, key: 'DEPUTIES_SANDBOX_TOKEN' } },
+                  },
                   { name: 'DEPUTIES_WORKSPACE', value: this.workspacePath },
                 ],
                 volumeMounts: [{ name: 'workspace', mountPath: this.workspacePath }],
