@@ -4,16 +4,30 @@ import tls from 'node:tls';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Context } from 'hono';
-import { isTrustedCookieAuthRequest } from '../auth/middleware.js';
-import { readSessionId, sessionCookieName } from '../auth/session.js';
-import { requireApiBearerToken, type AppConfig } from '../config/index.js';
+import {
+  createPreviewCookie,
+  previewBootstrapMaxAgeSeconds,
+  previewCookieName,
+  previewCookieMaxAgeSeconds,
+  previewGrantMaxAgeSeconds,
+  readPreviewCookie,
+  signPreviewAuthToken,
+  type PreviewAuthToken,
+  verifyPreviewAuthToken,
+} from '../auth/session.js';
+import { requireApiBearerToken, requireAuthSessionSecret, type AppConfig } from '../config/index.js';
 import type { SandboxPreviewUrl, SandboxProvider } from '../sandbox/types.js';
-import type { AppStore } from '../store/types.js';
+import type { AppStore, AuthUserRecord } from '../store/types.js';
 
 type ServiceProxyServices = {
   store: AppStore;
   sessions: { get(sessionId: string): Promise<unknown | null> };
   sandboxProvider?: SandboxProvider;
+};
+
+type PreviewAuthorization = {
+  user: AuthUserRecord;
+  cookie?: string;
 };
 
 export async function getSessionService(
@@ -56,8 +70,9 @@ export function serializeService(
   preview: SandboxPreviewUrl,
   metadata: { label?: string; path?: string } = {},
   sandboxTiming: { shutdownAt?: Date; keepaliveUntil?: Date; maxKeepaliveUntil?: Date } = {},
+  previewAuthToken?: string,
 ) {
-  const url = previewUrl(c, config, sessionId, preview.port, metadata.path);
+  const url = previewUrl(c, config, sessionId, preview.port, metadata.path, previewAuthToken);
   return {
     port: preview.port,
     url,
@@ -94,6 +109,11 @@ export async function proxyService(
   });
 }
 
+export function appendPreviewCookie(response: Response, cookie: string | undefined): Response {
+  if (cookie) response.headers.append('set-cookie', cookie);
+  return response;
+}
+
 export function parseServiceHostFromRequest(config: AppConfig, c: Context): { sessionId: string; port: number } | null {
   return parsePreviewHostFromHosts(previewRequestHosts(config, c), previewAllowedDomains(config, c));
 }
@@ -107,10 +127,79 @@ export async function isAuthorizedRequest(
   if (config.apiAuthMode === 'none') return true;
   if (config.apiAuthMode === 'bearer')
     return c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
-  if (!isTrustedCookieAuthRequest(c, config)) return false;
-  const authSessionId = readSessionId(c);
-  const user = authSessionId ? await store.getAuthUserBySession({ sessionId: authSessionId, now: new Date() }) : null;
-  return Boolean(user && (!options.role || user.role === options.role));
+  const authorization = await authorizePreviewRequest(config, store, c, options);
+  return Boolean(authorization);
+}
+
+export async function authorizePreviewRequest(
+  config: AppConfig,
+  store: AppStore,
+  c: Context,
+  options: { role?: 'admin' } = {},
+): Promise<PreviewAuthorization | null> {
+  if (config.apiAuthMode === 'none') return null;
+  if (config.apiAuthMode === 'bearer') return null;
+  if (!isTrustedPreviewRequest(config, c)) return null;
+  const authorization = await readPreviewAuthUser(config, store, readPreviewCookie(c), previewRequestHost(config, c), {
+    kind: 'cookie',
+    renew: true,
+  });
+  if (!authorization || (options.role && authorization.user.role !== options.role)) return null;
+  return authorization;
+}
+
+export async function authorizePreviewToken(
+  config: AppConfig,
+  store: AppStore,
+  c: Context,
+  previewSessionId: string,
+  port: number,
+): Promise<Response> {
+  const token = c.req.query('token');
+  const redirect = previewAuthRedirect(c.req.query('redirect'));
+  const authToken = token ?? null;
+  const payload = authToken ? verifyPreviewAuthToken(authToken, requireAuthSessionSecret(config)) : null;
+  if (
+    !authToken ||
+    !payload ||
+    payload.kind !== 'bootstrap' ||
+    payload.previewSessionId !== previewSessionId ||
+    payload.port !== port
+  ) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
+  const authorization = await readPreviewAuthUser(config, store, authToken, previewRequestHost(config, c), {
+    kind: 'bootstrap',
+  });
+  if (!authorization || authorization.user.role !== 'admin') return new Response('Forbidden', { status: 403 });
+
+  const cookieToken = createPreviewCookieToken(config, payload);
+
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: redirect,
+      'referrer-policy': 'no-referrer',
+      'set-cookie': createPreviewCookie(config, cookieToken, previewCookieMaxAgeSeconds),
+    },
+  });
+}
+
+export function createPreviewAuthToken(
+  config: AppConfig,
+  input: { authSessionId: string; previewSessionId: string; port: number; userId: string },
+): string {
+  const now = Math.floor(Date.now() / 1000);
+  return signPreviewAuthToken(
+    {
+      kind: 'bootstrap',
+      ...input,
+      exp: now + previewBootstrapMaxAgeSeconds,
+      grantExp: now + previewGrantMaxAgeSeconds,
+    },
+    requireAuthSessionSecret(config),
+  );
 }
 
 export async function handleServiceUpgrade(
@@ -129,7 +218,7 @@ export async function handleServiceUpgrade(
 
   const { sessionId, port } = hostPreview;
   if (
-    !isTrustedUpgradeRequest(config, request) ||
+    !isTrustedPreviewUpgrade(config, request) ||
     !(await isAuthorizedUpgrade(config, services, request, { role: 'admin' }))
   ) {
     rejectUpgrade(socket, 403, 'Forbidden');
@@ -267,7 +356,14 @@ function previewTargetUrlFromUrl(incoming: URL, targetUrl: string): string {
   return target.toString();
 }
 
-function previewUrl(c: Context, config: AppConfig, sessionId: string, port: number, path = '/'): string {
+function previewUrl(
+  c: Context,
+  config: AppConfig,
+  sessionId: string,
+  port: number,
+  path = '/',
+  previewAuthToken?: string,
+): string {
   const baseUrl = config.webBaseUrl ? new URL(config.webBaseUrl) : null;
   const requestUrl = new URL(c.req.url);
   const requestHost = baseUrl?.host ?? previewRequestHost(config, c) ?? requestUrl.host;
@@ -276,7 +372,15 @@ function previewUrl(c: Context, config: AppConfig, sessionId: string, port: numb
   const domain = config.serviceBaseDomain ?? previewDomainFromHost(requestHost);
   const suffix = path.startsWith('/') ? path.slice(1) : path;
   if (!domain) throw new Error('SERVICE_BASE_DOMAIN is required for service previews');
-  return `${protocol}://${previewHostLabel(sessionId, port)}.${domain}/${suffix}`;
+  const url = new URL(`${protocol}://${previewHostLabel(sessionId, port)}.${domain}/${suffix}`);
+  if (previewAuthToken) {
+    const redirect = `${url.pathname}${url.search}`;
+    url.pathname = '/__preview_auth';
+    url.search = '';
+    url.searchParams.set('token', previewAuthToken);
+    url.searchParams.set('redirect', redirect);
+  }
+  return url.toString();
 }
 
 function previewDomainFromHost(host: string): string | null {
@@ -405,31 +509,14 @@ async function isAuthorizedUpgrade(
   if (config.apiAuthMode === 'none') return true;
   if (config.apiAuthMode === 'bearer')
     return request.headers.authorization === `Bearer ${requireApiBearerToken(config)}`;
-  const authSessionId = parseCookieHeader(request.headers.cookie ?? '')[sessionCookieName];
-  const user = authSessionId
-    ? await services.store.getAuthUserBySession({ sessionId: authSessionId, now: new Date() })
-    : null;
-  return Boolean(user && (!options.role || user.role === options.role));
-}
-
-function isTrustedUpgradeRequest(config: AppConfig, request: IncomingMessage): boolean {
-  if (config.apiAuthMode !== 'session') return true;
-  const secFetchSite = stringHeader(request.headers['sec-fetch-site'])?.toLowerCase();
-  if (secFetchSite === 'cross-site') return false;
-
-  const origin = stringHeader(request.headers.origin);
-  if (!origin) return true;
-  return trustedUpgradeOrigins(config, request).has(origin);
-}
-
-function trustedUpgradeOrigins(config: AppConfig, request: IncomingMessage): Set<string> {
-  const origins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
-  for (const host of previewNodeRequestHosts(config, request)) {
-    origins.add(new URL(request.url ?? '/', `http://${host}`).origin);
-    origins.add(new URL(request.url ?? '/', `https://${host}`).origin);
-  }
-  if (config.webBaseUrl) origins.add(new URL(config.webBaseUrl).origin);
-  return origins;
+  const authorization = await readPreviewAuthUser(
+    config,
+    services.store,
+    parseCookieHeader(request.headers.cookie ?? '')[previewCookieName] ?? null,
+    previewNodeRequestHosts(config, request)[0],
+    { kind: 'cookie' },
+  );
+  return Boolean(authorization && (!options.role || authorization.user.role === options.role));
 }
 
 function stringHeader(value: string | string[] | undefined): string | undefined {
@@ -494,7 +581,7 @@ function previewUpgradeHeaders(
   const headers: Array<[string, string]> = [['host', target.host]];
   for (const [key, value] of Object.entries(request.headers)) {
     const lower = key.toLowerCase();
-    if (['authorization', 'cookie', 'host', 'content-length'].includes(lower)) continue;
+    if (['authorization', 'cookie', 'host', 'content-length', 'referer'].includes(lower)) continue;
     if (lower === 'origin' && !preserveOrigin) continue;
     if (Array.isArray(value)) for (const item of value) headers.push([key, item]);
     else if (value !== undefined) headers.push([key, value]);
@@ -522,6 +609,86 @@ function parseCookieHeader(header: string): Record<string, string> {
   return cookies;
 }
 
+async function readPreviewAuthUser(
+  config: AppConfig,
+  store: AppStore,
+  token: string | null,
+  host: string | undefined,
+  options: { kind: PreviewAuthToken['kind']; renew?: boolean },
+): Promise<PreviewAuthorization | null> {
+  if (!token) return null;
+  const payload = verifyPreviewAuthToken(token, requireAuthSessionSecret(config));
+  if (!payload) return null;
+  if (payload.kind !== options.kind) return null;
+  const hostPreview = parsePreviewHost(host, previewAllowedDomains(config));
+  if (!hostPreview || hostPreview.sessionId !== payload.previewSessionId || hostPreview.port !== payload.port)
+    return null;
+  const user = await store.getAuthUserBySession({ sessionId: payload.authSessionId, now: new Date() });
+  if (user?.id !== payload.userId) return null;
+  const cookie = options.renew ? renewedPreviewCookie(config, payload) : undefined;
+  return { user, ...(cookie ? { cookie } : {}) };
+}
+
+function createPreviewCookieToken(config: AppConfig, payload: PreviewAuthToken): string {
+  const now = Math.floor(Date.now() / 1000);
+  return signPreviewAuthToken(
+    {
+      kind: 'cookie',
+      authSessionId: payload.authSessionId,
+      previewSessionId: payload.previewSessionId,
+      port: payload.port,
+      userId: payload.userId,
+      exp: Math.min(now + previewCookieMaxAgeSeconds, payload.grantExp),
+      grantExp: payload.grantExp,
+    },
+    requireAuthSessionSecret(config),
+  );
+}
+
+function renewedPreviewCookie(config: AppConfig, payload: PreviewAuthToken): string | undefined {
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.exp - now > previewCookieMaxAgeSeconds / 2) return undefined;
+  const exp = Math.min(now + previewCookieMaxAgeSeconds, payload.grantExp);
+  if (exp <= now) return undefined;
+  const token = signPreviewAuthToken({ ...payload, exp }, requireAuthSessionSecret(config));
+  return createPreviewCookie(config, token, exp - now);
+}
+
+function isTrustedPreviewRequest(config: AppConfig, c: Context): boolean {
+  if (!unsafePreviewMethods.has(c.req.method.toUpperCase())) return true;
+  const secFetchSite = c.req.header('sec-fetch-site')?.toLowerCase();
+  if (secFetchSite === 'cross-site') return false;
+  const origin = c.req.header('origin');
+  if (!origin) return true;
+  return trustedPreviewOrigins(previewRequestHosts(config, c)).has(origin);
+}
+
+function isTrustedPreviewUpgrade(config: AppConfig, request: IncomingMessage): boolean {
+  if (config.apiAuthMode !== 'session') return true;
+  const secFetchSite = stringHeader(request.headers['sec-fetch-site'])?.toLowerCase();
+  if (secFetchSite === 'cross-site') return false;
+  const origin = stringHeader(request.headers.origin);
+  if (!origin) return true;
+  return trustedPreviewOrigins(previewNodeRequestHosts(config, request)).has(origin);
+}
+
+const unsafePreviewMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+function trustedPreviewOrigins(hosts: string[]): Set<string> {
+  const origins = new Set<string>();
+  for (const host of hosts) {
+    origins.add(new URL(`http://${host}`).origin);
+    origins.add(new URL(`https://${host}`).origin);
+  }
+  return origins;
+}
+
+function previewAuthRedirect(value: string | undefined): string {
+  if (!value || !value.startsWith('/')) return '/';
+  if (value.startsWith('//')) return '/';
+  return value;
+}
+
 function joinUrlPath(basePath: string, suffix: string): string {
   const base = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
   const rest = suffix.startsWith('/') ? suffix : `/${suffix}`;
@@ -532,7 +699,7 @@ function previewRequestHeaders(input: Headers, injected: Record<string, string> 
   const headers = new Headers();
   for (const [key, value] of input.entries()) {
     const lower = key.toLowerCase();
-    if (['authorization', 'cookie', 'host', 'connection', 'content-length'].includes(lower)) continue;
+    if (['authorization', 'cookie', 'host', 'connection', 'content-length', 'referer'].includes(lower)) continue;
     headers.set(key, value);
   }
   for (const [key, value] of Object.entries(injected)) headers.set(key, value);

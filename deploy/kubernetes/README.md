@@ -129,7 +129,7 @@ kubectl create secret generic deputies-app-secrets \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-Then set a domain-scoped cookie and reference the Secret:
+Then enable session auth and reference the Secret:
 
 ```sh
 helm upgrade --install deputies deploy/kubernetes/charts/deputies \
@@ -139,11 +139,10 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --set secrets.name=deputies-app-secrets \
   --set config.apiAuthMode=session \
   --set config.authProvider=static \
-  --set config.authCookieDomain=.deputies-k8s.localhost \
   --wait
 ```
 
-After changing cookie domain, log out/in or clear old host-only cookies.
+After changing cookie settings, log out/in or clear old cookies.
 
 ## Managed Services
 
@@ -166,7 +165,7 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --wait
 ```
 
-Static session auth needs both Secret keys and Helm config. Put `AUTH_STATIC_USERNAME` and `AUTH_STATIC_PASSWORD` in the referenced app Secret, then set `config.apiAuthMode=session`, `config.authProvider=static`, and `config.authCookieDomain=<shared-cookie-domain>`, such as `.devdeputies.com` for `app.devdeputies.com` plus `*.devdeputies.com` service hosts.
+Static session auth needs both Secret keys and Helm config. Put `AUTH_STATIC_USERNAME` and `AUTH_STATIC_PASSWORD` in the referenced app Secret, then set `config.apiAuthMode=session` and `config.authProvider=static`. Service previews use signed preview tokens and preview-only cookies, so no shared cookie domain is required.
 
 ## Kind Host Access
 

@@ -59,7 +59,6 @@ AUTH_PROVIDER=static
 AUTH_STATIC_USERNAME=dev
 AUTH_STATIC_PASSWORD=dev-secret
 AUTH_SESSION_SECRET=<generated-secret>
-AUTH_COOKIE_DOMAIN=.deputies.localhost
 AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAME_SITE=lax
 WEB_BASE_URL=https://deputies.localhost
@@ -231,17 +230,15 @@ Do not rotate it casually; changing it prevents decrypting existing Docker sandb
 For the default Portless HTTPS setup, use:
 
 ```sh
-AUTH_COOKIE_DOMAIN=.deputies.localhost
 AUTH_COOKIE_SECURE=true
 WEB_BASE_URL=https://deputies.localhost
 ```
 
-Clear browser cookies after changing cookie domain settings.
+Clear browser cookies after changing cookie settings.
 
 For a plain HTTP fallback, use:
 
 ```sh
-AUTH_COOKIE_DOMAIN=
 AUTH_COOKIE_SECURE=false
 WEB_BASE_URL=http://localhost:5173
 ```

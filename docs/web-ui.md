@@ -56,7 +56,6 @@ For portless local development, use these `.env.local` values:
 ```sh
 VITE_API_BASE_URL=
 WEB_BASE_URL=https://deputies.localhost
-AUTH_COOKIE_DOMAIN=.deputies.localhost
 AUTH_COOKIE_SECURE=true
 SERVICE_BASE_DOMAIN=deputies.localhost
 SERVICE_TRUST_FORWARDED_HOSTS=true
@@ -69,7 +68,6 @@ For production-like deployments, configure real DNS records so the app hostname 
 ```sh
 VITE_API_BASE_URL=
 WEB_BASE_URL=https://app.example.com
-AUTH_COOKIE_DOMAIN=.example.com
 AUTH_COOKIE_SECURE=true
 SERVICE_BASE_DOMAIN=example.com
 SERVICE_TRUST_FORWARDED_HOSTS=false
@@ -77,7 +75,21 @@ SERVICE_TRUST_FORWARDED_HOSTS=false
 
 On Railway with Cloudflare DNS, add both custom domains to the web entrypoint service: `app.example.com` and `*.example.com`. The wildcard CNAME should point directly to Railway's provided target, and Railway's `_acme-challenge` CNAME must remain DNS-only so certificate issuance and renewal can complete. If a wildcard service host returns a TLS handshake error before any HTTP status, Railway has not finished validating or serving the wildcard certificate yet.
 
-After changing `AUTH_COOKIE_DOMAIN`, existing browser sessions may still hold an old host-only cookie for the app domain. Log out and back in, or clear cookies for the app and service domains. A valid production session cookie should be scoped to `.example.com` so it is sent to both `app.example.com` and `s-<port>-<session>.example.com`.
+Main app session cookies are host-only. Authenticated service links include a short-lived signed preview token that sets a preview-only cookie on the service host before redirecting to the service path.
+
+### Preview Auth
+
+In `API_AUTH_MODE=session`, service previews do not use the main `dev_deputies_session` cookie. When the UI lists or opens a service for an admin, the API returns a service URL on the preview host that first visits the preview auth trampoline:
+
+```txt
+https://s-3000-<session-id>.example.com/__preview_auth?token=<signed-bootstrap-token>&redirect=/
+```
+
+The service-host middleware handles `/__preview_auth`, validates the signed bootstrap token, sets a host-only `deputies_preview` HTTP-only cookie, and redirects to `redirect`. The bootstrap token is valid for 2 minutes and is scoped to the authenticated app session, user, product session, and service port.
+
+The preview cookie is signed and scoped to the specific preview host. It has a 30-minute sliding idle expiry and a 2-hour absolute grant cap. Authorized HTTP preview requests renew the cookie after half of the idle window has elapsed, but WebSocket upgrades only validate the cookie at handshake time and do not renew mid-connection.
+
+Preview auth responses include `Referrer-Policy: no-referrer`, and the service proxy strips `Referer`, `Cookie`, and `Authorization` before forwarding requests to the sandbox service. Unsafe HTTP methods and WebSocket upgrades are rejected when browser `Sec-Fetch-Site` or `Origin` headers indicate a cross-site request.
 
 The Deputies web dev server moves its own Vite HMR socket to `/__deputies_vite_hmr` so sandbox service WebSocket upgrades on `/` can pass through the service proxy. For Vite apps running inside a sandbox, avoid hard-coding `server.hmr.host`, `server.hmr.clientPort`, or `server.hmr.protocol` to `localhost`; let Vite infer the browser URL.
 

@@ -212,7 +212,6 @@ Recommended same-origin production shape:
 ```sh
 WEB_BASE_URL=https://app.example.com
 SERVICE_BASE_DOMAIN=example.com
-AUTH_COOKIE_DOMAIN=.example.com
 AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAME_SITE=lax
 SERVICE_TRUST_FORWARDED_HOSTS=false
@@ -224,6 +223,8 @@ DNS/TLS requirements:
 - `app.example.com` points to the web/proxy entrypoint.
 - `*.example.com` points to the same web/proxy entrypoint.
 - Sandbox service previews use hosts like `https://s-3000-<session-id>.example.com`.
+
+The main app session cookie is host-only. Service previews use a short-lived signed preview token to set a preview-only cookie on the service host.
 
 Prefer first-level wildcards such as `*.example.com`. Nested wildcards such as `*.app.example.com` may require provider-specific certificate support.
 

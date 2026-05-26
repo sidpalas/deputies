@@ -5,6 +5,7 @@ import path from 'node:path';
 import { ArtifactService } from '../../src/artifacts/service.js';
 import { FilesystemArtifactObjectStorage, type ArtifactObjectStorage } from '../../src/artifacts/storage.js';
 import { createServer, createServices, createWorkerHealthServer, type AppServices } from '../../src/app/server.js';
+import { previewCookieMaxAgeSeconds, previewCookieName, signPreviewAuthToken } from '../../src/auth/session.js';
 import { loadConfig } from '../../src/config/index.js';
 import { GitHubApiError } from '../../src/integrations/github/client.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
@@ -220,7 +221,6 @@ describe('core API', () => {
         AUTH_STATIC_USERNAME: 'dev',
         AUTH_STATIC_PASSWORD: 'password',
         AUTH_SESSION_SECRET: 'test-secret',
-        AUTH_COOKIE_DOMAIN: '.deputies.localhost',
         WEB_BASE_URL: 'https://deputies.localhost',
       }),
     );
@@ -236,6 +236,7 @@ describe('core API', () => {
     expect(login.status).toBe(200);
     const cookie = login.headers.get('set-cookie');
     expect(cookie).toContain('dev_deputies_session=');
+    expect(cookie).not.toContain('Domain=');
     await expect(login.json()).resolves.toMatchObject({ user: { username: 'dev' } });
 
     const me = await fetch(`${baseUrl}/auth/me`, { headers: { cookie: cookie! } });
@@ -930,7 +931,7 @@ describe('core API', () => {
     }
   });
 
-  it('rejects cross-site unsafe service host requests with session cookies', async () => {
+  it('uses preview cookies instead of session cookies for service hosts', async () => {
     const upstream = createPreviewUpstream();
     const upstreamBaseUrl = await listen(upstream);
     await closeServer(server);
@@ -968,13 +969,70 @@ describe('core API', () => {
       const serviceHost = `s-3000-${session.id}.deputies.localhost`;
 
       const trustedGet = await fetch(`${baseUrl}/`, { headers: { cookie: cookie!, 'x-forwarded-host': serviceHost } });
-      expect(trustedGet.status).toBe(200);
+      expect(trustedGet.status).toBe(403);
+
+      const servicesResponse = await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`, {
+        headers: { cookie: cookie! },
+      });
+      expect(servicesResponse.status).toBe(200);
+      const servicesBody = (await servicesResponse.json()) as { services: Array<{ url: string }> };
+      const previewAuthUrl = new URL(servicesBody.services[0]!.url);
+      expect(previewAuthUrl.pathname).toBe('/__preview_auth');
+
+      const previewAuth = await fetch(`${baseUrl}${previewAuthUrl.pathname}${previewAuthUrl.search}`, {
+        headers: { 'x-forwarded-host': serviceHost },
+        redirect: 'manual',
+      });
+      expect(previewAuth.status).toBe(302);
+      expect(previewAuth.headers.get('location')).toBe('/');
+      const previewCookie = previewAuth.headers.get('set-cookie');
+      expect(previewCookie).toContain('deputies_preview=');
+
+      const previewGet = await fetch(`${baseUrl}/`, {
+        headers: { cookie: previewCookie!, 'x-forwarded-host': serviceHost },
+      });
+      expect(previewGet.status).toBe(200);
 
       const crossSitePost = await fetch(`${baseUrl}/`, {
         method: 'POST',
-        headers: { cookie: cookie!, 'x-forwarded-host': serviceHost, origin: 'https://evil.example' },
+        headers: { cookie: previewCookie!, 'x-forwarded-host': serviceHost, origin: 'https://evil.example' },
       });
       expect(crossSitePost.status).toBe(403);
+
+      const sameOriginPost = await fetch(`${baseUrl}/`, {
+        method: 'POST',
+        headers: { cookie: previewCookie!, 'x-forwarded-host': serviceHost, origin: `https://${serviceHost}` },
+      });
+      expect(sameOriginPost.status).toBe(200);
+
+      const headers = await fetch(`${baseUrl}/headers`, {
+        headers: {
+          cookie: previewCookie!,
+          'x-forwarded-host': serviceHost,
+          referer: previewAuthUrl.toString(),
+        },
+      });
+      await expect(headers.json()).resolves.toMatchObject({ referer: null });
+
+      const user = ((await login.clone().json()) as { user: { id: string } }).user;
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const renewalCookie = `${previewCookieName}=${signPreviewAuthToken(
+        {
+          kind: 'cookie',
+          authSessionId: cookieValue(cookie!, 'dev_deputies_session'),
+          previewSessionId: session.id,
+          port: 3000,
+          userId: user.id,
+          exp: nowSeconds + Math.floor(previewCookieMaxAgeSeconds / 3),
+          grantExp: nowSeconds + 3600,
+        },
+        'test-secret',
+      )}`;
+      const renewed = await fetch(`${baseUrl}/`, {
+        headers: { cookie: renewalCookie, 'x-forwarded-host': serviceHost },
+      });
+      expect(renewed.status).toBe(200);
+      expect(renewed.headers.get('set-cookie')).toContain(`${previewCookieName}=`);
     } finally {
       await closeServer(upstream);
     }
@@ -1927,6 +1985,11 @@ class DisappearingServiceSandboxProvider extends ServiceSandboxProvider {
 
 function createPreviewUpstream(): Server {
   return createHttpServer((request, response) => {
+    if (request.url === '/headers') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ referer: request.headers.referer ?? null }));
+      return;
+    }
     if (request.url === '/') {
       response.writeHead(200, { 'content-type': 'text/html' });
       response.end(`<!doctype html>
@@ -1954,6 +2017,12 @@ function createPreviewUpstream(): Server {
     response.writeHead(404, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ error: 'not_found' }));
   });
+}
+
+function cookieValue(header: string, name: string): string {
+  const match = header.match(new RegExp(`${name}=([^;]+)`));
+  if (!match?.[1]) throw new Error(`Missing cookie ${name}`);
+  return match[1];
 }
 
 async function closeServer(server: Server): Promise<void> {

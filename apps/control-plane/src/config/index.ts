@@ -59,7 +59,6 @@ export type AppConfig = {
   authSessionSecret?: string;
   authCookieSecure: boolean;
   authCookieSameSite: AuthCookieSameSite;
-  authCookieDomain?: string;
   webBaseUrl?: string;
   serviceBaseDomain?: string;
   serviceTrustForwardedHosts: boolean;
@@ -218,7 +217,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.AUTH_STATIC_USERNAME) config.authStaticUsername = env.AUTH_STATIC_USERNAME;
   if (env.AUTH_STATIC_PASSWORD) config.authStaticPassword = env.AUTH_STATIC_PASSWORD;
   if (env.AUTH_SESSION_SECRET) config.authSessionSecret = env.AUTH_SESSION_SECRET;
-  if (env.AUTH_COOKIE_DOMAIN) config.authCookieDomain = env.AUTH_COOKIE_DOMAIN;
   if (env.WEB_BASE_URL) config.webBaseUrl = env.WEB_BASE_URL;
   if (env.SERVICE_BASE_DOMAIN) config.serviceBaseDomain = env.SERVICE_BASE_DOMAIN;
   if (env.GITHUB_OAUTH_CLIENT_ID) config.githubOAuthClientId = env.GITHUB_OAUTH_CLIENT_ID;

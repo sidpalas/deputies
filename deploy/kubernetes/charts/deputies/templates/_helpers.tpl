@@ -69,10 +69,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ $root.Values.config.apiAuthMode | quote }}
 - name: AUTH_PROVIDER
   value: {{ $root.Values.config.authProvider | quote }}
-{{- if $root.Values.config.authCookieDomain }}
-- name: AUTH_COOKIE_DOMAIN
-  value: {{ $root.Values.config.authCookieDomain | quote }}
-{{- end }}
 - name: AUTH_COOKIE_SECURE
   value: {{ $root.Values.config.authCookieSecure | quote }}
 - name: AUTH_COOKIE_SAME_SITE

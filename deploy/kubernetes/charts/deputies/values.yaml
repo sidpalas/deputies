@@ -69,7 +69,6 @@ config:
   sandboxWorkspacePath: /workspace
   apiAuthMode: none
   authProvider: static
-  authCookieDomain: ''
   authCookieSecure: 'true'
   authCookieSameSite: lax
   webBaseUrl: https://deputies-k8s.localhost
