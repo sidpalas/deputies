@@ -1,26 +1,10 @@
 name: Build and Push Images
 
 on:
-  # Keep automatic publishing disabled until image release cadence is settled.
-  # push:
-  #   branches:
-  #     - main
-  #   tags:
-  #     - 'v*'
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
-    inputs:
-      web:
-        description: Build and push web
-        type: boolean
-        default: true
-      control_plane:
-        description: Build and push control-plane
-        type: boolean
-        default: true
-      sandbox_images:
-        description: Build and push sandbox base, Daytona, and Docker
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -32,45 +16,29 @@ env:
   SANDBOX_BASE_REF: ghcr.io/sidpalas/deputies-sandbox-base:sha-${{ github.sha }}
 
 jobs:
-  validate:
-    name: Validate image selection
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require at least one image
-        run: |
-          if [ "${{ inputs.web }}" != "true" ] && [ "${{ inputs.control_plane }}" != "true" ] && [ "${{ inputs.sandbox_images }}" != "true" ]; then
-            echo "Select at least one image to build and push."
-            exit 1
-          fi
-
   build:
     name: Build ${{ matrix.image.name }}
-    needs: validate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         image:
           - name: web
-            input: web
             dockerfile: apps/web/Dockerfile
             image: ghcr.io/sidpalas/deputies-web
             platforms: linux/amd64,linux/arm64
             provenance: true
           - name: control-plane
-            input: control_plane
             dockerfile: apps/control-plane/Dockerfile
             image: ghcr.io/sidpalas/deputies-control-plane
             platforms: linux/amd64,linux/arm64
             provenance: true
           - name: daytona-sandbox
-            input: sandbox_images
             dockerfile: deploy/sandboxes/daytona/Dockerfile
             image: ghcr.io/sidpalas/deputies-daytona-sandbox
             platforms: linux/amd64
             provenance: false
           - name: docker-sandbox
-            input: sandbox_images
             dockerfile: deploy/sandboxes/docker/Dockerfile
             image: ghcr.io/sidpalas/deputies-docker-sandbox
             platforms: linux/amd64
@@ -78,16 +46,13 @@ jobs:
 
     steps:
       - name: Checkout
-        if: ${{ inputs[matrix.image.input] }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # TODO: Switch to Namespace or Depot builders for faster multi-arch builds.
       - name: Set up Docker Buildx
-        if: ${{ inputs[matrix.image.input] }}
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Log in to GHCR
-        if: ${{ inputs[matrix.image.input] }}
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -95,7 +60,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract sandbox base metadata
-        if: ${{ inputs.sandbox_images && (matrix.image.name == 'daytona-sandbox' || matrix.image.name == 'docker-sandbox') }}
+        if: ${{ matrix.image.name == 'daytona-sandbox' || matrix.image.name == 'docker-sandbox' }}
         id: sandbox-base-meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
@@ -108,7 +73,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and publish sandbox base image
-        if: ${{ inputs.sandbox_images && (matrix.image.name == 'daytona-sandbox' || matrix.image.name == 'docker-sandbox') }}
+        if: ${{ matrix.image.name == 'daytona-sandbox' || matrix.image.name == 'docker-sandbox' }}
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
@@ -122,7 +87,6 @@ jobs:
           cache-to: type=gha,mode=max,scope=sandbox-base
 
       - name: Extract metadata
-        if: ${{ inputs[matrix.image.input] }}
         id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
@@ -135,7 +99,6 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and publish image
-        if: ${{ inputs[matrix.image.input] }}
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
