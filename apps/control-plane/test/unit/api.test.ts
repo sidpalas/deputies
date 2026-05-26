@@ -56,7 +56,7 @@ describe('core API', () => {
     const response = await fetch(`${baseUrl}/health`);
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ status: 'ok', runMode: 'all' });
+    await expect(response.json()).resolves.toMatchObject({ status: 'ok', runMode: 'combined' });
   });
 
   it('reports degraded health and unavailable model options', async () => {
@@ -1640,8 +1640,7 @@ describe('core API', () => {
     });
 
     const suffix = artifact!.storageKey!.split('/').at(-1)!;
-    expect(suffix).toHaveLength(`${artifact!.id}-`.length + 120);
-    expect(suffix).toBe(`${artifact!.id}-${'a'.repeat(120)}`);
+    expect(suffix).toMatch(new RegExp(`^\\d{8}T\\d{9}Z-${artifact!.id}-${'a'.repeat(120)}$`));
   });
 
   it('uses ranged object reads for text artifact previews', async () => {
@@ -1718,6 +1717,14 @@ describe('core API', () => {
     };
     const events = services.events;
     const failingStore = {
+      async getSession() {
+        return {
+          id: '00000000-0000-4000-8000-000000000001',
+          status: 'active' as const,
+          createdAt: new Date('2026-05-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-05-01T00:00:00.000Z'),
+        };
+      },
       async createArtifact() {
         throw new Error('metadata insert failed');
       },

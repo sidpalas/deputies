@@ -34,7 +34,9 @@ test('keeps context collapsed around tablet and small desktop widths', async ({ 
 
 test('keeps the mobile sessions modal footer reachable on short screens', async ({ page }) => {
   await page.route('http://localhost:3583/health', async (route) => {
-    await route.fulfill({ json: { status: 'ok', runMode: 'all', apiAuthMode: 'session', authProvider: 'static' } });
+    await route.fulfill({
+      json: { status: 'ok', runMode: 'combined', apiAuthMode: 'session', authProvider: 'static' },
+    });
   });
   await page.route('http://localhost:3583/auth/me', async (route) => {
     await route.fulfill({ json: { user: { id: 'operator', username: 'operator', displayName: 'Operator' } } });
@@ -72,7 +74,7 @@ async function mockApi(page: Page): Promise<void> {
     const url = new URL(route.request().url());
 
     if (url.pathname === '/health') {
-      await route.fulfill({ json: { status: 'ok', runMode: 'all', apiAuthMode: 'none' } });
+      await route.fulfill({ json: { status: 'ok', runMode: 'combined', apiAuthMode: 'none' } });
       return;
     }
 

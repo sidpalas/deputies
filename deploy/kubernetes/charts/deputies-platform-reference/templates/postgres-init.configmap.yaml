@@ -1,0 +1,20 @@
+{{- if .Values.postgresql.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deputies-platform-reference.postgresName" . }}-init
+  labels:
+    {{- include "deputies-platform-reference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+    {{- with .Values.postgresql.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.postgresql.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  10-init-test-db.sql: |
+    SELECT 'CREATE DATABASE {{ .Values.postgresql.testDatabase }} OWNER {{ .Values.postgresql.credentials.username }}'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ .Values.postgresql.testDatabase }}')\gexec
+{{- end }}

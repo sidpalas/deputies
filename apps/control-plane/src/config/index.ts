@@ -1,4 +1,4 @@
-export type RunMode = 'all' | 'api' | 'worker';
+export type RunMode = 'combined' | 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue';
 export type SandboxProviderKind = 'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'kubernetes' | 'ecs';
 export type DockerOrchestratorMode = 'in-process' | 'http';
@@ -139,7 +139,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
         'SANDBOX_KEEPALIVE_MAX_EXTENSION_SECONDS',
       ) * 1000,
     sandboxWorkspacePath: env.SANDBOX_WORKSPACE_PATH ?? '/workspace',
-    runMode: parseEnum(env.RUN_MODE, ['all', 'api', 'worker'], 'all'),
+    runMode: parseEnum(env.RUN_MODE, ['combined', 'all', 'api', 'worker'], 'combined'),
     runner: parseEnum(env.RUNNER, ['fake', 'flue'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,

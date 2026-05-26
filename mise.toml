@@ -1,4 +1,6 @@
 [tools]
+"github:kubernetes-sigs/cloud-provider-kind" = "0.9"
+kind = "0.30"
 node = "24"
 pnpm = "10.33"
 

@@ -79,7 +79,7 @@ For Node deployments, Flue can generate a standalone server with `/agents/:name/
 
 The current scaffold has implemented the portable control-plane foundation:
 
-- TypeScript Node service with `RUN_MODE=all|api|worker`.
+- TypeScript Node service with `RUN_MODE=combined|api|worker`.
 - Core session/message/event HTTP loop.
 - Docker Compose Postgres and SeaweedFS object storage for local development.
 - Raw SQL migration runner.
@@ -109,7 +109,7 @@ The following MVP pieces are still planned:
 
 The first complete version should support:
 
-- Single service process with `RUN_MODE=all`.
+- Single service process with `RUN_MODE=combined`.
 - Postgres-backed sessions, messages, events, runs, and leases.
 - Generic inbound webhook integration.
 - Fake runner and fake sandbox for deterministic tests.

@@ -9,7 +9,8 @@ Deployable source and shared Dockerfiles live under `apps/`:
 
 Deployment target docs:
 
-- `docker-compose/`: full app Docker Compose stacks for local production-style all-in-one and split API/worker/orchestrator deployments.
+- `docker-compose/`: full app Docker Compose stacks for local production-style combined and split API/worker/orchestrator deployments.
+- `kubernetes/`: Helm charts for Kubernetes deployments.
 - `railway/`: Railway template notes and post-deploy variable setup.
 
 Contributor local support services:
@@ -25,7 +26,6 @@ Sandbox provider deployment assets live under `sandboxes/`. These build and veri
 
 Add one subdirectory per deployment target or infrastructure provider, for example:
 
-- `k8s/`
 - `terraform/`
 
 Keep provider-specific secrets out of this directory. Document required environment variables in the relevant subdirectory README instead.

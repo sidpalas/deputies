@@ -8,3 +8,4 @@ test-results/
 .env.*
 !.env.example
 .DS_Store
+deploy/kubernetes/charts/**/charts/*.tgz

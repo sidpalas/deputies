@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "deputies.apiServiceName" . }}
+  labels:
+    {{- include "deputies.labels" . | nindent 4 }}
+    {{- with .Values.controlPlane.service.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    app.kubernetes.io/component: api
+  {{- with .Values.controlPlane.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ports:
+    - name: http
+      port: {{ .Values.controlPlane.service.port }}
+      targetPort: http
+  selector:
+    {{- include "deputies.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/role: api

@@ -1,0 +1,89 @@
+{{- if eq .Values.topology.mode "split" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "deputies.fullname" . }}-worker
+  labels:
+    {{- include "deputies.labels" . | nindent 4 }}
+    {{- with .Values.controlPlane.worker.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    app.kubernetes.io/component: worker
+  {{- with .Values.controlPlane.worker.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.controlPlane.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "deputies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      annotations:
+        checksum/app-secret: {{ include (print $.Template.BasePath "/app.secret.yaml") . | sha256sum }}
+        checksum/postgres-secret: {{ include (print $.Template.BasePath "/postgres.secret.yaml") . | sha256sum }}
+        rollout/revision: {{ .Values.rollout.revision | quote }}
+        {{- with .Values.controlPlane.worker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- with .Values.controlPlane.worker.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- include "deputies.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: {{ include "deputies.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
+          imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.controlPlane.service.port }}
+          env:
+            {{- include "deputies.controlPlaneEnv" (dict "root" . "runMode" "worker" "port" .Values.controlPlane.service.port) | nindent 12 }}
+          envFrom:
+            - secretRef:
+                name: {{ include "deputies.secretName" . }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.controlPlane.worker.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

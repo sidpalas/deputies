@@ -22,7 +22,7 @@ The template uses static session auth by default. Railway auto-generates the sta
 The template should be treated as equivalent to:
 
 ```sh
-RUN_MODE=all
+RUN_MODE=combined
 APP_DATA_STORE=postgres
 FLUE_STATE_STORE=postgres
 RUNNER=fake

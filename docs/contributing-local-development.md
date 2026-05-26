@@ -1,6 +1,6 @@
 # Local Development
 
-This is the fastest path to a solid local Deputies setup. It uses Postgres and SeaweedFS via Docker Compose, Portless HTTPS, static session auth, `RUN_MODE=all`, the Docker sandbox provider, and an Anthropic or OpenAI API key.
+This is the fastest path to a solid local Deputies setup. It uses Postgres and SeaweedFS via Docker Compose, Portless HTTPS, static session auth, `RUN_MODE=combined`, the Docker sandbox provider, and an Anthropic or OpenAI API key.
 
 ## Prerequisites
 
@@ -38,7 +38,7 @@ openssl rand -base64 32
 Edit `.env.local` with this baseline. Use one generated value for `AUTH_SESSION_SECRET` and the other for `SANDBOX_SECRET_ENCRYPTION_KEY`.
 
 ```sh
-RUN_MODE=all
+RUN_MODE=combined
 
 APP_DATA_STORE=postgres
 DATABASE_URL=postgres://flue:flue@localhost:5432/flue
@@ -136,7 +136,7 @@ pnpm portless:alias:web
 
 Portless binds port `443`, so approve the sudo prompt.
 
-Terminal 1, start the control plane API and worker in `RUN_MODE=all`:
+Terminal 1, start the control plane API and worker in `RUN_MODE=combined`:
 
 ```sh
 set -a; . ./.env.local; set +a

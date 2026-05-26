@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "deputies.fullname" . }}-web
+  labels:
+    {{- include "deputies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+    {{- with .Values.web.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.web.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ports:
+    - name: http
+      port: {{ .Values.web.service.port }}
+      targetPort: http
+  selector:
+    {{- include "deputies.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: web
