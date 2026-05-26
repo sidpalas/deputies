@@ -12,6 +12,7 @@ data:
       root * /usr/share/caddy
       encode zstd gzip
 
+      # Keep this forwarded-host routing aligned with apps/web/Caddyfile.local.
       @service_host header_regexp Host ^s-
       @service_forwarded_host header_regexp X-Forwarded-Host ^s-
       @service_original_host header_regexp X-Original-Host ^s-

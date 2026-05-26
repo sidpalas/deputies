@@ -2,6 +2,8 @@
 	root * /usr/share/caddy
 	encode zstd gzip
 
+	# Keep this forwarded-host routing aligned with the Helm-rendered Caddyfile used
+	# when web.trustForwardedServiceHosts=true.
 	@service_host header_regexp Host ^s-
 	# Portless terminates TLS locally and may forward Caddy an internal Host
 	# while preserving the browser service host/proto in X-Forwarded-* or X-Original-*.
