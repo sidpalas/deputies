@@ -546,6 +546,50 @@ it('renders active deputy progress without markdown code chrome', async () => {
   expect(codeToHtmlMock).not.toHaveBeenCalled();
 });
 
+it('keeps large live deputy progress bounded while streaming', async () => {
+  const messageId = '00000000-0000-4000-8000-000000000131';
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    sessionOverride: { status: 'active' },
+    messages: [
+      messageFixture({
+        id: messageId,
+        sequence: 1,
+        status: 'processing',
+        prompt: 'stream a large preview',
+      }),
+    ],
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByText('stream a large preview')).toBeInTheDocument();
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+
+  const deltaCount = 10_000;
+  const deltaText = `${'x'.repeat(800)}\n`;
+  await act(async () => {
+    for (let index = 1; index <= deltaCount; index += 1) {
+      pushGlobalEvent?.(
+        eventFixture({
+          id: index,
+          sequence: index,
+          type: 'agent_text_delta',
+          messageId,
+          payload: { sequence: 1, text: deltaText },
+        }),
+      );
+    }
+  });
+
+  await waitFor(() => {
+    expect(screen.getByLabelText('Scrollable deputy progress')).toHaveTextContent('earlier characters hidden');
+  });
+  expect(screen.getByLabelText('Scrollable deputy progress').textContent?.length).toBeLessThan(25_000);
+});
+
 it('retries a failed message from its message card', async () => {
   const retriedMessageIds: string[] = [];
   mockApi({

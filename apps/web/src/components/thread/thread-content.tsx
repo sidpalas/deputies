@@ -20,6 +20,7 @@ import { Textarea } from '../ui/textarea.js';
 import { cn } from '../../lib/utils.js';
 
 export function ChatPanel(props: {
+  activeProgress: Record<string, string>;
   artifacts: Artifact[];
   canAdmin: boolean;
   services: SandboxService[];
@@ -38,7 +39,7 @@ export function ChatPanel(props: {
   onExtendSandbox: (port?: number) => void;
   onLoadArtifactPreview: (artifact: Artifact) => Promise<ArtifactPreview>;
 }) {
-  const assistantText = buildAssistantText(props.events);
+  const assistantText = { ...buildAssistantText(props.events), ...props.activeProgress };
   const diagnostics = groupDiagnosticsByRun(props.events);
   const groups = groupMessagesByRun(props.messages, props.events);
 

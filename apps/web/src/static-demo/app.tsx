@@ -172,6 +172,7 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
               onReplayCallback={() => undefined}
             />
             <ChatPanel
+              activeProgress={{}}
               artifacts={props.demoSession.artifacts}
               canAdmin={false}
               services={services}
