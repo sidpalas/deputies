@@ -64,6 +64,22 @@ describe('AgentSandboxProvider', () => {
       fetchMock.mockRestore();
     }
   });
+
+  it('requires a matching bearer token for mutating HTTP orchestrator requests', async () => {
+    const handler = createAgentSandboxOrchestratorHttpHandler(new FakeAgentSandboxOrchestrator(), 'orchestrator-token');
+    const request = (token?: string) =>
+      new Request('https://orchestrator.test/sandboxes', {
+        method: 'POST',
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+        body: JSON.stringify({ sessionId: 'session-3' }),
+      });
+
+    await expect(handler(request())).resolves.toMatchObject({ status: 401 });
+    await expect(handler(request('wrong-token'))).resolves.toMatchObject({ status: 401 });
+    await expect(handler(request('orchestrator-token'))).resolves.toMatchObject({ status: 200 });
+
+    await expect(handler(new Request('https://orchestrator.test/health'))).resolves.toMatchObject({ status: 200 });
+  });
 });
 
 class FakeAgentSandboxOrchestrator implements AgentSandboxOrchestrator {

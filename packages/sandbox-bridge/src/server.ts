@@ -290,24 +290,34 @@ async function execCommand(workspacePath: string, input: ParsedExecRequest, maxO
     let stderr = '';
     let timedOut = false;
     let resolved = false;
+    let exited = false;
+    let stdoutClosed = false;
+    let stderrClosed = false;
+    let exitCode: number | null = null;
+    let exitSignal: NodeJS.Signals | null = null;
+    let exitDrainTimer: NodeJS.Timeout | undefined;
     const timer = timeoutMs
       ? setTimeout(() => {
           timedOut = true;
           killProcessGroup(child.pid);
         }, timeoutMs)
       : undefined;
-    const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+    const finish = () => {
       if (resolved) return;
       resolved = true;
       if (timer) clearTimeout(timer);
+      if (exitDrainTimer) clearTimeout(exitDrainTimer);
       if (timedOut && !stderr.trim()) stderr = `[sandbox bridge] Command timed out after ${timeoutMs}ms.`;
       resolveResult({
-        exitCode: code ?? signalExitCode(signal),
+        exitCode: exitCode ?? signalExitCode(exitSignal),
         stdout,
         stderr,
         startedAt: startedAt.toISOString(),
         completedAt: new Date().toISOString(),
       });
+    };
+    const finishIfStreamsDrained = () => {
+      if (exited && stdoutClosed && stderrClosed) finish();
     };
 
     child.stdout.setEncoding('utf-8');
@@ -318,8 +328,22 @@ async function execCommand(workspacePath: string, input: ParsedExecRequest, maxO
     child.stderr.on('data', (chunk: string) => {
       stderr = appendBounded(stderr, chunk, maxOutputBytes);
     });
+    child.stdout.on('close', () => {
+      stdoutClosed = true;
+      finishIfStreamsDrained();
+    });
+    child.stderr.on('close', () => {
+      stderrClosed = true;
+      finishIfStreamsDrained();
+    });
     child.on('error', reject);
-    child.on('exit', finish);
+    child.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+      exited = true;
+      exitCode = code;
+      exitSignal = signal;
+      finishIfStreamsDrained();
+      exitDrainTimer = setTimeout(finish, 100);
+    });
     if (input.stdin !== undefined) child.stdin.end(input.stdin);
     else child.stdin.end();
   });

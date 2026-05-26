@@ -260,6 +260,25 @@ describe('loadConfig', () => {
     },
   );
 
+  it('requires URL and token for k8s-agent-sandbox HTTP orchestrator mode', () => {
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        SANDBOX_PROVIDER: 'k8s-agent-sandbox',
+        AGENT_SANDBOX_ORCHESTRATOR_MODE: 'http',
+      }),
+    ).toThrow('AGENT_SANDBOX_ORCHESTRATOR_URL is required when AGENT_SANDBOX_ORCHESTRATOR_MODE=http');
+
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        SANDBOX_PROVIDER: 'k8s-agent-sandbox',
+        AGENT_SANDBOX_ORCHESTRATOR_MODE: 'http',
+        AGENT_SANDBOX_ORCHESTRATOR_URL: 'http://agent-sandbox-orchestrator:3587',
+      }),
+    ).toThrow('AGENT_SANDBOX_ORCHESTRATOR_TOKEN is required when AGENT_SANDBOX_ORCHESTRATOR_MODE=http');
+  });
+
   it('allows the app secret placeholder locally but rejects it in production', () => {
     expect(() =>
       loadConfig({

@@ -4,3 +4,9 @@
 {{- if not (has .Values.topology.mode (list "combined" "split")) -}}
 {{- fail "topology.mode must be one of: combined, split" -}}
 {{- end -}}
+{{- if and .Values.controlPlane.agentSandboxOrchestrator.enabled .Values.secrets.create (not .Values.secrets.agentSandboxOrchestratorToken) -}}
+{{- fail "secrets.agentSandboxOrchestratorToken is required when controlPlane.agentSandboxOrchestrator.enabled=true and secrets.create=true" -}}
+{{- end -}}
+{{- if and .Values.config.agentSandboxNamespace (ne .Values.config.agentSandboxNamespace .Release.Namespace) -}}
+{{- fail "config.agentSandboxNamespace must match the release namespace; cross-namespace Agent Sandbox orchestration is not supported yet" -}}
+{{- end -}}

@@ -68,9 +68,11 @@ spec:
             - name: AGENT_SANDBOX_STORAGE_CLASS_NAME
               value: {{ .Values.config.agentSandboxStorageClassName | quote }}
             {{- end }}
-          envFrom:
-            - secretRef:
-                name: {{ include "deputies.secretName" . }}
+            - name: AGENT_SANDBOX_ORCHESTRATOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "deputies.secretName" . }}
+                  key: AGENT_SANDBOX_ORCHESTRATOR_TOKEN
           readinessProbe:
             httpGet:
               path: /health

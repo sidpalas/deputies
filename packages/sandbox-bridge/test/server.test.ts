@@ -126,6 +126,16 @@ describe('sandbox bridge server', () => {
     if (Number.isInteger(pid)) process.kill(pid, 'SIGTERM');
   });
 
+  it('drains command output after process exit', async () => {
+    const output = 'x'.repeat(16 * 1024);
+    const response = await bridgeFetch('/exec', {
+      method: 'POST',
+      body: JSON.stringify({ command: `node -e "process.stdout.write('${output}')"` }),
+    });
+
+    await expect(response.json()).resolves.toMatchObject({ exitCode: 0, stdout: output });
+  });
+
   it('proxies preview traffic to localhost and strips auth cookies', async () => {
     const upstream = createServer((request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });

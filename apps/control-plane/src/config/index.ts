@@ -274,6 +274,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   validateProductAuthConfig(config);
   validateArtifactStorageConfig(config);
   validateSandboxSecretConfig(config, env);
+  validateAgentSandboxOrchestratorConfig(config);
 
   if (config.slackSigningSecret && !config.unsafeSlackWebhookAllowAllIds && !hasAnySlackAllowlist(config)) {
     throw new Error(
@@ -296,6 +297,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   }
 
   return config;
+}
+
+function validateAgentSandboxOrchestratorConfig(config: AppConfig): void {
+  if (config.sandboxProvider !== 'k8s-agent-sandbox' || config.agentSandboxOrchestratorMode !== 'http') return;
+  requireAgentSandboxOrchestratorUrl(config);
+  requireAgentSandboxOrchestratorToken(config);
 }
 
 function validateSandboxSecretConfig(config: AppConfig, env: NodeJS.ProcessEnv): void {
@@ -411,6 +418,14 @@ export function requireAgentSandboxOrchestratorUrl(config: AppConfig): string {
   }
 
   return config.agentSandboxOrchestratorUrl;
+}
+
+export function requireAgentSandboxOrchestratorToken(config: AppConfig): string {
+  if (!config.agentSandboxOrchestratorToken) {
+    throw new Error('AGENT_SANDBOX_ORCHESTRATOR_TOKEN is required when AGENT_SANDBOX_ORCHESTRATOR_MODE=http');
+  }
+
+  return config.agentSandboxOrchestratorToken;
 }
 
 export function requireFlueModel(config: AppConfig): string {

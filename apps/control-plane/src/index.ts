@@ -5,6 +5,7 @@ import { createArtifactObjectStorage } from './artifacts/storage.js';
 import { HttpCompletionCallbackSender, type CompletionCallbackSender } from './callbacks/service.js';
 import {
   loadConfig,
+  requireAgentSandboxOrchestratorToken,
   requireAgentSandboxOrchestratorUrl,
   requireDatabaseUrl,
   requireDaytonaApiKey,
@@ -231,7 +232,7 @@ function createSandboxProvider(): SandboxProvider {
         ? new HttpAgentSandboxOrchestratorClient(
             optional({
               baseUrl: requireAgentSandboxOrchestratorUrl(config),
-              token: config.agentSandboxOrchestratorToken,
+              token: requireAgentSandboxOrchestratorToken(config),
             }),
           )
         : new InProcessAgentSandboxOrchestrator(

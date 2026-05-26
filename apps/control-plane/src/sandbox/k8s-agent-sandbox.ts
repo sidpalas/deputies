@@ -562,8 +562,6 @@ export function createAgentSandboxOrchestratorHttpHandler(
 ): (request: Request) => Promise<Response> {
   return async (request) => {
     try {
-      if (token && request.headers.get('authorization') !== `Bearer ${token}`)
-        return jsonResponse(401, { error: 'unauthorized' });
       const url = new URL(request.url);
       const match = url.pathname.match(/^\/sandboxes\/([^/]+)\/(.+)$/);
       if (request.method === 'GET' && url.pathname === '/health') {
@@ -572,6 +570,8 @@ export function createAgentSandboxOrchestratorHttpHandler(
           : { status: 'ready' as const, checkedAt: new Date() };
         return jsonResponse(200, check);
       }
+      if (token && request.headers.get('authorization') !== `Bearer ${token}`)
+        return jsonResponse(401, { error: 'unauthorized' });
       if (request.method === 'POST' && url.pathname === '/sandboxes')
         return jsonResponse(200, await orchestrator.create((await request.json()) as AgentSandboxCreateInput));
       if (request.method !== 'POST' || !match) return jsonResponse(404, { error: 'not_found' });

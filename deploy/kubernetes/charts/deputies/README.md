@@ -11,6 +11,10 @@ Topologies:
 
 The chart supports `SANDBOX_PROVIDER=daytona` and `SANDBOX_PROVIDER=k8s-agent-sandbox`; it does not mount the Docker socket.
 
+When `controlPlane.agentSandboxOrchestrator.enabled=true`, set a non-empty `secrets.agentSandboxOrchestratorToken` unless you provide the app Secret externally. The control-plane uses this bearer token when calling the separate in-cluster orchestrator, and the orchestrator rejects requests without it.
+
+Agent Sandbox orchestration is same-namespace only for now. Leave `config.agentSandboxNamespace` empty or set it to the Helm release namespace.
+
 For Portless plus a local Traefik forward, set `web.trustForwardedServiceHosts=true` so the web proxy routes wildcard service hosts from `Host`, `X-Forwarded-Host`, or `X-Original-Host`, matching the Docker Compose local Caddy behavior. Also configure Traefik to trust forwarded headers through the platform chart; otherwise service previews may open the Deputies home page or setup guide instead of the sandbox service.
 
 The chart renders Kubernetes `Ingress` by default. Set `routing.mode=gateway` to render Gateway API `HTTPRoute` resources instead; the default parent is a `Gateway` named `traefik-gateway` in the release namespace. Override `gateway.parentRef.name`, `gateway.parentRef.namespace`, or `gateway.parentRef.sectionName` when using a different Gateway API controller or shared Gateway.

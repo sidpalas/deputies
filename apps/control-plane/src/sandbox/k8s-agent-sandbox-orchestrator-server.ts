@@ -3,6 +3,7 @@ import { InProcessAgentSandboxOrchestrator, createAgentSandboxOrchestratorHttpHa
 
 const port = parsePort(process.env.AGENT_SANDBOX_ORCHESTRATOR_PORT, 3587);
 const host = process.env.AGENT_SANDBOX_ORCHESTRATOR_HOST ?? '0.0.0.0';
+const token = requireEnv('AGENT_SANDBOX_ORCHESTRATOR_TOKEN');
 const handler = createAgentSandboxOrchestratorHttpHandler(
   new InProcessAgentSandboxOrchestrator(
     optional({
@@ -13,7 +14,7 @@ const handler = createAgentSandboxOrchestratorHttpHandler(
       storageClassName: process.env.AGENT_SANDBOX_STORAGE_CLASS_NAME,
     }),
   ),
-  process.env.AGENT_SANDBOX_ORCHESTRATOR_TOKEN,
+  token,
 );
 
 const server = createServer(async (request, response) => {
@@ -49,4 +50,10 @@ function parsePort(value: string | undefined, fallback: number): number {
 
 function optional<T extends Record<string, unknown>>(input: T): T {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T;
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required`);
+  return value;
 }
