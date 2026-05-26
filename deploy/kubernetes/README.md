@@ -226,7 +226,7 @@ pnpm dlx portless proxy start --wildcard
 pnpm dlx portless alias deputies-k8s 15173 --force
 ```
 
-For Portless plus Traefik, turn off host matching in the app chart and configure the web Caddy proxy to route service hosts from `X-Forwarded-Host`:
+For Portless plus Traefik, all of these settings are required. Turn off app-chart host matching, configure the web Caddy proxy to route forwarded service hosts, and configure Traefik to preserve forwarded host metadata:
 
 ```sh
 helm upgrade deputies-platform deploy/kubernetes/charts/deputies-platform-reference \
@@ -250,9 +250,19 @@ helm upgrade deputies deploy/kubernetes/charts/deputies \
 Why both are needed:
 
 - Portless forwards requests to Traefik through a local port, so Traefik may see an upstream `Host` like `127.0.0.1:15173` instead of `deputies-k8s.localhost`; hostless Ingress or `HTTPRoute` matching avoids Traefik returning `404` before the request reaches the app.
-- Portless forwards wildcard service requests with `X-Forwarded-Host: s-<port>-<session>.deputies-k8s.localhost`.
+- Portless forwards wildcard service requests with host metadata such as `X-Forwarded-Host: s-<port>-<session>.deputies-k8s.localhost` or `X-Original-Host: s-<port>-<session>.deputies-k8s.localhost`.
 - Traefik must not discard the forwarded host metadata.
-- The web Caddyfile must route service hosts from `X-Forwarded-Host`, matching the Docker Compose local Caddy behavior.
+- The web Caddyfile must route service hosts from `Host`, `X-Forwarded-Host`, or `X-Original-Host`, matching the Docker Compose local Caddy behavior.
+
+If a preview URL such as `https://s-3000-<session-id>.deputies-k8s.localhost` opens the Deputies home page or setup guide instead of the sandbox service, one of the local Portless settings above is missing or stale. Check the live state with:
+
+```sh
+helm get values deputies-platform --namespace deputies
+helm get values deputies --namespace deputies
+kubectl exec --namespace deputies deployment/deputies-web -- sed -n '1,45p' /etc/caddy/Caddyfile
+```
+
+The platform values must include both Traefik `forwardedHeaders.insecure=true` settings, and the app values must include `web.trustForwardedServiceHosts=true` with hostless local routing.
 
 Keep the host-matched defaults for real cluster DNS/LB installs. Only use the hostless override for local Portless access.
 

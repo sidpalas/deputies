@@ -9,13 +9,23 @@ Topologies:
 - `migrate`: one-shot database migration job, run as a Helm post-install/post-upgrade hook by default
 - `web`: static web UI served by Caddy, proxying API routes to the stable API service
 
-The chart is currently oriented around `SANDBOX_PROVIDER=daytona` and does not mount the Docker socket.
+The chart supports `SANDBOX_PROVIDER=daytona` and `SANDBOX_PROVIDER=k8s-agent-sandbox`; it does not mount the Docker socket.
 
-For Portless plus a local Traefik forward, set `web.trustForwardedServiceHosts=true` so the web proxy routes wildcard service hosts from `X-Forwarded-Host`, matching the Docker Compose local Caddy behavior. Also configure Traefik to trust forwarded headers through the platform chart.
+For Portless plus a local Traefik forward, set `web.trustForwardedServiceHosts=true` so the web proxy routes wildcard service hosts from `Host`, `X-Forwarded-Host`, or `X-Original-Host`, matching the Docker Compose local Caddy behavior. Also configure Traefik to trust forwarded headers through the platform chart; otherwise service previews may open the Deputies home page or setup guide instead of the sandbox service.
 
 The chart renders Kubernetes `Ingress` by default. Set `routing.mode=gateway` to render Gateway API `HTTPRoute` resources instead; the default parent is a `Gateway` named `traefik-gateway` in the release namespace. Override `gateway.parentRef.name`, `gateway.parentRef.namespace`, or `gateway.parentRef.sectionName` when using a different Gateway API controller or shared Gateway.
 
 Default routing is host-matched and intended for real clusters: point DNS for `ingress.web.host` / `ingress.services.host` or `gateway.web.host` / `gateway.services.host` at your ingress controller or Gateway load balancer. For local Portless development through a forwarded Traefik port, use hostless routing by setting `ingress.web.host=''`, `ingress.services.enabled=false`, `gateway.web.host=''`, and `gateway.services.host=''`.
+
+Required local Portless app-chart values:
+
+```sh
+--set-string ingress.web.host= \
+--set ingress.services.enabled=false \
+--set-string gateway.web.host= \
+--set-string gateway.services.host= \
+--set web.trustForwardedServiceHosts=true
+```
 
 Install with the reference platform chart:
 
@@ -63,6 +73,8 @@ Pods roll automatically when chart-rendered config or chart-created Secrets chan
 The chart intentionally exposes generic Kubernetes hooks for cloud workload identity without modeling provider-specific auth modes before the app supports them.
 
 Use `serviceAccount.annotations` for identity bindings such as AWS IRSA, EKS Pod Identity, or GKE Workload Identity. Use `serviceAccount.create=false` and `serviceAccount.name=<name>` to run the control-plane API/worker workloads and migration job with a platform-managed Kubernetes service account.
+
+When `controlPlane.agentSandboxOrchestrator.enabled=true`, the chart creates a separate orchestrator service account by default and binds Agent Sandbox RBAC to that service account instead of the control-plane service account. Override it with `controlPlane.agentSandboxOrchestrator.serviceAccount.*` when using a platform-managed identity for the orchestrator. In in-process mode, Agent Sandbox RBAC stays bound to the main `serviceAccount.*` account because the control-plane creates sandbox resources directly.
 
 Use per-workload pod metadata for identity systems that require labels or annotations on pods. The chart exposes `controlPlane.all.podLabels`, `controlPlane.all.podAnnotations`, `controlPlane.api.podLabels`, `controlPlane.api.podAnnotations`, `controlPlane.worker.podLabels`, `controlPlane.worker.podAnnotations`, `migrations.podLabels`, and `migrations.podAnnotations`. For example, Azure Workload Identity commonly requires `azure.workload.identity/use: "true"` on pods.
 

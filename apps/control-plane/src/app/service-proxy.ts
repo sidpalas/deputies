@@ -280,6 +280,7 @@ async function isAllowedPreviewTarget(config: AppConfig, provider: string, value
   if (target.protocol !== 'http:' && target.protocol !== 'https:') return false;
   if (provider === 'fake') return target.protocol === 'http:';
   if (provider === 'docker') return isAllowedDockerPreviewTarget(config, target);
+  if (provider === 'k8s-agent-sandbox') return isAllowedKubernetesServicePreviewTarget(target);
   if (provider === 'daytona') return target.protocol === 'https:' && (await isAllowedPublicHostname(target.hostname));
   return isAllowedPublicHostname(target.hostname);
 }
@@ -287,6 +288,11 @@ async function isAllowedPreviewTarget(config: AppConfig, provider: string, value
 function isAllowedDockerPreviewTarget(config: AppConfig, target: URL): boolean {
   const allowedHosts = new Set(['localhost', '127.0.0.1', config.dockerSandboxBridgeHost]);
   return target.protocol === 'http:' && allowedHosts.has(target.hostname.toLowerCase());
+}
+
+function isAllowedKubernetesServicePreviewTarget(target: URL): boolean {
+  const hostname = target.hostname.toLowerCase();
+  return target.protocol === 'http:' && (hostname.endsWith('.svc') || hostname.endsWith('.svc.cluster.local'));
 }
 
 function isLocalOrPrivateHostname(hostname: string): boolean {

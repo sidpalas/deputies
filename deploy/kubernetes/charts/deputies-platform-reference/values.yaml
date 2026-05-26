@@ -65,3 +65,16 @@ seaweedfs:
   annotations: {}
   podLabels: {}
   podAnnotations: {}
+
+agentSandbox:
+  enabled: false
+  # Installed from upstream release manifests because agent-sandbox does not
+  # currently publish a Helm repository or packaged chart release.
+  version: v0.4.6
+  namespace: agent-sandbox-system
+  kubectlImage: registry.k8s.io/kubectl:v1.33.0
+  resources: {}
+  labels: {}
+  annotations: {}
+  podLabels: {}
+  podAnnotations: {}

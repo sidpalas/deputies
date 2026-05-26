@@ -39,6 +39,22 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "deputies.agentSandboxOrchestratorServiceAccountName" -}}
+{{- if .Values.controlPlane.agentSandboxOrchestrator.serviceAccount.create -}}
+{{- default (printf "%s-agent-sandbox-orchestrator" (include "deputies.fullname" .)) .Values.controlPlane.agentSandboxOrchestrator.serviceAccount.name -}}
+{{- else -}}
+{{- default (include "deputies.serviceAccountName" .) .Values.controlPlane.agentSandboxOrchestrator.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deputies.agentSandboxRbacServiceAccountName" -}}
+{{- if .Values.controlPlane.agentSandboxOrchestrator.enabled -}}
+{{- include "deputies.agentSandboxOrchestratorServiceAccountName" . -}}
+{{- else -}}
+{{- include "deputies.serviceAccountName" . -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "deputies.secretName" -}}
 {{- default (printf "%s-app" (include "deputies.fullname" .)) .Values.secrets.name -}}
 {{- end -}}
@@ -83,6 +99,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ $root.Values.config.flueModel | quote }}
 - name: DAYTONA_IMAGE
   value: {{ $root.Values.config.daytonaImage | quote }}
+- name: AGENT_SANDBOX_ORCHESTRATOR_MODE
+  value: {{ ternary "http" $root.Values.config.agentSandboxOrchestratorMode $root.Values.controlPlane.agentSandboxOrchestrator.enabled | quote }}
+- name: AGENT_SANDBOX_IMAGE
+  value: {{ $root.Values.config.agentSandboxImage | quote }}
+- name: AGENT_SANDBOX_STORAGE_SIZE
+  value: {{ $root.Values.config.agentSandboxStorageSize | quote }}
 - name: HIDE_SETUP_PAGE
   value: {{ $root.Values.config.hideSetupPage | quote }}
 {{- if $root.Values.config.daytonaApiUrl }}
@@ -96,6 +118,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if $root.Values.config.daytonaSnapshot }}
 - name: DAYTONA_SNAPSHOT
   value: {{ $root.Values.config.daytonaSnapshot | quote }}
+{{- end }}
+{{- if or $root.Values.controlPlane.agentSandboxOrchestrator.enabled $root.Values.config.agentSandboxOrchestratorUrl }}
+- name: AGENT_SANDBOX_ORCHESTRATOR_URL
+  value: {{ ternary (include "deputies.agentSandboxOrchestratorUrl" $root) $root.Values.config.agentSandboxOrchestratorUrl $root.Values.controlPlane.agentSandboxOrchestrator.enabled | quote }}
+{{- end }}
+{{- if $root.Values.config.agentSandboxNamespace }}
+- name: AGENT_SANDBOX_NAMESPACE
+  value: {{ $root.Values.config.agentSandboxNamespace | quote }}
+{{- end }}
+{{- if $root.Values.config.agentSandboxStorageClassName }}
+- name: AGENT_SANDBOX_STORAGE_CLASS_NAME
+  value: {{ $root.Values.config.agentSandboxStorageClassName | quote }}
 {{- end }}
 - name: ARTIFACT_STORAGE_PROVIDER
   value: {{ $root.Values.config.artifactStorageProvider | quote }}
@@ -144,4 +178,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{- define "deputies.apiServiceName" -}}
 {{- printf "%s-api" (include "deputies.fullname" .) -}}
+{{- end -}}
+
+{{- define "deputies.agentSandboxOrchestratorServiceName" -}}
+{{- printf "%s-agent-sandbox-orchestrator" (include "deputies.fullname" .) -}}
+{{- end -}}
+
+{{- define "deputies.agentSandboxOrchestratorUrl" -}}
+{{- printf "http://%s:%v" (include "deputies.agentSandboxOrchestratorServiceName" .) .Values.controlPlane.agentSandboxOrchestrator.port -}}
 {{- end -}}

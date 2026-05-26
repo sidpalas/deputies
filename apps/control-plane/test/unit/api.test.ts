@@ -1068,6 +1068,38 @@ describe('core API', () => {
     });
   });
 
+  it('allows k8s agent sandbox service DNS preview targets', async () => {
+    await closeServer(server);
+    const provider = new K8sAgentSandboxTargetServiceSandboxProvider(
+      'http://deputies-test.default.svc.cluster.local:3584/preview/3000',
+    );
+    server = createServer(
+      loadConfig({ API_AUTH_MODE: 'none', SERVICE_BASE_DOMAIN: 'deputies.localhost' }),
+      createServices(store, { sandboxProvider: provider }),
+    );
+    baseUrl = await listen(server);
+
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Kubernetes service target' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    const sandbox = await provider.create({ sessionId: session.id });
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000514',
+      sessionId: session.id,
+      provider: provider.name,
+      providerSandboxId: sandbox.providerSandboxId,
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: { runtimeId: 'runtime-1' },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await expect((await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`)).json()).resolves.toMatchObject({
+      services: [{ port: 3000, url: `http://s-3000-${session.id}.deputies.localhost/` }],
+    });
+  });
+
   it('does not list a default service when none has been published', async () => {
     const upstream = createPreviewUpstream();
     const upstreamBaseUrl = await listen(upstream);
@@ -1961,6 +1993,14 @@ class ServiceSandboxProvider extends FakeSandboxProvider {
 
 class DaytonaTargetServiceSandboxProvider extends ServiceSandboxProvider {
   override readonly name = 'daytona' as 'fake';
+
+  constructor(upstreamBaseUrl: string) {
+    super(upstreamBaseUrl);
+  }
+}
+
+class K8sAgentSandboxTargetServiceSandboxProvider extends ServiceSandboxProvider {
+  override readonly name = 'k8s-agent-sandbox' as 'fake';
 
   constructor(upstreamBaseUrl: string) {
     super(upstreamBaseUrl);

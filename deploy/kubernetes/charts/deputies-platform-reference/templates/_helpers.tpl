@@ -33,3 +33,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "deputies-platform-reference.postgresName" -}}
 {{- printf "%s-postgres" .Release.Name | trunc 52 | trimSuffix "-" -}}
 {{- end -}}
+
+{{- define "deputies-platform-reference.agentSandboxInstallerName" -}}
+{{- printf "%s-agent-sandbox-install" .Release.Name | trunc 52 | trimSuffix "-" -}}
+{{- end -}}

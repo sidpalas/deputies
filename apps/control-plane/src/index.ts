@@ -5,6 +5,7 @@ import { createArtifactObjectStorage } from './artifacts/storage.js';
 import { HttpCompletionCallbackSender, type CompletionCallbackSender } from './callbacks/service.js';
 import {
   loadConfig,
+  requireAgentSandboxOrchestratorUrl,
   requireDatabaseUrl,
   requireDaytonaApiKey,
   requireDockerOrchestratorUrl,
@@ -29,6 +30,11 @@ import { PostgresFlueSessionStore } from './runner-flue/session-store.js';
 import { DaytonaSandboxProvider } from './sandbox/daytona.js';
 import { DockerSandboxProvider, HttpDockerOrchestratorClient, InProcessDockerOrchestrator } from './sandbox/docker.js';
 import { FakeSandboxProvider } from './sandbox/fake.js';
+import {
+  AgentSandboxProvider,
+  HttpAgentSandboxOrchestratorClient,
+  InProcessAgentSandboxOrchestrator,
+} from './sandbox/k8s-agent-sandbox.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
 import type { SandboxProvider } from './sandbox/types.js';
@@ -218,6 +224,26 @@ function createSandboxProvider(): SandboxProvider {
     if (config.daytonaSnapshot) Object.assign(options, { snapshot: config.daytonaSnapshot });
     Object.assign(options, { workspacePath: config.sandboxWorkspacePath });
     return new DaytonaSandboxProvider(options);
+  }
+  if (config.sandboxProvider === 'k8s-agent-sandbox') {
+    const orchestrator =
+      config.agentSandboxOrchestratorMode === 'http'
+        ? new HttpAgentSandboxOrchestratorClient(
+            optional({
+              baseUrl: requireAgentSandboxOrchestratorUrl(config),
+              token: config.agentSandboxOrchestratorToken,
+            }),
+          )
+        : new InProcessAgentSandboxOrchestrator(
+            optional({
+              namespace: config.agentSandboxNamespace,
+              image: config.agentSandboxImage,
+              workspacePath: config.sandboxWorkspacePath,
+              storageSize: config.agentSandboxStorageSize,
+              storageClassName: config.agentSandboxStorageClassName,
+            }),
+          );
+    return new AgentSandboxProvider({ orchestrator });
   }
 
   throw new Error(`SANDBOX_PROVIDER=${config.sandboxProvider} is not wired yet`);

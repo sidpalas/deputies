@@ -289,12 +289,26 @@ async function execCommand(workspacePath: string, input: ParsedExecRequest, maxO
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let resolved = false;
     const timer = timeoutMs
       ? setTimeout(() => {
           timedOut = true;
           killProcessGroup(child.pid);
         }, timeoutMs)
       : undefined;
+    const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (resolved) return;
+      resolved = true;
+      if (timer) clearTimeout(timer);
+      if (timedOut && !stderr.trim()) stderr = `[sandbox bridge] Command timed out after ${timeoutMs}ms.`;
+      resolveResult({
+        exitCode: code ?? signalExitCode(signal),
+        stdout,
+        stderr,
+        startedAt: startedAt.toISOString(),
+        completedAt: new Date().toISOString(),
+      });
+    };
 
     child.stdout.setEncoding('utf-8');
     child.stderr.setEncoding('utf-8');
@@ -305,17 +319,7 @@ async function execCommand(workspacePath: string, input: ParsedExecRequest, maxO
       stderr = appendBounded(stderr, chunk, maxOutputBytes);
     });
     child.on('error', reject);
-    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-      if (timer) clearTimeout(timer);
-      if (timedOut && !stderr.trim()) stderr = `[sandbox bridge] Command timed out after ${timeoutMs}ms.`;
-      resolveResult({
-        exitCode: code ?? signalExitCode(signal),
-        stdout,
-        stderr,
-        startedAt: startedAt.toISOString(),
-        completedAt: new Date().toISOString(),
-      });
-    });
+    child.on('exit', finish);
     if (input.stdin !== undefined) child.stdin.end(input.stdin);
     else child.stdin.end();
   });

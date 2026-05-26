@@ -9,8 +9,11 @@ It installs:
 - Traefik ingress controller, optionally with Gateway API provider enabled
 - A simple Postgres StatefulSet with Deputies app credentials
 - SeaweedFS with its S3-compatible API enabled
+- Optional Kubernetes SIG agent-sandbox CRDs/controller from pinned release manifests
 
 The chart uses Traefik's upstream Helm chart. Run `helm dependency update deploy/kubernetes/charts/deputies-platform-reference` before installing from a fresh checkout.
+
+When `agentSandbox.enabled=true`, this chart installs agent-sandbox with the upstream release `manifest.yaml` because the project includes Helm chart source but does not currently publish a consumable Helm chart repository or packaged chart release. If upstream publishes one later, prefer replacing the installer job with a normal Helm dependency.
 
 Traefik supports Gateway API, so this chart does not install Envoy Gateway by default. To use Gateway API with the reference platform, install the Gateway API v1.5.1 experimental CRDs first and enable Traefik's Gateway API provider:
 
@@ -38,7 +41,7 @@ The companion `deputies` chart defaults to these service names:
 
 For production, install `deputies` separately and point it at platform-managed Postgres and S3-compatible storage. This chart's Postgres StatefulSet is intentionally basic and is not production database guidance.
 
-For local Portless routing through Traefik, enable forwarded header trust:
+For local Portless routing through Traefik, enable forwarded header trust. This is required for wildcard service preview hosts; without it, `https://s-<port>-<session>.deputies-k8s.localhost` can route to the Deputies home page or setup guide instead of the sandbox service.
 
 ```sh
 helm upgrade deputies-platform deploy/kubernetes/charts/deputies-platform-reference \

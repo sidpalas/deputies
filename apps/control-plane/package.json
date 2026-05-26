@@ -9,6 +9,8 @@
     "demo:export": "tsx src/scripts/export-static-demo.ts",
     "docker-orchestrator:dev": "tsx watch src/sandbox/docker-orchestrator-server.ts",
     "docker-orchestrator:start": "node dist/sandbox/docker-orchestrator-server.js",
+    "k8s-agent-sandbox-orchestrator:dev": "tsx watch src/sandbox/k8s-agent-sandbox-orchestrator-server.ts",
+    "k8s-agent-sandbox-orchestrator:start": "node dist/sandbox/k8s-agent-sandbox-orchestrator-server.js",
     "dev": "tsx watch src/index.ts",
     "emulate:slack": "emulate start --service slack --portless",
     "portless:start": "pnpm dlx portless proxy start --wildcard",

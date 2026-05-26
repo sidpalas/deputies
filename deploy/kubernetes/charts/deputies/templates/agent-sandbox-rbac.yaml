@@ -1,0 +1,33 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deputies.fullname" . }}-agent-sandbox
+  labels:
+    {{- include "deputies.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes/status", "sandboxes/scale"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deputies.fullname" . }}-agent-sandbox
+  labels:
+    {{- include "deputies.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deputies.fullname" . }}-agent-sandbox
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deputies.agentSandboxRbacServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

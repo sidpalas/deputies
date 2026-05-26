@@ -28,6 +28,19 @@ controlPlane:
     annotations: {}
     podAnnotations: {}
     podLabels: {}
+  agentSandboxOrchestrator:
+    enabled: false
+    replicaCount: 1
+    port: 3587
+    serviceAccount:
+      create: true
+      annotations: {}
+      name: ''
+    resources: {}
+    labels: {}
+    annotations: {}
+    podAnnotations: {}
+    podLabels: {}
 
 web:
   replicaCount: 1
@@ -87,6 +100,12 @@ config:
   daytonaApiUrl: ''
   daytonaTarget: ''
   daytonaSnapshot: ''
+  agentSandboxOrchestratorMode: in-process
+  agentSandboxOrchestratorUrl: ''
+  agentSandboxNamespace: ''
+  agentSandboxImage: ghcr.io/sidpalas/deputies-docker-sandbox:sha-ac8a459
+  agentSandboxStorageSize: 1Gi
+  agentSandboxStorageClassName: ''
   hideSetupPage: 'false'
   extraEnv: {}
 
@@ -97,6 +116,8 @@ secrets:
   authStaticUsername: dev
   authStaticPassword: dev-secret
   apiBearerToken: ''
+  sandboxSecretEncryptionKey: replace-with-random-sandbox-secret
+  agentSandboxOrchestratorToken: ''
   daytonaApiKey: ''
   anthropicApiKey: ''
   openaiApiKey: ''
@@ -164,6 +185,9 @@ serviceAccount:
   create: true
   annotations: {}
   name: ''
+
+rbac:
+  create: true
 
 podSecurityContext: {}
 securityContext: {}

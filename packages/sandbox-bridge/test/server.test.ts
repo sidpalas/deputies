@@ -110,6 +110,22 @@ describe('sandbox bridge server', () => {
     });
   });
 
+  it('returns after a shell starts a background process', async () => {
+    const response = await bridgeFetch('/exec', {
+      method: 'POST',
+      body: JSON.stringify({
+        command: 'node -e "setInterval(() => {}, 1000)" & echo $! > background.pid && printf started',
+        timeoutMs: 1000,
+      }),
+    });
+
+    await expect(response.json()).resolves.toMatchObject({ exitCode: 0, stdout: 'started' });
+
+    const pidResponse = await bridgeFetch('/fs/read?path=background.pid');
+    const pid = Number((await pidResponse.text()).trim());
+    if (Number.isInteger(pid)) process.kill(pid, 'SIGTERM');
+  });
+
   it('proxies preview traffic to localhost and strips auth cookies', async () => {
     const upstream = createServer((request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
