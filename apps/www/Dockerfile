@@ -14,7 +14,7 @@ RUN pnpm install --frozen-lockfile
 COPY apps/web apps/web
 COPY apps/www apps/www
 
-RUN pnpm www:build
+RUN pnpm --dir apps/www build
 
 FROM caddy:2.11-alpine AS runtime
 
