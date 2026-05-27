@@ -1,7 +1,8 @@
-export type RunMode = 'all' | 'api' | 'worker';
+export type RunMode = 'combined' | 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue';
-export type SandboxProviderKind = 'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'kubernetes' | 'ecs';
+export type SandboxProviderKind = 'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'k8s-agent-sandbox' | 'ecs';
 export type DockerOrchestratorMode = 'in-process' | 'http';
+export type AgentSandboxOrchestratorMode = 'in-process' | 'http';
 export type AppStoreKind = 'memory' | 'postgres';
 export type ApiAuthMode = 'none' | 'bearer' | 'session';
 export type AuthProviderKind = 'static' | 'github';
@@ -49,6 +50,13 @@ export type AppConfig = {
   dockerSandboxMemory?: string;
   dockerSandboxCpus?: string;
   dockerCliTimeoutMs: number;
+  agentSandboxOrchestratorMode: AgentSandboxOrchestratorMode;
+  agentSandboxOrchestratorUrl?: string;
+  agentSandboxOrchestratorToken?: string;
+  agentSandboxNamespace?: string;
+  agentSandboxImage: string;
+  agentSandboxStorageSize: string;
+  agentSandboxStorageClassName?: string;
   sandboxSecretEncryptionKey?: string;
   appDataStore: AppStoreKind;
   apiAuthMode: ApiAuthMode;
@@ -59,7 +67,6 @@ export type AppConfig = {
   authSessionSecret?: string;
   authCookieSecure: boolean;
   authCookieSameSite: AuthCookieSameSite;
-  authCookieDomain?: string;
   webBaseUrl?: string;
   serviceBaseDomain?: string;
   serviceTrustForwardedHosts: boolean;
@@ -139,11 +146,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
         'SANDBOX_KEEPALIVE_MAX_EXTENSION_SECONDS',
       ) * 1000,
     sandboxWorkspacePath: env.SANDBOX_WORKSPACE_PATH ?? '/workspace',
-    runMode: parseEnum(env.RUN_MODE, ['all', 'api', 'worker'], 'all'),
+    runMode: parseEnum(env.RUN_MODE, ['combined', 'all', 'api', 'worker'], 'combined'),
     runner: parseEnum(env.RUNNER, ['fake', 'flue'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'unsafe-local', 'docker', 'daytona', 'kubernetes', 'ecs'],
+      ['fake', 'unsafe-local', 'docker', 'daytona', 'k8s-agent-sandbox', 'ecs'],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
@@ -151,6 +158,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     dockerSandboxImage: env.DOCKER_SANDBOX_IMAGE ?? 'deputies-sandbox:local',
     dockerSandboxBridgeHost: env.DOCKER_SANDBOX_BRIDGE_HOST ?? '127.0.0.1',
     dockerCliTimeoutMs: parsePositiveInteger(env.DOCKER_CLI_TIMEOUT_MS, 30_000, 'DOCKER_CLI_TIMEOUT_MS'),
+    agentSandboxOrchestratorMode: parseEnum(env.AGENT_SANDBOX_ORCHESTRATOR_MODE, ['in-process', 'http'], 'in-process'),
+    agentSandboxImage: env.AGENT_SANDBOX_IMAGE ?? 'ghcr.io/sidpalas/deputies-docker-sandbox:sha-ac8a459',
+    agentSandboxStorageSize: env.AGENT_SANDBOX_STORAGE_SIZE ?? '1Gi',
     appDataStore: parseEnum(env.APP_DATA_STORE, ['memory', 'postgres'], 'memory'),
     apiAuthMode: parseRequiredEnum(env.API_AUTH_MODE, ['none', 'bearer', 'session'], 'API_AUTH_MODE'),
     authProvider: parseEnum(env.AUTH_PROVIDER, ['static', 'github'], 'static'),
@@ -218,7 +228,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.AUTH_STATIC_USERNAME) config.authStaticUsername = env.AUTH_STATIC_USERNAME;
   if (env.AUTH_STATIC_PASSWORD) config.authStaticPassword = env.AUTH_STATIC_PASSWORD;
   if (env.AUTH_SESSION_SECRET) config.authSessionSecret = env.AUTH_SESSION_SECRET;
-  if (env.AUTH_COOKIE_DOMAIN) config.authCookieDomain = env.AUTH_COOKIE_DOMAIN;
   if (env.WEB_BASE_URL) config.webBaseUrl = env.WEB_BASE_URL;
   if (env.SERVICE_BASE_DOMAIN) config.serviceBaseDomain = env.SERVICE_BASE_DOMAIN;
   if (env.GITHUB_OAUTH_CLIENT_ID) config.githubOAuthClientId = env.GITHUB_OAUTH_CLIENT_ID;
@@ -237,6 +246,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.DOCKER_SANDBOX_NETWORK) config.dockerSandboxNetwork = env.DOCKER_SANDBOX_NETWORK;
   if (env.DOCKER_SANDBOX_MEMORY) config.dockerSandboxMemory = env.DOCKER_SANDBOX_MEMORY;
   if (env.DOCKER_SANDBOX_CPUS) config.dockerSandboxCpus = env.DOCKER_SANDBOX_CPUS;
+  if (env.AGENT_SANDBOX_ORCHESTRATOR_URL) config.agentSandboxOrchestratorUrl = env.AGENT_SANDBOX_ORCHESTRATOR_URL;
+  if (env.AGENT_SANDBOX_ORCHESTRATOR_TOKEN) config.agentSandboxOrchestratorToken = env.AGENT_SANDBOX_ORCHESTRATOR_TOKEN;
+  if (env.AGENT_SANDBOX_NAMESPACE) config.agentSandboxNamespace = env.AGENT_SANDBOX_NAMESPACE;
+  if (env.AGENT_SANDBOX_STORAGE_CLASS_NAME) config.agentSandboxStorageClassName = env.AGENT_SANDBOX_STORAGE_CLASS_NAME;
   if (env.SANDBOX_SECRET_ENCRYPTION_KEY) config.sandboxSecretEncryptionKey = env.SANDBOX_SECRET_ENCRYPTION_KEY;
   if (env.DAYTONA_API_KEY) config.daytonaApiKey = env.DAYTONA_API_KEY;
   if (env.DAYTONA_API_URL) config.daytonaApiUrl = env.DAYTONA_API_URL;
@@ -261,6 +274,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   validateProductAuthConfig(config);
   validateArtifactStorageConfig(config);
   validateSandboxSecretConfig(config, env);
+  validateAgentSandboxOrchestratorConfig(config);
 
   if (config.slackSigningSecret && !config.unsafeSlackWebhookAllowAllIds && !hasAnySlackAllowlist(config)) {
     throw new Error(
@@ -285,10 +299,17 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   return config;
 }
 
+function validateAgentSandboxOrchestratorConfig(config: AppConfig): void {
+  if (config.sandboxProvider !== 'k8s-agent-sandbox' || config.agentSandboxOrchestratorMode !== 'http') return;
+  requireAgentSandboxOrchestratorUrl(config);
+  requireAgentSandboxOrchestratorToken(config);
+}
+
 function validateSandboxSecretConfig(config: AppConfig, env: NodeJS.ProcessEnv): void {
-  if (config.appDataStore === 'postgres' && config.sandboxProvider === 'docker' && !config.sandboxSecretEncryptionKey) {
+  const sandboxSecretsRequired = config.sandboxProvider === 'docker' || config.sandboxProvider === 'k8s-agent-sandbox';
+  if (config.appDataStore === 'postgres' && sandboxSecretsRequired && !config.sandboxSecretEncryptionKey) {
     throw new Error(
-      'SANDBOX_SECRET_ENCRYPTION_KEY is required when APP_DATA_STORE=postgres and SANDBOX_PROVIDER=docker',
+      `SANDBOX_SECRET_ENCRYPTION_KEY is required when APP_DATA_STORE=postgres and SANDBOX_PROVIDER=${config.sandboxProvider}`,
     );
   }
   if (env.NODE_ENV === 'production' && config.sandboxSecretEncryptionKey === sandboxSecretEncryptionKeyPlaceholder) {
@@ -389,6 +410,22 @@ export function requireDockerOrchestratorUrl(config: AppConfig): string {
   }
 
   return config.dockerOrchestratorUrl;
+}
+
+export function requireAgentSandboxOrchestratorUrl(config: AppConfig): string {
+  if (!config.agentSandboxOrchestratorUrl) {
+    throw new Error('AGENT_SANDBOX_ORCHESTRATOR_URL is required when AGENT_SANDBOX_ORCHESTRATOR_MODE=http');
+  }
+
+  return config.agentSandboxOrchestratorUrl;
+}
+
+export function requireAgentSandboxOrchestratorToken(config: AppConfig): string {
+  if (!config.agentSandboxOrchestratorToken) {
+    throw new Error('AGENT_SANDBOX_ORCHESTRATOR_TOKEN is required when AGENT_SANDBOX_ORCHESTRATOR_MODE=http');
+  }
+
+  return config.agentSandboxOrchestratorToken;
 }
 
 export function requireFlueModel(config: AppConfig): string {

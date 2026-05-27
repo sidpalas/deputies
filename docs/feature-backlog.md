@@ -82,6 +82,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Preserve the shared workspace model: session filtering is for discovery and noise reduction, not an RBAC or visibility boundary.
 - Per-user/per-team integration authorization policies for Slack, GitHub, Linear, and web UI entry points, beyond the current global allowlists.
 - Metrics endpoint or structured timing logs.
+- Observability pass across control-plane, workers, sandbox orchestrators, and sandbox bridge: structured request/lifecycle logs with session/run/sandbox correlation IDs, sandbox create/connect/exec/preview/destroy audit events, useful latency/error metrics, and optional trace propagation for HTTP orchestrator and provider calls.
 - Pending-message, active-run, and worker-throughput dashboards.
 - Session/event table pagination and retention policies.
 - Deployment guides for Railway, ECS Fargate + RDS, and Kubernetes.

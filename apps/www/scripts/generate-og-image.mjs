@@ -5,13 +5,36 @@ import { chromium } from '@playwright/test';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../../..');
-const outputPath = resolve(repoRoot, 'apps/www/public/og-image.png');
+const outputDir = resolve(repoRoot, 'apps/www/public');
+
+const images = [
+  { name: 'Open Graph image', outputPath: resolve(outputDir, 'og-image.png'), width: 1200, height: 630 },
+  {
+    name: 'Twitter banner',
+    outputPath: resolve(outputDir, 'twitter-banner.png'),
+    width: 1500,
+    height: 500,
+    variantClass: 'banner',
+  },
+  {
+    name: 'Twitter profile image',
+    outputPath: resolve(outputDir, 'twitter-profile.png'),
+    width: 400,
+    height: 400,
+    variantClass: 'profile',
+  },
+];
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1200, height: 630 }, deviceScaleFactor: 1 });
 
-await page.setContent(
-  `<!doctype html>
+for (const image of images) {
+  const page = await browser.newPage({
+    viewport: { width: image.width, height: image.height },
+    deviceScaleFactor: 1,
+  });
+
+  await page.setContent(
+    `<!doctype html>
   <html lang="en">
     <head>
       <meta charset="UTF-8" />
@@ -19,8 +42,8 @@ await page.setContent(
         * { box-sizing: border-box; }
         body {
           margin: 0;
-          width: 1200px;
-          height: 630px;
+          width: ${image.width}px;
+          height: ${image.height}px;
           overflow: hidden;
           background:
             radial-gradient(circle at 18% 12%, rgba(96, 165, 250, 0.42), transparent 310px),
@@ -29,11 +52,28 @@ await page.setContent(
           color: #f8fafc;
           font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
+        body.banner {
+          background:
+            radial-gradient(circle at 12% 8%, rgba(96, 165, 250, 0.46), transparent 330px),
+            radial-gradient(circle at 88% 72%, rgba(37, 99, 235, 0.4), transparent 390px),
+            linear-gradient(135deg, #020617 0%, #0f172a 50%, #172554 100%);
+        }
+        body.profile {
+          display: grid;
+          place-items: center;
+          background: oklch(.985 .002 247.839);
+        }
         .frame {
           position: relative;
           width: 100%;
           height: 100%;
           padding: 64px 72px;
+        }
+        body.banner .frame { padding: 48px 72px; }
+        body.profile .frame {
+          display: grid;
+          padding: 0;
+          place-items: center;
         }
         .grid {
           position: absolute;
@@ -68,11 +108,35 @@ await page.setContent(
           font-size: 25px;
           font-weight: 830;
         }
+        body.profile .brand {
+          display: contents;
+        }
+        body.profile .brand span:not(.mark),
+        body.profile .copy,
+        body.profile .product,
+        body.profile .status {
+          display: none;
+        }
+        body.profile .mark {
+          width: 256px;
+          height: 256px;
+          border: 4px solid oklch(.869 .022 252.894);
+          border-radius: 64px;
+          background: oklch(.623 .214 259.815);
+          box-shadow: 0 32px 90px rgba(37, 99, 235, 0.22);
+          color: oklch(.97 .014 254.604);
+          font-size: 112px;
+          font-weight: 700;
+        }
         .copy {
           position: relative;
           z-index: 2;
           max-width: 560px;
           padding-top: 32px;
+        }
+        body.banner .copy {
+          max-width: 600px;
+          padding-top: 26px;
         }
         .eyebrow {
           margin: 0 0 18px;
@@ -82,12 +146,21 @@ await page.setContent(
           letter-spacing: 0.08em;
           text-transform: uppercase;
         }
+        body.banner .eyebrow {
+          margin-bottom: 14px;
+          font-size: 20px;
+        }
         h1 {
           max-width: 500px;
           margin: 0;
           font-size: 72px;
           line-height: 0.93;
           letter-spacing: -0.034em;
+        }
+        body.banner h1 {
+          max-width: 610px;
+          font-size: 68px;
+          line-height: 0.9;
         }
         .lede {
           max-width: 425px;
@@ -97,11 +170,17 @@ await page.setContent(
           line-height: 1.22;
           letter-spacing: -0.025em;
         }
+        body.banner .lede {
+          max-width: 520px;
+          margin-top: 22px;
+          font-size: 25px;
+        }
         .pills {
           display: flex;
           gap: 12px;
           margin-top: 38px;
         }
+        body.banner .pills { margin-top: 30px; }
         .pill {
           border: 1px solid rgba(191, 219, 254, 0.24);
           border-radius: 999px;
@@ -126,6 +205,12 @@ await page.setContent(
             0 0 72px rgba(59, 130, 246, 0.22);
           transform: none;
         }
+        body.banner .product {
+          right: 56px;
+          bottom: -34px;
+          width: 720px;
+          height: 392px;
+        }
         .browser-bar {
           display: flex;
           align-items: center;
@@ -149,6 +234,10 @@ await page.setContent(
           height: 400px;
           grid-template-columns: 142px 1fr 146px;
           background: #020617;
+        }
+        body.banner .app-shell {
+          height: 344px;
+          grid-template-columns: 132px 1fr 138px;
         }
         .sidebar,
         .context {
@@ -253,6 +342,7 @@ await page.setContent(
           font-size: 14px;
           font-weight: 650;
         }
+        body.banner .composer { height: 48px; }
         .send-row {
           display: flex;
           justify-content: flex-end;
@@ -298,6 +388,7 @@ await page.setContent(
           font-weight: 760;
           backdrop-filter: blur(12px);
         }
+        body.banner .status { display: none; }
         .dot {
           width: 12px;
           height: 12px;
@@ -307,7 +398,7 @@ await page.setContent(
         }
       </style>
     </head>
-    <body>
+    <body class="${image.variantClass ?? ''}">
       <main class="frame">
         <div class="grid"></div>
         <div class="brand"><span class="mark">D</span><span>Deputies</span></div>
@@ -359,10 +450,13 @@ await page.setContent(
       </main>
     </body>
   </html>`,
-  { waitUntil: 'load' },
-);
+    { waitUntil: 'load' },
+  );
 
-await page.screenshot({ path: outputPath, type: 'png' });
+  await page.screenshot({ path: image.outputPath, type: 'png' });
+  await page.close();
+
+  console.log(`Generated ${image.name}: ${image.outputPath}`);
+}
+
 await browser.close();
-
-console.log(`Generated ${outputPath}`);

@@ -108,6 +108,7 @@ export function App() {
   const [isCreatingThread, setIsCreatingThread] = useState(loadInitialIsCreatingThread);
   const [messages, setMessages] = useState<Message[]>([]);
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [activeProgress, setActiveProgress] = useState<ActiveProgressByMessageId>({});
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [services, setServices] = useState<SandboxService[]>([]);
   const [externalResources, setExternalResources] = useState<ExternalResource[]>([]);
@@ -162,6 +163,7 @@ export function App() {
   const autoScrolledSessionId = useRef('');
   const selectedSessionIdRef = useRef(selectedSessionId);
   const detailLoadedSessionIdRef = useRef(detailLoadedSessionId);
+  const messagesRef = useRef(messages);
   const createSessionInFlightRef = useRef(false);
   const sendMessageInFlightRef = useRef(false);
   const sessionsRefreshTimerRef = useRef<number | null>(null);
@@ -344,6 +346,10 @@ export function App() {
   }, [selectedSessionId, detailLoadedSessionId]);
 
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
     const handleConnectionOk = (event: Event) => {
       setConnectionStatus((current) => {
         if (isWakeRecoveryStatus(current)) {
@@ -476,7 +482,7 @@ export function App() {
     }
 
     setShowJumpToLatest(true);
-  }, [selectedSessionId, messages.length, events.length, composerFocused]);
+  }, [selectedSessionId, messages.length, events.length, activeProgress, composerFocused]);
 
   useEffect(() => {
     if (!pageVisible || !canCallApi || !sessionsLoaded) return;
@@ -499,7 +505,14 @@ export function App() {
               const activeSessionId = selectedSessionIdRef.current;
               if (event.sessionId === activeSessionId && detailLoadedSessionIdRef.current === activeSessionId) {
                 eventCursor.current = Math.max(eventCursor.current, event.sequence);
-                setEvents((current) => upsertEvent(current, event));
+                if (shouldUseActiveProgressEvent(event, messagesRef.current)) {
+                  setActiveProgress((current) => appendActiveProgress(current, event));
+                } else {
+                  if (event.type === 'agent_response_final' && event.messageId) {
+                    setActiveProgress((current) => omitActiveProgress(current, event.messageId!));
+                  }
+                  setEvents((current) => upsertEvent(current, event));
+                }
                 if (
                   (event.type === 'sandbox_ready' &&
                     (event.payload.created === true || event.payload.restarted === true)) ||
@@ -599,7 +612,8 @@ export function App() {
       if (selectedSessionIdRef.current !== sessionId) return;
       eventCursor.current = nextEvents.at(-1)?.sequence ?? 0;
       setMessages(nextMessages);
-      setEvents(nextEvents);
+      setEvents(filterActiveProgressEvents(nextEvents, nextMessages));
+      setActiveProgress(buildActiveProgress(nextEvents, nextMessages));
       setArtifacts(nextArtifacts);
       setServices(nextServices);
       setExternalResources(nextExternalResources);
@@ -670,6 +684,7 @@ export function App() {
       selectSession(session.id);
       setMessages([message]);
       setEvents([]);
+      setActiveProgress({});
       setArtifacts([]);
       setServices([]);
       setExternalResources([]);
@@ -884,6 +899,7 @@ export function App() {
     setIsCreatingThread(false);
     setMessages([]);
     setEvents([]);
+    setActiveProgress({});
     setArtifacts([]);
     setServices([]);
     setExternalResources([]);
@@ -908,6 +924,7 @@ export function App() {
     setFollowUpModel('');
     setMessages([]);
     setEvents([]);
+    setActiveProgress({});
     setArtifacts([]);
     setServices([]);
     setExternalResources([]);
@@ -1000,6 +1017,7 @@ export function App() {
     externalResources: ExternalResource[];
     callbacks: CallbackDelivery[];
     events: AgentEvent[];
+    activeProgress: ActiveProgressByMessageId;
     isCreatingThread: boolean;
     messages: Message[];
     selectedSessionId: string;
@@ -1015,6 +1033,7 @@ export function App() {
       externalResources,
       callbacks,
       events,
+      activeProgress,
       isCreatingThread,
       messages,
       selectedSessionId,
@@ -1036,6 +1055,7 @@ export function App() {
       setIsCreatingThread(rollback.isCreatingThread);
       setMessages(rollback.messages);
       setEvents(rollback.events);
+      setActiveProgress(rollback.activeProgress);
       setArtifacts(rollback.artifacts);
       setServices(rollback.services);
       setExternalResources(rollback.externalResources);
@@ -1052,6 +1072,7 @@ export function App() {
       externalResources,
       callbacks,
       events,
+      activeProgress,
       isCreatingThread,
       messages,
       selectedSessionId,
@@ -1073,6 +1094,7 @@ export function App() {
       setIsCreatingThread(true);
       setMessages([]);
       setEvents([]);
+      setActiveProgress({});
       setArtifacts([]);
       setServices([]);
       setExternalResources([]);
@@ -1336,6 +1358,7 @@ export function App() {
                                   artifacts={artifacts}
                                   services={services}
                                   editingMessageId={editingMessageId}
+                                  activeProgress={activeProgressDisplayText(activeProgress, messages)}
                                   events={events}
                                   messageDraft={messageDraft}
                                   messages={messages}
@@ -1474,6 +1497,77 @@ function isDesktopViewport(): boolean {
 function upsertEvent(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
   if (events.some((current) => current.sequence === event.sequence)) return events;
   return [...events, event].sort((a, b) => a.sequence - b.sequence);
+}
+
+type ActiveProgress = { text: string; omitted: number };
+type ActiveProgressByMessageId = Record<string, ActiveProgress>;
+
+const activeProgressMaxChars = 20_000;
+
+function shouldUseActiveProgressEvent(event: AgentEvent, messages: Message[]): boolean {
+  return event.type === 'agent_text_delta' && Boolean(activeProgressMessageId(event, messages));
+}
+
+function appendActiveProgress(progress: ActiveProgressByMessageId, event: AgentEvent): ActiveProgressByMessageId {
+  const messageId = event.messageId;
+  const text = event.payload.text;
+  if (!messageId || typeof text !== 'string') return progress;
+
+  const current = progress[messageId] ?? { text: '', omitted: 0 };
+  const next = truncateActiveProgress(current.text + text, current.omitted);
+  return { ...progress, [messageId]: next };
+}
+
+function omitActiveProgress(progress: ActiveProgressByMessageId, messageId: string): ActiveProgressByMessageId {
+  if (!progress[messageId]) return progress;
+  const { [messageId]: _removed, ...next } = progress;
+  return next;
+}
+
+function buildActiveProgress(events: AgentEvent[], messages: Message[]): ActiveProgressByMessageId {
+  let progress: ActiveProgressByMessageId = {};
+  for (const event of events) {
+    if (shouldUseActiveProgressEvent(event, messages)) {
+      progress = appendActiveProgress(progress, event);
+    } else if (event.type === 'agent_response_final' && event.messageId) {
+      progress = omitActiveProgress(progress, event.messageId);
+    }
+  }
+  return progress;
+}
+
+function filterActiveProgressEvents(events: AgentEvent[], messages: Message[]): AgentEvent[] {
+  return events.filter((event) => !shouldUseActiveProgressEvent(event, messages));
+}
+
+function activeProgressDisplayText(progress: ActiveProgressByMessageId, messages: Message[]): Record<string, string> {
+  const activeMessageIds = new Set(messages.filter(isActiveProgressMessage).map((message) => message.id));
+  return Object.fromEntries(
+    Object.entries(progress)
+      .filter(([messageId]) => activeMessageIds.has(messageId))
+      .map(([messageId, value]) => [messageId, formatActiveProgressText(value)]),
+  );
+}
+
+function activeProgressMessageId(event: AgentEvent, messages: Message[]): string | null {
+  if (!event.messageId || typeof event.payload.text !== 'string') return null;
+  const message = messages.find((candidate) => candidate.id === event.messageId);
+  return message && isActiveProgressMessage(message) ? event.messageId : null;
+}
+
+function isActiveProgressMessage(message: Message): boolean {
+  return message.status === 'processing' || message.status === 'cancelling';
+}
+
+function truncateActiveProgress(text: string, omitted: number): ActiveProgress {
+  if (text.length <= activeProgressMaxChars) return { text, omitted };
+  const nextOmitted = omitted + text.length - activeProgressMaxChars;
+  return { text: text.slice(-activeProgressMaxChars), omitted: nextOmitted };
+}
+
+function formatActiveProgressText(progress: ActiveProgress): string {
+  if (progress.omitted <= 0) return progress.text;
+  return `Showing latest deputy progress; ${progress.omitted.toLocaleString()} earlier characters hidden while the run is active.\n\n…${progress.text}`;
 }
 
 function shouldRefreshSessionDetail(eventType: string): boolean {

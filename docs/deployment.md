@@ -88,15 +88,15 @@ USER daytona
 
 `RUN_MODE` controls process responsibilities:
 
-| Mode     | Behavior                                                         |
-| -------- | ---------------------------------------------------------------- |
-| `all`    | API and worker loops in one process. Good for small deployments. |
-| `api`    | API only. Use with separate worker replicas.                     |
-| `worker` | Worker only. Also exposes `/health` on `PORT`.                   |
+| Mode       | Behavior                                                         |
+| ---------- | ---------------------------------------------------------------- |
+| `combined` | API and worker loops in one process. Good for small deployments. |
+| `api`      | API only. Use with separate worker replicas.                     |
+| `worker`   | Worker only. Also exposes `/health` on `PORT`.                   |
 
 Recommended topologies:
 
-- Simple mode: one or more `RUN_MODE=all` instances with Postgres.
+- Simple mode: one or more `RUN_MODE=combined` instances with Postgres.
 - Integrated mode: one or more `RUN_MODE=api` instances plus one or more `RUN_MODE=worker` instances.
 - Scale mode: API/worker processes call separate infrastructure such as a Docker orchestrator over HTTP.
 
@@ -106,7 +106,7 @@ Every control-plane process needs:
 
 ```sh
 PORT=3583
-RUN_MODE=all
+RUN_MODE=combined
 API_AUTH_MODE=session
 APP_DATA_STORE=postgres
 DATABASE_URL=postgres://user:password@host:5432/db
@@ -212,7 +212,6 @@ Recommended same-origin production shape:
 ```sh
 WEB_BASE_URL=https://app.example.com
 SERVICE_BASE_DOMAIN=example.com
-AUTH_COOKIE_DOMAIN=.example.com
 AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAME_SITE=lax
 SERVICE_TRUST_FORWARDED_HOSTS=false
@@ -224,6 +223,8 @@ DNS/TLS requirements:
 - `app.example.com` points to the web/proxy entrypoint.
 - `*.example.com` points to the same web/proxy entrypoint.
 - Sandbox service previews use hosts like `https://s-3000-<session-id>.example.com`.
+
+The main app session cookie is host-only. Service previews use a short-lived signed preview token to set a preview-only cookie on the service host.
 
 Prefer first-level wildcards such as `*.example.com`. Nested wildcards such as `*.app.example.com` may require provider-specific certificate support.
 

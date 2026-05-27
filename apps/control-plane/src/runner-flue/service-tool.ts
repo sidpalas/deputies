@@ -61,17 +61,24 @@ export function createServiceTool(services: ServiceToolServices): ToolDef {
       const ttlSeconds = action === 'publish' ? publishTtlSeconds(params.ttlSeconds) : undefined;
       const keepalive =
         ttlSeconds !== undefined ? await extendKeepalive(services, { ...params, ttlSeconds }, port) : undefined;
-      const current = readServices(services.getContext());
+      const latestContext = await refreshSessionContextWithoutStaleServices(services);
+      const current = readServices(latestContext);
       const next =
         action === 'publish'
           ? publishService(current, params, port, services.providerSandboxId, runtimeId)
-          : unpublishService(current, port);
-      const context = { ...services.getContext(), services: next };
-      services.setContext(await services.updateSessionContext(context));
+          : unpublishService(current, port, services.providerSandboxId, runtimeId);
+      services.setContext(await services.updateSessionContext({ ...latestContext, services: next }));
 
       return JSON.stringify({ services: next, ...(keepalive ? { keepalive } : {}) });
     },
   };
+}
+
+async function refreshSessionContextWithoutStaleServices(
+  services: ServiceToolServices,
+): Promise<Record<string, unknown>> {
+  const { services: _staleServices, ...contextWithoutServices } = services.getContext();
+  return services.updateSessionContext(contextWithoutServices);
 }
 
 function publishService(
@@ -87,7 +94,7 @@ function publishService(
   if (label) service.label = label;
   if (path) service.path = path;
   if (runtimeId) service.runtimeId = runtimeId;
-  const base = currentRuntimeServices(current, providerSandboxId, runtimeId).filter((item) => item.port !== port);
+  const base = current.filter((item) => !isSameRuntimeService(item, providerSandboxId, runtimeId, port));
   return [...base, service].sort((a, b) => a.port - b.port);
 }
 
@@ -101,8 +108,22 @@ function currentRuntimeServices(
   );
 }
 
-function unpublishService(current: PublishedService[], port: number): PublishedService[] {
-  return current.filter((item) => item.port !== port);
+function unpublishService(
+  current: PublishedService[],
+  port: number,
+  providerSandboxId: string,
+  runtimeId: string | undefined,
+): PublishedService[] {
+  return current.filter((item) => !isSameRuntimeService(item, providerSandboxId, runtimeId, port));
+}
+
+function isSameRuntimeService(
+  item: PublishedService,
+  providerSandboxId: string,
+  runtimeId: string | undefined,
+  port: number,
+): boolean {
+  return item.port === port && item.providerSandboxId === providerSandboxId && item.runtimeId === runtimeId;
 }
 
 async function extendKeepalive(services: ServiceToolServices, params: Record<string, unknown>, port: number) {

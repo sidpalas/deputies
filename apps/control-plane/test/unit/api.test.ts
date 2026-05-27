@@ -5,6 +5,7 @@ import path from 'node:path';
 import { ArtifactService } from '../../src/artifacts/service.js';
 import { FilesystemArtifactObjectStorage, type ArtifactObjectStorage } from '../../src/artifacts/storage.js';
 import { createServer, createServices, createWorkerHealthServer, type AppServices } from '../../src/app/server.js';
+import { previewCookieMaxAgeSeconds, previewCookieName, signPreviewAuthToken } from '../../src/auth/session.js';
 import { loadConfig } from '../../src/config/index.js';
 import { GitHubApiError } from '../../src/integrations/github/client.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
@@ -56,7 +57,7 @@ describe('core API', () => {
     const response = await fetch(`${baseUrl}/health`);
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ status: 'ok', runMode: 'all' });
+    await expect(response.json()).resolves.toMatchObject({ status: 'ok', runMode: 'combined' });
   });
 
   it('reports degraded health and unavailable model options', async () => {
@@ -220,7 +221,6 @@ describe('core API', () => {
         AUTH_STATIC_USERNAME: 'dev',
         AUTH_STATIC_PASSWORD: 'password',
         AUTH_SESSION_SECRET: 'test-secret',
-        AUTH_COOKIE_DOMAIN: '.deputies.localhost',
         WEB_BASE_URL: 'https://deputies.localhost',
       }),
     );
@@ -236,6 +236,7 @@ describe('core API', () => {
     expect(login.status).toBe(200);
     const cookie = login.headers.get('set-cookie');
     expect(cookie).toContain('dev_deputies_session=');
+    expect(cookie).not.toContain('Domain=');
     await expect(login.json()).resolves.toMatchObject({ user: { username: 'dev' } });
 
     const me = await fetch(`${baseUrl}/auth/me`, { headers: { cookie: cookie! } });
@@ -930,7 +931,7 @@ describe('core API', () => {
     }
   });
 
-  it('rejects cross-site unsafe service host requests with session cookies', async () => {
+  it('uses preview cookies instead of session cookies for service hosts', async () => {
     const upstream = createPreviewUpstream();
     const upstreamBaseUrl = await listen(upstream);
     await closeServer(server);
@@ -968,13 +969,70 @@ describe('core API', () => {
       const serviceHost = `s-3000-${session.id}.deputies.localhost`;
 
       const trustedGet = await fetch(`${baseUrl}/`, { headers: { cookie: cookie!, 'x-forwarded-host': serviceHost } });
-      expect(trustedGet.status).toBe(200);
+      expect(trustedGet.status).toBe(403);
+
+      const servicesResponse = await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`, {
+        headers: { cookie: cookie! },
+      });
+      expect(servicesResponse.status).toBe(200);
+      const servicesBody = (await servicesResponse.json()) as { services: Array<{ url: string }> };
+      const previewAuthUrl = new URL(servicesBody.services[0]!.url);
+      expect(previewAuthUrl.pathname).toBe('/__preview_auth');
+
+      const previewAuth = await fetch(`${baseUrl}${previewAuthUrl.pathname}${previewAuthUrl.search}`, {
+        headers: { 'x-forwarded-host': serviceHost },
+        redirect: 'manual',
+      });
+      expect(previewAuth.status).toBe(302);
+      expect(previewAuth.headers.get('location')).toBe('/');
+      const previewCookie = previewAuth.headers.get('set-cookie');
+      expect(previewCookie).toContain('deputies_preview=');
+
+      const previewGet = await fetch(`${baseUrl}/`, {
+        headers: { cookie: previewCookie!, 'x-forwarded-host': serviceHost },
+      });
+      expect(previewGet.status).toBe(200);
 
       const crossSitePost = await fetch(`${baseUrl}/`, {
         method: 'POST',
-        headers: { cookie: cookie!, 'x-forwarded-host': serviceHost, origin: 'https://evil.example' },
+        headers: { cookie: previewCookie!, 'x-forwarded-host': serviceHost, origin: 'https://evil.example' },
       });
       expect(crossSitePost.status).toBe(403);
+
+      const sameOriginPost = await fetch(`${baseUrl}/`, {
+        method: 'POST',
+        headers: { cookie: previewCookie!, 'x-forwarded-host': serviceHost, origin: `https://${serviceHost}` },
+      });
+      expect(sameOriginPost.status).toBe(200);
+
+      const headers = await fetch(`${baseUrl}/headers`, {
+        headers: {
+          cookie: previewCookie!,
+          'x-forwarded-host': serviceHost,
+          referer: previewAuthUrl.toString(),
+        },
+      });
+      await expect(headers.json()).resolves.toMatchObject({ referer: null });
+
+      const user = ((await login.clone().json()) as { user: { id: string } }).user;
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const renewalCookie = `${previewCookieName}=${signPreviewAuthToken(
+        {
+          kind: 'cookie',
+          authSessionId: cookieValue(cookie!, 'dev_deputies_session'),
+          previewSessionId: session.id,
+          port: 3000,
+          userId: user.id,
+          exp: nowSeconds + Math.floor(previewCookieMaxAgeSeconds / 3),
+          grantExp: nowSeconds + 3600,
+        },
+        'test-secret',
+      )}`;
+      const renewed = await fetch(`${baseUrl}/`, {
+        headers: { cookie: renewalCookie, 'x-forwarded-host': serviceHost },
+      });
+      expect(renewed.status).toBe(200);
+      expect(renewed.headers.get('set-cookie')).toContain(`${previewCookieName}=`);
     } finally {
       await closeServer(upstream);
     }
@@ -1007,6 +1065,38 @@ describe('core API', () => {
 
     await expect((await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`)).json()).resolves.toEqual({
       services: [],
+    });
+  });
+
+  it('allows k8s agent sandbox service DNS preview targets', async () => {
+    await closeServer(server);
+    const provider = new K8sAgentSandboxTargetServiceSandboxProvider(
+      'http://deputies-test.default.svc.cluster.local:3584/preview/3000',
+    );
+    server = createServer(
+      loadConfig({ API_AUTH_MODE: 'none', SERVICE_BASE_DOMAIN: 'deputies.localhost' }),
+      createServices(store, { sandboxProvider: provider }),
+    );
+    baseUrl = await listen(server);
+
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Kubernetes service target' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    const sandbox = await provider.create({ sessionId: session.id });
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000514',
+      sessionId: session.id,
+      provider: provider.name,
+      providerSandboxId: sandbox.providerSandboxId,
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: { runtimeId: 'runtime-1' },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await expect((await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`)).json()).resolves.toMatchObject({
+      services: [{ port: 3000, url: `http://s-3000-${session.id}.deputies.localhost/` }],
     });
   });
 
@@ -1640,8 +1730,7 @@ describe('core API', () => {
     });
 
     const suffix = artifact!.storageKey!.split('/').at(-1)!;
-    expect(suffix).toHaveLength(`${artifact!.id}-`.length + 120);
-    expect(suffix).toBe(`${artifact!.id}-${'a'.repeat(120)}`);
+    expect(suffix).toMatch(new RegExp(`^\\d{8}T\\d{9}Z-${artifact!.id}-${'a'.repeat(120)}$`));
   });
 
   it('uses ranged object reads for text artifact previews', async () => {
@@ -1718,6 +1807,14 @@ describe('core API', () => {
     };
     const events = services.events;
     const failingStore = {
+      async getSession() {
+        return {
+          id: '00000000-0000-4000-8000-000000000001',
+          status: 'active' as const,
+          createdAt: new Date('2026-05-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-05-01T00:00:00.000Z'),
+        };
+      },
       async createArtifact() {
         throw new Error('metadata insert failed');
       },
@@ -1902,6 +1999,14 @@ class DaytonaTargetServiceSandboxProvider extends ServiceSandboxProvider {
   }
 }
 
+class K8sAgentSandboxTargetServiceSandboxProvider extends ServiceSandboxProvider {
+  override readonly name = 'k8s-agent-sandbox' as 'fake';
+
+  constructor(upstreamBaseUrl: string) {
+    super(upstreamBaseUrl);
+  }
+}
+
 class DisappearingServiceSandboxProvider extends ServiceSandboxProvider {
   creates = 0;
   private healthChecks = 0;
@@ -1920,6 +2025,11 @@ class DisappearingServiceSandboxProvider extends ServiceSandboxProvider {
 
 function createPreviewUpstream(): Server {
   return createHttpServer((request, response) => {
+    if (request.url === '/headers') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ referer: request.headers.referer ?? null }));
+      return;
+    }
     if (request.url === '/') {
       response.writeHead(200, { 'content-type': 'text/html' });
       response.end(`<!doctype html>
@@ -1947,6 +2057,12 @@ function createPreviewUpstream(): Server {
     response.writeHead(404, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ error: 'not_found' }));
   });
+}
+
+function cookieValue(header: string, name: string): string {
+  const match = header.match(new RegExp(`${name}=([^;]+)`));
+  if (!match?.[1]) throw new Error(`Missing cookie ${name}`);
+  return match[1];
 }
 
 async function closeServer(server: Server): Promise<void> {

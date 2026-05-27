@@ -503,7 +503,10 @@ h1 {
 
 .site-footer {
   display: flex;
+  align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.85rem 1rem;
   margin-top: 3rem;
   padding-top: 1.5rem;
   border-top: 1px solid var(--border);
@@ -514,11 +517,14 @@ h1 {
 .site-footer p {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 0.35rem;
   margin: 0;
 }
 
-.build-icon {
+.build-icon,
+.mail-icon {
   width: 1rem;
   height: 1rem;
   flex: 0 0 auto;
@@ -533,10 +539,31 @@ h1 {
   font-weight: 600;
 }
 
-.site-footer a:hover {
+.site-footer a:not(.contact-button):hover {
   color: var(--primary);
   text-decoration: underline;
   text-underline-offset: 0.18rem;
+}
+
+.contact-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  padding: 0.45rem 0.8rem;
+  box-shadow: 0 10px 24px oklch(0.208 0.042 265.755 / 6%);
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.contact-button:hover {
+  border-color: oklch(0.623 0.214 259.815 / 42%);
+  background: var(--accent);
+  color: var(--primary);
 }
 
 @media (max-width: 820px) {

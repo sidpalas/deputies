@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-COMPOSE=(docker compose -f "$ROOT_DIR/deploy/docker-compose/docker-compose.all.yml" -f "$ROOT_DIR/deploy/docker-compose/docker-compose.smoke.yml")
+COMPOSE=(docker compose -f "$ROOT_DIR/deploy/docker-compose/docker-compose.combined.yml" -f "$ROOT_DIR/deploy/docker-compose/docker-compose.smoke.yml")
 
 cleanup() {
   "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true

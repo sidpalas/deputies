@@ -17,7 +17,7 @@ describe('loadConfig', () => {
       sandboxRetentionMs: 3_600_000,
       sandboxKeepaliveMaxExtensionMs: 7_200_000,
       sandboxWorkspacePath: '/workspace',
-      runMode: 'all',
+      runMode: 'combined',
       runner: 'fake',
       sandboxProvider: 'fake',
       localSandboxAllowedCommands: [],
@@ -25,6 +25,9 @@ describe('loadConfig', () => {
       dockerSandboxImage: 'deputies-sandbox:local',
       dockerSandboxBridgeHost: '127.0.0.1',
       dockerCliTimeoutMs: 30_000,
+      agentSandboxOrchestratorMode: 'in-process',
+      agentSandboxImage: 'ghcr.io/sidpalas/deputies-docker-sandbox:sha-ac8a459',
+      agentSandboxStorageSize: '1Gi',
       appDataStore: 'memory',
       apiAuthMode: 'none',
       authProvider: 'static',
@@ -62,6 +65,8 @@ describe('loadConfig', () => {
   });
 
   it('parses supported run modes and providers', () => {
+    expect(loadConfig({ API_AUTH_MODE: 'none', RUN_MODE: 'all' }).runMode).toBe('all');
+
     expect(
       loadConfig({
         PORT: '4000',
@@ -87,6 +92,13 @@ describe('loadConfig', () => {
         DOCKER_SANDBOX_MEMORY: '2g',
         DOCKER_SANDBOX_CPUS: '2',
         DOCKER_CLI_TIMEOUT_MS: '45000',
+        AGENT_SANDBOX_ORCHESTRATOR_MODE: 'http',
+        AGENT_SANDBOX_ORCHESTRATOR_URL: 'http://agent-sandbox-orchestrator:3587',
+        AGENT_SANDBOX_ORCHESTRATOR_TOKEN: 'agent-sandbox-token',
+        AGENT_SANDBOX_NAMESPACE: 'deputies-sandboxes',
+        AGENT_SANDBOX_IMAGE: 'deputies-sandbox:k8s',
+        AGENT_SANDBOX_STORAGE_SIZE: '20Gi',
+        AGENT_SANDBOX_STORAGE_CLASS_NAME: 'standard',
         APP_DATA_STORE: 'postgres',
         API_AUTH_MODE: 'session',
         API_BEARER_TOKEN: 'api-token',
@@ -168,6 +180,13 @@ describe('loadConfig', () => {
       dockerSandboxMemory: '2g',
       dockerSandboxCpus: '2',
       dockerCliTimeoutMs: 45_000,
+      agentSandboxOrchestratorMode: 'http',
+      agentSandboxOrchestratorUrl: 'http://agent-sandbox-orchestrator:3587',
+      agentSandboxOrchestratorToken: 'agent-sandbox-token',
+      agentSandboxNamespace: 'deputies-sandboxes',
+      agentSandboxImage: 'deputies-sandbox:k8s',
+      agentSandboxStorageSize: '20Gi',
+      agentSandboxStorageClassName: 'standard',
       appDataStore: 'postgres',
       apiAuthMode: 'session',
       apiBearerToken: 'api-token',
@@ -228,14 +247,36 @@ describe('loadConfig', () => {
     });
   });
 
-  it('requires an app secret encryption key for postgres-backed Docker sandboxes', () => {
+  it.each(['docker', 'k8s-agent-sandbox'])(
+    'requires an app secret encryption key for postgres-backed %s sandboxes',
+    (provider) => {
+      expect(() =>
+        loadConfig({
+          API_AUTH_MODE: 'none',
+          APP_DATA_STORE: 'postgres',
+          SANDBOX_PROVIDER: provider,
+        }),
+      ).toThrow('SANDBOX_SECRET_ENCRYPTION_KEY is required');
+    },
+  );
+
+  it('requires URL and token for k8s-agent-sandbox HTTP orchestrator mode', () => {
     expect(() =>
       loadConfig({
         API_AUTH_MODE: 'none',
-        APP_DATA_STORE: 'postgres',
-        SANDBOX_PROVIDER: 'docker',
+        SANDBOX_PROVIDER: 'k8s-agent-sandbox',
+        AGENT_SANDBOX_ORCHESTRATOR_MODE: 'http',
       }),
-    ).toThrow('SANDBOX_SECRET_ENCRYPTION_KEY is required');
+    ).toThrow('AGENT_SANDBOX_ORCHESTRATOR_URL is required when AGENT_SANDBOX_ORCHESTRATOR_MODE=http');
+
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        SANDBOX_PROVIDER: 'k8s-agent-sandbox',
+        AGENT_SANDBOX_ORCHESTRATOR_MODE: 'http',
+        AGENT_SANDBOX_ORCHESTRATOR_URL: 'http://agent-sandbox-orchestrator:3587',
+      }),
+    ).toThrow('AGENT_SANDBOX_ORCHESTRATOR_TOKEN is required when AGENT_SANDBOX_ORCHESTRATOR_MODE=http');
   });
 
   it('allows the app secret placeholder locally but rejects it in production', () => {
@@ -448,9 +489,9 @@ describe('loadConfig', () => {
   });
 
   it('rejects invalid enum values', () => {
-    expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of all, api, worker');
+    expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of combined, all, api, worker');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'local' })).toThrow(
-      'Expected one of fake, unsafe-local, docker, daytona, kubernetes, ecs',
+      'Expected one of fake, unsafe-local, docker, daytona, k8s-agent-sandbox, ecs',
     );
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_COOKIE_SAME_SITE: 'strict' })).toThrow(
       'Expected one of lax, none',

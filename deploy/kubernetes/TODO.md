@@ -1,0 +1,5 @@
+- add k8s sandbox support
+- add app support for ambient S3 credentials through the SDK default credential chain
+- add chart support for future `artifactStorage.s3.credentials.mode=secret|ambient` after app support exists
+- add app support for RDS IAM auth token generation, TLS config, and migration job auth
+- add chart support for future `postgres.authMode=password|aws-rds-iam` after app support exists

@@ -1,0 +1,62 @@
+{{- if .Values.web.trustForwardedServiceHosts }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deputies.fullname" . }}-web-caddyfile
+  labels:
+    {{- include "deputies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+data:
+  Caddyfile: |
+    :{$PORT:5173} {
+      root * /usr/share/caddy
+      encode zstd gzip
+
+      # Keep this forwarded-host routing aligned with apps/web/Caddyfile.local.
+      @service_host header_regexp Host ^s-
+      @service_forwarded_host header_regexp X-Forwarded-Host ^s-
+      @service_original_host header_regexp X-Original-Host ^s-
+      handle @service_host {
+        reverse_proxy {$API_UPSTREAM:http://control-plane:3583} {
+          header_up X-Original-Host {host}
+          header_up X-Forwarded-Host {host}
+          header_up X-Forwarded-Proto {scheme}
+        }
+      }
+      handle @service_forwarded_host {
+        reverse_proxy {$API_UPSTREAM:http://control-plane:3583} {
+          header_up X-Original-Host {header.X-Forwarded-Host}
+          header_up X-Forwarded-Host {header.X-Forwarded-Host}
+          header_up X-Forwarded-Proto {header.X-Forwarded-Proto}
+        }
+      }
+      handle @service_original_host {
+        reverse_proxy {$API_UPSTREAM:http://control-plane:3583} {
+          header_up X-Original-Host {header.X-Original-Host}
+          header_up X-Forwarded-Host {header.X-Original-Host}
+          header_up X-Forwarded-Proto {header.X-Forwarded-Proto}
+        }
+      }
+
+      @api path /health /auth* /sessions* /events* /repositories* /models* /setup* /webhooks*
+      handle @api {
+        reverse_proxy {$API_UPSTREAM:http://control-plane:3583} {
+          header_up X-Original-Host {host}
+          header_up X-Forwarded-Host {host}
+          header_up X-Forwarded-Proto {scheme}
+        }
+      }
+
+      @assets path /assets/*
+      handle @assets {
+        header Cache-Control "public, max-age=31536000, immutable"
+        file_server
+      }
+
+      handle {
+        header Cache-Control "no-cache"
+        try_files {path} /index.html
+        file_server
+      }
+    }
+{{- end }}

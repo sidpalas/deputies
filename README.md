@@ -28,7 +28,7 @@ Start with the provider-agnostic deployment guide:
 Specific deployment targets:
 
 - Railway: the public template at `https://railway.com/deploy/ZYSsM8` provisions the app services and supporting infrastructure.
-- Docker Compose: `deploy/docker-compose/` contains local production-style Compose stacks for all-in-one and split API/worker/orchestrator deployments.
+- Docker Compose: `deploy/docker-compose/` contains local production-style Compose stacks for combined and split API/worker/orchestrator deployments.
 
 More deployment targets are expected over time. See `deploy/README.md`, `docs/deployment.md`, and target-specific docs for details.
 

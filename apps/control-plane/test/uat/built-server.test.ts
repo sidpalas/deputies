@@ -344,7 +344,7 @@ async function startServer(extraEnv: Record<string, string> = {}): Promise<void>
       APP_DATA_STORE: 'postgres',
       DATABASE_URL: testDatabaseUrl!,
       PORT: String(uatPort),
-      RUN_MODE: 'all',
+      RUN_MODE: 'combined',
       RUNNER: 'fake',
       API_AUTH_MODE: 'none',
       UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS: 'true',

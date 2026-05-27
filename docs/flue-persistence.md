@@ -157,7 +157,7 @@ Node in-memory Flue sessions are only valid for local experiments. Production an
 
 Rules:
 
-- `RUN_MODE=all` still uses Postgres Flue store.
+- `RUN_MODE=combined` still uses Postgres Flue store.
 - `RUN_MODE=worker` uses Postgres Flue store.
 - Tests should fail if production config accidentally uses in-memory Flue sessions.
 - Local development may opt into memory only with explicit config such as `FLUE_STATE_STORE=memory`.

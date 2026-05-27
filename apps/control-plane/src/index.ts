@@ -5,6 +5,8 @@ import { createArtifactObjectStorage } from './artifacts/storage.js';
 import { HttpCompletionCallbackSender, type CompletionCallbackSender } from './callbacks/service.js';
 import {
   loadConfig,
+  requireAgentSandboxOrchestratorToken,
+  requireAgentSandboxOrchestratorUrl,
   requireDatabaseUrl,
   requireDaytonaApiKey,
   requireDockerOrchestratorUrl,
@@ -29,6 +31,11 @@ import { PostgresFlueSessionStore } from './runner-flue/session-store.js';
 import { DaytonaSandboxProvider } from './sandbox/daytona.js';
 import { DockerSandboxProvider, HttpDockerOrchestratorClient, InProcessDockerOrchestrator } from './sandbox/docker.js';
 import { FakeSandboxProvider } from './sandbox/fake.js';
+import {
+  AgentSandboxProvider,
+  HttpAgentSandboxOrchestratorClient,
+  InProcessAgentSandboxOrchestrator,
+} from './sandbox/k8s-agent-sandbox.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
 import type { SandboxProvider } from './sandbox/types.js';
@@ -65,12 +72,12 @@ let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
 if ('close' in store && typeof store.close === 'function') resources.push(store as CloseableResource);
 if (
   store instanceof PostgresStore &&
-  (config.runMode === 'all' || config.runMode === 'api' || config.runMode === 'worker')
+  (config.runMode === 'combined' || config.runMode === 'all' || config.runMode === 'api' || config.runMode === 'worker')
 ) {
   resources.unshift(await store.listenEvents((event) => services.events.publishExternal(event)));
 }
 
-if (config.runMode === 'all' || config.runMode === 'api') {
+if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode === 'api') {
   server = createServer(config, services);
   server.listen(config.port, () => {
     console.log(`background-agent service listening on :${config.port} (${config.runMode})`);
@@ -82,7 +89,7 @@ if (config.runMode === 'all' || config.runMode === 'api') {
   });
 }
 
-if (config.runMode === 'all' || config.runMode === 'worker') {
+if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode === 'worker') {
   const runner = await createRunner();
   const callbackSenders = createCallbackSenders();
   const progressNotifiers = createProgressNotifiers();
@@ -218,6 +225,26 @@ function createSandboxProvider(): SandboxProvider {
     if (config.daytonaSnapshot) Object.assign(options, { snapshot: config.daytonaSnapshot });
     Object.assign(options, { workspacePath: config.sandboxWorkspacePath });
     return new DaytonaSandboxProvider(options);
+  }
+  if (config.sandboxProvider === 'k8s-agent-sandbox') {
+    const orchestrator =
+      config.agentSandboxOrchestratorMode === 'http'
+        ? new HttpAgentSandboxOrchestratorClient(
+            optional({
+              baseUrl: requireAgentSandboxOrchestratorUrl(config),
+              token: requireAgentSandboxOrchestratorToken(config),
+            }),
+          )
+        : new InProcessAgentSandboxOrchestrator(
+            optional({
+              namespace: config.agentSandboxNamespace,
+              image: config.agentSandboxImage,
+              workspacePath: config.sandboxWorkspacePath,
+              storageSize: config.agentSandboxStorageSize,
+              storageClassName: config.agentSandboxStorageClassName,
+            }),
+          );
+    return new AgentSandboxProvider({ orchestrator });
   }
 
   throw new Error(`SANDBOX_PROVIDER=${config.sandboxProvider} is not wired yet`);

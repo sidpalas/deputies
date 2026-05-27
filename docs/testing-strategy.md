@@ -193,7 +193,7 @@ E2E tests should run the whole app with fake runner and fake sandbox first.
 Scenario:
 
 ```txt
-start app with RUN_MODE=all
+start app with RUN_MODE=combined
 run migrations
 POST /sessions
 POST /sessions/:id/messages

@@ -1,6 +1,6 @@
 # Local Development
 
-This is the fastest path to a solid local Deputies setup. It uses Postgres and SeaweedFS via Docker Compose, Portless HTTPS, static session auth, `RUN_MODE=all`, the Docker sandbox provider, and an Anthropic or OpenAI API key.
+This is the fastest path to a solid local Deputies setup. It uses Postgres and SeaweedFS via Docker Compose, Portless HTTPS, static session auth, `RUN_MODE=combined`, the Docker sandbox provider, and an Anthropic or OpenAI API key.
 
 ## Prerequisites
 
@@ -38,7 +38,7 @@ openssl rand -base64 32
 Edit `.env.local` with this baseline. Use one generated value for `AUTH_SESSION_SECRET` and the other for `SANDBOX_SECRET_ENCRYPTION_KEY`.
 
 ```sh
-RUN_MODE=all
+RUN_MODE=combined
 
 APP_DATA_STORE=postgres
 DATABASE_URL=postgres://flue:flue@localhost:5432/flue
@@ -59,7 +59,6 @@ AUTH_PROVIDER=static
 AUTH_STATIC_USERNAME=dev
 AUTH_STATIC_PASSWORD=dev-secret
 AUTH_SESSION_SECRET=<generated-secret>
-AUTH_COOKIE_DOMAIN=.deputies.localhost
 AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAME_SITE=lax
 WEB_BASE_URL=https://deputies.localhost
@@ -136,7 +135,7 @@ pnpm portless:alias:web
 
 Portless binds port `443`, so approve the sudo prompt.
 
-Terminal 1, start the control plane API and worker in `RUN_MODE=all`:
+Terminal 1, start the control plane API and worker in `RUN_MODE=combined`:
 
 ```sh
 set -a; . ./.env.local; set +a
@@ -231,17 +230,15 @@ Do not rotate it casually; changing it prevents decrypting existing Docker sandb
 For the default Portless HTTPS setup, use:
 
 ```sh
-AUTH_COOKIE_DOMAIN=.deputies.localhost
 AUTH_COOKIE_SECURE=true
 WEB_BASE_URL=https://deputies.localhost
 ```
 
-Clear browser cookies after changing cookie domain settings.
+Clear browser cookies after changing cookie settings.
 
 For a plain HTTP fallback, use:
 
 ```sh
-AUTH_COOKIE_DOMAIN=
 AUTH_COOKIE_SECURE=false
 WEB_BASE_URL=http://localhost:5173
 ```

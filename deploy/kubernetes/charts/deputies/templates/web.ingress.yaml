@@ -1,0 +1,43 @@
+{{- if eq .Values.routing.mode "ingress" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "deputies.fullname" . }}-web
+  labels:
+    {{- include "deputies.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    - {{- if .Values.ingress.web.host }}
+      host: {{ .Values.ingress.web.host | quote }}
+      {{- end }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.web.path }}
+            pathType: {{ .Values.ingress.web.pathType }}
+            backend:
+              service:
+                name: {{ include "deputies.fullname" . }}-web
+                port:
+                  name: http
+    {{- if .Values.ingress.services.enabled }}
+    - {{- if .Values.ingress.services.host }}
+      host: {{ .Values.ingress.services.host | quote }}
+      {{- end }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.services.path }}
+            pathType: {{ .Values.ingress.services.pathType }}
+            backend:
+              service:
+                name: {{ include "deputies.fullname" . }}-web
+                port:
+                  name: http
+    {{- end }}
+{{- end }}

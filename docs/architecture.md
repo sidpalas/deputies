@@ -27,14 +27,14 @@ Terminology in this document:
 Run modes:
 
 ```txt
-RUN_MODE=all       # API + worker in one process
+RUN_MODE=combined  # API + worker in one process
 RUN_MODE=api       # API only
 RUN_MODE=worker    # worker only
 ```
 
-### Monolith Mode
+### Combined Mode
 
-Monolith mode runs API, integration, event streaming, worker, runner, and sandbox lifecycle work in one process. It is the smallest operational shape.
+Combined mode runs API, integration, event streaming, worker, runner, and sandbox lifecycle work in one process. It is the smallest operational shape.
 
 Responsibilities:
 
@@ -78,7 +78,7 @@ flowchart LR
     Integration[Slack / GitHub / webhook]
   end
 
-  subgraph Runtime[Control plane process<br/>RUN_MODE=all]
+  subgraph Runtime[Control plane process<br/>RUN_MODE=combined]
     direction TB
     API[API routes + auth + event streams]
     Worker[Worker loop + leases<br/>Flue runner adapter]
@@ -432,7 +432,7 @@ worker loop
 
 Correctness must not depend on a single process.
 
-The code must behave correctly with multiple replicas even when deployed in `RUN_MODE=all`. Any code path that allocates durable work or processes work must use Postgres-backed concurrency controls. The current store uses database-backed per-session sequence counters and Postgres-backed run leases, including active/cancelling run exclusivity and stale lease recovery.
+The code must behave correctly with multiple replicas even when deployed in `RUN_MODE=combined`. Any code path that allocates durable work or processes work must use Postgres-backed concurrency controls. The current store uses database-backed per-session sequence counters and Postgres-backed run leases, including active/cancelling run exclusivity and stale lease recovery.
 
 Rules:
 
@@ -524,7 +524,7 @@ interface SandboxProvider {
 Provider choices should be config-driven:
 
 ```txt
-SANDBOX_PROVIDER=fake|unsafe-local|docker|daytona|kubernetes|ecs
+SANDBOX_PROVIDER=fake|unsafe-local|docker|daytona|k8s-agent-sandbox|ecs
 ```
 
 MVP should include `fake` for tests and one real provider.

@@ -16,7 +16,6 @@ import {
 import { oauthSuccessHtml } from '../auth/oauth-success-page.js';
 import {
   clearSessionCookie,
-  clearHostSessionCookie,
   createSessionCookie,
   createSessionId,
   readSessionId,
@@ -26,6 +25,7 @@ import {
 } from '../auth/session.js';
 import { CallbackService, CallbackServiceError } from '../callbacks/service.js';
 import {
+  requireApiBearerToken,
   requireAuthSessionSecret,
   requireGitHubOAuthCredentials,
   requireSlackSigningSecret,
@@ -61,9 +61,12 @@ import { writeGlobalEventStream, writeSessionEventStream } from './event-stream.
 import { configuredModels, ModelAvailabilityService, modelOptions } from './model-availability.js';
 import { buildSetupStatus } from './setup-status.js';
 import {
+  appendPreviewCookie,
+  authorizePreviewToken,
+  authorizePreviewRequest,
+  createPreviewAuthToken,
   getSessionService,
   handleServiceUpgrade,
-  isAuthorizedRequest,
   parseServiceHostFromRequest,
   parseServicePort,
   proxyService,
@@ -326,13 +329,25 @@ export function createApp(config: AppConfig, services = createServices()) {
       await next();
       return;
     }
-    const serviceAuthorized = await isAuthorizedRequest(config, services.store, c, { role: 'admin' });
-    if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Admin access is required');
+    if (new URL(c.req.url).pathname === '/__preview_auth') {
+      return authorizePreviewToken(config, services.store, c, serviceHost.sessionId, serviceHost.port);
+    }
+    const authorization = await authorizePreviewRequest(config, services.store, c, { role: 'admin' });
+    if (config.apiAuthMode === 'session' && !authorization) {
+      return writeError(c, 403, 'forbidden', 'Admin access is required');
+    }
     const session = await services.sessions.get(serviceHost.sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
     const service = await getSessionService(config, services, serviceHost.sessionId, serviceHost.port);
     if (!service) return writeError(c, 404, 'not_found', 'Service URL is not available for this sandbox');
-    return proxyService(c, config, serviceHost.sessionId, serviceHost.port, service);
+    if (config.apiAuthMode === 'bearer') {
+      const serviceAuthorized = c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
+      if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Admin access is required');
+    }
+    return appendPreviewCookie(
+      await proxyService(c, config, serviceHost.sessionId, serviceHost.port, service),
+      authorization?.cookie,
+    );
   });
 
   app.post('/sessions', async (c) => {
@@ -802,7 +817,17 @@ export function createApp(config: AppConfig, services = createServices()) {
         continue;
       const service = await getSessionService(config, services, sessionId, item.port);
       if (service)
-        liveServices.push(serializeService(c, config, sessionId, service, item, sandboxTiming(config, sandbox)));
+        liveServices.push(
+          serializeService(
+            c,
+            config,
+            sessionId,
+            service,
+            item,
+            sandboxTiming(config, sandbox),
+            await previewAuthTokenForRequest(c, config, services.store, sessionId, item.port),
+          ),
+        );
     }
     return c.json({ services: liveServices });
   });
@@ -905,6 +930,7 @@ export function createApp(config: AppConfig, services = createServices()) {
         preview,
         workspaceToolServiceMetadata(tool, servicePath),
         sandboxTiming(config, keepalive.record),
+        await previewAuthTokenForRequest(c, config, services.store, sessionId, tool.port),
       ),
       session: await serializeSessionWithSandbox(config, services, updatedSession),
     });
@@ -1146,7 +1172,20 @@ function serializeSandboxTiming(config: AppConfig, sandbox: SandboxRecord) {
 
 function clearSessionCookies(c: Context, config: AppConfig): void {
   c.header('set-cookie', clearSessionCookie(config));
-  if (config.authCookieDomain) c.header('set-cookie', clearHostSessionCookie(config), { append: true });
+}
+
+async function previewAuthTokenForRequest(
+  c: Context,
+  config: AppConfig,
+  store: AppStore,
+  previewSessionId: string,
+  port: number,
+): Promise<string | undefined> {
+  if (config.apiAuthMode !== 'session') return undefined;
+  const authSessionId = readSessionId(c);
+  const user = authSessionId ? await store.getAuthUserBySession({ sessionId: authSessionId, now: new Date() }) : null;
+  if (!authSessionId || user?.role !== 'admin') return undefined;
+  return createPreviewAuthToken(config, { authSessionId, previewSessionId, port, userId: user.id });
 }
 
 async function messageAuthor(

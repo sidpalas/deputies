@@ -5,5 +5,7 @@ playwright-report
 test-results
 .pnpm-store
 pnpm-lock.yaml
+CHANGELOG.md
 .env*
 !.env.example
+deploy/kubernetes/charts/**/templates/*.yaml

@@ -78,7 +78,7 @@ Deliverables:
 
 Acceptance criteria:
 
-- `RUN_MODE=all`, `RUN_MODE=api`, and `RUN_MODE=worker` are parseable.
+- `RUN_MODE=combined`, `RUN_MODE=api`, and `RUN_MODE=worker` are parseable. `RUN_MODE=all` remains accepted as a compatibility alias.
 - Health endpoint works.
 - Integration test can start app with test Postgres.
 - Architecture tests prevent forbidden imports.

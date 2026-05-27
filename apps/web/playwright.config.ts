@@ -2,6 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 const apiBaseUrl = process.env.VITE_API_BASE_URL ?? 'http://localhost:3583';
 const webBaseUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:5173';
+const hostResolverRules = process.env.PLAYWRIGHT_HOST_RESOLVER_RULES;
 
 export default defineConfig({
   testDir: './e2e',
@@ -24,7 +25,10 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        ...(hostResolverRules ? { launchOptions: { args: [`--host-resolver-rules=${hostResolverRules}`] } } : {}),
+      },
     },
   ],
 });

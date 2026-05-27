@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { EventService } from '../events/service.js';
 import type { RunnerArtifact, RunnerResult } from '../runner/types.js';
-import type { ArtifactRecord, CreateArtifactRecord } from '../store/types.js';
+import type { ArtifactRecord, CreateArtifactRecord, SessionRecord } from '../store/types.js';
 import { checksumSha256, type ArtifactObjectStorage } from './storage.js';
 
 type ArtifactStore = {
   createArtifact(record: CreateArtifactRecord): Promise<ArtifactRecord>;
+  getSession(id: string): Promise<SessionRecord | null>;
   getArtifacts?: (sessionId: string) => Promise<ArtifactRecord[]>;
 };
 
@@ -101,7 +102,16 @@ export class ArtifactService {
     if (content) {
       if (!this.objectStorage)
         throw new ArtifactServiceError('storage_disabled', 'Artifact object storage is disabled');
-      const storageKey = buildStorageKey(createdAt, input.sessionId, input.runId, id, artifact.fileName);
+      const session = await this.store.getSession(input.sessionId);
+      if (!session) throw new ArtifactServiceError('not_found', 'Session not found');
+      const storageKey = buildStorageKey(
+        session.createdAt,
+        createdAt,
+        input.sessionId,
+        input.runId,
+        id,
+        artifact.fileName,
+      );
       await this.objectStorage.put({
         key: storageKey,
         body: content,
@@ -255,14 +265,15 @@ function artifactContentBytes(artifact: RunnerArtifact): Uint8Array | null {
 }
 
 function buildStorageKey(
-  createdAt: Date,
+  sessionCreatedAt: Date,
+  artifactCreatedAt: Date,
   sessionId: string,
   runId: string,
   artifactId: string,
   fileName?: string,
 ): string {
   const suffix = fileName ? `-${sanitizeStorageFileName(fileName)}` : '';
-  return `artifacts/${formatStorageTimestamp(createdAt)}/sessions/${sessionId}/runs/${runId}/${artifactId}${suffix}`;
+  return `artifacts/${formatStorageTimestamp(sessionCreatedAt)}/sessions/${sessionId}/runs/${runId}/${formatStorageTimestamp(artifactCreatedAt)}-${artifactId}${suffix}`;
 }
 
 function sanitizeStorageFileName(fileName: string): string {

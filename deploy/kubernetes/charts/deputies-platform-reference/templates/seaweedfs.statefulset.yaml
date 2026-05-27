@@ -1,0 +1,86 @@
+{{- if .Values.seaweedfs.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "deputies-platform-reference.seaweedfsName" . }}
+  labels:
+    {{- include "deputies-platform-reference.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+    {{- with .Values.seaweedfs.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.seaweedfs.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceName: seaweedfs
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "deputies-platform-reference.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: seaweedfs
+  template:
+    metadata:
+      labels:
+        {{- include "deputies-platform-reference.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: seaweedfs
+        {{- with .Values.seaweedfs.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.seaweedfs.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- if not .Values.seaweedfs.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+      containers:
+        - name: seaweedfs
+          image: "{{ .Values.seaweedfs.image.repository }}:{{ .Values.seaweedfs.image.tag }}"
+          imagePullPolicy: {{ .Values.seaweedfs.image.pullPolicy }}
+          command: ["weed"]
+          args: ["server", "-s3", "-s3.port={{ .Values.seaweedfs.s3.port }}", "-dir=/data"]
+          ports:
+            - name: s3
+              containerPort: {{ .Values.seaweedfs.s3.port }}
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "deputies-platform-reference.seaweedfsName" . }}
+                  key: access-key-id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "deputies-platform-reference.seaweedfsName" . }}
+                  key: secret-access-key
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: s3
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: 30
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.seaweedfs.resources | nindent 12 }}
+  {{- if .Values.seaweedfs.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.seaweedfs.persistence.storageClassName }}
+        storageClassName: {{ .Values.seaweedfs.persistence.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.seaweedfs.persistence.size | quote }}
+  {{- end }}
+{{- end }}
