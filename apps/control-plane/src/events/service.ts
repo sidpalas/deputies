@@ -30,7 +30,8 @@ const globalEventTypes = new Set<NormalizedEventType>([
 
 type PersistedEvent<T extends NormalizedEventType = NormalizedEventType> = EventRecord & NormalizedEvent<T>;
 type EventSubscriber = (event: PersistedEvent) => void;
-type GlobalEventSubscriber = { handler: EventSubscriber; allEvents: boolean };
+type GlobalEventSubscriber = { handler: EventSubscriber; allEvents: boolean; localOnly: boolean };
+type EventSource = 'local' | 'external';
 
 type AppendEventBase<T extends NormalizedEventType> = {
   sessionId: string;
@@ -54,7 +55,7 @@ export class EventService {
     const event = normalizeAppendInput(input);
 
     const persisted = await this.store.appendEventWithNextSequence(event);
-    this.publish(persisted);
+    this.publish(persisted, 'local');
     return persisted as PersistedEvent<T>;
   }
 
@@ -67,7 +68,7 @@ export class EventService {
     };
     const persisted = await this.store.appendEventWithNextSequenceForRun(event, guard);
     if (!persisted) return null;
-    this.publish(persisted);
+    this.publish(persisted, 'local');
     return persisted as PersistedEvent<T>;
   }
 
@@ -84,7 +85,7 @@ export class EventService {
   }
 
   publishExternal(event: EventRecord): void {
-    this.publish(event);
+    this.publish(event, 'external');
   }
 
   subscribe(sessionId: string, subscriber: EventSubscriber): () => void {
@@ -99,11 +100,15 @@ export class EventService {
   }
 
   subscribeAll(subscriber: EventSubscriber): () => void {
-    return this.subscribeGlobal(subscriber, false);
+    return this.subscribeGlobal(subscriber, false, false);
   }
 
   subscribeAllEvents(subscriber: EventSubscriber): () => void {
-    return this.subscribeGlobal(subscriber, true);
+    return this.subscribeGlobal(subscriber, true, false);
+  }
+
+  subscribeLocalEvents(subscriber: EventSubscriber): () => void {
+    return this.subscribeGlobal(subscriber, true, true);
   }
 
   subscriberCount(): number {
@@ -112,16 +117,17 @@ export class EventService {
     return sessionSubscriberCount + this.globalSubscribers.size;
   }
 
-  private subscribeGlobal(subscriber: EventSubscriber, allEvents: boolean): () => void {
-    const record = { handler: subscriber, allEvents };
+  private subscribeGlobal(subscriber: EventSubscriber, allEvents: boolean, localOnly: boolean): () => void {
+    const record = { handler: subscriber, allEvents, localOnly };
     this.globalSubscribers.add(record);
     return () => {
       this.globalSubscribers.delete(record);
     };
   }
 
-  private publish(event: PersistedEvent): void {
+  private publish(event: PersistedEvent, source: EventSource): void {
     for (const subscriber of this.globalSubscribers) {
+      if (subscriber.localOnly && source !== 'local') continue;
       if (subscriber.allEvents || isGlobalEvent(event)) subscriber.handler(event);
     }
     for (const subscriber of this.subscribers.get(event.sessionId) ?? []) {

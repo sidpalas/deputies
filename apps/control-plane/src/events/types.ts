@@ -24,7 +24,7 @@ export type NormalizedEventPayloadMap = {
   message_created: { sequence: number; source: string | null; transcriptOnly?: true };
   message_updated: { sequence: number };
   message_cancelled: { sequence: number; transcriptOnly?: true };
-  message_started: { sequences: number[]; batchSize: number };
+  message_started: { sequences: number[]; batchSize: number; queuedAtBySequence?: Record<string, string> };
   run_started: { runner: string };
   sandbox_starting: { provider: string };
   sandbox_ready: {

@@ -152,6 +152,8 @@ export class FlueRunner implements Runner {
         response = await session.prompt(
           withToolGuidance(input.prompt, Boolean(this.options.artifacts), Boolean(repositoryServices)),
         );
+      } catch (error) {
+        throw error;
       } finally {
         if (input.signal?.aborted) await this.restoreSessionSnapshot(input.sessionId, sessionSnapshot);
       }
@@ -337,7 +339,12 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
       return {
         ...base,
         type: 'tool_started',
-        payload: { toolName: 'command', args: { operationId: event.operationId }, flueSessionId },
+        payload: {
+          toolName: 'command',
+          toolCallId: event.operationId,
+          args: { operationId: event.operationId },
+          flueSessionId,
+        },
       };
     case 'operation':
       if (event.operationKind !== 'shell') return null;
@@ -346,6 +353,7 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
         type: 'tool_finished',
         payload: {
           toolName: 'command',
+          toolCallId: event.operationId,
           isError: event.isError,
           result: event.result,
           flueSessionId,

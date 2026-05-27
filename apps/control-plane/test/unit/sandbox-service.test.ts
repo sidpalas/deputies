@@ -1,5 +1,6 @@
 import { SandboxCleanupService, SandboxLifecycleService } from '../../src/sandbox/service.js';
 import { EventService } from '../../src/events/service.js';
+import { logger } from '../../src/observability/logger.js';
 import { sandboxRuntimeId } from '../../src/sandbox/runtime.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import type { SandboxCapabilities, SandboxHandle, SandboxProvider } from '../../src/sandbox/types.js';
@@ -88,7 +89,7 @@ describe('SandboxLifecycleService', () => {
 
   it('destroys and recreates when sandbox secrets cannot be loaded', async () => {
     const store = new FailingGetSandboxSecretsStore(new Error('decrypt failed'));
-    const consoleWarnMock = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const loggerWarnMock = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
     const now = new Date();
     await store.createSandbox({
       id: '00000000-0000-4000-8000-000000000003',
@@ -113,9 +114,12 @@ describe('SandboxLifecycleService', () => {
       expect(provider.destroy).toHaveBeenCalledWith(expect.objectContaining({ providerSandboxId: 'sandbox-1' }));
       expect(provider.connect).not.toHaveBeenCalled();
       expect(provider.create).toHaveBeenCalled();
-      expect(consoleWarnMock).toHaveBeenCalledWith(expect.stringContaining('decrypt failed'));
+      expect(loggerWarnMock).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.objectContaining({ message: 'decrypt failed' }) }),
+        'Destroyed sandbox after failing to load sandbox secrets',
+      );
     } finally {
-      consoleWarnMock.mockRestore();
+      loggerWarnMock.mockRestore();
     }
   });
 

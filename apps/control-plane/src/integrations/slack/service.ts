@@ -1,4 +1,5 @@
 import type { MessageService } from '../../messages/service.js';
+import { getLogger } from '../../observability/logger.js';
 import type { SessionService } from '../../sessions/service.js';
 import type { AppStore, MessageRecord, SessionRecord } from '../../store/types.js';
 import {
@@ -30,6 +31,8 @@ import type {
 } from './client.js';
 import { renderSlackPrompt, slackSessionTitle, type SlackThreadContext } from './prompts.js';
 import type { SlackAcceptedEvent, SlackEventEnvelope, SlackPromptMetadata, SlackThreadMessage } from './types.js';
+
+const logger = getLogger({ integration: 'slack' });
 
 export type SlackIntegrationOptions = {
   assistantThreadClient?: SlackAssistantThreadClient;
@@ -181,10 +184,10 @@ export class SlackIntegrationService {
         status,
       });
       if (!response.ok) {
-        console.warn(`Slack assistant thread status failed: ${response.error ?? 'unknown_error'}`);
+        logger.warn({ error: response.error ?? 'unknown_error' }, 'Slack assistant thread status failed');
       }
     } catch (error) {
-      console.warn(error instanceof Error ? error.message : error);
+      logger.warn({ err: error }, 'Slack assistant thread status failed');
     }
   }
 
@@ -193,10 +196,10 @@ export class SlackIntegrationService {
     try {
       const response = await this.options.reactionClient.addReaction({ channel: event.channel, ts: event.ts, name });
       if (!response.ok && response.error !== 'already_reacted') {
-        console.warn(`Slack reaction add failed: ${response.error ?? 'unknown_error'}`);
+        logger.warn({ error: response.error ?? 'unknown_error' }, 'Slack reaction add failed');
       }
     } catch (error) {
-      console.warn(error instanceof Error ? error.message : error);
+      logger.warn({ err: error }, 'Slack reaction add failed');
     }
   }
 
@@ -208,9 +211,10 @@ export class SlackIntegrationService {
         threadTs: event.threadTs,
         text: archivedSessionNotice(),
       });
-      if (!response.ok) console.warn(`Slack archived-session notice failed: ${response.error ?? 'unknown_error'}`);
+      if (!response.ok)
+        logger.warn({ error: response.error ?? 'unknown_error' }, 'Slack archived-session notice failed');
     } catch (error) {
-      console.warn(error instanceof Error ? error.message : error);
+      logger.warn({ err: error }, 'Slack archived-session notice failed');
     }
   }
 
@@ -222,9 +226,10 @@ export class SlackIntegrationService {
         threadTs: event.threadTs,
         text: archivedSessionRecoveredNotice(),
       });
-      if (!response.ok) console.warn(`Slack recovery acknowledgement failed: ${response.error ?? 'unknown_error'}`);
+      if (!response.ok)
+        logger.warn({ error: response.error ?? 'unknown_error' }, 'Slack recovery acknowledgement failed');
     } catch (error) {
-      console.warn(error instanceof Error ? error.message : error);
+      logger.warn({ err: error }, 'Slack recovery acknowledgement failed');
     }
   }
 
@@ -248,9 +253,9 @@ export class SlackIntegrationService {
         text,
         blocks: [{ type: 'section', text: { type: 'mrkdwn', text: message } }, { type: 'divider' }],
       });
-      if (!response.ok) console.warn(`Slack session-link reply failed: ${response.error ?? 'unknown_error'}`);
+      if (!response.ok) logger.warn({ error: response.error ?? 'unknown_error' }, 'Slack session-link reply failed');
     } catch (error) {
-      console.warn(error instanceof Error ? error.message : error);
+      logger.warn({ err: error }, 'Slack session-link reply failed');
     }
   }
 
@@ -351,7 +356,7 @@ export class SlackIntegrationService {
         threadTs: event.threadTs,
       });
       if (!response.ok) {
-        console.warn(`Slack thread context fetch failed: ${response.error ?? 'unknown_error'}`);
+        logger.warn({ error: response.error ?? 'unknown_error' }, 'Slack thread context fetch failed');
         return { messages: [], unavailableReason: response.error ?? 'unknown_error' };
       }
 
@@ -364,7 +369,7 @@ export class SlackIntegrationService {
         .filter((message) => slackTimestampLessThanOrEqual(message.ts, event.ts));
       return { messages };
     } catch (error) {
-      console.warn(error instanceof Error ? error.message : error);
+      logger.warn({ err: error }, 'Slack thread context fetch failed');
       return { messages: [], unavailableReason: error instanceof Error ? error.message : 'unknown_error' };
     }
   }
@@ -379,9 +384,9 @@ export class SlackIntegrationService {
     try {
       const channel = await this.options.infoClient.getChannelInfo({ channel: event.channel });
       if (channel.ok && channel.channel?.name) metadata.channelName = channel.channel.name;
-      else if (!channel.ok) console.warn(`Slack channel info fetch failed: ${channel.error ?? 'unknown_error'}`);
+      else if (!channel.ok) logger.warn({ error: channel.error ?? 'unknown_error' }, 'Slack channel info fetch failed');
     } catch (error) {
-      console.warn(error instanceof Error ? error.message : error);
+      logger.warn({ err: error }, 'Slack channel info fetch failed');
     }
 
     const userIds = new Set([
@@ -394,9 +399,9 @@ export class SlackIntegrationService {
         const user = await this.options.infoClient.getUserInfo({ user: userId });
         const name = user.ok && user.user ? displayNameForUser(user.user) : '';
         if (name) userNames.set(userId, name);
-        else if (!user.ok) console.warn(`Slack user info fetch failed: ${user.error ?? 'unknown_error'}`);
+        else if (!user.ok) logger.warn({ error: user.error ?? 'unknown_error' }, 'Slack user info fetch failed');
       } catch (error) {
-        console.warn(error instanceof Error ? error.message : error);
+        logger.warn({ err: error }, 'Slack user info fetch failed');
       }
     }
 

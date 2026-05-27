@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { EventService } from '../events/service.js';
+import { logger } from '../observability/logger.js';
 import type { CreateSandboxRecord, SandboxRecord, SandboxStore } from '../store/types.js';
 import { withNewSandboxRuntime, withSandboxRuntimeMetadata } from './runtime.js';
 import type { SandboxHandle, SandboxProvider } from './types.js';
@@ -135,10 +136,9 @@ export class SandboxLifecycleService {
       await this.store
         .updateSandbox({ ...checkedRecord, status: 'destroyed', updatedAt: destroyedAt, destroyedAt })
         .catch(() => undefined);
-      console.warn(
-        `Destroyed ${this.provider.name} sandbox ${record.providerSandboxId} after failing to load sandbox secrets: ${
-          error instanceof Error ? error.message : 'unknown error'
-        }`,
+      logger.warn(
+        { err: error, provider: this.provider.name, providerSandboxId: record.providerSandboxId },
+        'Destroyed sandbox after failing to load sandbox secrets',
       );
       return null;
     }

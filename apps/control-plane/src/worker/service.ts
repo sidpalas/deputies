@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ArtifactService } from '../artifacts/service.js';
 import { CallbackDispatcher, CallbackService, type CompletionCallbackSender } from '../callbacks/service.js';
 import type { AppendEventInput, EventService } from '../events/service.js';
+import { logger } from '../observability/logger.js';
 import type { Runner } from '../runner/types.js';
 import { SandboxLifecycleService } from '../sandbox/service.js';
 import type { SandboxProvider } from '../sandbox/types.js';
@@ -75,7 +76,13 @@ export class WorkerService {
       runId: claimed.run.id,
       messageId: claimed.messages[0]!.id,
       type: 'message_started',
-      payload: { sequences: claimed.messages.map((message) => message.sequence), batchSize: claimed.messages.length },
+      payload: {
+        sequences: claimed.messages.map((message) => message.sequence),
+        batchSize: claimed.messages.length,
+        queuedAtBySequence: Object.fromEntries(
+          claimed.messages.map((message) => [String(message.sequence), message.createdAt.toISOString()]),
+        ),
+      },
     });
     await this.notifyRunStarted(claimed.messages[0]!, claimed.run);
 
@@ -160,7 +167,7 @@ export class WorkerService {
           if (!run || run.status === 'cancelling') abort.abort();
         })
         .catch((error: unknown) => {
-          console.error(error instanceof Error ? error.message : error);
+          logger.error({ err: error, runId: claimed.run.id }, 'Run cancellation poll failed');
         });
     };
     const heartbeat = setInterval(() => {
@@ -176,7 +183,7 @@ export class WorkerService {
           if (!run || run.status === 'cancelling') abort.abort();
         })
         .catch((error: unknown) => {
-          console.error(error instanceof Error ? error.message : error);
+          logger.error({ err: error, runId: claimed.run.id }, 'Run lease renewal failed');
         });
     }, this.heartbeatIntervalMs);
     const cancellationPoll = setInterval(pollCancellation, this.cancellationPollIntervalMs);
@@ -388,7 +395,7 @@ export class WorkerService {
       try {
         await notifier.onRunStarted?.({ message, run });
       } catch (error) {
-        console.warn(error instanceof Error ? error.message : error);
+        logger.warn({ err: error, runId: run.id, messageId: message.id }, 'Run-start notifier failed');
       }
     }
   }
@@ -398,7 +405,7 @@ export class WorkerService {
       try {
         await notifier.onRunCompleted?.({ message, run });
       } catch (error) {
-        console.warn(error instanceof Error ? error.message : error);
+        logger.warn({ err: error, runId: run.id, messageId: message.id }, 'Run-completed notifier failed');
       }
     }
   }
@@ -408,7 +415,7 @@ export class WorkerService {
       try {
         await notifier.onRunFailed?.({ message, run, error });
       } catch (notifyError) {
-        console.warn(notifyError instanceof Error ? notifyError.message : notifyError);
+        logger.warn({ err: notifyError, runId: run.id, messageId: message.id }, 'Run-failed notifier failed');
       }
     }
   }
@@ -418,7 +425,7 @@ export class WorkerService {
       try {
         await notifier.onRunCancelled?.({ message, run });
       } catch (error) {
-        console.warn(error instanceof Error ? error.message : error);
+        logger.warn({ err: error, runId: run.id, messageId: message.id }, 'Run-cancelled notifier failed');
       }
     }
   }
@@ -461,7 +468,7 @@ export function startWorkerLoop(worker: Pick<WorkerService, 'processNext'>, poll
       } while (!stopped && processed);
     })()
       .catch((error: unknown) => {
-        console.error(error instanceof Error ? error.message : error);
+        logger.error({ err: error }, 'Worker loop failed');
       })
       .finally(() => {
         inFlight = null;

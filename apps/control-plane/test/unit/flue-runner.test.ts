@@ -131,7 +131,12 @@ describe('FlueRunner', () => {
     expect(events.filter((event) => event.type === 'agent_text_delta')).toHaveLength(1);
     expect(events[1]?.payload).toMatchObject({ text: 'hello', flueSessionId: 'flue-session' });
     expect(events[2]?.payload).toMatchObject({ toolName: 'shell', toolCallId: 'tool-1' });
-    expect(events[4]?.payload).toMatchObject({ toolName: 'command', args: { operationId: 'op-1' } });
+    expect(events[4]?.payload).toMatchObject({
+      toolName: 'command',
+      toolCallId: 'op-1',
+      args: { operationId: 'op-1' },
+    });
+    expect(events[5]?.payload).toMatchObject({ toolName: 'command', toolCallId: 'op-1' });
     expect(events[6]?.payload).toMatchObject({ toolName: 'task', taskId: 'task-1' });
   });
 

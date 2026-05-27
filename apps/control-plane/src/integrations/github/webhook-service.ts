@@ -1,4 +1,5 @@
 import type { MessageService } from '../../messages/service.js';
+import { getLogger } from '../../observability/logger.js';
 import type { SessionService } from '../../sessions/service.js';
 import type { AppStore, MessageRecord, SessionRecord } from '../../store/types.js';
 import {
@@ -25,6 +26,8 @@ import { githubCallbackTarget } from './callback-target.js';
 import type { GitHubIssueContextFetcher, GitHubIssueThreadComment } from './issue-context-fetcher.js';
 import type { GitHubReactionSender, GitHubReactionTarget } from './reaction-sender.js';
 import { isRepositoryAllowed } from './repository-access.js';
+
+const logger = getLogger({ integration: 'github' });
 
 export type GitHubWebhookHeaders = {
   deliveryId?: string;
@@ -275,7 +278,7 @@ export class GitHubWebhookService {
     try {
       await this.options.reactionSender.addEyes(target);
     } catch (error) {
-      console.warn(error instanceof Error ? error.message : error);
+      logger.warn({ err: error }, 'GitHub reaction add failed');
     }
   }
 
@@ -288,7 +291,7 @@ export class GitHubWebhookService {
         issueNumber: event.number,
       });
     } catch (error) {
-      console.warn(error instanceof Error ? error.message : error);
+      logger.warn({ err: error }, 'GitHub archived-session notice failed');
     }
   }
 
@@ -301,7 +304,7 @@ export class GitHubWebhookService {
         issueNumber: event.number,
       });
     } catch (error) {
-      console.warn(error instanceof Error ? error.message : error);
+      logger.warn({ err: error }, 'GitHub recovery acknowledgement failed');
     }
   }
 
@@ -428,7 +431,7 @@ export class GitHubWebhookService {
       return { comments: comments.filter((comment) => !seenCommentIds.has(comment.id) && !isBotComment(comment)) };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown_error';
-      console.warn(message);
+      logger.warn({ err: error }, 'GitHub issue context fetch failed');
       return { comments: [], unavailableReason: message };
     }
   }
