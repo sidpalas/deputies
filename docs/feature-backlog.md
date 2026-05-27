@@ -4,13 +4,8 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 ## Integrations
 
-- Slack start/queued status acknowledgement beyond reaction-only progress.
-- Slack direct-message support.
-- GitHub provider-owned push, branch, and PR helper operations using fresh installation access, sanitized branch names, and verified PR artifacts.
-- Preview URL detection and surfacing from sandbox/deployment output, including final callback links for Slack/GitHub and context-panel artifacts in the web UI.
 - GitHub collaborator permission gating in addition to the current repository, user, org, and trigger-phrase gates.
 - GitHub label-based triggers for teams that want non-mention workflows.
-- GitHub final callback links for provider-owned PR URLs after PR helpers exist.
 - Continue consolidating shared integration utilities, especially allowlist helpers, prompt section rendering, and callback target parsing before adding the next major integration.
 - Source-agnostic start/queued/final-response lifecycle so integrations add lightweight start signals while callback senders own exactly one final external reply.
 - Global runner/agent instruction injection for integration behavior that should not appear in chat-visible source prompts.
@@ -20,15 +15,12 @@ This is a living backlog for product, integration, runtime, and operations work.
 ## Web UI
 
 - Session tagging, filtering, and grouping.
-- Multiplayer-friendly session discovery controls without making sessions private by default.
 - Session filters for all sessions, started by me, participated in, and tag-based views.
 - User-selectable model, repository, branch, and execution settings.
 - Repository picker with saved defaults per user/team/source.
 - Session list pagination and server-side search.
 - Pin/favorite sessions.
-- Better run and sandbox status in the context panel.
-- Preview URL cards in the context panel, with source, expiry/status, and quick-open/copy actions.
-- Serve previews from a separate site/eTLD+1 and keep preview auth isolation strong, rather than relying on same-site cookies across the app and preview wildcard.
+- Audit and document preview-origin isolation after signed preview auth, including whether separate eTLD+1 deployment remains required for defense-in-depth against untrusted preview content.
 - Surface sandbox cleanup events and failures more clearly.
 - Expand callback delivery UI with filtering and clearer retry/failure history.
 - Improve archived-session browsing and bulk cleanup.
@@ -37,16 +29,12 @@ This is a living backlog for product, integration, runtime, and operations work.
 ## Agent Runtime
 
 - Agent authentication to external services through MCP, CLI credentials, API tokens, and short-lived provider tokens.
-- Harden and document OpenAI Codex subscription authentication, including `pnpm --dir apps/control-plane auth:login:openai-codex`, `FLUE_MODEL=openai-codex/<model>`, and `FLUE_OPENAI_CODEX_AUTH_FILE` override behavior.
 - Credential scoping and injection policy for tools, commands, MCP servers, and sandbox environments.
 - First-class multi-repository task support, including environments made of one or more repositories, one primary writable repo by default, auxiliary read-only context repos, and explicit multi-writable change sets when a task spans repos.
 - Prompt templates and snapshot tests for Slack/GitHub/Linear inputs.
 - Better repo resolution from Slack/GitHub/Linear context.
-- Populate `repository list` from GitHub App installation repositories instead of only `GITHUB_ALLOWED_REPOSITORIES`, while keeping the allowlist enforced at webhook intake and runtime token minting.
 - Setup/install hook observability beyond `repository_ready`.
 - User-controlled startup scripts for repository/environment setup before agent work begins.
-- Preview URL artifact emission from agent tools and sandbox processes, with normalization for common local/dev-server/deployment URL patterns.
-- Auto-refreshing sandbox images for common repos that keep up with main, preinstall dependencies, precompile the app, and still use Flue startup refresh for stale or missing worktrees.
 - Upstream Flue cancellation improvement for built-in bash/tool execution.
 
 ## Automations
@@ -62,15 +50,9 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 ## Sandboxes
 
-- Local Docker provider, distinct from the existing `unsafe-local` host-subprocess development provider.
-- Kubernetes provider.
-- ECS/Fargate provider with bridge sidecar.
 - Provider conformance test suite.
 - Sandbox metrics for create/connect/start/stop/destroy latency.
-- Persist or recover Docker sandbox bridge tokens so existing sandboxes can reconnect after control-plane/orchestrator restarts.
-- Let published live previews extend or hold sandbox idle timeout while users are actively viewing them, with provider-neutral limits and clear cleanup behavior.
-- Object storage integration for large logs/artifacts.
-- Repository-aware Daytona image or snapshot selection so common repos can use pre-baked dependencies instead of the global `DAYTONA_IMAGE` default.
+- Repository-aware, auto-refreshing sandbox images/snapshots for common repos that keep up with main, preinstall dependencies, precompile the app, and still use Flue startup refresh for stale or missing worktrees.
 
 ## Scale And Operations
 
@@ -85,7 +67,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Observability pass across control-plane, workers, sandbox orchestrators, and sandbox bridge: structured request/lifecycle logs with session/run/sandbox correlation IDs, sandbox create/connect/exec/preview/destroy audit events, useful latency/error metrics, and optional trace propagation for HTTP orchestrator and provider calls.
 - Pending-message, active-run, and worker-throughput dashboards.
 - Session/event table pagination and retention policies.
-- Deployment guides for Railway, ECS Fargate + RDS, and Kubernetes.
+- Deployment guides for Railway, Docker-Compose, and Kubernetes.
 - Migration/release runbooks.
 - Production readiness checklist.
 

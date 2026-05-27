@@ -104,7 +104,7 @@ ${HOME}/.pi/agent/auth.json:/run/secrets/openai-codex-auth.json
 If you use `FLUE_MODEL=openai-codex/<model>`, create the host auth file first:
 
 ```sh
-pnpm --dir apps/control-plane auth:login:openai-codex
+mise run //apps/control-plane:auth:login:openai-codex
 ```
 
 The Compose files set `FLUE_OPENAI_CODEX_AUTH_FILE=/run/secrets/openai-codex-auth.json` for worker-capable containers.

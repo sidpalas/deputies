@@ -276,6 +276,12 @@ If unset, model options are derived from available provider credentials.
 OpenAI Codex subscription auth:
 
 ```sh
+mise run //apps/control-plane:auth:login:openai-codex
+```
+
+The login task writes OAuth credentials to `~/.pi/agent/auth.json` by default. Use `FLUE_OPENAI_CODEX_AUTH_FILE` when the runtime should read a mounted copy from another path.
+
+```sh
 FLUE_MODEL=openai-codex/gpt-5.5
 FLUE_OPENAI_CODEX_AUTH_FILE=/run/secrets/openai-codex-auth.json
 FLUE_OPENAI_CODEX_AUTH_BASE64=<base64-auth-json>
