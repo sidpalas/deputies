@@ -1,0 +1,3 @@
+[tasks."smoke:full-stack"]
+description = "Run the Docker Compose full-stack smoke test"
+run = "./full-stack-smoke.sh"

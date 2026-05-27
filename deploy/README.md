@@ -15,7 +15,7 @@ Deployment target docs:
 
 Contributor local support services:
 
-- `local/`: Postgres and SeaweedFS services used by root package scripts such as `pnpm db:up` and `pnpm infra:up`. This directory does not deploy the full Deputies app stack; use `docker-compose/` if you prefer to run the full stack locally with Docker Compose.
+- `local/`: Postgres and SeaweedFS services used by mise tasks such as `mise run //deploy/local:infra:up` and `mise run //deploy/local:infra:down`. This directory does not deploy the full Deputies app stack; use `docker-compose/` if you prefer to run the full stack locally with Docker Compose.
 
 Provider-agnostic deployment guidance lives in `../docs/deployment.md`. Contributor-focused local development guidance lives in `../docs/contributing-local-development.md`.
 

@@ -40,7 +40,7 @@ docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f de
 Or use mise:
 
 ```sh
-mise run daytona-image-publish
+mise run //deploy/sandboxes/daytona:image:publish
 ```
 
 Daytona currently pulls `linux/amd64` images. If you build on Apple Silicon without `--platform linux/amd64`, GHCR may publish an ARM-only manifest and Daytona will fail with `no match for platform in manifest`. The publish command also disables SBOM/provenance attestations so GHCR does not add extra `unknown/unknown` package entries that can confuse strict image resolvers.
@@ -48,7 +48,7 @@ Daytona currently pulls `linux/amd64` images. If you build on Apple Silicon with
 To publish the `latest` tag explicitly:
 
 ```sh
-DAYTONA_IMAGE=ghcr.io/<owner>/deputies-daytona-sandbox:latest mise run daytona-image-publish
+DAYTONA_IMAGE=ghcr.io/<owner>/deputies-daytona-sandbox:latest mise run //deploy/sandboxes/daytona:image:publish
 ```
 
 Use any registry Daytona can pull from. For private registries, configure registry credentials in Daytona before using the image.
@@ -134,7 +134,7 @@ For manual development inside a sandbox:
 Then run services directly:
 
 ```sh
-DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue pnpm control-plane:db:migrate
-DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue API_AUTH_MODE=none pnpm control-plane:dev
-VITE_API_PROXY_TARGET=http://127.0.0.1:3583 pnpm web:dev
+DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue mise run //apps/control-plane:db:migrate
+DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue API_AUTH_MODE=none mise run //apps/control-plane:dev
+VITE_API_PROXY_TARGET=http://127.0.0.1:3583 mise run //apps/web:dev
 ```

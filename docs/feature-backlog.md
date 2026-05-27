@@ -37,7 +37,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 ## Agent Runtime
 
 - Agent authentication to external services through MCP, CLI credentials, API tokens, and short-lived provider tokens.
-- Harden and document OpenAI Codex subscription authentication, including `pnpm auth:login:openai-codex`, `FLUE_MODEL=openai-codex/<model>`, and `FLUE_OPENAI_CODEX_AUTH_FILE` override behavior.
+- Harden and document OpenAI Codex subscription authentication, including `pnpm --dir apps/control-plane auth:login:openai-codex`, `FLUE_MODEL=openai-codex/<model>`, and `FLUE_OPENAI_CODEX_AUTH_FILE` override behavior.
 - Credential scoping and injection policy for tools, commands, MCP servers, and sandbox environments.
 - First-class multi-repository task support, including environments made of one or more repositories, one primary writable repo by default, auxiliary read-only context repos, and explicit multi-writable change sets when a task spans repos.
 - Prompt templates and snapshot tests for Slack/GitHub/Linear inputs.

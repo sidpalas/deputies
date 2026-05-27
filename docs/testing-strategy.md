@@ -73,18 +73,18 @@ Use real Postgres. Use `vercel-labs/emulate` for GitHub, Slack, and AWS when tes
 
 Current local policy:
 
-- `pnpm control-plane:test` runs deterministic unit tests from `apps/control-plane/test/unit` without Postgres.
-- `pnpm control-plane:test:integration` runs Postgres-backed integration tests and requires `TEST_DATABASE_URL`.
-- `pnpm control-plane:test:load` runs a configurable Postgres-backed control-plane load profile and requires `TEST_DATABASE_URL`.
-- `pnpm control-plane:test:uat` runs built-artifact UAT tests from `apps/control-plane/test/uat` and requires `TEST_DATABASE_URL` plus a prior `pnpm control-plane:build`.
-- `pnpm web:test` runs the Vite/jsdom operator UI regression tests.
-- `pnpm web:e2e` runs Playwright browser tests such as responsive context-panel coverage.
-- `pnpm smoke:full-stack` is an opt-in Docker smoke that builds the local Postgres, SeaweedFS, built control-plane, and built web/Caddy stack, then drives Playwright through Caddy. It verifies deployed-style API proxying for browser routes such as `/repositories` and `/models` plus basic session creation against Postgres.
-- `pnpm check` runs API typecheck/tests and web typecheck/jsdom tests; it does not run Playwright E2E tests.
+- `mise run //apps/control-plane:test` runs deterministic unit tests from `apps/control-plane/test/unit` without Postgres.
+- `mise run //apps/control-plane:test:integration` runs Postgres-backed integration tests and requires `TEST_DATABASE_URL`.
+- `mise run //apps/control-plane:test:load` runs a configurable Postgres-backed control-plane load profile and requires `TEST_DATABASE_URL`.
+- `mise run //apps/control-plane:test:uat` runs built-artifact UAT tests from `apps/control-plane/test/uat` and requires `TEST_DATABASE_URL` plus a prior `mise run //apps/control-plane:build`.
+- `mise run //apps/web:test` runs the Vite/jsdom operator UI regression tests.
+- `mise run //apps/web:e2e` runs Playwright browser tests such as responsive context-panel coverage.
+- `mise run //deploy/docker-compose:smoke:full-stack` is an opt-in Docker smoke that builds the local Postgres, SeaweedFS, built control-plane, and built web/Caddy stack, then drives Playwright through Caddy. It verifies deployed-style API proxying for browser routes such as `/repositories` and `/models` plus basic session creation against Postgres.
+- `pnpm check` and `mise run //:check` run formatting, package typechecks, and package unit tests; they do not run Playwright E2E tests.
 - Real local Flue UAT is opt-in: set `RUN_REAL_LOCAL_FLUE_UAT=true`, `API_AUTH_MODE=none`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-local-flue.test.ts`.
 - Real Docker sandbox UAT is opt-in: use `DOCKER_SANDBOX_IMAGE=ghcr.io/sidpalas/deputies-docker-sandbox:latest`, set `RUN_REAL_DOCKER_SANDBOX_UAT=true`, and run `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-docker-sandbox.test.ts` to verify create, stop/start, reconnect, bridge exec/fs, live preview proxying, and cleanup against a real Docker daemon. Build `deputies-sandbox:local` only when testing unpublished sandbox image changes.
-- Real Daytona/Flue UAT is opt-in: build first and set `RUN_REAL_DAYTONA_FLUE_UAT=true`, `API_AUTH_MODE=none`, `TEST_DATABASE_URL`, `DAYTONA_API_KEY`, `FLUE_MODEL`, and the model provider credentials required by that model before running `pnpm control-plane:test:uat`.
-- `pnpm infra:up` starts the normal local Postgres and SeaweedFS baseline from `deploy/local/docker-compose.yml`; Postgres creates both `flue` and `flue_test`. Use `pnpm db:up` only when you need Postgres without artifact storage.
+- Real Daytona/Flue UAT is opt-in: build first and set `RUN_REAL_DAYTONA_FLUE_UAT=true`, `API_AUTH_MODE=none`, `TEST_DATABASE_URL`, `DAYTONA_API_KEY`, `FLUE_MODEL`, and the model provider credentials required by that model before running `mise run //apps/control-plane:test:uat`.
+- `mise run //deploy/local:infra:up` starts the normal local Postgres and SeaweedFS baseline from `deploy/local/docker-compose.yml`; Postgres creates both `flue` and `flue_test`.
 - Sandboxes without nested virtualization should not assume Docker or Docker Compose is available. Use `./deploy/sandboxes/daytona/start-postgres.sh` to start Postgres directly in sandbox images that include the helper scripts, then set `DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue` and `TEST_DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue_test`.
 - For broad verification inside sandbox images that include the Daytona helper scripts, run `./deploy/sandboxes/daytona/full-check.sh`; it starts Postgres, installs dependencies, runs migrations, and exercises API and web checks including Playwright e2e.
 - Integration tests apply migrations to `flue_test` and truncate app tables between tests.
@@ -100,7 +100,7 @@ Current local policy:
 - Lifecycle unit tests cover worker-loop stop behavior and idempotent resource shutdown.
 - API tests cover auth modes, static and GitHub App session-cookie login/logout, archive/restore behavior, queued-message edit/cancel/pause/resume, active-run cancellation, callback/artifact persistence, sandbox stop/destroy cleanup, and worker batching.
 - Web tests cover provider-aware session-cookie login, keyboard send behavior, mobile/sidebar reachability, active-run cancellation button, archived restore notice, and batch rendering for cancelled middle messages.
-- `pnpm web:build` typechecks and builds the separate Vite React operator UI.
+- `mise run //apps/web:build` typechecks and builds the separate Vite React operator UI.
 
 Harness responsibilities:
 

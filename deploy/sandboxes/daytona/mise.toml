@@ -1,0 +1,47 @@
+[tasks."image:build"]
+description = "Build the Daytona sandbox image"
+run = """
+docker buildx build \
+  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
+  --provenance=false \
+  --sbom=false \
+  -f ../base/Dockerfile \
+  -t deputies-sandbox-base:local \
+  --load \
+  ../../..
+
+docker buildx build \
+  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
+  --provenance=false \
+  --sbom=false \
+  -f Dockerfile \
+  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1} \
+  --load \
+  ../../..
+"""
+
+[tasks."image:push"]
+description = "Build and push the Daytona sandbox image"
+run = """
+docker buildx build \
+  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
+  --provenance=false \
+  --sbom=false \
+  -f ../base/Dockerfile \
+  -t deputies-sandbox-base:local \
+  --load \
+  ../../..
+
+docker buildx build \
+  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
+  --provenance=false \
+  --sbom=false \
+  -f Dockerfile \
+  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1} \
+  --push \
+  ../../..
+"""
+
+[tasks."image:publish"]
+description = "Build and push the Daytona sandbox image"
+depends = ["image:push"]

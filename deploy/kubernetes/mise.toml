@@ -1,3 +1,7 @@
+[tools]
+"github:kubernetes-sigs/cloud-provider-kind" = "0.9"
+kind = "0.30"
+
 [tasks.deps]
 description = "Update Helm dependencies for Kubernetes charts"
 run = "helm dependency update charts/deputies-platform-reference"
@@ -72,7 +76,7 @@ helm upgrade deputies charts/deputies \
   --wait
 """
 
-[tasks.portless-start]
+[tasks."portless:start"]
 description = "Start Portless wildcard proxy and alias Deputies to local Traefik forward"
 run = """
 pnpm dlx portless proxy start --wildcard

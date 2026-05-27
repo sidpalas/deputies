@@ -16,7 +16,7 @@ mise install
 pnpm install
 ```
 
-The Portless commands used below run through package scripts with `pnpm dlx`, so there is no separate Portless install step.
+The Portless commands used below run through mise tasks with `pnpm dlx`, so there is no separate Portless install step.
 
 Install ngrok separately only if you need external webhook delivery into your local machine, such as Slack or GitHub events; it is not needed for the default local UI, API, or sandbox flow.
 
@@ -105,7 +105,7 @@ Use the narrowest `GITHUB_ALLOWED_REPOSITORIES` patterns you can. For local env 
 Start Postgres and SeaweedFS:
 
 ```sh
-pnpm infra:up
+mise run //deploy/local:infra:up
 ```
 
 Pull the Docker sandbox image once, or let Docker pull it on the first run:
@@ -123,14 +123,14 @@ set -a; . ./.env.local; set +a
 Run migrations:
 
 ```sh
-pnpm control-plane:db:migrate
+mise run //apps/control-plane:db:migrate
 ```
 
 Start the local HTTPS wildcard proxy and register the web alias:
 
 ```sh
-pnpm portless:start
-pnpm portless:alias:web
+mise run //deploy/local:portless:start
+mise run //deploy/local:portless:alias:web
 ```
 
 Portless binds port `443`, so approve the sudo prompt.
@@ -139,14 +139,14 @@ Terminal 1, start the control plane API and worker in `RUN_MODE=combined`:
 
 ```sh
 set -a; . ./.env.local; set +a
-pnpm control-plane:dev
+mise run //apps/control-plane:dev
 ```
 
 Terminal 2, start the web UI:
 
 ```sh
 set -a; . ./.env.local; set +a
-pnpm web:dev
+mise run //apps/web:dev
 ```
 
 Open `https://deputies.localhost` and sign in with `dev` / `dev-secret`.
@@ -198,19 +198,19 @@ GitHub webhooks fail closed when `GITHUB_WEBHOOK_SECRET` is set. Configure at le
 ## Common Commands
 
 ```sh
-pnpm infra:up
-pnpm db:down
-pnpm control-plane:db:migrate
-pnpm portless:start
-pnpm portless:alias:web
-pnpm control-plane:dev
-pnpm web:dev
-pnpm control-plane:typecheck
-pnpm control-plane:test
-pnpm control-plane:test:integration
-pnpm web:typecheck
-pnpm web:test
-pnpm smoke:full-stack
+mise run //deploy/local:infra:up
+mise run //deploy/local:infra:down
+mise run //apps/control-plane:db:migrate
+mise run //deploy/local:portless:start
+mise run //deploy/local:portless:alias:web
+mise run //apps/control-plane:dev
+mise run //apps/web:dev
+mise run //apps/control-plane:typecheck
+mise run //apps/control-plane:test
+mise run //apps/control-plane:test:integration
+mise run //apps/web:typecheck
+mise run //apps/web:test
+mise run //deploy/docker-compose:smoke:full-stack
 ```
 
 ## Troubleshooting

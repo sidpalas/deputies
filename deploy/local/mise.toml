@@ -1,0 +1,15 @@
+[tasks."infra:up"]
+description = "Start local Postgres and SeaweedFS"
+run = "docker compose -f docker-compose.yml up -d postgres seaweedfs"
+
+[tasks."infra:down"]
+description = "Stop local Postgres and SeaweedFS"
+run = "docker compose -f docker-compose.yml down"
+
+[tasks."portless:start"]
+description = "Start the local HTTPS wildcard Portless proxy"
+run = "pnpm dlx portless proxy start --wildcard"
+
+[tasks."portless:alias:web"]
+description = "Route the local Deputies hostname to the web dev server"
+run = "pnpm dlx portless alias deputies 5173 --force"

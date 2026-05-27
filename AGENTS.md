@@ -9,6 +9,22 @@ mise install
 pnpm install
 ```
 
+If `mise` reports that repo config files are not trusted, inspect the repo-local `mise.toml` files before trusting them. For this repo, trust the checked-in configs when they are needed:
+
+```sh
+mise trust
+```
+
+Do not blindly trust `mise` configs from unrelated or unreviewed repositories.
+
+Discover repo tasks with:
+
+```sh
+mise task ls --all
+```
+
+Prefer discovered `mise run //path:task` commands for repo workflows. Use direct `pnpm --dir <package> <script>` commands only when no matching `mise` task exists.
+
 ## Postgres In Sandboxes Without Nested Virtualization
 
 Some sandbox providers do not support nested Docker or Docker Compose. For Postgres-backed tests in any sandbox without nested virtualization, start Postgres directly inside the sandbox:
@@ -34,7 +50,7 @@ export TEST_DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue_test
 Run migrations before API integration or UAT checks:
 
 ```sh
-pnpm control-plane:db:migrate
+mise run //apps/control-plane:db:migrate
 ```
 
 ## Full Sandbox Verification
@@ -50,13 +66,13 @@ This starts Postgres, installs dependencies, runs migrations, then runs API type
 ## Common Test Commands
 
 ```sh
-pnpm control-plane:typecheck
-pnpm control-plane:test
-pnpm control-plane:test:integration
-pnpm web:typecheck
-pnpm web:test
-pnpm web:e2e
-pnpm web:build
+mise run //apps/control-plane:typecheck
+mise run //apps/control-plane:test
+mise run //apps/control-plane:test:integration
+mise run //apps/web:typecheck
+mise run //apps/web:test
+mise run //apps/web:e2e
+mise run //apps/web:build
 ```
 
 ## Web API Routes
