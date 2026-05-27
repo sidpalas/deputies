@@ -14,6 +14,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Integrations](./integrations.md): generic webhook, GitHub, Slack, Linear, callbacks, auth, and external thread mapping.
 - [Web UI](./web-ui.md): separate Vite React operator UI, browser auth, and static deployment notes.
 - [Local Development](./contributing-local-development.md): contributor setup, Postgres, Portless, Docker Compose, real Flue, and local integrations.
+- [Development Tasks](./development-tasks.md): where to put `package.json` scripts versus `mise` tasks in this monorepo.
 - [Deployment](./deployment.md): provider-agnostic deployment topology, env vars, integrations, sandbox providers, and operations checklist.
 - [Testing Strategy](./testing-strategy.md): unit, integration, e2e, UAT, adversarial, prompt/context, and emulator-backed tests.
 - [Prior Art](./prior-art.md): comparison with Open-Inspect/background-agents, Open SWE, and Junior, plus non-open-source hosted-agent references.

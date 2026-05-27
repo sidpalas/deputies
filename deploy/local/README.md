@@ -1,13 +1,13 @@
 # Local Support Services
 
-This directory contains contributor-focused local infrastructure used by root package scripts.
+This directory contains contributor-focused local infrastructure used by local mise tasks.
 
 It does not deploy the full Deputies application stack. Full Docker Compose app deployments live in `../docker-compose/`.
 
 The normal contributor baseline is both Postgres and SeaweedFS:
 
 ```sh
-pnpm infra:up
+mise run //deploy/local:infra:up
 ```
 
 ## Services
@@ -20,17 +20,15 @@ pnpm infra:up
 From the repository root:
 
 ```sh
-pnpm db:up
-pnpm infra:up
-pnpm db:down
+mise run //deploy/local:infra:up
+mise run //deploy/local:infra:down
 ```
 
-`pnpm db:up` starts only Postgres. Use `pnpm infra:up` for the normal local baseline, including SeaweedFS artifact storage.
+`mise run //deploy/local:infra:up` starts the normal local baseline, including Postgres and SeaweedFS artifact storage.
 
 Equivalent Docker Compose commands:
 
 ```sh
-docker compose -f deploy/local/docker-compose.yml up -d postgres
 docker compose -f deploy/local/docker-compose.yml up -d postgres seaweedfs
 docker compose -f deploy/local/docker-compose.yml down
 ```

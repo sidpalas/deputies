@@ -1,0 +1,71 @@
+[tasks."auth:login:openai-codex"]
+description = "Authenticate the OpenAI Codex runner"
+run = "pnpm auth:login:openai-codex"
+
+[tasks."db:migrate"]
+description = "Run control-plane database migrations"
+run = "pnpm db:migrate"
+
+[tasks."demo:export"]
+description = "Export static demo data"
+run = "pnpm demo:export"
+
+[tasks."docker-orchestrator:dev"]
+description = "Run the Docker sandbox orchestrator from source"
+run = "pnpm docker-orchestrator:dev"
+
+[tasks."docker-orchestrator:start"]
+description = "Run the built Docker sandbox orchestrator"
+run = "pnpm docker-orchestrator:start"
+
+[tasks."k8s-agent-sandbox-orchestrator:dev"]
+description = "Run the Kubernetes agent sandbox orchestrator from source"
+run = "pnpm k8s-agent-sandbox-orchestrator:dev"
+
+[tasks."k8s-agent-sandbox-orchestrator:start"]
+description = "Run the built Kubernetes agent sandbox orchestrator"
+run = "pnpm k8s-agent-sandbox-orchestrator:start"
+
+[tasks.dev]
+description = "Run the control-plane API and worker from source"
+run = "pnpm dev"
+
+[tasks."emulate:slack"]
+description = "Run the Slack emulator"
+run = "pnpm emulate:slack"
+
+[tasks."portless:start"]
+description = "Start the local HTTPS wildcard Portless proxy"
+run = "pnpm portless:start"
+
+[tasks.start]
+description = "Run the built control plane"
+run = "pnpm start"
+
+[tasks.build]
+description = "Build the control plane"
+run = "pnpm build"
+
+[tasks.typecheck]
+description = "Typecheck the control plane"
+run = "pnpm typecheck"
+
+[tasks.test]
+description = "Run control-plane unit tests"
+run = "pnpm test"
+
+[tasks."test:watch"]
+description = "Run control-plane tests in watch mode"
+run = "pnpm test:watch"
+
+[tasks."test:integration"]
+description = "Run control-plane integration tests"
+run = "pnpm test:integration"
+
+[tasks."test:load"]
+description = "Run control-plane load tests"
+run = "pnpm test:load"
+
+[tasks."test:uat"]
+description = "Run control-plane UAT tests"
+run = "pnpm test:uat"

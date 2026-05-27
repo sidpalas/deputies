@@ -16,14 +16,14 @@ Use a public tunnel such as ngrok pointed at the web proxy:
 ngrok http 5173
 ```
 
-The Vite dev proxy allows common tunnel domains by default. If you use another tunnel host, set `VITE_DEV_ALLOWED_HOSTS=<host>` before `pnpm web:dev` so Vite does not return `403 Forbidden` before proxying Slack requests.
+The Vite dev proxy allows common tunnel domains by default. If you use another tunnel host, set `VITE_DEV_ALLOWED_HOSTS=<host>` before `mise run //apps/web:dev` so Vite does not return `403 Forbidden` before proxying Slack requests.
 
 Run the API with Slack config and the web proxy:
 
 ```sh
 cp .env.example .env.local
-set -a; . ./.env.local; set +a; pnpm control-plane:dev
-pnpm web:dev
+set -a; . ./.env.local; set +a; mise run //apps/control-plane:dev
+mise run //apps/web:dev
 ```
 
 Slack app settings:
@@ -79,8 +79,8 @@ Use `vercel-labs/emulate` for stateful local Slack Web API behavior and callback
 Start HTTPS emulation:
 
 ```sh
-pnpm control-plane:portless:start
-pnpm control-plane:emulate:slack
+pnpm --dir apps/control-plane portless:start
+pnpm --dir apps/control-plane emulate:slack
 ```
 
 Use:

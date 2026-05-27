@@ -13,9 +13,9 @@ This keeps the `www` service aligned with the rest of the project: deployable an
 Common commands:
 
 ```sh
-pnpm www:dev
-pnpm www:build
-pnpm www:preview
+mise run //apps/www:dev
+mise run //apps/www:build:with-static-demo
+mise run //apps/www:preview
 ```
 
 Static demo data:
@@ -27,7 +27,7 @@ URLs are rewritten so image and browser-playable video artifacts render in the s
 
 ```sh
 DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue pnpm --dir apps/control-plane demo:export -- --session-id <session-id> --session-id <session-id>
-pnpm www:build
+mise run //apps/www:build:with-static-demo
 ```
 
 The current public demo set was exported from local Postgres and SeaweedFS/S3 using `.env.local` for `DATABASE_URL` and
@@ -41,14 +41,14 @@ pnpm --dir apps/control-plane demo:export -- --include-artifacts \
   --session-id 5def100c-eed1-4b37-82c2-066b97bd390b \
   --session-id d7d24550-4804-45d5-9df8-da26e079e796 \
   --session-id 6678a357-0e6d-4cae-bc74-3ce5394d8cdb
-pnpm www:build
+mise run //apps/www:build:with-static-demo
 ```
 
 For local preview, build the embedded web demo before starting the www dev server:
 
 ```sh
-pnpm --dir apps/web build:static-demo
-pnpm www:dev
+mise run //apps/web:build:static-demo
+mise run //apps/www:dev
 ```
 
 If you explicitly want the most recently updated sessions instead of a reviewed set of ids, pass `--latest`:

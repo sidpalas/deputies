@@ -468,7 +468,7 @@ Current provider implementation:
 - `apps/control-plane/src/sandbox/docker-orchestrator-server.ts` is the split-service entrypoint for running the Docker orchestrator separately from the main API/worker process.
 - `DOCKER_ORCHESTRATOR_MODE=in-process` runs Docker orchestration inside the control-plane process for single-service operation.
 - `DOCKER_ORCHESTRATOR_MODE=http` makes the control-plane call an external Docker orchestrator service.
-- `pnpm control-plane:docker-orchestrator:dev` starts the orchestrator service from source for development.
+- `pnpm --dir apps/control-plane docker-orchestrator:dev` starts the orchestrator service from source for development.
 
 #### Docker Persistence
 

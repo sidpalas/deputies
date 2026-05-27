@@ -15,26 +15,26 @@ The app chart includes generic workload identity hooks through Kubernetes servic
 
 ## Mise Tasks
 
-Run these from `deploy/kubernetes`:
+Run these from the repository root:
 
 ```sh
-mise run deps
-mise run platform:install
-mise run app:install:fake
-mise run smoke:port-forward
+mise run //deploy/kubernetes:deps
+mise run //deploy/kubernetes:platform:install
+mise run //deploy/kubernetes:app:install:fake
+mise run //deploy/kubernetes:smoke:port-forward
 ```
 
 For real Daytona-backed work, create or sync the app Secret first, then run:
 
 ```sh
-mise run app:install:daytona
+mise run //deploy/kubernetes:app:install:daytona
 ```
 
 You can load credentials through 1Password when creating the referenced Secret:
 
 ```sh
 op run --env-file=../../.env.local -- sh -c 'kubectl create secret generic deputies-app-secrets --namespace deputies --from-literal=AUTH_SESSION_SECRET="$(openssl rand -hex 32)" --from-literal=DAYTONA_API_KEY="$DAYTONA_API_KEY" --from-literal=ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" --from-literal=ARTIFACT_STORAGE_S3_ACCESS_KEY_ID=seaweed --from-literal=ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY=seaweed --dry-run=client -o yaml | kubectl apply -f -'
-mise run app:install:daytona
+mise run //deploy/kubernetes:app:install:daytona
 ```
 
 ## Install
@@ -283,13 +283,13 @@ https://s-3000-<session-id>.deputies-k8s.localhost
 Run the Kubernetes smoke test against an empty kind cluster:
 
 ```sh
-pnpm smoke:kubernetes
+mise run //deploy/kubernetes:smoke
 ```
 
 Run both supported app topologies:
 
 ```sh
-pnpm smoke:kubernetes:matrix
+mise run //deploy/kubernetes:smoke:matrix
 ```
 
 The smoke test installs both charts into `deputies-smoke`, runs the existing full-stack Playwright smoke, and validates artifact creation/download through SeaweedFS-backed storage.
@@ -308,7 +308,7 @@ Access modes:
 Keep resources for debugging:
 
 ```sh
-K8S_SMOKE_KEEP=true pnpm smoke:kubernetes
+K8S_SMOKE_KEEP=true mise run //deploy/kubernetes:smoke
 ```
 
 The fake-runner smoke validates artifacts. Exposed sandbox service creation/access requires a real sandbox provider with preview URL support, such as Daytona, so it is not part of the default fake-runner smoke path.

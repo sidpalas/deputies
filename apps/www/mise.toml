@@ -1,0 +1,19 @@
+[tasks.dev]
+description = "Run the marketing site dev server"
+run = "pnpm dev"
+
+[tasks.build]
+description = "Build the marketing site"
+run = "pnpm build"
+
+[tasks."build:with-static-demo"]
+description = "Build the static web demo and marketing site"
+run = "pnpm --dir ../web build:static-demo && pnpm build"
+
+[tasks."generate:og"]
+description = "Generate Open Graph images"
+run = "pnpm generate:og"
+
+[tasks.preview]
+description = "Preview the built marketing site"
+run = "pnpm preview"

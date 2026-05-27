@@ -1,0 +1,11 @@
+[tasks.build]
+description = "Build the sandbox bridge package"
+run = "pnpm build"
+
+[tasks.typecheck]
+description = "Typecheck the sandbox bridge package"
+run = "pnpm typecheck"
+
+[tasks.test]
+description = "Run sandbox bridge tests"
+run = "pnpm test"

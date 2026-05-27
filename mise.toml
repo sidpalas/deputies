@@ -1,6 +1,7 @@
+experimental_monorepo_root = true
+
 [tools]
-"github:kubernetes-sigs/cloud-provider-kind" = "0.9"
-kind = "0.30"
+fzf = "0.66"
 node = "24"
 pnpm = "10.33"
 
@@ -8,88 +9,62 @@ pnpm = "10.33"
 description = "Install project dependencies"
 run = "pnpm install"
 
+[tasks.format]
+description = "Format the workspace"
+run = "pnpm format"
+
+[tasks."format:check"]
+description = "Check workspace formatting"
+run = "pnpm format:check"
+
 [tasks.test]
-description = "Run unit tests"
-run = "pnpm test"
+description = "Run package unit tests"
+run = "pnpm -r --if-present test"
 
 [tasks.typecheck]
-description = "Run TypeScript type checking"
-run = "pnpm typecheck"
+description = "Run package TypeScript checks"
+run = "pnpm -r --if-present typecheck"
 
 [tasks.check]
-description = "Run typecheck and tests"
-depends = ["typecheck", "test"]
+description = "Run formatting, typechecks, and unit tests"
+depends = ["format:check", "typecheck", "test"]
 
-[tasks.portless-start]
-description = "Start the local HTTPS wildcard portless proxy"
-run = "pnpm portless:start"
+[tasks.mise-fzf]
+description = "[Mise] Pick one task; print it and copy the run command"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
 
-[tasks.portless-alias-web]
-description = "Route the local Deputies hostname to the Vite web dev server"
-run = "pnpm portless:alias:web"
+LIST_CMD=(mise task ls --all)
 
-[tasks.deploy-control-plane]
-description = "Deploy the control-plane service to Railway"
-run = "railway up --service control-plane --detach -m 'deploy control-plane'"
+SEL="$("${LIST_CMD[@]}" \
+  | fzf --no-multi --height=90% --border --prompt='task> ' \
+        --select-1 --exit-0)"
 
-[tasks.deploy-web]
-description = "Deploy the web service to Railway"
-run = "railway up --service web --detach -m 'deploy web'"
+[ -n "${SEL:-}" ] || exit 0
 
-[tasks.deploy-www]
-description = "Deploy the root-domain marketing site to Railway"
-run = "railway up --service www --detach -m 'deploy www'"
+# First token only = task name
+TASK="$(awk '{print $1; exit}' <<< "$SEL")"
 
-[tasks.deploy]
-description = "Deploy control-plane, web, and www services to Railway"
-depends = ["deploy-control-plane", "deploy-web", "deploy-www"]
+# Build the runnable command
+CMD=$(printf 'mise run %q' "$TASK")
 
-[tasks.daytona-image-build]
-description = "Build the Daytona sandbox image"
-# Daytona pulls amd64 images, and disabling provenance/SBOM avoids extra
-# unknown/unknown GHCR attestation manifests that can confuse image resolution.
-run = """
-docker buildx build \
-  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
-  --provenance=false \
-  --sbom=false \
-  -f deploy/sandboxes/base/Dockerfile \
-  -t deputies-sandbox-base:local \
-  --load \
-  .
+echo "$CMD"
 
-docker buildx build \
-  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
-  --provenance=false \
-  --sbom=false \
-  -f deploy/sandboxes/daytona/Dockerfile \
-  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1} \
-  --load \
-  .
-"""
+# Print the task's usage/help
+echo ""
+mise run "$TASK" --help 2>/dev/null || true
 
-[tasks.daytona-image-push]
-description = "Build and push the Daytona sandbox image"
-run = """
-docker buildx build \
-  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
-  --provenance=false \
-  --sbom=false \
-  -f deploy/sandboxes/base/Dockerfile \
-  -t deputies-sandbox-base:local \
-  --load \
-  .
+copy_to_clipboard() {
+  if command -v pbcopy >/dev/null 2>&1; then
+    pbcopy
+  # TODO: add support for linux clipboard tools
+  else
+    return 1
+  fi
+}
 
-docker buildx build \
-  --platform ${DAYTONA_IMAGE_PLATFORM:-linux/amd64} \
-  --provenance=false \
-  --sbom=false \
-  -f deploy/sandboxes/daytona/Dockerfile \
-  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1} \
-  --push \
-  .
-"""
-
-[tasks.daytona-image-publish]
-description = "Build and push the Daytona sandbox image"
-depends = ["daytona-image-push"]
+if copy_to_clipboard <<< "$CMD"; then
+  echo "(^ copied to clipboard)"
+fi
+'''

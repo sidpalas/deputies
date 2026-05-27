@@ -474,8 +474,8 @@ Current implementation:
 Local HTTPS emulation:
 
 ```sh
-pnpm control-plane:portless:start
-pnpm control-plane:emulate:slack
+pnpm --dir apps/control-plane portless:start
+pnpm --dir apps/control-plane emulate:slack
 ```
 
 Then point Slack client config at:

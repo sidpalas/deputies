@@ -1,0 +1,31 @@
+[tasks.dev]
+description = "Run the web app dev server"
+run = "pnpm dev"
+
+[tasks.build]
+description = "Build the web app"
+run = "pnpm build"
+
+[tasks."build:static-demo"]
+description = "Build the static web demo for the marketing site"
+run = "pnpm build:static-demo"
+
+[tasks.preview]
+description = "Preview the built web app"
+run = "pnpm preview"
+
+[tasks.typecheck]
+description = "Typecheck the web app"
+run = "pnpm typecheck"
+
+[tasks.test]
+description = "Run web unit tests"
+run = "pnpm test"
+
+[tasks."test:watch"]
+description = "Run web tests in watch mode"
+run = "pnpm test:watch"
+
+[tasks.e2e]
+description = "Run web Playwright tests"
+run = "pnpm e2e"

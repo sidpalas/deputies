@@ -8,10 +8,10 @@ With the default `.env.example` settings, start Postgres plus SeaweedFS, run mig
 
 ```sh
 cp .env.example .env.local # if needed
-pnpm infra:up
-set -a; . ./.env.local; set +a; pnpm control-plane:db:migrate
-set -a; . ./.env.local; set +a; pnpm control-plane:dev
-pnpm web:dev
+mise run //deploy/local:infra:up
+set -a; . ./.env.local; set +a; mise run //apps/control-plane:db:migrate
+set -a; . ./.env.local; set +a; mise run //apps/control-plane:dev
+mise run //apps/web:dev
 ```
 
 For quick UI experiments that do not need durable state, you can instead run the API with `APP_DATA_STORE=memory`.
@@ -19,7 +19,7 @@ For quick UI experiments that do not need durable state, you can instead run the
 The web app uses same-origin API requests by default. In Vite dev mode, `apps/web/vite.config.ts` proxies `/health`, `/auth`, `/sessions`, `/events`, `/repositories`, `/models`, and `/webhooks` to the API at `VITE_API_PROXY_TARGET` or `http://localhost:3583`.
 
 ```sh
-VITE_API_PROXY_TARGET=http://localhost:3583 pnpm web:dev
+VITE_API_PROXY_TARGET=http://localhost:3583 mise run //apps/web:dev
 ```
 
 ### Local Sandbox Services
@@ -31,22 +31,22 @@ Portless TLS terminates HTTPS locally. In Docker Compose, `apps/web/Caddyfile.lo
 Start the HTTPS wildcard proxy in one terminal. Portless uses port `443`, so accept the sudo prompt when it starts:
 
 ```sh
-pnpm portless:start
-# or: mise run portless-start
+mise run //deploy/local:portless:start
+# or: mise run //deploy/local:portless:start
 ```
 
 Register the web UI alias once, or after resetting portless aliases:
 
 ```sh
-pnpm portless:alias:web
-# or: mise run portless-alias-web
+mise run //deploy/local:portless:alias:web
+# or: mise run //deploy/local:portless:alias:web
 ```
 
 Run the API and web dev server as usual:
 
 ```sh
-set -a; . ./.env.local; set +a; pnpm control-plane:dev
-pnpm web:dev
+set -a; . ./.env.local; set +a; mise run //apps/control-plane:dev
+mise run //apps/web:dev
 ```
 
 Open the app at `https://deputies.localhost`. Published services are listed from `GET /sessions/:sessionId/services`; no service is shown until the agent publishes one with the service tool. Service previews use wildcard hosts such as `s-<port>-<session>.deputies.localhost`, not path-based proxy URLs.
@@ -183,7 +183,7 @@ Inline artifact rendering is intentionally conservative:
 The web app builds to static assets:
 
 ```sh
-pnpm web:build
+mise run //apps/web:build
 ```
 
 For production-like deployments, serve `apps/web/dist` behind a reverse proxy that forwards API routes to the control-plane service. Leave `VITE_API_BASE_URL` empty for same-origin requests. If the web assets are deployed without a proxy, set `VITE_API_BASE_URL` to the public API origin at build time and set the control-plane service's `WEB_BASE_URL` to the deployed web UI URL so the API allows that origin for credentialed CORS requests and uses it for integration session links. Do not bake bearer tokens, static passwords, or session secrets into the web build.

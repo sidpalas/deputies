@@ -136,7 +136,7 @@ FLUE_STATE_STORE=postgres
 Run migrations before serving traffic:
 
 ```sh
-DATABASE_URL=postgres://... pnpm control-plane:db:migrate
+DATABASE_URL=postgres://... mise run //apps/control-plane:db:migrate
 ```
 
 Memory mode is only for demos/tests:
