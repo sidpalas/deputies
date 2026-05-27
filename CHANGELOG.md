@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.0](https://github.com/sidpalas/deputies/compare/v0.1.1...v0.2.0) (2026-05-27)
+
+
+### Features
+
+* add Kubernetes agent sandbox provider ([#33](https://github.com/sidpalas/deputies/issues/33)) ([65d14f0](https://github.com/sidpalas/deputies/commit/65d14f0b0784ff83e21177eda59875eba9b87d0c))
+* use signed preview auth cookies ([88a6873](https://github.com/sidpalas/deputies/commit/88a6873305dfe261792e667998cd32f0fd780389))
+
+
+### Bug Fixes
+
+* **web:** bound live streaming progress ([7cc9935](https://github.com/sidpalas/deputies/commit/7cc9935a61042f9e5dc099e1d33951041afe7bb2))
+
+
+### Chores
+
+* ignore chagelog from prettier ([42f5831](https://github.com/sidpalas/deputies/commit/42f5831c00ac9d4877be8e75c269b7ef350ba497))
+* include chores in changelog ([7fa62cb](https://github.com/sidpalas/deputies/commit/7fa62cb280f344c2f16af1278e0b52218afe1c94))
+
 ## [0.1.1](https://github.com/sidpalas/deputies/compare/v0.1.0...v0.1.1) (2026-05-26)
 
 ### Bug Fixes
