@@ -3,9 +3,11 @@ import type {
   CompletionCallbackPayload,
   CompletionCallbackSender,
 } from '../../callbacks/service.js';
+import { getLogger } from '../../observability/logger.js';
 import type { SlackAssistantThreadClient, SlackBlock, SlackReplyClient } from './client.js';
 
 const maxSlackMrkdwnCharacters = 3000;
+const logger = getLogger({ integration: 'slack' });
 
 export class SlackCompletionCallbackSender implements CompletionCallbackSender {
   readonly type = 'slack';
@@ -32,9 +34,9 @@ export class SlackCompletionCallbackSender implements CompletionCallbackSender {
       if (this.client.setThreadStatus) {
         try {
           const status = await this.client.setThreadStatus({ channel, threadTs, status: '' });
-          if (!status.ok) console.warn(`Slack status clear failed${status.error ? `: ${status.error}` : ''}`);
+          if (!status.ok) logger.warn({ error: status.error ?? 'unknown_error' }, 'Slack status clear failed');
         } catch (error) {
-          console.warn(error instanceof Error ? error.message : error);
+          logger.warn({ err: error }, 'Slack status clear failed');
         }
       }
     }

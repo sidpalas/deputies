@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { logger } from '../observability/logger.js';
 import { InProcessDockerOrchestrator, createDockerOrchestratorHttpHandler } from './docker.js';
 
 const port = parsePort(process.env.DOCKER_ORCHESTRATOR_PORT, 3585);
@@ -39,7 +40,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`docker sandbox orchestrator listening on ${host}:${port}`);
+  logger.info({ host, port }, 'docker sandbox orchestrator listening');
 });
 
 function parsePort(value: string | undefined, fallback: number): number {

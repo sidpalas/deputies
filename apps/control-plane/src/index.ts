@@ -22,6 +22,7 @@ import { GitHubRepositoryAccessService } from './integrations/github/repository-
 import { SlackClient } from './integrations/slack/client.js';
 import { SlackCompletionCallbackSender } from './integrations/slack/callback-sender.js';
 import { SlackRunProgressNotifier } from './integrations/slack/progress-notifier.js';
+import { logger } from './observability/logger.js';
 import { FakeRunner } from './runner/fake.js';
 import type { Runner } from './runner/types.js';
 import { RealFlueAgentFactory, type RealFlueAgentFactoryOptions } from './runner-flue/agent-factory.js';
@@ -80,12 +81,12 @@ if (
 if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode === 'api') {
   server = createServer(config, services);
   server.listen(config.port, () => {
-    console.log(`background-agent service listening on :${config.port} (${config.runMode})`);
+    logger.info({ port: config.port, runMode: config.runMode }, 'background-agent service listening');
   });
 } else {
   server = createWorkerHealthServer(config);
   server.listen(config.port, () => {
-    console.log(`background-agent worker health listening on :${config.port} (${config.runMode})`);
+    logger.info({ port: config.port, runMode: config.runMode }, 'background-agent worker health listening');
   });
 }
 
@@ -126,10 +127,10 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
       store,
       stopDelayMs: config.sandboxStopDelayMs,
       retentionMs: config.sandboxRetentionMs,
-      onError: (error: unknown) => console.error(error instanceof Error ? error.message : error),
+      onError: (error: unknown) => logger.error({ err: error }, 'Sandbox reaper failed'),
     });
   }
-  console.log(`background-agent worker started (${config.runMode}, concurrency=${config.workerConcurrency})`);
+  logger.info({ runMode: config.runMode, concurrency: config.workerConcurrency }, 'background-agent worker started');
 }
 
 function createCallbackSenders(): CompletionCallbackSender[] {
@@ -178,7 +179,7 @@ function createGitHubRepositoryAccess(client: GitHubClient): GitHubRepositoryAcc
 
 const lifecycleOptions = {
   resources,
-  onError: (error: unknown) => console.error(error instanceof Error ? error.message : error),
+  onError: (error: unknown) => logger.error({ err: error }, 'Shutdown resource failed'),
 };
 if (server) Object.assign(lifecycleOptions, { server });
 if (workerLoop) Object.assign(lifecycleOptions, { workerLoop });
@@ -188,7 +189,7 @@ installProcessShutdownHandlers(new AppLifecycle(lifecycleOptions));
 function createSandboxProvider(): SandboxProvider {
   if (config.sandboxProvider === 'fake') return new FakeSandboxProvider();
   if (config.sandboxProvider === 'unsafe-local') {
-    console.warn(
+    logger.warn(
       'WARNING: SANDBOX_PROVIDER=unsafe-local is not a security boundary. Agent commands run on the API/worker host runtime; use only for trusted local development.',
     );
     return new LocalSandboxProvider(
@@ -284,7 +285,7 @@ async function createRunner(): Promise<Runner> {
         reason: message,
         action: 'Re-authenticate Codex, then refresh this page.',
       });
-      console.error(`OpenAI Codex models unavailable: ${message}`);
+      logger.error({ err: error }, `OpenAI Codex models unavailable: ${message}`);
     }
   }
   if (config.flueStateStore === 'postgres') {

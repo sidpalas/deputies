@@ -1,4 +1,5 @@
 import type { Server } from 'node:http';
+import { logger } from '../observability/logger.js';
 import type { WorkerLoopHandle } from '../worker/service.js';
 
 export type CloseableResource = {
@@ -65,7 +66,7 @@ export function installProcessShutdownHandlers(lifecycle: AppLifecycle): void {
         process.exitCode = 0;
       })
       .catch((error: unknown) => {
-        console.error(error instanceof Error ? error.message : error);
+        logger.error({ err: error }, 'Process shutdown failed');
         process.exitCode = 1;
       });
   };

@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { logger } from '../observability/logger.js';
 import { InProcessAgentSandboxOrchestrator, createAgentSandboxOrchestratorHttpHandler } from './k8s-agent-sandbox.js';
 
 const port = parsePort(process.env.AGENT_SANDBOX_ORCHESTRATOR_PORT, 3587);
@@ -38,7 +39,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`agent sandbox orchestrator listening on ${host}:${port}`);
+  logger.info({ host, port }, 'agent sandbox orchestrator listening');
 });
 
 function parsePort(value: string | undefined, fallback: number): number {
