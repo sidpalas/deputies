@@ -26,6 +26,7 @@
     sans-serif;
   font-synthesis: none;
   line-height: 1.5;
+  scrollbar-gutter: stable both-edges;
 }
 
 * {
