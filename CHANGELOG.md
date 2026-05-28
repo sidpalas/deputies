@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.0](https://github.com/sidpalas/deputies/compare/v0.2.0...v0.3.0) (2026-05-28)
+
+
+### Features
+
+* upgrade Flue runtime to 0.8.0 ([#37](https://github.com/sidpalas/deputies/issues/37)) ([d382a7d](https://github.com/sidpalas/deputies/commit/d382a7d7b150cf3170fdaddc339311943c9e0e36))
+
+
+### Bug Fixes
+
+* cancel queued messages when archiving sessions ([f45d8d6](https://github.com/sidpalas/deputies/commit/f45d8d638fb07e0b0f568e388a075580063bca6c))
+* **www:** build static demo in Docker image ([d9dab0e](https://github.com/sidpalas/deputies/commit/d9dab0e81d0a652d738b538b68208f0e3267b8db))
+* **www:** use package build command in Dockerfile ([894e600](https://github.com/sidpalas/deputies/commit/894e6002fc07237c8c7b5716705cab3faf6d99ca))
+
+
+### Chores
+
+* organize mise monorepo tasks ([#34](https://github.com/sidpalas/deputies/issues/34)) ([05176db](https://github.com/sidpalas/deputies/commit/05176dbcb7b4249ee51426f82509c71ea046e391))
+
 ## [0.2.0](https://github.com/sidpalas/deputies/compare/v0.1.1...v0.2.0) (2026-05-27)
 
 
