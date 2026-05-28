@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="420" viewBox="0 0 840 420" role="img" aria-labelledby="title">
+  <title id="title">Example SVG Asset</title>
+  <rect width="840" height="420" rx="32" fill="#f8fafc" />
+  <rect x="36" y="36" width="768" height="348" rx="24" fill="#ffffff" stroke="#dbe4f0" stroke-width="2" />
+  <text
+    x="420"
+    y="224"
+    fill="#2563eb"
+    font-family="Inter, Arial, sans-serif"
+    font-size="48"
+    font-weight="700"
+    text-anchor="middle"
+  >
+    EXAMPLE SVG ASSET
+  </text>
+</svg>

@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.astro/
 apps/www/public/static-demo/
 apps/www/public/twitter-banner.png
 apps/www/public/twitter-profile.png

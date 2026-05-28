@@ -10,7 +10,7 @@ COPY apps/web/package.json apps/web/package.json
 COPY apps/www/package.json apps/www/package.json
 COPY packages/sandbox-bridge/package.json packages/sandbox-bridge/package.json
 
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile && pnpm rebuild sharp
 
 COPY apps/web apps/web
 COPY apps/www apps/www

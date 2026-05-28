@@ -1,0 +1,43 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { formatBlogDate, getBlogPostUrl, getPublishedBlogPosts } from '../../lib/blog';
+
+const posts = await getPublishedBlogPosts();
+---
+
+<BaseLayout
+  title="Deputies Blog"
+  description="Notes on background agents, self-hostable agent infrastructure, and building Deputies."
+  canonicalPath="/blog/"
+  current="blog"
+>
+  <section class="blog-hero" aria-labelledby="blog-title">
+    <p class="eyebrow">Blog</p>
+    <h1 id="blog-title">Notes from building Deputies.</h1>
+    <p>
+      Practical writing on background agents, self-hostable control planes, deployment patterns, and the product
+      decisions behind Deputies.
+    </p>
+  </section>
+
+  <section class="blog-list" aria-label="Blog posts">
+    {
+      posts.length > 0 ? (
+        posts.map((post) => (
+          <a class="blog-card" href={getBlogPostUrl(post)}>
+            <p class="post-meta">
+              <time datetime={post.data.pubDate.toISOString()}>{formatBlogDate(post.data.pubDate)}</time>
+              <span>{post.data.author}</span>
+            </p>
+            <h2>{post.data.title}</h2>
+            <p>{post.data.description}</p>
+          </a>
+        ))
+      ) : (
+        <div class="empty-state">
+          <h2>Posts are coming soon... ⏳</h2>
+        </div>
+      )
+    }
+  </section>
+</BaseLayout>

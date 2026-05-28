@@ -14,6 +14,10 @@ run = "pnpm --dir ../web build:static-demo && pnpm build"
 description = "Generate Open Graph images"
 run = "pnpm generate:og"
 
+[tasks."blog:new"]
+description = "Create a draft blog post in the dated content directory"
+run = "node scripts/new-blog-post.mjs"
+
 [tasks.preview]
 description = "Preview the built marketing site"
 run = "pnpm preview"

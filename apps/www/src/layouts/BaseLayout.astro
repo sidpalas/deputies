@@ -1,0 +1,102 @@
+---
+import '../styles.css';
+
+interface Props {
+  title: string;
+  description: string;
+  canonicalPath?: string;
+  image?: string;
+  type?: 'website' | 'article';
+  current?: 'home' | 'blog';
+}
+
+const {
+  title,
+  description,
+  canonicalPath = Astro.url.pathname,
+  image = '/og-image.png',
+  type = 'website',
+  current,
+} = Astro.props;
+
+const site = Astro.site ?? new URL('https://deputies.dev');
+const canonicalUrl = new URL(canonicalPath, site);
+const imageUrl = new URL(image, site);
+const rssUrl = new URL('/rss.xml', site);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonicalUrl.href} />
+    <link rel="alternate" type="application/rss+xml" title="Deputies Blog" href={rssUrl.href} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={imageUrl.href} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:type" content={type} />
+    <meta property="og:url" content={canonicalUrl.href} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={imageUrl.href} />
+    <title>{title}</title>
+    <script is:inline data-goatcounter="https://devdeputies.goatcounter.com/count" async src="//gc.zgo.at/count.js"
+    ></script>
+  </head>
+  <body>
+    <main class="page-shell">
+      <nav class="nav" aria-label="Primary navigation">
+        <a class="brand" href="/" aria-label="Deputies home" aria-current={current === 'home' ? 'page' : undefined}>
+          <span class="brand-mark">D</span>
+          <span>Deputies</span>
+        </a>
+        <div class="nav-links">
+          <a href="/blog/" aria-current={current === 'blog' ? 'page' : undefined}>Blog</a>
+          <a href="https://github.com/sidpalas/deputies" target="_blank" rel="noopener noreferrer">
+            <svg class="github-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M12 2C6.48 2 2 6.59 2 12.25c0 4.52 2.87 8.35 6.84 9.7.5.09.68-.22.68-.49v-1.9c-2.78.62-3.37-1.22-3.37-1.22-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.67.35-1.12.63-1.38-2.22-.26-4.55-1.14-4.55-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.3 9.3 0 0 1 12 6.95c.85 0 1.7.12 2.5.34 1.9-1.33 2.74-1.05 2.74-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.8-4.57 5.05.36.32.68.94.68 1.9v2.81c0 .27.18.59.69.49A10.08 10.08 0 0 0 22 12.25C22 6.59 17.52 2 12 2Z"
+              ></path>
+            </svg>
+            GitHub
+          </a>
+        </div>
+      </nav>
+
+      <slot />
+
+      <footer class="site-footer">
+        <p>
+          <svg class="build-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <!-- Tabler Icons "tools", MIT License: https://tabler.io/icons -->
+            <path d="M3 21h4l13 -13a1.5 1.5 0 0 0 -4 -4l-13 13v4"></path>
+            <path d="M14.5 5.5l4 4"></path>
+            <path d="M12 8l-5 -5l-4 4l5 5"></path>
+            <path d="M7 8l-1.5 1.5"></path>
+            <path d="M16 12l5 5l-4 4l-5 -5"></path>
+            <path d="M16 17l-1.5 1.5"></path>
+          </svg>
+          Built by <a href="https://x.com/sidpalas" target="_blank" rel="noopener noreferrer">Sid Palas</a> (<a
+            href="https://devopsdirective.com/"
+            target="_blank"
+            rel="noopener noreferrer">DevOps Directive</a
+          >)
+        </p>
+        <a class="contact-button" href="mailto:sid@devopsdirective.com">
+          <svg class="mail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <!-- Tabler Icons "mail", MIT License: https://tabler.io/icons -->
+            <path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10z"></path>
+            <path d="M3 7l9 6l9 -6"></path>
+          </svg>
+          Contact
+        </a>
+      </footer>
+    </main>
+  </body>
+</html>

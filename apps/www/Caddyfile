@@ -2,7 +2,7 @@
 	root * /usr/share/caddy
 	encode zstd gzip
 
-	@assets path /assets/*
+	@assets path /_astro/* /assets/*
 	handle @assets {
 		header Cache-Control "public, max-age=31536000, immutable"
 		file_server
@@ -15,7 +15,6 @@
 
 	handle {
 		header Cache-Control "no-cache"
-		try_files {path} /index.html
 		file_server
 	}
 }

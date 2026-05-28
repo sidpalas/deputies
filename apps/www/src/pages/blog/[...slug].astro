@@ -1,0 +1,48 @@
+---
+import { render } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { formatBlogDate, getBlogPostSlug, getBlogPostUrl, getPublishedBlogPosts, type BlogPost } from '../../lib/blog';
+
+export async function getStaticPaths() {
+  const posts = await getPublishedBlogPosts();
+  return posts.map((post) => ({
+    params: { slug: getBlogPostSlug(post) },
+    props: { post },
+  }));
+}
+
+const { post } = Astro.props as { post: BlogPost };
+const { Content } = await render(post);
+---
+
+<BaseLayout
+  title={`${post.data.title} | Deputies Blog`}
+  description={post.data.description}
+  canonicalPath={getBlogPostUrl(post)}
+  type="article"
+  current="blog"
+>
+  <article class="post-shell">
+    <header class="post-header">
+      <a class="back-link" href="/blog/">Blog</a>
+      <p class="eyebrow">Deputies Blog</p>
+      <h1>{post.data.title}</h1>
+      <p class="post-description">{post.data.description}</p>
+      <p class="post-meta">
+        <time datetime={post.data.pubDate.toISOString()}>{formatBlogDate(post.data.pubDate)}</time>
+        <span>{post.data.author}</span>
+        {
+          post.data.updatedDate && (
+            <span>
+              Updated{' '}
+              <time datetime={post.data.updatedDate.toISOString()}>{formatBlogDate(post.data.updatedDate)}</time>
+            </span>
+          )
+        }
+      </p>
+    </header>
+    <div class="post-body">
+      <Content />
+    </div>
+  </article>
+</BaseLayout>

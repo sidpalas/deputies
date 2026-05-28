@@ -1,0 +1,76 @@
+---
+title: Draft post template
+description: A hidden MDX template for new Deputies blog posts.
+pubDate: 2026-05-28
+author: Sid Palas
+draft: true
+---
+
+import { Image } from 'astro:assets';
+import exampleAssetImage from './assets/example-asset.svg';
+
+Use this file as a starting point for a real post, then set `draft: false` when it is ready to publish.
+
+## Section Heading
+
+Write posts in MDX. Markdown syntax works by default, and Astro components can be imported when a post needs richer
+content.
+
+## Images
+
+Images in `apps/www/public` are served from the site root. For example, `apps/www/public/images/simple-mode.svg` can be
+referenced as `/images/simple-mode.svg`:
+
+![Simple Mode Deputies architecture](/images/simple-mode.svg)
+
+Use HTML when you want a caption or more control over the markup:
+
+<figure>
+  <img src="/images/integrated-mode.svg" alt="Integrated Mode Deputies architecture" />
+  <figcaption>Integrated Mode keeps the deployment shape simple while adding auth, storage, and callbacks.</figcaption>
+</figure>
+
+Use `astro:assets` for imported local images. Keep post-specific assets beside the post in an `assets/` directory so the
+article and its images move together:
+
+<figure>
+  <Image src={exampleAssetImage} alt="Diagram showing the Deputies agent workflow" width={420} />
+  <figcaption>
+    A post-scoped asset imported from `./assets/example-asset.svg` and rendered with Astro's Image component.
+  </figcaption>
+</figure>
+
+## Links And Callouts
+
+You can link to [the Deputies repository](https://github.com/sidpalas/deputies) with normal Markdown.
+
+> Use blockquotes for short notes, warnings, or quoted context from issues and docs.
+
+## Code
+
+Use fenced code blocks with a language tag for syntax highlighting:
+
+```js
+const session = await deputies.sessions.create({
+  prompt: 'Summarize the failing tests and propose a fix.',
+});
+```
+
+Inline code like `mise run //apps/www:build` works too.
+
+## Tables
+
+| Feature             | Why it helps                                                           |
+| ------------------- | ---------------------------------------------------------------------- |
+| Frontmatter         | Keeps title, description, dates, and draft state validated.            |
+| MDX                 | Allows Markdown content plus HTML or imported components when needed.  |
+| Content collections | Powers the blog index, post routes, and RSS feed from the same source. |
+
+## Inline HTML
+
+MDX also allows HTML when Markdown is not expressive enough:
+
+<aside>
+  <strong>Tip:</strong> keep posts mostly Markdown, and only reach for HTML or components where the content actually
+  benefits from custom structure.
+</aside>

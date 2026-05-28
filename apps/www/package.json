@@ -4,13 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "astro dev",
     "generate:og": "node scripts/generate-og-image.mjs",
-    "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "build": "astro build",
+    "preview": "astro preview --host 0.0.0.0"
   },
   "devDependencies": {
+    "@astrojs/mdx": "^5.0.6",
+    "@astrojs/rss": "^4.0.18",
     "@playwright/test": "^1.59.1",
-    "vite": "^7.3.0"
+    "astro": "^6.3.7",
+    "sharp": "^0.34.5"
   }
 }
