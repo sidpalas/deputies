@@ -455,7 +455,7 @@ export function App() {
 
   useEffect(() => {
     if (!selectedSessionId || !canCallApi) return;
-    setDetailLoadedSessionId('');
+    setDetailLoadedSessionId((current) => (current === selectedSessionId ? current : ''));
     refreshSessionDetail(selectedSessionId);
   }, [selectedSessionId, canCallApi, token]);
 
@@ -690,6 +690,8 @@ export function App() {
       setExternalResources([]);
       setCallbacks([]);
       eventCursor.current = 0;
+      detailLoadedSessionIdRef.current = session.id;
+      setDetailLoadedSessionId(session.id);
       setIsCreatingThread(false);
     } catch (err) {
       setNewThreadPrompt(firstPrompt);
@@ -935,6 +937,7 @@ export function App() {
   function selectSession(sessionId: string) {
     setSetupGuideOpen(false);
     autoScrolledSessionId.current = '';
+    selectedSessionIdRef.current = sessionId;
     localStorage.setItem(selectedSessionStorageKey, sessionId);
     setSessionSearchParam(sessionId);
     localStorage.removeItem(newSessionSelectedStorageKey);

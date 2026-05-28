@@ -123,6 +123,40 @@ it('allows starting a session without repository options', async () => {
   expect(submittedMessageBodies[0]).not.toHaveProperty('repository');
 });
 
+it('shows fast streamed responses for newly-created sessions before detail refresh completes', async () => {
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    hangMessagesForSessions: ['00000000-0000-4000-8000-000000000102'],
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  fireEvent.change(screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...'), {
+    target: { value: 'start work' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+  expect(await screen.findAllByText('start work')).not.toHaveLength(0);
+  act(() => {
+    pushGlobalEvent?.({
+      id: 10,
+      sessionId: '00000000-0000-4000-8000-000000000102',
+      sequence: 2,
+      type: 'agent_response_final',
+      messageId: '00000000-0000-4000-8000-000000000101',
+      payload: { text: 'fast fake provider response' },
+      createdAt: '2026-05-05T12:02:00.000Z',
+    });
+  });
+
+  expect(await screen.findByText('fast fake provider response')).toBeInTheDocument();
+  expect(screen.queryByText('Loading session')).not.toBeInTheDocument();
+});
+
 it('keeps only one context picker open at a time', async () => {
   mockApi();
   render(<App />);
