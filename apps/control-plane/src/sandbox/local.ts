@@ -216,21 +216,38 @@ function execLocalCommand(rootDir: string, toolPath: string, input: SandboxExecI
   const env = createLocalCommandEnv(toolPath, input.env);
 
   return new Promise((resolveResult, reject) => {
+    if (input.signal?.aborted) {
+      reject(abortError(input.signal));
+      return;
+    }
+
     const child = spawn(input.command, {
       cwd,
       env,
       shell: true,
+      detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let aborted = false;
+    let settled = false;
     const timer = input.timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          child.kill('SIGTERM');
+          killProcessGroup(child.pid);
         }, input.timeoutMs)
       : undefined;
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      input.signal?.removeEventListener('abort', abort);
+    };
+    const abort = () => {
+      aborted = true;
+      killProcessGroup(child.pid);
+    };
+    input.signal?.addEventListener('abort', abort, { once: true });
 
     child.stdout.setEncoding('utf-8');
     child.stderr.setEncoding('utf-8');
@@ -240,9 +257,20 @@ function execLocalCommand(rootDir: string, toolPath: string, input: SandboxExecI
     child.stderr.on('data', (chunk: string) => {
       stderr = appendBounded(stderr, chunk);
     });
-    child.on('error', reject);
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    });
     child.on('close', (code, signal) => {
-      if (timer) clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (aborted || input.signal?.aborted) {
+        reject(abortError(input.signal));
+        return;
+      }
       if (timedOut && !stderr.trim()) stderr = `[local sandbox] Command timed out after ${input.timeoutMs}ms.`;
       resolveResult({
         exitCode: code ?? signalExitCode(signal),
@@ -255,6 +283,19 @@ function execLocalCommand(rootDir: string, toolPath: string, input: SandboxExecI
     if (input.stdin) child.stdin.end(input.stdin);
     else child.stdin.end();
   });
+}
+
+function abortError(_signal: AbortSignal | undefined): DOMException {
+  return new DOMException('Operation aborted', 'AbortError');
+}
+
+function killProcessGroup(pid: number | undefined): void {
+  if (!pid) return;
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    // The process may have already exited.
+  }
 }
 
 function resolveSandboxPath(rootDir: string, path: string): string {

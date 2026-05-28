@@ -313,7 +313,7 @@ Required rules:
 - `api` must not import `runner-flue`.
 - `integrations` must not import `runner-flue`.
 - `store` must not import domain modules.
-- Only `runner-flue` imports `@flue/sdk`.
+- Only `runner-flue` imports `@flue/runtime`.
 - Public event types must be declared in one shared module.
 - Public API responses must have schemas.
 - Callback core must not import concrete integrations; integrations may provide callback sender plugins.

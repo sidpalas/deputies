@@ -3,6 +3,7 @@ import { createServer as createHttpServer, type Server } from 'node:http';
 import net from 'node:net';
 import { createSandboxBridgeServer } from '../../../../packages/sandbox-bridge/src/server.js';
 import { createServer, createServices } from '../../src/app/server.js';
+import { createPreviewAuthToken } from '../../src/app/service-proxy.js';
 import { loadConfig } from '../../src/config/index.js';
 import {
   DockerSandboxProvider,
@@ -48,18 +49,16 @@ describe('Docker service WebSocket proxy integration', () => {
     const provider = new DockerSandboxProvider({
       orchestrator: new BridgeDockerOrchestrator({ bridgeUrl, bridgeToken }),
     });
-    controlPlane = createServer(
-      loadConfig({
-        API_AUTH_MODE: 'session',
-        AUTH_STATIC_USERNAME: 'dev',
-        AUTH_STATIC_PASSWORD: 'password',
-        AUTH_SESSION_SECRET: 'test-secret',
-        SERVICE_BASE_DOMAIN: 'deputies.localhost',
-        SERVICE_TRUST_FORWARDED_HOSTS: 'true',
-        WEB_BASE_URL: 'https://deputies.localhost',
-      }),
-      createServices(store, { sandboxProvider: provider }),
-    );
+    const config = loadConfig({
+      API_AUTH_MODE: 'session',
+      AUTH_STATIC_USERNAME: 'dev',
+      AUTH_STATIC_PASSWORD: 'password',
+      AUTH_SESSION_SECRET: 'test-secret',
+      SERVICE_BASE_DOMAIN: 'deputies.localhost',
+      SERVICE_TRUST_FORWARDED_HOSTS: 'true',
+      WEB_BASE_URL: 'https://deputies.localhost',
+    });
+    controlPlane = createServer(config, createServices(store, { sandboxProvider: provider }));
     controlPlaneUrl = await listen(controlPlane);
 
     const login = await fetch(`${controlPlaneUrl}/auth/login`, {
@@ -67,11 +66,12 @@ describe('Docker service WebSocket proxy integration', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ username: 'dev', password: 'password' }),
     });
-    const cookie = login.headers.get('set-cookie');
+    const loginBody = (await login.json()) as { user: { id: string } };
+    const authCookie = cookiePair(login.headers.get('set-cookie'));
 
     const createSession = await fetch(`${controlPlaneUrl}/sessions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', cookie: cookie! },
+      headers: { 'content-type': 'application/json', cookie: authCookie },
       body: JSON.stringify({ title: 'Docker WebSocket service' }),
     });
     const { session } = (await createSession.json()) as { session: { id: string } };
@@ -90,15 +90,30 @@ describe('Docker service WebSocket proxy integration', () => {
     });
 
     const serviceHost = `s-${upstreamPort}-${session.id}.deputies.localhost`;
+    const previewToken = createPreviewAuthToken(config, {
+      authSessionId: cookieValue(authCookie),
+      previewSessionId: session.id,
+      port: upstreamPort,
+      userId: loginBody.user.id,
+    });
+    const previewAuth = await fetch(
+      `${controlPlaneUrl}/__preview_auth?token=${encodeURIComponent(previewToken)}&redirect=/`,
+      {
+        headers: { cookie: authCookie, 'x-forwarded-host': serviceHost, 'x-forwarded-proto': 'https' },
+        redirect: 'manual',
+      },
+    );
+    const previewCookie = cookiePair(previewAuth.headers.get('set-cookie'));
+    const cookie = `${authCookie}; ${previewCookie}`;
     const directResponse = await rawUpgrade(controlPlaneUrl, {
       host: serviceHost,
-      cookie: cookie!,
+      cookie,
       origin: `https://${serviceHost}`,
       path: '/stable-code-server?reconnection=false',
     });
     const forwardedResponse = await rawUpgrade(controlPlaneUrl, {
       forwardedHost: serviceHost,
-      cookie: cookie!,
+      cookie,
       origin: `https://${serviceHost}`,
       path: '/stable-code-server?reconnection=false',
     });
@@ -225,6 +240,18 @@ function rawUpgrade(
     socket.once('end', () => resolve(response));
     socket.once('error', reject);
   });
+}
+
+function cookiePair(setCookie: string | null): string {
+  const pair = setCookie?.split(';')[0];
+  if (!pair) throw new Error('Expected set-cookie header');
+  return pair;
+}
+
+function cookieValue(cookie: string): string {
+  const value = cookie.split('=')[1];
+  if (!value) throw new Error('Expected cookie value');
+  return value;
 }
 
 async function closeServer(server: Server | undefined): Promise<void> {

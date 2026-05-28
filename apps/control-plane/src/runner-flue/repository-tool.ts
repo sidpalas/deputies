@@ -1,4 +1,4 @@
-import type { ToolDef } from '@flue/sdk';
+import type { ToolDefinition } from '@flue/runtime';
 import {
   repositorySetupCommand,
   type GitHubRepository,
@@ -30,7 +30,7 @@ export type RepositoryToolServices = {
   updateSessionContext?: RunnerInput['updateSessionContext'];
 };
 
-export function createRepositoryTool(services: RepositoryToolServices): ToolDef {
+export function createRepositoryTool(services: RepositoryToolServices): ToolDefinition {
   return {
     name: 'repository',
     description:

@@ -542,6 +542,7 @@ Current implementation:
 - `apps/control-plane/src/runner-flue/sandbox-factory.ts` adapts any filesystem-capable `SandboxHandle` into Flue's `SandboxFactory` using `createSandboxSessionEnv`.
 - Daytona creation supports optional `DAYTONA_IMAGE`, `DAYTONA_SNAPSHOT`, `DAYTONA_API_URL`, and `DAYTONA_TARGET` configuration.
 - Daytona creation sets `autoStopInterval` from `SANDBOX_IDLE_TIMEOUT_SECONDS` using Daytona's minute granularity. The default product timeout is 900 seconds.
+- Daytona exec cancellation is best-effort. Deputies observes `AbortSignal`s before and during SDK `executeCommand` calls so the worker can stop waiting and mark a run cancelled, but Daytona's direct exec API does not expose a remote command cancel/kill handle. If cancellation happens after a command starts, that command may keep running and may continue mutating the persistent sandbox filesystem until it exits or hits its timeout.
 - This follows Flue's documented connector shape: product code creates/configures the Daytona sandbox, then Flue receives a connector-wrapped sandbox.
 - Provider sandbox IDs, workspace paths, metadata, health timestamps, and lifecycle status are persisted in `sandboxes`.
 - Follow-up messages reconnect to the latest active sandbox for the session/provider when health is ready. Stopped sandboxes are restarted before reconnect so filesystem state can be reused. Unhealthy or missing sandboxes are marked unhealthy and replaced.

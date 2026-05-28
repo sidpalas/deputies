@@ -1,10 +1,18 @@
-import type { AgentInit, FlueEvent, SandboxFactory, SessionData, ShellResult, ToolDef } from '@flue/sdk';
+import type {
+  FlueEvent,
+  ModelConfig,
+  PromptOptions,
+  SandboxFactory,
+  SessionData,
+  ShellResult,
+  ToolDefinition,
+} from '@flue/runtime';
 import type { RunnerInput, RunnerResult } from '../runner/types.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 
 export type FlueRunnerOptions = {
   model: string;
-  sandbox?: 'empty' | 'local' | SandboxFactory;
+  sandbox?: false | SandboxFactory;
   cwd?: string;
 };
 
@@ -12,7 +20,11 @@ export interface FlueRunnerPort {
   run(input: RunnerInput): Promise<RunnerResult>;
 }
 
-export type FluePromptResponse = { text: string };
+export type FluePromptResponse = {
+  text: string;
+  model?: { id: string } | string;
+  usage?: RunnerResult['usage'];
+};
 
 export type FlueShellOptions = {
   env?: Record<string, string>;
@@ -23,9 +35,9 @@ export type FlueShellOptions = {
 };
 
 export interface FlueSessionPort {
-  prompt(text: string): PromiseLike<FluePromptResponse>;
+  prompt(text: string, options?: Pick<PromptOptions, 'signal'>): PromiseLike<FluePromptResponse>;
   shell?(command: string, options?: FlueShellOptions): PromiseLike<ShellResult>;
-  abort?: () => void;
+  abort?: (reason?: unknown) => void;
 }
 
 export interface FlueAgentPort {
@@ -39,8 +51,8 @@ export interface FlueAgentFactory {
     sessionId: string;
     sandbox: SandboxHandle;
     cwd?: string;
-    model?: AgentInit['model'];
-    tools?: ToolDef[];
+    model?: ModelConfig;
+    tools?: ToolDefinition[];
     onEvent?: (event: FlueEvent) => void;
   }): Promise<FlueAgentPort>;
   loadSession?(id: string): Promise<SessionData | null>;

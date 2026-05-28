@@ -44,6 +44,7 @@ export type SandboxExecInput = {
   cwd?: string;
   env?: Record<string, string>;
   timeoutMs?: number;
+  signal?: AbortSignal;
   stdin?: string;
 };
 

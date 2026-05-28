@@ -1,11 +1,22 @@
-import { createFlueContext, InMemorySessionStore, resolveModel } from '@flue/sdk/internal';
-import type { AgentInit, FlueHarness, FlueSession, SessionData, SessionStore, ShellOptions } from '@flue/sdk';
-import { configureProvider } from '@flue/sdk/app';
+import {
+  type CallHandle,
+  createAgent,
+  type AgentProfile,
+  type FlueHarness,
+  type FlueSession,
+  type ModelConfig,
+  type SessionData,
+  type SessionStore,
+  type ShellOptions,
+} from '@flue/runtime';
+import { configureProvider } from '@flue/runtime/app';
+import { createFlueContext, InMemorySessionStore, resolveModel } from '@flue/runtime/internal';
 import type { FlueAgentFactory, FlueAgentPort, FlueSessionPort } from './types.js';
 import { sandboxHandleToFlueFactory } from './sandbox-factory.js';
 
 const FLUE_INSTANCE_ID = 'deputies';
 const FLUE_HARNESS_NAME = 'runner';
+const FLUE_DEFAULT_SUBAGENT_DEPTH = 4;
 const DEPUTIES_SYSTEM_PROMPT = [
   'You are a software engineering agent running in a sandbox for the Deputies product.',
   'When generating files for users, prefer broadly compatible formats that can be opened in modern browsers and common desktop tools.',
@@ -14,7 +25,7 @@ const DEPUTIES_SYSTEM_PROMPT = [
 ].join('\n');
 
 export type RealFlueAgentFactoryOptions = {
-  model: AgentInit['model'];
+  model: ModelConfig;
   providers?: Record<string, { apiKey?: string; baseUrl?: string; headers?: Record<string, string> }>;
   sessionStore?: SessionStore;
   env?: Record<string, unknown>;
@@ -39,28 +50,28 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
       payload: {},
       env: this.env,
       agentConfig: {
-        systemPrompt: DEPUTIES_SYSTEM_PROMPT,
+        systemPrompt: '',
         skills: {},
-        roles: {},
+        subagents: {},
         model: undefined,
         resolveModel,
       },
       createDefaultEnv: unsupportedEnv('default'),
-      createLocalEnv: unsupportedEnv('local'),
       defaultStore: this.sessionStore,
     });
     ctx.setEventCallback(input.onEvent);
 
-    const initOptions: AgentInit = {
-      name: FLUE_HARNESS_NAME,
+    const agent = createAgent(() => ({
+      instructions: DEPUTIES_SYSTEM_PROMPT,
       sandbox: sandboxHandleToFlueFactory(input.sandbox),
       model: input.model ?? this.options.model,
       persist: this.sessionStore,
-    };
-    if (input.cwd) initOptions.cwd = input.cwd;
-    if (input.tools) initOptions.tools = input.tools;
+      subagents: [createDefaultSubagent(FLUE_DEFAULT_SUBAGENT_DEPTH)],
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+      ...(input.tools ? { tools: input.tools } : {}),
+    }));
 
-    return adaptHarness(await ctx.init(initOptions), input.agentId, this.sessionStore);
+    return adaptHarness(await ctx.init(agent, { name: FLUE_HARNESS_NAME }), input.agentId, this.sessionStore);
   }
 
   async loadSession(id: string): Promise<SessionData | null> {
@@ -94,6 +105,15 @@ function flueSessionStorageKeys(sessionId: string, legacyAgentId: string): strin
     legacyFlueSessionStorageKey(sessionId, legacyAgentId),
     preUpgradeFlueSessionStorageKey(sessionId),
   ];
+}
+
+function createDefaultSubagent(depth: number): AgentProfile {
+  const subagent: AgentProfile = {
+    name: 'default',
+    description: 'Use the default Deputies software engineering agent.',
+  };
+  if (depth > 1) subagent.subagents = [createDefaultSubagent(depth - 1)];
+  return subagent;
 }
 
 async function loadFlueSession(
@@ -134,9 +154,24 @@ function adaptHarness(harness: FlueHarness, legacyAgentId: string, sessionStore:
 }
 
 function adaptSession(session: FlueSession): FlueSessionPort {
+  const activeCalls = new Set<CallHandle<unknown>>();
+
+  const track = <T>(call: CallHandle<T>): CallHandle<T> => {
+    activeCalls.add(call as CallHandle<unknown>);
+    void Promise.resolve(call)
+      .finally(() => {
+        activeCalls.delete(call as CallHandle<unknown>);
+      })
+      .catch(() => {});
+    return call;
+  };
+
   return {
-    prompt: (text) => session.prompt(text),
-    shell: (command, options) => session.shell(command, toFlueShellOptions(options)),
+    prompt: (text, options) => track(session.prompt(text, options)),
+    shell: (command, options) => track(session.shell(command, toFlueShellOptions(options))),
+    abort: (reason) => {
+      for (const call of activeCalls) call.abort(reason);
+    },
   };
 }
 

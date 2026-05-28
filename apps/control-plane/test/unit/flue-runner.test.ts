@@ -2,7 +2,7 @@ import { FlueRunner } from '../../src/runner-flue/runner.js';
 import { RealFlueAgentFactory } from '../../src/runner-flue/agent-factory.js';
 import { createArtifactTool } from '../../src/runner-flue/artifact-tool.js';
 import type { FlueAgentFactory } from '../../src/runner-flue/types.js';
-import type { SessionData, SessionStore } from '@flue/sdk';
+import type { SessionData, SessionStore } from '@flue/runtime';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +19,14 @@ describe('FlueRunner', () => {
   it('uses stable product session IDs for Flue agent and session identity', async () => {
     const calls: Parameters<FlueAgentFactory['create']>[0][] = [];
     const prompts: string[] = [];
+    const usage = {
+      input: 10,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 15,
+      cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+    };
     const factory: FlueAgentFactory = {
       async create(input) {
         calls.push(input);
@@ -28,7 +36,7 @@ describe('FlueRunner', () => {
             return {
               async prompt(text) {
                 prompts.push(text);
-                return { text: 'flue: ok' };
+                return { text: 'flue: ok', model: { id: 'test/model' }, usage };
               },
               abort() {},
             };
@@ -55,8 +63,9 @@ describe('FlueRunner', () => {
     expect(calls[0]?.onEvent).toEqual(expect.any(Function));
     expect(prompts[0]).toContain('Service tool guidance:');
     expect(prompts[0]).toContain('User request:\nhello');
-    expect(result.text).toBe('flue: ok');
+    expect(result).toMatchObject({ text: 'flue: ok', model: 'test/model', usage });
     expect(events.map((event) => event.type)).toEqual(['run_started', 'agent_text_delta', 'run_completed']);
+    expect(events[2]?.payload).toMatchObject({ runner: 'flue', model: 'test/model', usage });
   });
 
   it('normalizes Flue live events into product events', async () => {
@@ -425,6 +434,72 @@ describe('FlueRunner', () => {
     ).rejects.toThrow('Operation aborted');
 
     expect(deleted).toEqual(['session-1']);
+  });
+
+  it('restores Flue session state when abort arrives after prompt resolves', async () => {
+    const previousSession = {
+      version: 3 as const,
+      entries: [],
+      leafId: null,
+      metadata: {},
+      createdAt: '2026-05-06T00:00:00.000Z',
+      updatedAt: '2026-05-06T00:00:00.000Z',
+    };
+    const saved: unknown[] = [];
+    const abort = new AbortController();
+    let releaseEvent!: () => void;
+    let eventStarted!: () => void;
+    const eventStartedPromise = new Promise<void>((resolve) => {
+      eventStarted = resolve;
+    });
+    const releaseEventPromise = new Promise<void>((resolve) => {
+      releaseEvent = resolve;
+    });
+    const factory: FlueAgentFactory = {
+      async create(input) {
+        return {
+          async session() {
+            return {
+              async prompt() {
+                input.onEvent?.({ type: 'text_delta', text: 'partial', session: 'session-1' });
+                return { text: 'partial response' };
+              },
+              abort() {},
+            };
+          },
+        };
+      },
+      async loadSession() {
+        return previousSession;
+      },
+      async saveSession(_id, data) {
+        saved.push(data);
+      },
+    };
+    const sandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+
+    const run = new FlueRunner(factory).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'sleep for 5 seconds',
+      context: {},
+      sandbox,
+      signal: abort.signal,
+      emit: async (event) => {
+        if (event.type === 'agent_text_delta') {
+          eventStarted();
+          await releaseEventPromise;
+        }
+      },
+    });
+
+    await eventStartedPromise;
+    abort.abort();
+    releaseEvent();
+
+    await expect(run).rejects.toThrow('Operation aborted');
+    expect(saved).toEqual([previousSession]);
   });
 
   it('maps product session IDs to Flue storage keys for snapshots', async () => {

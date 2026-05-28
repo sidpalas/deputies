@@ -848,8 +848,22 @@ function standaloneActivityDetail(event: AgentEvent): string | undefined {
     const batchSize = typeof event.payload.batchSize === 'number' ? event.payload.batchSize : undefined;
     return batchSize && batchSize > 1 ? `${batchSize} queued messages are running together.` : undefined;
   }
+  if (event.type === 'run_completed') return runCompletedDetail(event.payload);
   if (event.type === 'sandbox_ready' && event.payload.created === true) return 'Sandbox was created for this run.';
   return previewValue(event.payload.message) ?? previewValue(event.payload.result);
+}
+
+function runCompletedDetail(payload: Record<string, unknown>): string | undefined {
+  const model = stringValue(payload.model);
+  const usage = payload.usage;
+  const totalTokens = usage && typeof usage === 'object' ? (usage as Record<string, unknown>).totalTokens : undefined;
+  const cost = usage && typeof usage === 'object' ? (usage as Record<string, unknown>).cost : undefined;
+  const totalCost = cost && typeof cost === 'object' ? (cost as Record<string, unknown>).total : undefined;
+  const parts: string[] = [];
+  if (model) parts.push(`Model: ${model}`);
+  if (typeof totalTokens === 'number') parts.push(`Tokens: ${totalTokens.toLocaleString()}`);
+  if (typeof totalCost === 'number' && totalCost > 0) parts.push(`Estimated cost: $${totalCost.toFixed(4)}`);
+  return parts.length ? parts.join(' · ') : undefined;
 }
 
 function diagnosticStatusLabel(status: DiagnosticActivity['status']): string {

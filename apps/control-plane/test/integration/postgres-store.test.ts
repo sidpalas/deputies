@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import type { SessionData } from '@flue/sdk';
+import type { SessionData } from '@flue/runtime';
 import { Pool } from 'pg';
 import { createServer, createServices } from '../../src/app/server.js';
 import type { CompletionCallbackSender } from '../../src/callbacks/service.js';

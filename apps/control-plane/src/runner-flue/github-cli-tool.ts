@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ToolDef } from '@flue/sdk';
+import type { ToolDefinition } from '@flue/runtime';
 import type { ExternalResourceService } from '../external-resources/service.js';
 import type { GitHubRepositoryAccess } from '../repositories/setup.js';
 import {
@@ -37,7 +37,10 @@ type GitHubCliToolOptions = {
   messageId?: string;
 };
 
-export function createGitHubCliTool(repository: RepositoryToolServices, options: GitHubCliToolOptions = {}): ToolDef {
+export function createGitHubCliTool(
+  repository: RepositoryToolServices,
+  options: GitHubCliToolOptions = {},
+): ToolDefinition {
   return {
     name: 'gh',
     description:

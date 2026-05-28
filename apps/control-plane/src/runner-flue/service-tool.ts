@@ -1,4 +1,4 @@
-import type { ToolDef } from '@flue/sdk';
+import type { ToolDefinition } from '@flue/runtime';
 import type { RunnerInput } from '../runner/types.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
 import { sandboxRuntimeId } from '../sandbox/runtime.js';
@@ -23,7 +23,7 @@ export type ServiceToolServices = {
 
 const defaultServiceTtlSeconds = 600;
 
-export function createServiceTool(services: ServiceToolServices): ToolDef {
+export function createServiceTool(services: ServiceToolServices): ToolDefinition {
   return {
     name: 'service',
     description:

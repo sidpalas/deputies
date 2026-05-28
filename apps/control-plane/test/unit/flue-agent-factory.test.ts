@@ -1,3 +1,6 @@
+import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from '@flue/runtime';
+import { registerProvider } from '@flue/runtime/app';
+import { randomUUID } from 'node:crypto';
 import { RealFlueAgentFactory } from '../../src/runner-flue/agent-factory.js';
 import type { SandboxHandle } from '../../src/sandbox/types.js';
 
@@ -58,6 +61,79 @@ describe('RealFlueAgentFactory', () => {
     await agent.session('thread-1');
 
     expect(saved.get('agent-session:["deputies","runner","thread-1"]')).toBe(legacyData);
+  });
+
+  it('keeps nested default-subagent task affinity keys within the Codex cache limit', async () => {
+    const provider = `faux-${randomUUID()}`;
+    const modelId = 'task-default';
+    const registration = registerFauxProvider({ api: `${provider}-api`, provider, models: [{ id: modelId }] });
+    registerProvider(provider, { api: registration.api, baseUrl: 'https://fixture.invalid' });
+    const saved = new Map<string, unknown>();
+    const sessionIds: string[] = [];
+    registration.setResponses([
+      (_context, options) => {
+        sessionIds.push(options?.sessionId ?? '');
+        return fauxAssistantMessage(fauxToolCall('task', { prompt: 'Research this.', agent: 'default' }), {
+          stopReason: 'toolUse',
+        });
+      },
+      (_context, options) => {
+        sessionIds.push(options?.sessionId ?? '');
+        return fauxAssistantMessage(fauxToolCall('task', { prompt: 'Dig deeper.', agent: 'default' }), {
+          stopReason: 'toolUse',
+        });
+      },
+      (_context, options) => {
+        sessionIds.push(options?.sessionId ?? '');
+        return fauxAssistantMessage(fauxText('grandchild answer'));
+      },
+      (_context, options) => {
+        sessionIds.push(options?.sessionId ?? '');
+        return fauxAssistantMessage(fauxText('child used grandchild'));
+      },
+      (_context, options) => {
+        sessionIds.push(options?.sessionId ?? '');
+        return fauxAssistantMessage(fauxText('used child answer'));
+      },
+    ]);
+
+    try {
+      const agent = await new RealFlueAgentFactory({
+        model: `${provider}/${modelId}`,
+        sessionStore: {
+          async save(id, data) {
+            saved.set(id, data);
+          },
+          async load(id) {
+            return (saved.get(id) as never) ?? null;
+          },
+          async delete(id) {
+            saved.delete(id);
+          },
+        },
+        env: {},
+      }).create({
+        agentId: 'agent-1',
+        sessionId: 'thread-1',
+        cwd: '/workspace/project',
+        sandbox: createSandboxHandle(),
+      });
+      const session = await agent.session('thread-1');
+
+      const result = await session.prompt('Use a task.');
+
+      expect(result.text).toBe('used child answer');
+      expect(sessionIds).toHaveLength(5);
+      expect(sessionIds[0]).toBe('deputies::runner::thread-1');
+      expect(sessionIds.every((sessionId) => sessionId.length <= 64)).toBe(true);
+      expect(
+        sessionIds
+          .filter((sessionId) => sessionId !== 'deputies::runner::thread-1')
+          .every((sessionId) => sessionId.startsWith('deputies::runner::h:')),
+      ).toBe(true);
+    } finally {
+      registration.unregister();
+    }
   });
 });
 

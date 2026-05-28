@@ -488,9 +488,12 @@ export class HttpAgentSandboxOrchestratorClient implements AgentSandboxOrchestra
   }
 
   exec(input: AgentSandboxExecInput): Promise<SandboxExecResult> {
-    return this.request('POST', `/sandboxes/${encodeURIComponent(input.providerSandboxId)}/exec`, input).then(
-      parseExecResult,
-    );
+    return this.request(
+      'POST',
+      `/sandboxes/${encodeURIComponent(input.providerSandboxId)}/exec`,
+      execRequestBody(input),
+      input.signal ? { signal: input.signal } : {},
+    ).then(parseExecResult);
   }
 
   async readFile(input: AgentSandboxFileInput): Promise<Uint8Array> {
@@ -551,12 +554,19 @@ export class HttpAgentSandboxOrchestratorClient implements AgentSandboxOrchestra
     };
   }
 
-  private async request(method: string, path: string, body?: unknown): Promise<unknown> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+  private async request(
+    method: string,
+    path: string,
+    body?: unknown,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<unknown> {
+    const request: RequestInit = {
       method,
       headers: this.headers(),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+    };
+    if (init.signal) request.signal = init.signal;
+    const response = await fetch(`${this.baseUrl}${path}`, request);
     const text = await response.text();
     const parsed = parseJsonOrText(text);
     if (!response.ok) {
@@ -619,7 +629,10 @@ export function createAgentSandboxOrchestratorHttpHandler(
           await orchestrator.destroy(ref);
           return jsonResponse(200, { ok: true });
         case 'exec':
-          return jsonResponse(200, await orchestrator.exec(execInput(refWithSecrets, body)));
+          return jsonResponse(
+            200,
+            await orchestrator.exec({ ...execInput(refWithSecrets, body), signal: request.signal }),
+          );
         case 'fs/read':
           return jsonResponse(200, {
             contentBase64: Buffer.from(
@@ -806,8 +819,19 @@ function createAgentSandboxFileSystem(orchestrator: AgentSandboxOrchestrator, re
 
 async function execBridge(descriptor: AgentSandboxDescriptor, input: SandboxExecInput): Promise<SandboxExecResult> {
   return parseExecResult(
-    await readBridgeJson(await bridgeFetch(descriptor, '/exec', { method: 'POST', body: JSON.stringify(input) })),
+    await readBridgeJson(
+      await bridgeFetch(descriptor, '/exec', {
+        method: 'POST',
+        body: JSON.stringify(execRequestBody(input)),
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
+    ),
   );
+}
+
+function execRequestBody<T extends SandboxExecInput>(input: T): Omit<T, 'signal'> {
+  const { signal: _signal, ...body } = input;
+  return body;
 }
 
 async function bridgeFetch(
