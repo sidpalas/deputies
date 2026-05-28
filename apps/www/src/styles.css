@@ -689,6 +689,185 @@ h1 {
   margin-bottom: 0;
 }
 
+.post-body .twitter-embed {
+  --twitter-embed-width: min(100%, 550px);
+  position: relative;
+  display: grid;
+  min-height: var(--twitter-embed-reserve-height, 28rem);
+  justify-items: center;
+  margin: 1.75rem 0;
+}
+
+.post-body .twitter-embed[data-enhance='false'] {
+  min-height: 0;
+}
+
+.post-body .twitter-embed[data-align='left'] {
+  justify-items: start;
+}
+
+.post-body .twitter-embed[data-align='center'] {
+  justify-items: center;
+}
+
+.post-body .twitter-embed[data-align='right'] {
+  justify-items: end;
+}
+
+.post-body .twitter-embed__placeholder,
+.post-body .twitter-embed__mount,
+.post-body .twitter-embed__fallback {
+  width: var(--twitter-embed-width);
+}
+
+.post-body .twitter-embed__mount {
+  display: flex;
+  justify-content: center;
+}
+
+.post-body .twitter-embed__placeholder {
+  display: none;
+  min-height: var(--twitter-embed-reserve-height, 28rem);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--card);
+  padding: 1rem;
+  box-shadow: 0 18px 45px oklch(0.208 0.042 265.755 / 8%);
+}
+
+.post-body
+  .twitter-embed[data-enhance='true']:not([data-twitter-loaded]):not([data-twitter-failed])
+  .twitter-embed__placeholder {
+  display: block;
+}
+
+.post-body
+  .twitter-embed[data-enhance='true']:not([data-twitter-loaded]):not([data-twitter-failed])
+  .twitter-embed__mount,
+.post-body
+  .twitter-embed[data-enhance='true']:not([data-twitter-loaded]):not([data-twitter-failed])
+  .twitter-embed__fallback {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  visibility: hidden;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.post-body
+  .twitter-embed[data-align='left']:not([data-twitter-loaded]):not([data-twitter-failed])
+  .twitter-embed__mount,
+.post-body
+  .twitter-embed[data-align='left']:not([data-twitter-loaded]):not([data-twitter-failed])
+  .twitter-embed__fallback {
+  left: 0;
+  transform: none;
+}
+
+.post-body
+  .twitter-embed[data-align='right']:not([data-twitter-loaded]):not([data-twitter-failed])
+  .twitter-embed__mount,
+.post-body
+  .twitter-embed[data-align='right']:not([data-twitter-loaded]):not([data-twitter-failed])
+  .twitter-embed__fallback {
+  right: 0;
+  left: auto;
+  transform: none;
+}
+
+.post-body .twitter-embed[data-twitter-loaded] .twitter-embed__placeholder,
+.post-body .twitter-embed[data-twitter-loaded] .twitter-embed__fallback,
+.post-body .twitter-embed[data-twitter-failed] .twitter-embed__placeholder,
+.post-body .twitter-embed[data-twitter-failed] .twitter-embed__mount {
+  display: none;
+}
+
+.post-body .twitter-embed__placeholder-header {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.post-body .twitter-embed__placeholder-header > span {
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.post-body .twitter-embed__placeholder-header div,
+.post-body .twitter-embed__placeholder-lines {
+  display: grid;
+  gap: 0.55rem;
+  width: 100%;
+}
+
+.post-body .twitter-embed__placeholder-header div span,
+.post-body .twitter-embed__placeholder-lines span,
+.post-body .twitter-embed__placeholder-media {
+  display: block;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--muted), var(--background), var(--muted));
+}
+
+.post-body .twitter-embed__placeholder-header div span:first-child {
+  width: 42%;
+  height: 0.75rem;
+}
+
+.post-body .twitter-embed__placeholder-header div span:last-child {
+  width: 28%;
+  height: 0.65rem;
+}
+
+.post-body .twitter-embed__placeholder-lines span {
+  height: 0.75rem;
+}
+
+.post-body .twitter-embed__placeholder-lines span:nth-child(2) {
+  width: 88%;
+}
+
+.post-body .twitter-embed__placeholder-lines span:nth-child(3) {
+  width: 62%;
+}
+
+.post-body .twitter-embed__placeholder-media {
+  height: clamp(18rem, 56vw, 32rem);
+  margin-top: 1.25rem;
+  border-radius: 0.65rem;
+}
+
+.post-body .twitter-embed__fallback blockquote {
+  width: 100%;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--card);
+  padding: 1rem;
+  box-shadow: 0 18px 45px oklch(0.208 0.042 265.755 / 8%);
+}
+
+.post-body .twitter-embed__fallback blockquote > :first-child {
+  margin-top: 0;
+}
+
+.post-body .twitter-embed__fallback blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.post-body .twitter-embed p {
+  color: var(--foreground);
+}
+
+.post-body .twitter-embed iframe {
+  max-width: 100%;
+}
+
 .post-body table {
   width: 100%;
   border-collapse: collapse;

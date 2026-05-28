@@ -1,0 +1,289 @@
+---
+interface Props {
+  url: string;
+  align?: 'left' | 'center' | 'right';
+  cards?: 'hidden' | 'visible';
+  conversation?: 'all' | 'none';
+  enhance?: boolean;
+  reserveHeight?: number | string;
+  theme?: 'light' | 'dark';
+}
+
+interface FetchTweetHtmlOptions extends Required<Pick<Props, 'align' | 'theme'>> {
+  tweetUrl: string;
+  cards?: Props['cards'];
+  conversation?: Props['conversation'];
+}
+
+interface TwitterOEmbedResponse {
+  html?: unknown;
+}
+
+type HtmlAttribute = [name: string, value: string];
+
+const blockquoteClassPattern = /<blockquote\b([^>]*)\bclass=(['"])([^'"]*)\2([^>]*)>/i;
+
+const { url, align = 'center', cards, conversation, enhance = true, reserveHeight, theme = 'light' } = Astro.props;
+const tweetUrl = normalizeTweetUrl(url);
+const tweetId = getTweetId(tweetUrl);
+const tweetOptions: FetchTweetHtmlOptions = { tweetUrl, align, cards, conversation, theme };
+const reserveHeightStyle = formatReserveHeight(reserveHeight);
+const tweetHtml = await fetchTweetHtml(tweetOptions).catch(function renderTweetFetchFallback(error: unknown): string {
+  console.warn(`TwitterEmbed fell back to runtime rendering for ${tweetUrl}: ${getErrorMessage(error)}`);
+  return renderFallbackTweetHtml(tweetOptions);
+});
+
+function normalizeTweetUrl(value: string): string {
+  const parsed = new URL(value);
+  const hostname = parsed.hostname.replace(/^www\./, '').toLowerCase();
+
+  if (hostname !== 'x.com' && hostname !== 'twitter.com') {
+    throw new Error(`TwitterEmbed expected an x.com or twitter.com URL, received "${value}".`);
+  }
+
+  if (!parsed.pathname.includes('/status/')) {
+    throw new Error(`TwitterEmbed expected a tweet status URL, received "${value}".`);
+  }
+
+  parsed.protocol = 'https:';
+  parsed.hostname = 'x.com';
+  parsed.search = '';
+  parsed.hash = '';
+
+  return parsed.href;
+}
+
+function getTweetId(tweetUrl: string): string {
+  const segments = new URL(tweetUrl).pathname.split('/');
+  const statusIndex = segments.indexOf('status');
+  const tweetId = segments.at(statusIndex + 1);
+
+  if (!tweetId || !/^\d+$/.test(tweetId)) {
+    throw new Error(`TwitterEmbed expected a tweet status URL, received "${tweetUrl}".`);
+  }
+
+  return tweetId;
+}
+
+async function fetchTweetHtml({ tweetUrl, align, cards, conversation, theme }: FetchTweetHtmlOptions): Promise<string> {
+  const params = new URLSearchParams({
+    url: tweetUrl,
+    align,
+    dnt: '1',
+    omit_script: '1',
+    theme,
+  });
+
+  if (cards === 'hidden') params.set('hide_media', '1');
+  if (conversation === 'none') params.set('hide_thread', '1');
+
+  const response = await fetch(`https://publish.twitter.com/oembed?${params}`);
+
+  if (!response.ok) {
+    throw new Error(`TwitterEmbed could not fetch ${tweetUrl}: ${response.status} ${response.statusText}`);
+  }
+
+  const data = (await response.json()) as TwitterOEmbedResponse;
+
+  if (typeof data.html !== 'string' || !data.html.includes('twitter-tweet')) {
+    throw new Error(`TwitterEmbed received an invalid oEmbed response for ${tweetUrl}.`);
+  }
+
+  if (/<script[\s>]/i.test(data.html)) {
+    throw new Error(`TwitterEmbed received script markup for ${tweetUrl}.`);
+  }
+
+  return renderStaticTweetHtml(data.html.trim());
+}
+
+function renderFallbackTweetHtml({ tweetUrl, align, cards, conversation, theme }: FetchTweetHtmlOptions): string {
+  const attrs: HtmlAttribute[] = [
+    ['class', 'twitter-embed__tweet'],
+    ['data-align', align],
+    ['data-dnt', 'true'],
+    ['data-theme', theme],
+  ];
+
+  if (cards === 'hidden') attrs.push(['data-cards', cards]);
+  if (conversation === 'none') attrs.push(['data-conversation', conversation]);
+
+  return `<blockquote ${attrs.map(([name, value]) => `${name}="${escapeHtml(value)}"`).join(' ')}><a href="${escapeHtml(
+    tweetUrl,
+  )}">View this post on X</a></blockquote>`;
+}
+
+function renderStaticTweetHtml(html: string): string {
+  return html.replace(blockquoteClassPattern, replaceTweetClass);
+}
+
+function replaceTweetClass(_match: string, before: string, quote: string, classes: string, after: string): string {
+  const staticClasses = classes.split(/\s+/).filter(function isStaticClass(className: string): boolean {
+    return Boolean(className) && className !== 'twitter-tweet';
+  });
+
+  const className = [...new Set([...staticClasses, 'twitter-embed__tweet'])].join(' ');
+  return `<blockquote${before}class=${quote}${className}${quote}${after}>`;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatReserveHeight(value: Props['reserveHeight']): string | undefined {
+  if (typeof value === 'number') return `--twitter-embed-reserve-height: ${Math.max(0, value)}px`;
+  if (typeof value === 'string') return `--twitter-embed-reserve-height: ${value}`;
+  return undefined;
+}
+
+function escapeHtml(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+---
+
+<figure
+  class="twitter-embed"
+  data-align={align}
+  data-enhance={String(enhance)}
+  data-tweet-id={tweetId}
+  data-cards={cards}
+  data-conversation={conversation}
+  data-theme={theme}
+  style={reserveHeightStyle}
+>
+  {
+    enhance && (
+      <div class="twitter-embed__placeholder" aria-hidden="true">
+        <div class="twitter-embed__placeholder-header">
+          <span />
+          <div>
+            <span />
+            <span />
+          </div>
+        </div>
+        <div class="twitter-embed__placeholder-lines">
+          <span />
+          <span />
+          <span />
+        </div>
+        <div class="twitter-embed__placeholder-media" />
+      </div>
+    )
+  }
+  {enhance && <div class="twitter-embed__mount" aria-label="Embedded post from X" />}
+  <div class="twitter-embed__fallback" set:html={tweetHtml} />
+</figure>
+
+<script>
+  interface TwitterCreateTweetOptions {
+    align?: 'left' | 'center' | 'right';
+    cards?: 'hidden' | 'visible';
+    conversation?: 'all' | 'none';
+    dnt: boolean;
+    theme?: 'light' | 'dark';
+  }
+
+  interface TwitterWidgets {
+    createTweet: (
+      tweetId: string,
+      element: HTMLElement,
+      options: TwitterCreateTweetOptions,
+    ) => Promise<HTMLElement | null>;
+  }
+
+  type TwitterWidgetsWindow = Window & {
+    twttr?: {
+      widgets?: TwitterWidgets;
+    };
+    __twitterEmbedScript?: Promise<void>;
+  };
+
+  const enhancedEmbedSelector = '.twitter-embed[data-enhance="true"]';
+  const pendingEmbedSelector = `${enhancedEmbedSelector}:not([data-twitter-loaded]):not([data-twitter-failed])`;
+  const scriptSrc = 'https://platform.twitter.com/widgets.js';
+  const twitterWindow = window as TwitterWidgetsWindow;
+
+  async function loadEmbeds(): Promise<void> {
+    const widgets = twitterWindow.twttr?.widgets;
+    if (!widgets) return;
+
+    for (const embed of document.querySelectorAll<HTMLElement>(pendingEmbedSelector)) {
+      await renderEmbed(embed, widgets);
+    }
+  }
+
+  async function renderEmbed(embed: HTMLElement, widgets: TwitterWidgets): Promise<void> {
+    const mount = embed.querySelector<HTMLElement>('.twitter-embed__mount');
+    const tweetId = embed.dataset.tweetId;
+
+    if (!mount || !tweetId) {
+      markEmbedFailed(embed);
+      return;
+    }
+
+    try {
+      mount.replaceChildren();
+      const tweet = await widgets.createTweet(tweetId, mount, getTweetOptions(embed));
+
+      if (!tweet) throw new Error('Twitter widgets did not render the tweet.');
+
+      embed.dataset.twitterLoaded = 'true';
+    } catch {
+      markEmbedFailed(embed);
+    }
+  }
+
+  function markEmbedFailed(embed: HTMLElement): void {
+    embed.dataset.twitterFailed = 'true';
+  }
+
+  function markEnhancedEmbedsFailed(): void {
+    for (const embed of document.querySelectorAll<HTMLElement>(enhancedEmbedSelector)) {
+      markEmbedFailed(embed);
+    }
+  }
+
+  function getTweetOptions(embed: HTMLElement): TwitterCreateTweetOptions {
+    return {
+      align: getOption(embed.dataset.align, ['left', 'center', 'right']),
+      cards: getOption(embed.dataset.cards, ['hidden', 'visible']),
+      conversation: getOption(embed.dataset.conversation, ['all', 'none']),
+      dnt: true,
+      theme: getOption(embed.dataset.theme, ['light', 'dark']),
+    };
+  }
+
+  function getOption<Option extends string>(value: string | undefined, options: Option[]): Option | undefined {
+    return options.includes(value as Option) ? (value as Option) : undefined;
+  }
+
+  function loadTwitterScript(): Promise<void> {
+    if (twitterWindow.twttr?.widgets) return Promise.resolve();
+    if (twitterWindow.__twitterEmbedScript) return twitterWindow.__twitterEmbedScript;
+
+    twitterWindow.__twitterEmbedScript = new Promise((resolve, reject) => {
+      const existingScript = document.querySelector<HTMLScriptElement>(`script[src="${scriptSrc}"]`);
+
+      if (existingScript) {
+        existingScript.addEventListener('load', () => resolve(), { once: true });
+        existingScript.addEventListener('error', () => reject(new Error('Twitter widgets failed to load.')), {
+          once: true,
+        });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.async = true;
+      script.src = scriptSrc;
+      script.charset = 'utf-8';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Twitter widgets failed to load.'));
+      document.head.append(script);
+    });
+
+    return twitterWindow.__twitterEmbedScript;
+  }
+
+  if (document.querySelector(enhancedEmbedSelector)) {
+    loadTwitterScript().then(loadEmbeds).catch(markEnhancedEmbedsFailed);
+  }
+</script>

@@ -7,6 +7,7 @@ draft: true
 ---
 
 import { Image } from 'astro:assets';
+import TwitterEmbed from '../../../../components/TwitterEmbed.astro';
 import exampleAssetImage from './assets/example-asset.svg';
 
 Use this file as a starting point for a real post, then set `draft: false` when it is ready to publish.
@@ -45,6 +46,13 @@ article and its images move together:
 You can link to [the Deputies repository](https://github.com/sidpalas/deputies) with normal Markdown.
 
 > Use blockquotes for short notes, warnings, or quoted context from issues and docs.
+
+## Embeds
+
+Import `TwitterEmbed` when a post needs a full X/Twitter embed. The component fetches static oEmbed content at build time,
+then progressively enhances it with X's widget script at runtime when available.
+
+<TwitterEmbed url="https://x.com/sidpalas/status/2057814658761867614" reserveHeight="min(720px, 135vw)" />
 
 ## Code
 
