@@ -1,4 +1,4 @@
-import type { ToolDef } from '@flue/sdk';
+import type { ToolDefinition } from '@flue/runtime';
 import type { FlueAgentPort } from './types.js';
 import { getPreparedRepository, type RepositoryToolServices } from './repository-tool.js';
 
@@ -9,7 +9,7 @@ export type AgentRef = {
   current?: FlueAgentPort;
 };
 
-export function createGitTool(input: { agentRef: AgentRef; repository: RepositoryToolServices }): ToolDef {
+export function createGitTool(input: { agentRef: AgentRef; repository: RepositoryToolServices }): ToolDefinition {
   return {
     name: 'git',
     description:

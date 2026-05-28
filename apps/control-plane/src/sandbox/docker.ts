@@ -437,7 +437,11 @@ export class HttpDockerOrchestratorClient implements DockerOrchestrator {
   }
 
   exec(input: DockerExecInput): Promise<SandboxExecResult> {
-    return this.post(`/sandboxes/${encodeURIComponent(input.providerSandboxId)}/exec`, input).then(parseExecResult);
+    return this.post(
+      `/sandboxes/${encodeURIComponent(input.providerSandboxId)}/exec`,
+      execRequestBody(input),
+      input.signal ? { signal: input.signal } : {},
+    ).then(parseExecResult);
   }
 
   async readFile(input: DockerFileInput): Promise<Uint8Array> {
@@ -495,12 +499,14 @@ export class HttpDockerOrchestratorClient implements DockerOrchestrator {
     };
   }
 
-  private async post(path: string, body: unknown): Promise<unknown> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+  private async post(path: string, body: unknown, init: { signal?: AbortSignal } = {}): Promise<unknown> {
+    const request: RequestInit = {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(body),
-    });
+    };
+    if (init.signal) request.signal = init.signal;
+    const response = await fetch(`${this.baseUrl}${path}`, request);
     const text = await response.text();
     const parsed = text ? (JSON.parse(text) as unknown) : {};
     if (!response.ok) {
@@ -558,7 +564,10 @@ export function createDockerOrchestratorHttpHandler(
           await orchestrator.destroy(ref);
           return jsonResponse(200, { ok: true });
         case 'exec':
-          return jsonResponse(200, await orchestrator.exec(dockerExecInput(refWithSecrets, body)));
+          return jsonResponse(
+            200,
+            await orchestrator.exec({ ...dockerExecInput(refWithSecrets, body), signal: request.signal }),
+          );
         case 'fs/read':
           return jsonResponse(200, {
             contentBase64: Buffer.from(
@@ -647,7 +656,11 @@ function createDockerFileSystem(orchestrator: DockerOrchestrator, ref: DockerSan
 
 async function execBridge(descriptor: DockerSandboxDescriptor, input: SandboxExecInput): Promise<SandboxExecResult> {
   const result = await readBridgeJson(
-    await bridgeFetch(descriptor, '/exec', { method: 'POST', body: JSON.stringify(input) }),
+    await bridgeFetch(descriptor, '/exec', {
+      method: 'POST',
+      body: JSON.stringify(execRequestBody(input)),
+      ...(input.signal ? { signal: input.signal } : {}),
+    }),
   );
   const body = readObject(result);
   return {
@@ -657,6 +670,11 @@ async function execBridge(descriptor: DockerSandboxDescriptor, input: SandboxExe
     startedAt: new Date(readString(body.startedAt, 'startedAt')),
     completedAt: new Date(readString(body.completedAt, 'completedAt')),
   };
+}
+
+function execRequestBody<T extends SandboxExecInput>(input: T): Omit<T, 'signal'> {
+  const { signal: _signal, ...body } = input;
+  return body;
 }
 
 async function bridgeFetch(

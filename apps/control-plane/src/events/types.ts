@@ -53,12 +53,12 @@ export type NormalizedEventPayloadMap = {
     expiresAt: string;
   };
   agent_text_delta: { text: string; flueSessionId?: string | undefined };
-  agent_response_final: { text: string };
+  agent_response_final: { text: string; model?: string; usage?: ModelUsagePayload };
   tool_started: ToolStartedPayload;
   tool_finished: ToolFinishedPayload;
   artifact_created: { artifact: ArtifactPayload };
   external_resource_created: { resource: ExternalResourcePayload };
-  run_completed: { runner: string };
+  run_completed: { runner: string; model?: string; usage?: ModelUsagePayload };
   run_failed: { error: string; recovered?: true };
   run_cancel_requested: { sequences: number[]; batchSize: number };
   run_cancelled: { sequences: number[]; batchSize: number };
@@ -84,6 +84,7 @@ type ToolStartedPayload = {
   flueSessionId?: string | undefined;
   taskId?: string | undefined;
   prompt?: string | undefined;
+  agent?: string | undefined;
   role?: string | undefined;
   cwd?: string | undefined;
   parentSessionId?: string | undefined;
@@ -98,6 +99,7 @@ type ToolFinishedPayload = {
   command?: string | undefined;
   exitCode?: number | undefined;
   taskId?: string | undefined;
+  agent?: string | undefined;
   parentSessionId?: string | undefined;
   error?: unknown;
 };
@@ -125,6 +127,21 @@ type ExternalResourcePayload = {
   url: string;
   metadata: Record<string, unknown>;
   createdAt: Date;
+};
+
+export type ModelUsagePayload = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
 };
 
 type CallbackPayload = {

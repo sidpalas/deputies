@@ -50,6 +50,82 @@ describe('DaytonaSandboxProvider', () => {
     await expect(handle.fs?.readdir('/workspace')).resolves.toEqual(['file.txt']);
   });
 
+  it('converts Daytona exec timeouts from milliseconds to seconds', async () => {
+    const sandbox = createMockDaytonaSandbox();
+    const calls: unknown[][] = [];
+    sandbox.process.executeCommand = async (...args) => {
+      calls.push(args);
+      return { result: 'ok', exitCode: 0 };
+    };
+    const provider = new DaytonaSandboxProvider({
+      client: {
+        async create() {
+          return sandbox;
+        },
+        async get() {
+          return sandbox;
+        },
+      },
+    });
+    const handle = await provider.create({ sessionId: 'session-1' });
+
+    await handle.exec({ command: 'sleep 5', timeoutMs: 2500 });
+
+    expect(calls).toEqual([['sleep 5', undefined, undefined, 3]]);
+  });
+
+  it('does not start Daytona exec when the caller signal is already aborted', async () => {
+    const sandbox = createMockDaytonaSandbox();
+    sandbox.process.executeCommand = vi.fn(async () => ({ result: 'late', exitCode: 0 }));
+    const provider = new DaytonaSandboxProvider({
+      client: {
+        async create() {
+          return sandbox;
+        },
+        async get() {
+          return sandbox;
+        },
+      },
+    });
+    const handle = await provider.create({ sessionId: 'session-1' });
+    const abort = new AbortController();
+    abort.abort();
+
+    await expect(handle.exec({ command: 'sleep 20', signal: abort.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(sandbox.process.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it('rejects Daytona exec when the caller aborts while the SDK command is pending', async () => {
+    const sandbox = createMockDaytonaSandbox();
+    let resolveCommand: ((value: { result?: string; exitCode?: number }) => void) | undefined;
+    const pendingCommand = new Promise<{ result?: string; exitCode?: number }>((resolve) => {
+      resolveCommand = resolve;
+    });
+    sandbox.process.executeCommand = vi.fn(() => pendingCommand);
+    const provider = new DaytonaSandboxProvider({
+      client: {
+        async create() {
+          return sandbox;
+        },
+        async get() {
+          return sandbox;
+        },
+      },
+    });
+    const handle = await provider.create({ sessionId: 'session-1' });
+    const abort = new AbortController();
+
+    const run = handle.exec({ command: 'sleep 20', signal: abort.signal });
+    abort.abort();
+
+    await expect(run).rejects.toMatchObject({ name: 'AbortError' });
+    expect(sandbox.process.executeCommand).toHaveBeenCalledWith('sleep 20', undefined, undefined, undefined);
+    resolveCommand?.({ result: 'late', exitCode: 0 });
+    await pendingCommand;
+  });
+
   it('connects, reports health, and treats missing destroy as idempotent', async () => {
     const sandbox = createMockDaytonaSandbox();
     const client: DaytonaClientLike = {

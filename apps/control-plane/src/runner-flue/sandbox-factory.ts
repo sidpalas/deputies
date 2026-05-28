@@ -1,5 +1,5 @@
-import { createSandboxSessionEnv } from '@flue/sdk/sandbox';
-import type { FileStat, SandboxApi, SandboxFactory, SessionEnv } from '@flue/sdk/sandbox';
+import { createSandboxSessionEnv } from '@flue/runtime';
+import type { FileStat, SandboxApi, SandboxFactory, SessionEnv } from '@flue/runtime';
 import type { SandboxHandle } from '../sandbox/types.js';
 
 export function sandboxHandleToFlueFactory(handle: SandboxHandle, cleanup?: () => Promise<void>): SandboxFactory {
@@ -47,12 +47,13 @@ class SandboxHandleApi implements SandboxApi {
 
   async exec(
     command: string,
-    options?: { cwd?: string; env?: Record<string, string>; timeout?: number },
+    options?: { cwd?: string; env?: Record<string, string>; timeout?: number; signal?: AbortSignal },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const input: Parameters<SandboxHandle['exec']>[0] = { command };
     if (options?.cwd) input.cwd = options.cwd;
     if (options?.env) input.env = options.env;
     if (options?.timeout !== undefined) input.timeoutMs = options.timeout * 1000;
+    if (options?.signal) input.signal = options.signal;
     const result = await this.handle.exec(input);
     return {
       stdout: result.stdout,

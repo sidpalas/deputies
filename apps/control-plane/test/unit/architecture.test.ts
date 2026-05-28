@@ -11,7 +11,7 @@ describe('architecture boundaries', () => {
     const offenders: string[] = [];
 
     const rules = [
-      { sdk: '@flue/sdk', allowed: (path: string) => path.startsWith('runner-flue/') },
+      { sdk: '@flue/runtime', allowed: (path: string) => path.startsWith('runner-flue/') },
       { sdk: '@daytona/sdk', allowed: (path: string) => path === 'sandbox/daytona.ts' },
     ];
 

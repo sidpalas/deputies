@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { ToolDef } from '@flue/sdk';
+import type { ToolDefinition } from '@flue/runtime';
 import type { ArtifactService } from '../artifacts/service.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 
@@ -15,7 +15,7 @@ export type ArtifactToolServices = {
   maxBytes: number;
 };
 
-export function createArtifactTool(services: ArtifactToolServices): ToolDef {
+export function createArtifactTool(services: ArtifactToolServices): ToolDefinition {
   return {
     name: 'artifact',
     description:

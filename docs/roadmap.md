@@ -41,7 +41,7 @@ Still open from the early phases:
 
 - Contract schemas for public API responses and events.
 
-The next implementation phase should focus on operational polish and the remaining GitHub/artifact integration gaps: collaborator permission checks, label-based triggers, provider-owned branch/PR helpers, artifact retention cleanup, richer UI observability for sandbox cleanup, release/migration commands, Railway/ECS/Kubernetes guidance, and contract schemas for public API/events.
+The next implementation phase should focus on operational polish and the remaining GitHub/artifact integration gaps: collaborator permission checks, label-based triggers, provider-owned branch/PR helpers, artifact retention cleanup, richer UI observability for sandbox cleanup, sandbox cancellation conformance coverage, release/migration commands, Railway/ECS/Kubernetes guidance, and contract schemas for public API/events.
 
 ## Phase 0: Repository And Agent Context
 
@@ -175,7 +175,7 @@ Deliverables:
 
 Acceptance criteria:
 
-- Only `runner-flue` imports `@flue/sdk`.
+- Only `runner-flue` imports `@flue/runtime`.
 - Flue session history survives process restart.
 - Fake runner remains default in deterministic tests.
 - Real Flue runner can execute a minimal prompt in a controlled sandbox.
@@ -205,7 +205,7 @@ Acceptance criteria:
 - Unhealthy sandbox fails clearly or is recreated according to policy.
 - Tests use fake provider without real infrastructure.
 
-Status: implemented for the current provider set. The fake provider and Daytona provider adapter exist. Daytona creation, connection, start, stop, health, destroy, exec, and filesystem operations are unit-tested with an SDK-shaped fake client. The `sandboxes` table persists provider sandbox IDs, workspace paths, status, metadata, and health timestamps. The worker reuses ready/stopped active sandboxes for follow-up messages, restarts stopped Daytona sandboxes before reconnect, and creates a replacement if health/connect fails. Idle cleanup stops sandboxes before retention destroy, and archive destroys active sandboxes immediately. Real Daytona UAT is opt-in.
+Status: implemented for the current provider set. The fake provider and Daytona provider adapter exist. Daytona creation, connection, start, stop, health, destroy, exec, and filesystem operations are unit-tested with an SDK-shaped fake client. The `sandboxes` table persists provider sandbox IDs, workspace paths, status, metadata, and health timestamps. The worker reuses ready/stopped active sandboxes for follow-up messages, restarts stopped Daytona sandboxes before reconnect, and creates a replacement if health/connect fails. Idle cleanup stops sandboxes before retention destroy, and archive destroys active sandboxes immediately. Real Daytona UAT is opt-in. Active-run cancellation propagates through repository setup shell calls, Flue prompt handles, local sandbox child processes, Docker/Kubernetes bridge fetches, and bridge-side command termination. Daytona observes cancellation before and during SDK `executeCommand` calls so Deputies stops waiting, but remains a provider-specific interruption gap because the current SDK path exposes timeouts but no explicit remote command cancel; future hardening should add provider conformance coverage and account for SDK backends that cannot interrupt running commands.
 
 ## Phase 7: UAT Suite
 

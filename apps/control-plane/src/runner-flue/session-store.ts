@@ -1,4 +1,4 @@
-import type { SessionData, SessionStore } from '@flue/sdk';
+import type { SessionData, SessionStore } from '@flue/runtime';
 import { Pool, type QueryResultRow } from 'pg';
 
 type FlueSessionRow = QueryResultRow & {

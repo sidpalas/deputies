@@ -120,7 +120,7 @@ Concepts:
 
 Invariants:
 
-- Only `runner-flue` imports `@flue/sdk`.
+- Only `runner-flue` imports `@flue/runtime`.
 - Runner emits normalized events.
 - Runner does not own product session state.
 - Flue runtime state is persisted separately through the Flue session store.
@@ -277,4 +277,4 @@ When adding a feature:
 4. Put provider-specific logic behind interfaces.
 5. Add tests at the domain boundary and at one user-visible boundary.
 
-If a change requires importing `@flue/sdk` outside `runner-flue`, importing provider SDKs outside `sandbox`, or importing Slack/GitHub/Linear types into `sessions`, the boundary is probably wrong.
+If a change requires importing `@flue/runtime` outside `runner-flue`, importing provider SDKs outside `sandbox`, or importing Slack/GitHub/Linear types into `sessions`, the boundary is probably wrong.

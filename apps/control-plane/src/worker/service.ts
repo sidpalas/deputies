@@ -275,7 +275,11 @@ export class WorkerService {
         runId: claimed.run.id,
         messageId: primary.id,
         type: 'agent_response_final',
-        payload: { text: result.text },
+        payload: {
+          text: result.text,
+          ...(result.model ? { model: result.model } : {}),
+          ...(result.usage ? { usage: result.usage } : {}),
+        },
       });
       const artifacts = await this.artifacts.recordRunArtifacts({
         sessionId: primary.sessionId,

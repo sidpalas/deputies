@@ -3,3 +3,5 @@ packages:
   - packages/*
 allowBuilds:
   esbuild: true
+patchedDependencies:
+  '@flue/runtime@0.8.0': patches/@flue__runtime@0.8.0.patch

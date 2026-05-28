@@ -1,4 +1,4 @@
-import type { NormalizedEvent } from '../events/types.js';
+import type { ModelUsagePayload, NormalizedEvent } from '../events/types.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 
 export type RunnerInput = {
@@ -16,6 +16,8 @@ export type RunnerInput = {
 
 export type RunnerResult = {
   text: string;
+  model?: string;
+  usage?: ModelUsagePayload;
   artifacts?: RunnerArtifact[];
 };
 

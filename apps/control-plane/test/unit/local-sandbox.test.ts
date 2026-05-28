@@ -112,6 +112,17 @@ describe('LocalSandboxProvider', () => {
     });
   });
 
+  it('aborts local exec commands when the caller signal aborts', async () => {
+    const provider = new LocalSandboxProvider({ rootDir });
+    const sandbox = await provider.create({ sessionId: 'session-1' });
+    const abort = new AbortController();
+
+    const run = sandbox.exec({ command: 'node -e "setTimeout(() => {}, 5000)"', signal: abort.signal });
+    abort.abort();
+
+    await expect(run).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   it('runs repository setup against a real local git remote', async () => {
     const provider = new LocalSandboxProvider({ rootDir });
     const sandbox = await provider.create({ sessionId: 'session-1' });
@@ -143,6 +154,7 @@ describe('LocalSandboxProvider', () => {
     const remotePath = await createLocalGitRemote(sandbox);
     const events: NormalizedEvent[] = [];
     const calls: Parameters<FlueAgentFactory['create']>[0][] = [];
+    const abort = new AbortController();
     const factory: FlueAgentFactory = {
       async create(input) {
         calls.push(input);
@@ -153,6 +165,7 @@ describe('LocalSandboxProvider', () => {
           async session() {
             return {
               async shell(command, options) {
+                expect(options?.signal).toBe(abort.signal);
                 return input.sandbox.exec(shellInput(command, options));
               },
               async prompt() {
@@ -175,6 +188,7 @@ describe('LocalSandboxProvider', () => {
       prompt: 'inspect repo',
       context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
       sandbox,
+      signal: abort.signal,
       emit: async (event) => {
         events.push(event);
       },
@@ -206,6 +220,7 @@ async function createLocalGitRemote(sandbox: SandboxHandle): Promise<string> {
       'git init seed',
       "git -C seed config user.name 'Test User'",
       "git -C seed config user.email 'test@example.com'",
+      'git -C seed config commit.gpgsign false',
       "printf 'hello local git\\n' > seed/README.md",
       'git -C seed add README.md',
       "git -C seed commit -m 'initial commit'",
@@ -220,12 +235,13 @@ async function createLocalGitRemote(sandbox: SandboxHandle): Promise<string> {
 
 function shellInput(
   command: string,
-  options: { cwd?: string; env?: Record<string, string>; timeout?: number } | undefined,
+  options: { cwd?: string; env?: Record<string, string>; timeout?: number; signal?: AbortSignal } | undefined,
 ): SandboxExecInput {
   const input: SandboxExecInput = { command };
   if (options?.cwd) input.cwd = options.cwd;
   if (options?.env) input.env = options.env;
   if (options?.timeout !== undefined) input.timeoutMs = options.timeout;
+  if (options?.signal) input.signal = options.signal;
   return input;
 }
 

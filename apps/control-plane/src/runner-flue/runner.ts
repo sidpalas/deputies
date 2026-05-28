@@ -1,4 +1,4 @@
-import type { FlueEvent } from '@flue/sdk';
+import type { FlueEvent } from '@flue/runtime';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ArtifactService } from '../artifacts/service.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
@@ -14,7 +14,7 @@ import { createGitTool, type AgentRef } from './git-tool.js';
 import { createGitHubCliTool } from './github-cli-tool.js';
 import { createServiceTool } from './service-tool.js';
 import { createRepositoryTool, type RepositoryToolServices, type RepositoryToolState } from './repository-tool.js';
-import type { FlueAgentFactory, FlueSessionPort } from './types.js';
+import type { FlueAgentFactory, FluePromptResponse, FlueSessionPort } from './types.js';
 
 export type FlueRunnerOptions = {
   repositoryAccess?: {
@@ -146,38 +146,43 @@ export class FlueRunner implements Runner {
       // A prompt-only warning is cheaper but advisory, and models can still continue
       // cancelled work from persisted context.
       const sessionSnapshot = await this.loadSessionSnapshot(input.sessionId);
-      if (input.signal?.aborted) throw new Error('Operation aborted');
+      let restoreOnAbort = true;
       let response;
       try {
+        if (input.signal?.aborted) throw new Error('Operation aborted');
         response = await session.prompt(
           withToolGuidance(input.prompt, Boolean(this.options.artifacts), Boolean(repositoryServices)),
+          input.signal ? { signal: input.signal } : undefined,
         );
-      } finally {
-        if (input.signal?.aborted) await this.restoreSessionSnapshot(input.sessionId, sessionSnapshot);
-      }
-      await Promise.all(pendingEvents);
-      if (input.signal?.aborted) throw new Error('Operation aborted');
+        await Promise.all(pendingEvents);
+        if (input.signal?.aborted) throw new Error('Operation aborted');
 
-      if (!sawTextDelta && response.text) {
+        if (!sawTextDelta && response.text) {
+          await input.emit({
+            sessionId: input.sessionId,
+            runId: input.runId,
+            messageId: input.messageId,
+            type: 'agent_text_delta',
+            payload: { text: response.text },
+            createdAt: new Date(),
+          });
+        }
+        const responseMetadata = promptResponseMetadata(response);
         await input.emit({
           sessionId: input.sessionId,
           runId: input.runId,
           messageId: input.messageId,
-          type: 'agent_text_delta',
-          payload: { text: response.text },
+          type: 'run_completed',
+          payload: { runner: 'flue', ...responseMetadata },
           createdAt: new Date(),
         });
-      }
-      await input.emit({
-        sessionId: input.sessionId,
-        runId: input.runId,
-        messageId: input.messageId,
-        type: 'run_completed',
-        payload: { runner: 'flue' },
-        createdAt: new Date(),
-      });
 
-      return { text: response.text };
+        restoreOnAbort = false;
+        return { text: response.text, ...responseMetadata };
+      } finally {
+        if (restoreOnAbort && input.signal?.aborted)
+          await this.restoreSessionSnapshot(input.sessionId, sessionSnapshot);
+      }
     } finally {
       input.signal?.removeEventListener('abort', abortSession);
     }
@@ -193,7 +198,9 @@ export class FlueRunner implements Runner {
       cwd: input.sandbox.workspacePath,
       env: setup.env,
       timeout: 120_000,
+      ...(input.signal ? { signal: input.signal } : {}),
     });
+    if (input.signal?.aborted) throw new Error('Operation aborted');
     if (result.exitCode !== 0) {
       throw new Error(`Repository setup failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`);
     }
@@ -229,6 +236,13 @@ export class FlueRunner implements Runner {
       await this.agentFactory.deleteSession?.(sessionId);
     }
   }
+}
+
+function promptResponseMetadata(response: FluePromptResponse) {
+  const metadata: Pick<RunnerResult, 'model' | 'usage'> = {};
+  if (response.model) metadata.model = typeof response.model === 'string' ? response.model : response.model.id;
+  if (response.usage) metadata.usage = response.usage;
+  return metadata;
 }
 
 function withToolGuidance(prompt: string, includeArtifacts: boolean, includeRepository: boolean): string {
@@ -313,7 +327,8 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
           toolName: 'task',
           taskId: event.taskId,
           prompt: event.prompt,
-          role: event.role,
+          agent: event.agent,
+          role: event.agent,
           cwd: event.cwd,
           parentSessionId: event.parentSession,
           flueSessionId,
@@ -326,6 +341,7 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
         payload: {
           toolName: 'task',
           taskId: event.taskId,
+          agent: event.agent,
           isError: event.isError,
           result: event.result,
           parentSessionId: event.parentSession,
@@ -366,6 +382,17 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
         payload: { toolName: 'flue', isError: true, error: event.message, flueSessionId },
       };
     case 'run_start':
+    case 'agent_start':
+    case 'agent_end':
+    case 'turn_start':
+    case 'turn_request':
+    case 'turn_end':
+    case 'message_start':
+    case 'message_update':
+    case 'message_end':
+    case 'tool_execution_start':
+    case 'tool_execution_update':
+    case 'tool_execution_end':
     case 'thinking_start':
     case 'thinking_delta':
     case 'thinking_end':

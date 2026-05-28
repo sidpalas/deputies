@@ -69,7 +69,11 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
 
       if (request.method === 'POST' && url.pathname === '/exec') {
         const body = parseExecRequest(await readJson(request, maxBodyBytes));
-        const result = await execCommand(workspacePath, body, maxOutputBytes);
+        const abort = new AbortController();
+        response.on('close', () => {
+          if (!response.writableEnded) abort.abort();
+        });
+        const result = await execCommand(workspacePath, body, maxOutputBytes, abort.signal);
         writeJson(response, 200, result);
         return;
       }
@@ -273,13 +277,23 @@ function appendHeaderValues(headers: Array<[string, string]>, key: string, value
   if (value !== undefined) headers.push([key, value]);
 }
 
-async function execCommand(workspacePath: string, input: ParsedExecRequest, maxOutputBytes: number) {
+async function execCommand(
+  workspacePath: string,
+  input: ParsedExecRequest,
+  maxOutputBytes: number,
+  signal?: AbortSignal,
+) {
   const startedAt = new Date();
   const cwd = input.cwd ? resolveWorkspacePath(workspacePath, input.cwd) : workspacePath;
   const env = createCommandEnv(input.env);
   const timeoutMs = input.timeoutMs;
 
   return new Promise((resolveResult, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Operation aborted', 'AbortError'));
+      return;
+    }
+
     const child = spawn(input.command, {
       cwd,
       env,
@@ -289,6 +303,7 @@ async function execCommand(workspacePath: string, input: ParsedExecRequest, maxO
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let aborted = false;
     let resolved = false;
     let exited = false;
     let stdoutClosed = false;
@@ -302,11 +317,24 @@ async function execCommand(workspacePath: string, input: ParsedExecRequest, maxO
           killProcessGroup(child.pid);
         }, timeoutMs)
       : undefined;
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      if (exitDrainTimer) clearTimeout(exitDrainTimer);
+      signal?.removeEventListener('abort', abort);
+    };
+    const abort = () => {
+      aborted = true;
+      killProcessGroup(child.pid);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     const finish = () => {
       if (resolved) return;
       resolved = true;
-      if (timer) clearTimeout(timer);
-      if (exitDrainTimer) clearTimeout(exitDrainTimer);
+      cleanup();
+      if (aborted || signal?.aborted) {
+        reject(new DOMException('Operation aborted', 'AbortError'));
+        return;
+      }
       if (timedOut && !stderr.trim()) stderr = `[sandbox bridge] Command timed out after ${timeoutMs}ms.`;
       resolveResult({
         exitCode: exitCode ?? signalExitCode(exitSignal),
@@ -336,7 +364,12 @@ async function execCommand(workspacePath: string, input: ParsedExecRequest, maxO
       stderrClosed = true;
       finishIfStreamsDrained();
     });
-    child.on('error', reject);
+    child.on('error', (error) => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(error);
+    });
     child.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
       exited = true;
       exitCode = code;

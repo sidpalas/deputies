@@ -295,8 +295,14 @@ function createDaytonaFileSystem(sandbox: DaytonaSandboxLike): SandboxFileSystem
 }
 
 async function execDaytonaCommand(sandbox: DaytonaSandboxLike, input: SandboxExecInput): Promise<SandboxExecResult> {
+  if (input.signal?.aborted) throw abortError();
   const startedAt = new Date();
-  const response = await sandbox.process.executeCommand(input.command, input.cwd, input.env, input.timeoutMs);
+  // Daytona's direct executeCommand API does not expose a remote command cancel/kill handle.
+  // Aborting here only stops Deputies from waiting; the remote command may keep mutating the sandbox.
+  const response = await abortable(
+    sandbox.process.executeCommand(input.command, input.cwd, input.env, daytonaTimeoutSeconds(input.timeoutMs)),
+    input.signal,
+  );
   return {
     exitCode: response.exitCode ?? 0,
     stdout: response.result ?? '',
@@ -304,6 +310,36 @@ async function execDaytonaCommand(sandbox: DaytonaSandboxLike, input: SandboxExe
     startedAt,
     completedAt: new Date(),
   };
+}
+
+function daytonaTimeoutSeconds(timeoutMs: number | undefined): number | undefined {
+  return timeoutMs === undefined ? undefined : Math.max(1, Math.ceil(timeoutMs / 1000));
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener('abort', abort);
+      reject(abortError());
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function abortError(): DOMException {
+  return new DOMException('Operation aborted', 'AbortError');
 }
 
 function toBuffer(content: string | Uint8Array): Buffer {
