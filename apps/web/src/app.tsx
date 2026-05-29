@@ -204,7 +204,10 @@ export function App() {
   const selectedSessionBranch =
     typeof selectedSession?.context?.branch === 'string' ? selectedSession.context.branch : '';
   const selectedSessionArchived = selectedSession?.status === 'archived';
-  const selectedSessionDetailLoading = Boolean(selectedSessionId && detailLoadedSessionId !== selectedSessionId);
+  const selectedSessionHasMessages = messages.some((message) => message.sessionId === selectedSessionId);
+  const selectedSessionDetailLoading = Boolean(
+    selectedSessionId && detailLoadedSessionId !== selectedSessionId && !selectedSessionHasMessages,
+  );
   const sortedSessions = useMemo(() => sortSessionsByLastActivity(sessions), [sessions]);
 
   useEffect(() => {
@@ -503,7 +506,13 @@ export function App() {
                 globalEventCursor.current = Math.max(globalEventCursor.current, event.id);
 
               const activeSessionId = selectedSessionIdRef.current;
-              if (event.sessionId === activeSessionId && detailLoadedSessionIdRef.current === activeSessionId) {
+              const activeSessionHasMessages = messagesRef.current.some(
+                (message) => message.sessionId === activeSessionId,
+              );
+              if (
+                event.sessionId === activeSessionId &&
+                (detailLoadedSessionIdRef.current === activeSessionId || activeSessionHasMessages)
+              ) {
                 eventCursor.current = Math.max(eventCursor.current, event.sequence);
                 if (shouldUseActiveProgressEvent(event, messagesRef.current)) {
                   setActiveProgress((current) => appendActiveProgress(current, event));
