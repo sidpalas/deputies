@@ -52,6 +52,14 @@ It can run on the server in your closet or in a giant EKS cluster on AWS.
 
 It is simple enough to get up and running in an hour, but provides the right primitives to build the workflows your team needs.
 
+<figure class="architecture-figure">
+  <img src="/images/integrated-mode.svg" alt="Integrated Mode Deputies architecture" />
+  <figcaption>
+    A typical Deputies deployment: work enters through the web UI, Slack, GitHub, or custom webhooks; the control plane
+    coordinates persistence, artifact storage, and isolated agent sandboxes.
+  </figcaption>
+</figure>
+
 ### See What a Deputies Session Looks Like
 
 Browse a read-only snapshot of real agent work: the original request, progress updates, diagnostics, artifacts, callbacks, and session context that Deputies keeps together while a background agent runs.

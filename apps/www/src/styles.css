@@ -988,6 +988,11 @@ h1 {
   margin: 1.5rem 0;
 }
 
+.post-body .architecture-figure {
+  max-width: 33rem;
+  margin-inline: auto;
+}
+
 .post-body figure img {
   display: block;
   margin-inline: auto;
