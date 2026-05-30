@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.0](https://github.com/sidpalas/deputies/compare/v0.3.0...v0.4.0) (2026-05-30)
+
+
+### Features
+
+* add Deputies favicon ([690a0c8](https://github.com/sidpalas/deputies/commit/690a0c8f548deb43383a9e9317d88510b0a517e6))
+* **www:** add Astro MDX blog ([aa99716](https://github.com/sidpalas/deputies/commit/aa997165a6cfa44544ee45322869757d2b95e471))
+* **www:** add Deputies launch blog post ([e7ec362](https://github.com/sidpalas/deputies/commit/e7ec362b6bdc1f78c0c0dd63a06bc48b6993d410))
+* **www:** add Twitter embed component ([0eb6e83](https://github.com/sidpalas/deputies/commit/0eb6e8321e8224d29aac1bb31f88239ec288f675))
+
+
+### Bug Fixes
+
+* harden github cli tool file access ([d74e0a5](https://github.com/sidpalas/deputies/commit/d74e0a5179b53be2b658c917d570a8e4e8954b8d))
+* remove raw Codex auth JSON env ([e3f7769](https://github.com/sidpalas/deputies/commit/e3f7769b824993fe87cd367d239918053c6da19f))
+* **web:** handle fast new-session responses ([84fc025](https://github.com/sidpalas/deputies/commit/84fc025aff5db21af1d72a0306223bc64c632dfa))
+* **web:** render new session stream events before detail refresh ([#39](https://github.com/sidpalas/deputies/issues/39)) ([1ac9031](https://github.com/sidpalas/deputies/commit/1ac9031840f757ed73395800e5f88cea850d4a62))
+* **www:** stabilize scrollbar gutter ([6e61574](https://github.com/sidpalas/deputies/commit/6e61574c2fa95673b14493ea167b96c31117f630))
+
+
+### Chores
+
+* **www:** remove subdir for template post ([7e57ec1](https://github.com/sidpalas/deputies/commit/7e57ec165000837d332f10514d2d5b7a7b0505ea))
+
 ## [0.3.0](https://github.com/sidpalas/deputies/compare/v0.2.0...v0.3.0) (2026-05-28)
 
 
