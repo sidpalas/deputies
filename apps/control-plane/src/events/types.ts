@@ -15,10 +15,21 @@ export type NormalizedEvent<T extends NormalizedEventType = NormalizedEventType>
 export type NormalizedEventPayload<T extends NormalizedEventType = NormalizedEventType> = NormalizedEventPayloadMap[T];
 
 export type NormalizedEventPayloadMap = {
-  session_created: { title: string | null };
+  session_created: {
+    title: string | null;
+    ownerGroupId?: string;
+    visibility?: 'group' | 'organization';
+    writePolicy?: 'group_members' | 'creator_only';
+  };
   session_archived: EmptyEventPayload;
   session_unarchived: EmptyEventPayload;
-  session_updated: { title: string | null; context?: Record<string, unknown> | null };
+  session_updated: {
+    title: string | null;
+    context?: Record<string, unknown> | null;
+    ownerGroupId?: string;
+    visibility?: 'group' | 'organization';
+    writePolicy?: 'group_members' | 'creator_only';
+  };
   session_queue_paused: EmptyEventPayload;
   session_queue_resumed: EmptyEventPayload;
   message_created: { sequence: number; source: string | null; transcriptOnly?: true };

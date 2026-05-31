@@ -24,13 +24,16 @@ export async function writeGlobalEventStream(
   afterId: number,
   replay: boolean,
   includeAll: boolean,
+  options: { filter?: (event: EventRecord) => boolean | Promise<boolean> } = {},
 ): Promise<Response> {
   return writeEventStream(c, {
     after: afterId,
     id: (event) => event.id,
-    list: () => (includeAll ? events.listAllEvents(afterId) : events.listAll(afterId)),
+    list: async () =>
+      filterEvents(includeAll ? await events.listAllEvents(afterId) : await events.listAll(afterId), options.filter),
     replay,
     subscribe: (writeEvent) => (includeAll ? events.subscribeAllEvents(writeEvent) : events.subscribeAll(writeEvent)),
+    ...(options.filter ? { filter: options.filter } : {}),
   });
 }
 
@@ -42,6 +45,7 @@ async function writeEventStream(
     list: () => Promise<EventRecord[]>;
     replay?: boolean;
     subscribe: (writeEvent: (event: EventRecord) => void) => () => void;
+    filter?: (event: EventRecord) => boolean | Promise<boolean>;
   },
 ): Promise<Response> {
   const { readable, writable } = new TransformStream();
@@ -52,6 +56,7 @@ async function writeEventStream(
   let replaying = options.replay !== false;
   let queuedWrites = 0;
   let writeQueue: Promise<void> = Promise.resolve();
+  let emitQueue: Promise<void> = Promise.resolve();
   let liveBuffer: EventRecord[] = [];
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -95,17 +100,22 @@ async function writeEventStream(
   const eventFrame = (eventId: number, event: EventRecord) =>
     `id: ${eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 
-  const emitEvent = (event: EventRecord): void => {
+  const emitEvent = async (event: EventRecord): Promise<void> => {
+    if (options.filter && !(await options.filter(event))) return;
     const eventId = options.id(event);
     if (eventId <= cursor || closed) return;
     cursor = eventId;
-    write(eventFrame(eventId, event)).catch(() => {});
+    await write(eventFrame(eventId, event));
   };
   const emitEventAndDrain = async (event: EventRecord): Promise<void> => {
     const eventId = options.id(event);
     if (eventId <= cursor || closed) return;
     cursor = eventId;
     await write(eventFrame(eventId, event));
+  };
+  const enqueueEvent = (event: EventRecord) => {
+    emitQueue = emitQueue.then(() => emitEvent(event));
+    emitQueue.catch(() => cleanup());
   };
   const writeEvent = (event: EventRecord) => {
     if (closed) return;
@@ -118,7 +128,7 @@ async function writeEventStream(
       return;
     }
 
-    emitEvent(event);
+    enqueueEvent(event);
   };
 
   unsubscribe = options.subscribe(writeEvent);
@@ -140,7 +150,7 @@ async function writeEventStream(
       const bufferedEvents = liveBuffer;
       liveBuffer = [];
       for (const event of bufferedEvents) {
-        emitEvent(event);
+        await emitEvent(event);
       }
     } catch {
       cleanup();
@@ -155,4 +165,16 @@ async function writeEventStream(
       connection: 'keep-alive',
     },
   });
+}
+
+async function filterEvents(
+  events: EventRecord[],
+  filter: ((event: EventRecord) => boolean | Promise<boolean>) | undefined,
+): Promise<EventRecord[]> {
+  if (!filter) return events;
+  const filtered: EventRecord[] = [];
+  for (const event of events) {
+    if (await filter(event)) filtered.push(event);
+  }
+  return filtered;
 }

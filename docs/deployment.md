@@ -183,12 +183,12 @@ GITHUB_OAUTH_CLIENT_ID=<github-app-client-id>
 GITHUB_OAUTH_CLIENT_SECRET=<github-app-client-secret>
 GITHUB_OAUTH_CALLBACK_URL=https://app.example.com/auth/oauth/github/callback
 AUTH_GITHUB_ADMIN_USERS=octocat
-AUTH_GITHUB_ADMIN_ORGANIZATIONS=
-AUTH_GITHUB_VIEWER_USERS=
-AUTH_GITHUB_VIEWER_ORGANIZATIONS=
+AUTH_GITHUB_ALLOWED_USERS=
+AUTH_GITHUB_ALLOWED_ORGANIZATIONS=
+AUTH_GITHUB_DEFAULT_GROUP_ROLE=member
 ```
 
-Admin allowlists grant admin access. Viewer allowlists grant read-only access.
+`AUTH_GITHUB_ADMIN_USERS` grants super-admin access and is restored on login. `AUTH_GITHUB_ALLOWED_*` controls which non-admin GitHub users can sign in, and `AUTH_GITHUB_DEFAULT_GROUP_ROLE` sets their default access group role.
 
 ## Web Entrypoint, Proxying, And Cookies
 

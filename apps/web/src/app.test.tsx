@@ -11,8 +11,30 @@ const session = {
   id: '00000000-0000-4000-8000-000000000001',
   status: 'idle',
   title: 'Existing session',
+  ownerGroupId: '00000000-0000-4000-8000-000000000010',
+  visibility: 'organization',
+  writePolicy: 'group_members',
+  createdByUserId: '00000000-0000-4000-8000-000000000020',
   createdAt: '2026-05-05T12:00:00.000Z',
   updatedAt: '2026-05-05T12:00:00.000Z',
+};
+
+const group = {
+  id: '00000000-0000-4000-8000-000000000010',
+  name: 'Default group',
+  defaultVisibility: 'organization',
+  defaultWritePolicy: 'group_members',
+  membershipRole: 'admin',
+  canCreateSessions: true,
+  canManage: true,
+  createdAt: '2026-05-05T12:00:00.000Z',
+  updatedAt: '2026-05-05T12:00:00.000Z',
+};
+
+const user = {
+  id: '00000000-0000-4000-8000-000000000020',
+  username: 'dev',
+  role: 'super_admin',
 };
 
 type StreamEventPusher = (event: unknown) => void;
@@ -20,6 +42,7 @@ type StreamEventPusher = (event: unknown) => void;
 type MockApiOptions = {
   submittedPrompts?: string[];
   submittedMessageBodies?: unknown[];
+  accessUpdates?: unknown[];
   repositories?: unknown[];
   branches?: unknown[];
   models?: string[];
@@ -29,6 +52,9 @@ type MockApiOptions = {
   artifacts?: unknown[];
   services?: unknown[];
   externalResources?: unknown[];
+  groups?: unknown[];
+  groupMembers?: unknown[];
+  users?: unknown[];
   artifactPreview?: unknown;
   artifactPreviewStatus?: number;
   sessions?: unknown[];
@@ -54,7 +80,7 @@ type MockApiOptions = {
   hangSessionsAfterFirst?: boolean;
   authMode?: 'none' | 'bearer' | 'session';
   sandboxProvider?: string;
-  currentUser?: { username: string } | null;
+  currentUser?: (typeof user & { memberships?: unknown[] }) | null;
   logins?: Array<{ username: string; password: string }>;
 };
 
@@ -64,6 +90,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   codeToHtmlMock.mockClear();
   localStorage.clear();
+  sessionStorage.clear();
   window.history.replaceState({}, '', '/');
   document.documentElement.classList.remove('dark');
   setVisibilityState('visible');
@@ -325,6 +352,163 @@ it('groups header session actions in a tools menu', async () => {
   expect(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' })).toBeInTheDocument();
 });
 
+it('keeps the groups page open until a session is selected', async () => {
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({
+    authMode: 'session',
+    currentUser: {
+      ...user,
+      memberships: [
+        {
+          groupId: group.id,
+          userId: user.id,
+          role: 'admin',
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+        },
+      ],
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  expect(screen.getByText('Your access')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /Existing session/ }));
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  expect(sessionStorage.getItem('deputies-groups-panel-open')).toBeNull();
+});
+
+it('persists and restores the selected access group on groups page refresh', async () => {
+  const clientGroup = {
+    ...group,
+    id: '00000000-0000-4000-8000-000000000011',
+    name: 'Client access',
+  };
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user, groups: [group, clientGroup] });
+
+  const rendered = render(<App />);
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /Client access/ }));
+  expect(sessionStorage.getItem('deputies-groups-panel-selected-group-id')).toBe(clientGroup.id);
+
+  rendered.unmount();
+  render(<App />);
+
+  expect(await screen.findByDisplayValue('Client access')).toBeInTheDocument();
+});
+
+it('persists and restores the super admins groups page view on refresh', async () => {
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user });
+
+  const rendered = render(<App />);
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /Super admins/ }));
+  expect(sessionStorage.getItem('deputies-groups-panel-view')).toBe('super_admins');
+
+  rendered.unmount();
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Super admins' })).toBeInTheDocument();
+});
+
+it('collapses member search results after selecting a user', async () => {
+  const teammate = {
+    id: '00000000-0000-4000-8000-000000000030',
+    username: 'teammate',
+    displayName: 'Teammate',
+    role: 'user',
+  };
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user, users: [teammate] });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  const search = screen.getByPlaceholderText('Search by username, display name, or exact user ID');
+  fireEvent.change(search, { target: { value: 'team' } });
+  fireEvent.click(await screen.findByRole('button', { name: /Teammate/ }));
+
+  expect(screen.getByPlaceholderText('Select a user or paste user ID')).toHaveValue(teammate.id);
+  expect(screen.getByText('Selected user: Teammate')).toBeInTheDocument();
+  expect(search).toHaveValue('');
+  expect(screen.queryByRole('button', { name: /Teammate/ })).not.toBeInTheDocument();
+});
+
+it('moves archived groups below the archived groups toggle', async () => {
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Archive group' }));
+
+  const archivedSummary = await screen.findByText('Archived groups · 1');
+  const archivedDetails = archivedSummary.closest('details')!;
+  archivedDetails.open = true;
+  fireEvent(archivedDetails, new Event('toggle', { bubbles: true }));
+
+  expect(archivedDetails).toHaveAttribute('open');
+  expect(sessionStorage.getItem('deputies-archived-groups-open')).toBe('true');
+});
+
+it('restores the archived groups toggle after refresh', async () => {
+  const archivedGroup = { ...group, archivedAt: session.updatedAt };
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  sessionStorage.setItem('deputies-archived-groups-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user, groups: [archivedGroup] });
+  render(<App />);
+
+  const archivedSummary = await screen.findByText('Archived groups · 1');
+  expect(archivedSummary.closest('details')).toHaveAttribute('open');
+});
+
+it('saves session access group when selected', async () => {
+  const accessUpdates: unknown[] = [];
+  const clientGroup = {
+    ...group,
+    id: '00000000-0000-4000-8000-000000000011',
+    name: 'Client access',
+  };
+  mockApi({ accessUpdates, authMode: 'session', currentUser: user, groups: [group, clientGroup] });
+  render(<App />);
+
+  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  const accessGroup = await contextPanel.findByLabelText('Access group');
+  expect(contextPanel.queryByRole('button', { name: 'Save group' })).not.toBeInTheDocument();
+
+  fireEvent.change(accessGroup, { target: { value: clientGroup.id } });
+
+  await waitFor(() => expect(accessGroup).toHaveValue(clientGroup.id));
+  await waitFor(() => expect(accessUpdates).toEqual([{ ownerGroupId: clientGroup.id }]));
+});
+
+it('persists the mobile context panel after refresh', async () => {
+  mockApi();
+
+  const rendered = render(<App />);
+  await screen.findByRole('heading', { name: 'Existing session' });
+  const contextSummary = screen.getAllByText('Context').find((element) => element.tagName === 'SUMMARY');
+  expect(contextSummary).toBeDefined();
+
+  const contextDetails = contextSummary!.closest('details')!;
+  contextDetails.open = true;
+  fireEvent(contextDetails, new Event('toggle', { bubbles: true }));
+  expect(sessionStorage.getItem('deputies-mobile-context-open')).toBe('true');
+
+  rendered.unmount();
+  render(<App />);
+
+  await screen.findByRole('heading', { name: 'Existing session' });
+  const restoredSummary = screen.getAllByText('Context').find((element) => element.tagName === 'SUMMARY');
+  expect(restoredSummary?.closest('details')).toHaveAttribute('open');
+});
+
 it('archives the selected session before waiting for the archive request', async () => {
   mockApi({ hangArchive: true });
   render(<App />);
@@ -335,12 +519,13 @@ it('archives the selected session before waiting for the archive request', async
   fireEvent.click(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' }));
 
   expect(screen.getByText('What needs doing?')).toBeInTheDocument();
-  expect(localStorage.getItem('deputies-selected-session-id')).toBeNull();
-  expect(localStorage.getItem('deputies-new-session-selected')).toBe('true');
+  expect(sessionStorage.getItem('deputies-selected-session-id')).toBeNull();
+  expect(sessionStorage.getItem('deputies-new-session-selected')).toBe('true');
 });
 
 it('refreshes sessions when the global event stream reports an external session', async () => {
   const externalSession = {
+    ...session,
     id: '00000000-0000-4000-8000-000000000099',
     status: 'idle',
     title: 'Slack thread',
@@ -1896,8 +2081,8 @@ it('shows callback delivery status and replays failed callbacks', async () => {
 
 it('preserves selected archived session and archived section after refresh', async () => {
   const archivedSession = { ...session, status: 'archived', title: 'Archived chosen' };
-  localStorage.setItem('deputies-selected-session-id', archivedSession.id);
-  localStorage.setItem('deputies-archived-sessions-open', 'true');
+  sessionStorage.setItem('deputies-selected-session-id', archivedSession.id);
+  sessionStorage.setItem('deputies-archived-sessions-open', 'true');
   mockApi({
     sessionOverride: archivedSession,
     sessions: [
@@ -1924,8 +2109,8 @@ it('keeps the new-session page selected after archiving and refreshing', async (
   fireEvent.click((await screen.findAllByRole('button', { name: 'Archive session' }))[0]!);
 
   expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
-  expect(localStorage.getItem('deputies-selected-session-id')).toBeNull();
-  expect(localStorage.getItem('deputies-new-session-selected')).toBe('true');
+  expect(sessionStorage.getItem('deputies-selected-session-id')).toBeNull();
+  expect(sessionStorage.getItem('deputies-new-session-selected')).toBe('true');
 
   first.unmount();
   render(<App />);
@@ -1935,7 +2120,7 @@ it('keeps the new-session page selected after archiving and refreshing', async (
 });
 
 it('opens a session link over the persisted new-session page', async () => {
-  localStorage.setItem('deputies-new-session-selected', 'true');
+  sessionStorage.setItem('deputies-new-session-selected', 'true');
   window.history.replaceState({}, '', `/?session=${session.id}`);
   mockApi();
   render(<App />);
@@ -1948,7 +2133,7 @@ it('opens a session link over the persisted new-session page', async () => {
 
 it('restores the selected session before waiting for the restore request', async () => {
   const archivedSession = { ...session, status: 'archived', title: 'Archived chosen' };
-  localStorage.setItem('deputies-selected-session-id', archivedSession.id);
+  sessionStorage.setItem('deputies-selected-session-id', archivedSession.id);
   mockApi({ sessionOverride: archivedSession, sessions: [archivedSession], hangUnarchive: true });
   render(<App />);
 
@@ -2002,7 +2187,7 @@ function mockApi(options: MockApiOptions = {}) {
     if (url.pathname === '/auth/login' && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { username: string; password: string };
       options.logins?.push(body);
-      currentUser = { username: body.username };
+      currentUser = { ...user, username: body.username };
       return jsonResponse({ user: currentUser });
     }
 
@@ -2020,8 +2205,10 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === '/sessions' && method === 'POST') {
+      const body = JSON.parse(String(init?.body)) as Partial<typeof session>;
       currentSession = {
         ...currentSession,
+        ...body,
         id: '00000000-0000-4000-8000-000000000102',
         title: 'start work',
         createdAt: '2026-05-05T12:01:00.000Z',
@@ -2047,6 +2234,53 @@ function mockApi(options: MockApiOptions = {}) {
       return jsonResponse({ models, defaultModel: models[0] ?? null });
     }
 
+    if (url.pathname === '/groups' && method === 'GET') {
+      return jsonResponse({ groups: options.groups ?? [group] });
+    }
+
+    if (url.pathname === '/groups' && method === 'POST') {
+      const body = JSON.parse(String(init?.body)) as { name: string };
+      return jsonResponse({ group: { ...group, id: '00000000-0000-4000-8000-000000000011', name: body.name } }, 201);
+    }
+
+    if (url.pathname.match(/^\/groups\/[^/]+$/) && method === 'PATCH') {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const archivedAt = body.archived === true ? session.updatedAt : undefined;
+      const archivedPatch = body.archived === undefined ? {} : archivedAt ? { archivedAt } : { archivedAt: undefined };
+      return jsonResponse({ group: { ...group, ...body, ...archivedPatch } });
+    }
+
+    if (url.pathname.match(/^\/groups\/[^/]+\/members$/) && method === 'GET') {
+      return jsonResponse({ members: options.groupMembers ?? [] });
+    }
+
+    if (url.pathname.match(/^\/groups\/[^/]+\/members$/) && method === 'POST') {
+      const body = JSON.parse(String(init?.body)) as { userId: string; role: string };
+      return jsonResponse({
+        member: {
+          groupId: group.id,
+          userId: body.userId,
+          role: body.role,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+        },
+      });
+    }
+
+    if (url.pathname.match(/^\/groups\/[^/]+\/members\/[^/]+$/) && method === 'DELETE') {
+      return jsonResponse({ ok: true });
+    }
+
+    if (url.pathname === '/users' && method === 'GET') {
+      return jsonResponse({ users: options.users ?? [user] });
+    }
+
+    if (url.pathname.match(/^\/users\/[^/]+$/) && method === 'PATCH') {
+      const body = JSON.parse(String(init?.body)) as { role: string };
+      const selectedUser = (options.users?.[0] as Record<string, unknown> | undefined) ?? user;
+      return jsonResponse({ user: { ...selectedUser, id: url.pathname.split('/').pop(), role: body.role } });
+    }
+
     if (url.pathname === `/sessions/${currentSession.id}/unarchive` && method === 'POST') {
       if (options.hangUnarchive) return new Promise<Response>(() => undefined);
       currentSession = { ...currentSession, status: 'idle' };
@@ -2062,6 +2296,13 @@ function mockApi(options: MockApiOptions = {}) {
     if (url.pathname === `/sessions/${currentSession.id}` && method === 'PATCH') {
       const body = JSON.parse(String(init?.body)) as { title?: string };
       currentSession = { ...currentSession, ...(body.title ? { title: body.title } : {}) };
+      return jsonResponse({ session: currentSession });
+    }
+
+    if (url.pathname === `/sessions/${currentSession.id}/access` && method === 'PATCH') {
+      const body = JSON.parse(String(init?.body)) as Partial<typeof session>;
+      options.accessUpdates?.push(body);
+      currentSession = { ...currentSession, ...body };
       return jsonResponse({ session: currentSession });
     }
 

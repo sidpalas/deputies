@@ -3,7 +3,12 @@ import { EventService } from '../../src/events/service.js';
 import { sandboxRuntimeId } from '../../src/sandbox/runtime.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import type { SandboxCapabilities, SandboxHandle, SandboxProvider } from '../../src/sandbox/types.js';
-import type { CreateSandboxRecord, SandboxRecord, SandboxStore } from '../../src/store/types.js';
+import {
+  defaultGroupId,
+  type CreateSandboxRecord,
+  type SandboxRecord,
+  type SandboxStore,
+} from '../../src/store/types.js';
 
 const capabilities: SandboxCapabilities = {
   persistentFilesystem: true,
@@ -171,7 +176,15 @@ describe('SandboxLifecycleService', () => {
       createdAt: now,
       updatedAt: new Date(now.getTime() - 60_000),
     };
-    await store.createSession({ id: 'session-1', status: 'idle', createdAt: now, updatedAt: now });
+    await store.createSession({
+      id: 'session-1',
+      status: 'idle',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      createdAt: now,
+      updatedAt: now,
+    });
     await store.createSandbox(oldRecord);
     await store.updateSandbox({ ...oldRecord, keepaliveUntil: new Date(now.getTime() + 600_000), updatedAt: now });
     const provider = createProvider(createHandle('sandbox-1'));

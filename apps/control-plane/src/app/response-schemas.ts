@@ -46,6 +46,30 @@ export const publicApiResponseSchemas = {
     description: 'Session list envelope.',
     fields: { sessions: 'array' },
   },
+  group: {
+    description: 'Single group envelope.',
+    fields: { group: 'object' },
+  },
+  groups: {
+    description: 'Group list envelope.',
+    fields: { groups: 'array' },
+  },
+  groupMembers: {
+    description: 'Group member list envelope.',
+    fields: { members: 'array' },
+  },
+  groupMember: {
+    description: 'Single group member envelope.',
+    fields: { member: 'object' },
+  },
+  users: {
+    description: 'Auth user list envelope.',
+    fields: { users: 'array' },
+  },
+  user: {
+    description: 'Single auth user envelope.',
+    fields: { user: 'object' },
+  },
   repositories: {
     description: 'Configured repository picker options.',
     fields: { repositories: 'array' },

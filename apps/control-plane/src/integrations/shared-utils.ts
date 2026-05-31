@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../messages/service.js';
 import type { SessionService } from '../sessions/service.js';
 import type { AppStore, IntegrationDeliveryRecord, MessageRecord, SessionRecord } from '../store/types.js';
+import { defaultGroupId } from '../store/types.js';
 
 export type IntegrationDeliveryRef = {
   source: string;
@@ -167,7 +168,12 @@ async function getOrCreateExternalThreadSessionUnlocked(
     if (session) return session;
   }
 
-  const createdSession = await sessions.create({ title: input.title });
+  const createdSession = await sessions.create({
+    title: input.title,
+    ownerGroupId: defaultGroupId,
+    visibility: 'group',
+    writePolicy: 'creator_only',
+  });
   const thread = await store.createExternalThread({
     id: randomUUID(),
     source: input.source,

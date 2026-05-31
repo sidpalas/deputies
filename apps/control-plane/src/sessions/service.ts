@@ -1,14 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import type { EventService } from '../events/service.js';
-import type { SessionRecord, SessionStore } from '../store/types.js';
+import { defaultGroupId } from '../store/types.js';
+import type { SessionRecord, SessionStore, SessionVisibility, SessionWritePolicy } from '../store/types.js';
 
 export type CreateSessionInput = {
   title?: string;
+  ownerGroupId?: string;
+  visibility?: SessionVisibility;
+  writePolicy?: SessionWritePolicy;
+  createdByUserId?: string;
 };
 
 export type UpdateSessionInput = {
   id: string;
   title?: string;
+  ownerGroupId?: string;
+  visibility?: SessionVisibility;
+  writePolicy?: SessionWritePolicy;
 };
 
 export class SessionServiceError extends Error {
@@ -28,17 +36,26 @@ export class SessionService {
     const record: SessionRecord = {
       id: randomUUID(),
       status: 'created',
+      ownerGroupId: input.ownerGroupId ?? defaultGroupId,
+      visibility: input.visibility ?? 'organization',
+      writePolicy: input.writePolicy ?? 'group_members',
       createdAt: now,
       updatedAt: now,
     };
 
     if (input.title) record.title = input.title;
+    if (input.createdByUserId) record.createdByUserId = input.createdByUserId;
 
     const session = await this.store.createSession(record);
     await this.events.append({
       sessionId: session.id,
       type: 'session_created',
-      payload: { title: session.title ?? null },
+      payload: {
+        title: session.title ?? null,
+        ownerGroupId: session.ownerGroupId,
+        visibility: session.visibility,
+        writePolicy: session.writePolicy,
+      },
     });
 
     return session;
@@ -62,12 +79,20 @@ export class SessionService {
     };
     if (input.title) next.title = input.title;
     else delete next.title;
+    if (input.ownerGroupId) next.ownerGroupId = input.ownerGroupId;
+    if (input.visibility) next.visibility = input.visibility;
+    if (input.writePolicy) next.writePolicy = input.writePolicy;
 
     const session = await this.store.updateSession(next);
     await this.events.append({
       sessionId: session.id,
       type: 'session_updated',
-      payload: { title: session.title ?? null },
+      payload: {
+        title: session.title ?? null,
+        ownerGroupId: session.ownerGroupId,
+        visibility: session.visibility,
+        writePolicy: session.writePolicy,
+      },
     });
     return session;
   }

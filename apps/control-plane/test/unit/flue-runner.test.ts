@@ -14,6 +14,7 @@ import type { RepositoryAccessProvider } from '../../src/repositories/setup.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
 import type { SandboxFileSystem, SandboxHandle } from '../../src/sandbox/types.js';
 import { MemoryStore } from '../../src/store/memory.js';
+import { defaultGroupId } from '../../src/store/types.js';
 
 describe('FlueRunner', () => {
   it('uses stable product session IDs for Flue agent and session identity', async () => {
@@ -218,6 +219,9 @@ describe('FlueRunner', () => {
         id: 'session-1',
         status: 'active',
         title: 'Artifact session',
+        ownerGroupId: defaultGroupId,
+        visibility: 'organization',
+        writePolicy: 'group_members',
         createdAt: new Date(),
         updatedAt: new Date(),
         context: {},
@@ -297,6 +301,9 @@ describe('FlueRunner', () => {
       id: 'session-1',
       status: 'active',
       title: 'Video session',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
       createdAt: new Date(),
       updatedAt: new Date(),
       context: {},

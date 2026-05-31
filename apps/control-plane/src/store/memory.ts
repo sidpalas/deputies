@@ -1,4 +1,5 @@
 import type { NormalizedEvent } from '../events/types.js';
+import { defaultGroupId } from './types.js';
 import type {
   AppStore,
   ArtifactRecord,
@@ -13,6 +14,9 @@ import type {
   CreateWebhookSourceRecord,
   ExternalResourceRecord,
   ExternalThreadRecord,
+  GroupMemberRecord,
+  GroupMemberWithUserRecord,
+  GroupRecord,
   IntegrationDeliveryRecord,
   EventRecord,
   CreateMessageRecord,
@@ -30,11 +34,26 @@ import type {
 } from './types.js';
 
 const staleCallbackSendingMs = 15 * 60_000;
+const defaultGroupCreatedAt = new Date(0);
 
 export class MemoryStore implements AppStore {
   private readonly authUsers = new Map<string, AuthUserRecord>();
   private readonly authAccounts = new Map<string, AuthAccountRecord>();
   private readonly authSessions = new Map<string, AuthSessionRecord>();
+  private readonly groups = new Map<string, GroupRecord>([
+    [
+      defaultGroupId,
+      {
+        id: defaultGroupId,
+        name: 'Default',
+        defaultVisibility: 'organization',
+        defaultWritePolicy: 'group_members',
+        createdAt: defaultGroupCreatedAt,
+        updatedAt: defaultGroupCreatedAt,
+      },
+    ],
+  ]);
+  private readonly groupMembers = new Map<string, GroupMemberRecord>();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly messages = new Map<string, MessageRecord[]>();
   private readonly runs = new Map<string, RunRecord>();
@@ -56,7 +75,7 @@ export class MemoryStore implements AppStore {
     const user: AuthUserRecord = {
       id: existingUser?.id ?? record.userId,
       username: record.username,
-      role: record.role,
+      role: existingUser?.role === 'super_admin' ? 'super_admin' : record.role,
       createdAt: existingUser?.createdAt ?? record.now,
       updatedAt: record.now,
       ...(record.displayName ? { displayName: record.displayName } : {}),
@@ -91,6 +110,81 @@ export class MemoryStore implements AppStore {
 
   async deleteAuthSession(sessionId: string): Promise<void> {
     this.authSessions.delete(sessionId);
+  }
+
+  async listAuthUsers(input: { query?: string } = {}): Promise<AuthUserRecord[]> {
+    const query = input.query?.trim().toLowerCase();
+    return [...this.authUsers.values()]
+      .filter((user) => {
+        if (!query) return true;
+        return (
+          user.username.toLowerCase().includes(query) ||
+          user.displayName?.toLowerCase().includes(query) ||
+          user.id.toLowerCase() === query
+        );
+      })
+      .sort((a, b) => a.username.localeCompare(b.username));
+  }
+
+  async updateAuthUserRole(input: { userId: string; role: AuthUserRecord['role']; updatedAt: Date }) {
+    const user = this.authUsers.get(input.userId);
+    if (!user) return null;
+    const updated = { ...user, role: input.role, updatedAt: input.updatedAt };
+    this.authUsers.set(input.userId, updated);
+    return updated;
+  }
+
+  async createGroup(record: GroupRecord): Promise<GroupRecord> {
+    if (this.groups.has(record.id)) throw new Error(`Group already exists: ${record.id}`);
+    this.groups.set(record.id, record);
+    return record;
+  }
+
+  async getGroup(id: string): Promise<GroupRecord | null> {
+    return this.groups.get(id) ?? null;
+  }
+
+  async listGroups(): Promise<GroupRecord[]> {
+    return [...this.groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async updateGroup(record: GroupRecord): Promise<GroupRecord> {
+    if (!this.groups.has(record.id)) throw new Error(`Group does not exist: ${record.id}`);
+    this.groups.set(record.id, record);
+    return record;
+  }
+
+  async upsertGroupMember(record: GroupMemberRecord): Promise<GroupMemberRecord> {
+    if (!this.groups.has(record.groupId)) throw new Error(`Group does not exist: ${record.groupId}`);
+    if (!this.authUsers.has(record.userId)) throw new Error(`Auth user does not exist: ${record.userId}`);
+    const key = groupMemberKey(record.groupId, record.userId);
+    const existing = this.groupMembers.get(key);
+    const member = existing ? { ...record, createdAt: existing.createdAt } : record;
+    this.groupMembers.set(key, member);
+    return member;
+  }
+
+  async deleteGroupMember(input: { groupId: string; userId: string }): Promise<void> {
+    this.groupMembers.delete(groupMemberKey(input.groupId, input.userId));
+  }
+
+  async getGroupMember(input: { groupId: string; userId: string }): Promise<GroupMemberRecord | null> {
+    return this.groupMembers.get(groupMemberKey(input.groupId, input.userId)) ?? null;
+  }
+
+  async listGroupMembers(groupId: string): Promise<GroupMemberWithUserRecord[]> {
+    return [...this.groupMembers.values()]
+      .filter((member) => member.groupId === groupId)
+      .map((member) => {
+        const user = this.authUsers.get(member.userId);
+        if (!user) throw new Error(`Auth user does not exist: ${member.userId}`);
+        return { ...member, user };
+      })
+      .sort((a, b) => a.user.username.localeCompare(b.user.username));
+  }
+
+  async listUserGroupMemberships(userId: string): Promise<GroupMemberRecord[]> {
+    return [...this.groupMembers.values()].filter((member) => member.userId === userId);
   }
 
   async createSession(record: CreateSessionRecord): Promise<SessionRecord> {
@@ -863,6 +957,10 @@ export class MemoryStore implements AppStore {
 
 function authAccountKey(provider: string, providerAccountId: string): string {
   return `${provider}:${providerAccountId}`;
+}
+
+function groupMemberKey(groupId: string, userId: string): string {
+  return `${groupId}:${userId}`;
 }
 
 function isStaleSendingCallback(delivery: CallbackDeliveryRecord, staleSendingBefore: Date): boolean {

@@ -8,6 +8,7 @@ export type ApiAuthMode = 'none' | 'bearer' | 'session';
 export type AuthProviderKind = 'static' | 'github';
 export type AuthCookieSameSite = 'lax' | 'none';
 export type ArtifactStorageKind = 'disabled' | 'filesystem' | 's3';
+export type AuthGithubDefaultGroupRole = 'viewer' | 'member' | 'admin';
 
 const ANTHROPIC_FLUE_MODELS = [
   'anthropic/claude-haiku-4-5',
@@ -75,10 +76,10 @@ export type AppConfig = {
   githubOAuthCallbackUrl?: string;
   githubOAuthBaseUrl: string;
   authGithubAdminUsers: string[];
-  authGithubAdminOrganizations: string[];
-  authGithubViewerUsers: string[];
-  authGithubViewerOrganizations: string[];
-  unsafeAuthGithubAllowAllViewers: boolean;
+  authGithubAllowedUsers: string[];
+  authGithubAllowedOrganizations: string[];
+  authGithubDefaultGroupRole: AuthGithubDefaultGroupRole;
+  unsafeAuthGithubAllowAll: boolean;
   databaseUrl?: string;
   flueStateStore: 'postgres' | 'memory';
   flueModel?: string;
@@ -168,14 +169,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     serviceTrustForwardedHosts: parseBoolean(env.SERVICE_TRUST_FORWARDED_HOSTS, false, 'SERVICE_TRUST_FORWARDED_HOSTS'),
     githubOAuthBaseUrl: env.GITHUB_OAUTH_BASE_URL ?? 'https://github.com',
     authGithubAdminUsers: parseStringList(env.AUTH_GITHUB_ADMIN_USERS),
-    authGithubAdminOrganizations: parseStringList(env.AUTH_GITHUB_ADMIN_ORGANIZATIONS),
-    authGithubViewerUsers: parseStringList(env.AUTH_GITHUB_VIEWER_USERS),
-    authGithubViewerOrganizations: parseStringList(env.AUTH_GITHUB_VIEWER_ORGANIZATIONS),
-    unsafeAuthGithubAllowAllViewers: parseBoolean(
-      env.UNSAFE_AUTH_GITHUB_ALLOW_ALL_VIEWERS,
-      false,
-      'UNSAFE_AUTH_GITHUB_ALLOW_ALL_VIEWERS',
-    ),
+    authGithubAllowedUsers: parseStringList(env.AUTH_GITHUB_ALLOWED_USERS),
+    authGithubAllowedOrganizations: parseStringList(env.AUTH_GITHUB_ALLOWED_ORGANIZATIONS),
+    authGithubDefaultGroupRole: parseEnum(env.AUTH_GITHUB_DEFAULT_GROUP_ROLE, ['viewer', 'member', 'admin'], 'member'),
+    unsafeAuthGithubAllowAll: parseBoolean(env.UNSAFE_AUTH_GITHUB_ALLOW_ALL, false, 'UNSAFE_AUTH_GITHUB_ALLOW_ALL'),
     flueStateStore: parseEnum(env.FLUE_STATE_STORE, ['postgres', 'memory'], 'postgres'),
     flueModelOptions: parseStringList(env.FLUE_MODEL_OPTIONS),
     slackApiBaseUrl: env.SLACK_API_BASE_URL ?? 'https://slack.com/api',

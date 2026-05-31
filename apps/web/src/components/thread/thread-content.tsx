@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AnchorHTMLAttributes, MouseEvent, ToggleEvent } from 'react';
+import type { AnchorHTMLAttributes, MouseEvent, ReactNode, ToggleEvent } from 'react';
 import { Check, ChevronDown, Copy, Download, ExternalLink, Play, RotateCcw, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -19,10 +19,12 @@ import { Card } from '../ui/card.js';
 import { Textarea } from '../ui/textarea.js';
 import { cn } from '../../lib/utils.js';
 
+const mobileContextOpenStorageKey = 'deputies-mobile-context-open';
+
 export function ChatPanel(props: {
   activeProgress: Record<string, string>;
   artifacts: Artifact[];
-  canAdmin: boolean;
+  canWriteSession: boolean;
   services: SandboxService[];
   canRetryMessages: boolean;
   editingMessageId: string;
@@ -68,7 +70,7 @@ export function ChatPanel(props: {
                       onRetry={() => props.onRetryFailedMessages(failedMessages.map((message) => message.id))}
                     />
                   ) : null}
-                  {activeRun && props.canAdmin ? (
+                  {activeRun && props.canWriteSession ? (
                     <CancelRunButton cancelling={cancellingRun} onCancelRun={props.onCancelRun} />
                   ) : null}
                 </div>
@@ -77,7 +79,7 @@ export function ChatPanel(props: {
             {group.messages.map((message) => (
               <UserMessageCard
                 canRetryMessages={props.canRetryMessages}
-                canAdmin={props.canAdmin}
+                canWriteSession={props.canWriteSession}
                 editingMessageId={props.editingMessageId}
                 key={message.id}
                 message={message}
@@ -112,7 +114,7 @@ export function ChatPanel(props: {
             {props.services.length > 0 && group.key === groups.at(-1)?.key ? (
               <InlineServices
                 services={props.services}
-                canAdmin={props.canAdmin}
+                canWriteSession={props.canWriteSession}
                 onExtendSandbox={props.onExtendSandbox}
               />
             ) : null}
@@ -127,7 +129,7 @@ export function ChatPanel(props: {
 
 function InlineServices(props: {
   services: SandboxService[];
-  canAdmin: boolean;
+  canWriteSession: boolean;
   onExtendSandbox: (port?: number) => void;
 }) {
   return (
@@ -137,7 +139,7 @@ function InlineServices(props: {
           compact
           key={service.port}
           service={service}
-          canAdmin={props.canAdmin}
+          canWriteSession={props.canWriteSession}
           onExtendSandbox={props.onExtendSandbox}
         />
       ))}
@@ -164,7 +166,7 @@ function InlineArtifacts(props: {
 }
 
 function UserMessageCard(props: {
-  canAdmin: boolean;
+  canWriteSession: boolean;
   canRetryMessages: boolean;
   editingMessageId: string;
   message: Message;
@@ -189,7 +191,7 @@ function UserMessageCard(props: {
           {message.authorName ? ` from ${message.authorName}` : ''}{' '}
           <Badge className={statusTextClass(message.status)}>{messageStatusLabel(message)}</Badge>
         </h3>
-        {props.canAdmin && message.status === 'pending' && props.editingMessageId !== message.id ? (
+        {props.canWriteSession && message.status === 'pending' && props.editingMessageId !== message.id ? (
           <div className="flex gap-1">
             <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onEditMessage(message)}>
               Edit
@@ -210,7 +212,7 @@ function UserMessageCard(props: {
             onRetry={() => props.onRetryFailedMessages([message.id])}
           />
         ) : null}
-        {props.canAdmin && props.showRunCancel ? (
+        {props.canWriteSession && props.showRunCancel ? (
           <CancelRunButton cancelling={props.runCancelling} onCancelRun={props.onCancelRun} />
         ) : null}
       </div>
@@ -950,7 +952,8 @@ function humanizeEventName(value: string): string {
 }
 
 export function MobileContextPanel(props: {
-  canAdmin: boolean;
+  accessPanel?: ReactNode;
+  canWriteSession: boolean;
   repository: string | null;
   branch: string | null;
   artifacts: Artifact[];
@@ -960,8 +963,20 @@ export function MobileContextPanel(props: {
   onExtendSandbox: (port?: number) => void;
   onReplayCallback: (callbackId: string) => void;
 }) {
+  const [open, setOpen] = useState(() => sessionStorage.getItem(mobileContextOpenStorageKey) === 'true');
+
+  function handleToggle(event: ToggleEvent<HTMLDetailsElement>) {
+    const nextOpen = event.currentTarget.open;
+    sessionStorage.setItem(mobileContextOpenStorageKey, String(nextOpen));
+    setOpen(nextOpen);
+  }
+
   return (
-    <details className="mb-5 rounded-md border border-border bg-card/90 shadow-sm xl:hidden">
+    <details
+      className="mb-5 rounded-md border border-border bg-card/90 shadow-sm xl:hidden"
+      open={open}
+      onToggle={handleToggle}
+    >
       <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-foreground">Context</summary>
       <ContextPanelContent {...props} />
     </details>
@@ -969,7 +984,8 @@ export function MobileContextPanel(props: {
 }
 
 export function DesktopContextPanel(props: {
-  canAdmin: boolean;
+  accessPanel?: ReactNode;
+  canWriteSession: boolean;
   repository: string | null;
   branch: string | null;
   artifacts: Artifact[];
@@ -992,7 +1008,8 @@ export function DesktopContextPanel(props: {
 }
 
 function ContextPanelContent(props: {
-  canAdmin: boolean;
+  accessPanel?: ReactNode;
+  canWriteSession: boolean;
   repository: string | null;
   branch: string | null;
   artifacts: Artifact[];
@@ -1004,6 +1021,7 @@ function ContextPanelContent(props: {
 }) {
   return (
     <div className="p-4 pt-0 xl:p-0 xl:pt-0">
+      {props.accessPanel ? <div className="mt-3 border-b border-border pb-3">{props.accessPanel}</div> : null}
       <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
         <strong className="block font-medium text-foreground">Repository</strong>
         {props.repository ? (
@@ -1020,9 +1038,9 @@ function ContextPanelContent(props: {
               <span className="mt-1 block text-xs text-muted-foreground">Branch: {props.branch}</span>
             ) : null}
             <span className="mt-1 block text-xs">
-              {props.canAdmin
+              {props.canWriteSession
                 ? 'Follow-ups inherit this repo. Enter another repo in the composer to switch.'
-                : 'Admin follow-ups inherit this repo.'}
+                : 'Write-access follow-ups inherit this repo.'}
             </span>
           </>
         ) : (
@@ -1032,9 +1050,9 @@ function ContextPanelContent(props: {
       <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
         <strong className="block font-medium text-foreground">Live services</strong>
         <span>
-          {props.canAdmin
+          {props.canWriteSession
             ? 'Authenticated links to HTTP services running inside the sandbox.'
-            : 'Service metadata is visible, but sandbox access is admin-only.'}
+            : 'Service metadata is visible, but write access is required to extend.'}
         </span>
       </div>
       <div className="mt-3 grid gap-2">
@@ -1042,7 +1060,7 @@ function ContextPanelContent(props: {
           <ServiceCard
             key={service.port}
             service={service}
-            canAdmin={props.canAdmin}
+            canWriteSession={props.canWriteSession}
             onExtendSandbox={props.onExtendSandbox}
           />
         ))}
@@ -1105,7 +1123,7 @@ function ContextPanelContent(props: {
                 {callback.lastError ? <div className="text-destructive">Last error: {callback.lastError}</div> : null}
                 <div className="truncate">ID: {callback.id}</div>
               </dl>
-              {props.canAdmin && callback.status === 'failed' ? (
+              {props.canWriteSession && callback.status === 'failed' ? (
                 <Button
                   className="mt-2 h-7 px-2"
                   size="sm"
@@ -1134,7 +1152,7 @@ type ArtifactPreviewCardProps = {
 
 function ServiceCard(props: {
   service: SandboxService;
-  canAdmin: boolean;
+  canWriteSession: boolean;
   compact?: boolean;
   onExtendSandbox: (port?: number) => void;
 }) {
@@ -1164,17 +1182,11 @@ function ServiceCard(props: {
           <strong className="min-w-0 text-sm leading-5 text-foreground">
             {props.service.label ?? 'Sandbox service'}
           </strong>
-          {props.canAdmin ? (
-            <Button asChild className="shrink-0" size="sm" variant="secondary">
-              <a href={props.service.url} target="_blank" rel="noreferrer">
-                <ExternalLink className="h-3.5 w-3.5" /> Open
-              </a>
-            </Button>
-          ) : (
-            <Button className="shrink-0" size="sm" variant="secondary" disabled title="Admin access is required">
+          <Button asChild className="shrink-0" size="sm" variant="secondary">
+            <a href={props.service.url} target="_blank" rel="noreferrer">
               <ExternalLink className="h-3.5 w-3.5" /> Open
-            </Button>
-          )}
+            </a>
+          </Button>
         </div>
         <div className="min-w-0 text-xs text-muted-foreground">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -1185,8 +1197,8 @@ function ServiceCard(props: {
           {shutdownLabel ? (
             <p className="mt-1 text-xs text-muted-foreground">
               Shuts down {shutdownLabel}.{' '}
-              {!props.canAdmin ? (
-                <span className="text-muted-foreground">Admin access is required to extend.</span>
+              {!props.canWriteSession ? (
+                <span className="text-muted-foreground">Write access is required to extend.</span>
               ) : extensionAtMax ? (
                 <span className="text-muted-foreground">{extensionLabel}</span>
               ) : (

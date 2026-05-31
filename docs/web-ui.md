@@ -131,14 +131,15 @@ GITHUB_OAUTH_CLIENT_ID=Iv1.example
 GITHUB_OAUTH_CLIENT_SECRET=github-app-client-secret
 GITHUB_OAUTH_CALLBACK_URL=http://localhost:5173/auth/oauth/github/callback
 AUTH_GITHUB_ADMIN_USERS=your-github-login
-# Optional read-only viewers:
-# AUTH_GITHUB_VIEWER_USERS=teammate-login
-# AUTH_GITHUB_VIEWER_ORGANIZATIONS=your-org
+# Optional non-admin sign-in allowlist:
+# AUTH_GITHUB_ALLOWED_USERS=teammate-login
+# AUTH_GITHUB_ALLOWED_ORGANIZATIONS=your-org
+# AUTH_GITHUB_DEFAULT_GROUP_ROLE=member
 ```
 
 For GitHub App login, configure the GitHub App's callback URL to exactly match `GITHUB_OAUTH_CALLBACK_URL`. The same GitHub App can also provide runtime repository access through `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`; those are separate values from the app's user-authorization client ID and client secret.
 
-GitHub users in `AUTH_GITHUB_ADMIN_*` allowlists are admins. Users in `AUTH_GITHUB_VIEWER_*` are read-only and cannot mutate sessions or access sandbox services.
+GitHub users in `AUTH_GITHUB_ADMIN_USERS` are super admins and are restored to that role on login. Users or organizations in `AUTH_GITHUB_ALLOWED_*` can sign in as regular users and receive default-group access from `AUTH_GITHUB_DEFAULT_GROUP_ROLE`.
 
 Set `WEB_BASE_URL` to the externally reachable web UI origin when Slack/GitHub callbacks should include an “open session” link. The API appends `?session=<id>` to that URL, and the web UI opens the matching session when present.
 

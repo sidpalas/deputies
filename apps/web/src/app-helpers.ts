@@ -1,6 +1,9 @@
 export const tokenStorageKey = 'deputies-api-token';
 export const selectedSessionStorageKey = 'deputies-selected-session-id';
 export const newSessionSelectedStorageKey = 'deputies-new-session-selected';
+export const groupsPanelOpenStorageKey = 'deputies-groups-panel-open';
+export const groupsPanelViewStorageKey = 'deputies-groups-panel-view';
+export const groupsPanelSelectedGroupStorageKey = 'deputies-groups-panel-selected-group-id';
 export const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
 export const themeStorageKey = 'deputies-theme';
 
@@ -35,15 +38,29 @@ export function loadStoredToken(): string {
 
 export function loadInitialSelectedSessionId(): string {
   return (
-    new URLSearchParams(window.location.search).get('session') ?? localStorage.getItem(selectedSessionStorageKey) ?? ''
+    new URLSearchParams(window.location.search).get('session') ??
+    sessionStorage.getItem(selectedSessionStorageKey) ??
+    ''
   );
 }
 
 export function loadInitialIsCreatingThread(): boolean {
   return (
     !new URLSearchParams(window.location.search).get('session') &&
-    localStorage.getItem(newSessionSelectedStorageKey) === 'true'
+    sessionStorage.getItem(newSessionSelectedStorageKey) === 'true'
   );
+}
+
+export function loadInitialGroupsPanelOpen(): boolean {
+  return sessionStorage.getItem(groupsPanelOpenStorageKey) === 'true';
+}
+
+export function loadInitialGroupsPanelView(): 'group' | 'super_admins' {
+  return sessionStorage.getItem(groupsPanelViewStorageKey) === 'super_admins' ? 'super_admins' : 'group';
+}
+
+export function loadInitialGroupsPanelSelectedGroupId(): string {
+  return sessionStorage.getItem(groupsPanelSelectedGroupStorageKey) ?? '';
 }
 
 export function loadThemePreference(): ThemePreference {

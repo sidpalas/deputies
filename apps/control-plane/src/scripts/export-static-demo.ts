@@ -25,6 +25,10 @@ type SessionRow = QueryResultRow & {
   status: string;
   title: string | null;
   context: Record<string, unknown> | null;
+  owner_group_id: string;
+  visibility: string;
+  write_policy: string;
+  created_by_user_id: string | null;
   created_at: Date;
   updated_at: Date;
   queue_paused_at: Date | null;
@@ -195,7 +199,7 @@ function requiredValue(values: string[], index: number, flag: string): string {
 async function loadSessions(pool: Pool, args: Args): Promise<SessionRow[]> {
   if (args.sessionIds.length) {
     const result = await pool.query<SessionRow>(
-      `SELECT id, status, title, context, created_at, updated_at, queue_paused_at
+      `SELECT id, status, title, context, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, queue_paused_at
        FROM sessions
        WHERE id = ANY($1::uuid[])
        ORDER BY array_position($1::uuid[], id) ASC`,
@@ -205,7 +209,7 @@ async function loadSessions(pool: Pool, args: Args): Promise<SessionRow[]> {
   }
 
   const result = await pool.query<SessionRow>(
-    `SELECT id, status, title, context, created_at, updated_at, queue_paused_at
+    `SELECT id, status, title, context, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, queue_paused_at
      FROM sessions
      ORDER BY updated_at DESC, created_at DESC
      LIMIT $1`,
@@ -287,6 +291,10 @@ function toSession(row: SessionRow) {
     status: row.status,
     title: row.title ?? undefined,
     context: row.context ?? undefined,
+    ownerGroupId: row.owner_group_id,
+    visibility: row.visibility,
+    writePolicy: row.write_policy,
+    createdByUserId: row.created_by_user_id ?? undefined,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     queuePausedAt: row.queue_paused_at?.toISOString(),

@@ -23,7 +23,12 @@ export type IntegrationDeliveryStatus = 'received' | 'processed' | 'failed';
 export type SandboxStatus = 'ready' | 'stopped' | 'unhealthy' | 'destroyed' | 'failed';
 export type CallbackDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed';
 
-export type AuthRole = 'admin' | 'viewer';
+export const defaultGroupId = '00000000-0000-4000-8000-000000000001';
+
+export type AuthRole = 'user' | 'super_admin';
+export type GroupRole = 'viewer' | 'member' | 'admin';
+export type SessionVisibility = 'group' | 'organization';
+export type SessionWritePolicy = 'group_members' | 'creator_only';
 
 export type AuthUserRecord = {
   id: string;
@@ -53,6 +58,28 @@ export type AuthSessionRecord = {
   expiresAt: Date;
 };
 
+export type GroupRecord = {
+  id: string;
+  name: string;
+  defaultVisibility: SessionVisibility;
+  defaultWritePolicy: SessionWritePolicy;
+  archivedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type GroupMemberRecord = {
+  groupId: string;
+  userId: string;
+  role: GroupRole;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type GroupMemberWithUserRecord = GroupMemberRecord & {
+  user: AuthUserRecord;
+};
+
 export type UpsertAuthUserForAccountRecord = {
   userId: string;
   accountId: string;
@@ -71,8 +98,12 @@ export type SessionRecord = {
   status: SessionStatus;
   createdAt: Date;
   updatedAt: Date;
+  ownerGroupId: string;
+  visibility: SessionVisibility;
+  writePolicy: SessionWritePolicy;
   title?: string;
   queuePausedAt?: Date;
+  createdByUserId?: string;
   context?: Record<string, unknown>;
 };
 
@@ -230,7 +261,11 @@ export type CreateSessionRecord = {
   status: SessionStatus;
   createdAt: Date;
   updatedAt: Date;
+  ownerGroupId: string;
+  visibility: SessionVisibility;
+  writePolicy: SessionWritePolicy;
   title?: string;
+  createdByUserId?: string;
   context?: Record<string, unknown>;
 };
 
@@ -449,6 +484,18 @@ export interface AppStore extends SessionStore, MessageStore, RunStore, SandboxS
   createAuthSession(record: AuthSessionRecord): Promise<AuthSessionRecord>;
   getAuthUserBySession(input: { sessionId: string; now: Date }): Promise<AuthUserRecord | null>;
   deleteAuthSession(sessionId: string): Promise<void>;
+  listAuthUsers(input?: { query?: string }): Promise<AuthUserRecord[]>;
+  updateAuthUserRole(input: { userId: string; role: AuthRole; updatedAt: Date }): Promise<AuthUserRecord | null>;
+
+  createGroup(record: GroupRecord): Promise<GroupRecord>;
+  getGroup(id: string): Promise<GroupRecord | null>;
+  listGroups(): Promise<GroupRecord[]>;
+  updateGroup(record: GroupRecord): Promise<GroupRecord>;
+  upsertGroupMember(record: GroupMemberRecord): Promise<GroupMemberRecord>;
+  deleteGroupMember(input: { groupId: string; userId: string }): Promise<void>;
+  getGroupMember(input: { groupId: string; userId: string }): Promise<GroupMemberRecord | null>;
+  listGroupMembers(groupId: string): Promise<GroupMemberWithUserRecord[]>;
+  listUserGroupMemberships(userId: string): Promise<GroupMemberRecord[]>;
 
   createArtifact(record: CreateArtifactRecord): Promise<ArtifactRecord>;
   getArtifacts(sessionId: string): Promise<ArtifactRecord[]>;

@@ -23,6 +23,10 @@ export type Session = {
   status: string;
   displayStatus?: string;
   displayStatusTooltip?: string;
+  ownerGroupId: string;
+  visibility: SessionVisibility;
+  writePolicy: SessionWritePolicy;
+  createdByUserId?: string;
   createdAt: string;
   updatedAt: string;
   title?: string;
@@ -36,6 +40,32 @@ export type Session = {
     updatedAt: string;
     destroyedAt?: string;
   };
+};
+
+export type GroupRole = 'viewer' | 'member' | 'admin';
+export type SessionVisibility = 'group' | 'organization';
+export type SessionWritePolicy = 'group_members' | 'creator_only';
+
+export type Group = {
+  id: string;
+  name: string;
+  defaultVisibility: SessionVisibility;
+  defaultWritePolicy: SessionWritePolicy;
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  membershipRole?: GroupRole | null;
+  canCreateSessions?: boolean;
+  canManage?: boolean;
+};
+
+export type GroupMember = {
+  groupId: string;
+  userId: string;
+  role: GroupRole;
+  createdAt: string;
+  updatedAt: string;
+  user?: AuthUser;
 };
 
 export type Message = {
@@ -200,9 +230,10 @@ export type CallbackDelivery = {
 export type AuthUser = {
   id: string;
   username: string;
-  role: 'admin' | 'viewer';
+  role: 'user' | 'super_admin';
   displayName?: string;
   avatarUrl?: string;
+  memberships?: GroupMember[];
 };
 
 export class ApiError extends Error {
@@ -278,11 +309,120 @@ export async function getSetupStatus(token: string): Promise<SetupStatus> {
   return request<SetupStatus>('/setup/status', { token });
 }
 
-export async function createSession(input: { title?: string; token: string }): Promise<Session> {
+export async function listGroups(token: string): Promise<Group[]> {
+  const body = await request<{ groups: Group[] }>('/groups', { token });
+  return body.groups;
+}
+
+export async function createGroup(input: {
+  name: string;
+  defaultVisibility: SessionVisibility;
+  defaultWritePolicy: SessionWritePolicy;
+  token: string;
+}): Promise<Group> {
+  const body = await request<{ group: Group }>('/groups', {
+    method: 'POST',
+    token: input.token,
+    body: {
+      name: input.name,
+      defaultVisibility: input.defaultVisibility,
+      defaultWritePolicy: input.defaultWritePolicy,
+    },
+  });
+  return body.group;
+}
+
+export async function updateGroup(input: {
+  groupId: string;
+  name: string;
+  defaultVisibility: SessionVisibility;
+  defaultWritePolicy: SessionWritePolicy;
+  archived?: boolean;
+  token: string;
+}): Promise<Group> {
+  const body = await request<{ group: Group }>(`/groups/${input.groupId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: {
+      name: input.name,
+      defaultVisibility: input.defaultVisibility,
+      defaultWritePolicy: input.defaultWritePolicy,
+      ...(input.archived === undefined ? {} : { archived: input.archived }),
+    },
+  });
+  return body.group;
+}
+
+export async function archiveGroup(input: { groupId: string; archived: boolean; token: string }): Promise<Group> {
+  const body = await request<{ group: Group }>(`/groups/${input.groupId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: { archived: input.archived },
+  });
+  return body.group;
+}
+
+export async function listGroupMembers(input: { groupId: string; token: string }): Promise<GroupMember[]> {
+  const body = await request<{ members: GroupMember[] }>(`/groups/${input.groupId}/members`, { token: input.token });
+  return body.members;
+}
+
+export async function upsertGroupMember(input: {
+  groupId: string;
+  userId: string;
+  role: GroupRole;
+  token: string;
+}): Promise<GroupMember> {
+  const body = await request<{ member: GroupMember }>(`/groups/${input.groupId}/members`, {
+    method: 'POST',
+    token: input.token,
+    body: { userId: input.userId, role: input.role },
+  });
+  return body.member;
+}
+
+export async function removeGroupMember(input: { groupId: string; userId: string; token: string }): Promise<void> {
+  await request<{ ok: true }>(`/groups/${input.groupId}/members/${input.userId}`, {
+    method: 'DELETE',
+    token: input.token,
+  });
+}
+
+export async function listUsers(input: { query?: string; token: string }): Promise<AuthUser[]> {
+  const query = input.query ? `?query=${encodeURIComponent(input.query)}` : '';
+  const body = await request<{ users: AuthUser[] }>(`/users${query}`, { token: input.token });
+  return body.users;
+}
+
+export async function updateUserRole(input: {
+  userId: string;
+  role: AuthUser['role'];
+  token: string;
+}): Promise<AuthUser> {
+  const body = await request<{ user: AuthUser }>(`/users/${input.userId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: { role: input.role },
+  });
+  return body.user;
+}
+
+export async function createSession(input: {
+  title?: string;
+  token: string;
+  ownerGroupId?: string;
+  visibility?: SessionVisibility;
+  writePolicy?: SessionWritePolicy;
+}): Promise<Session> {
   const body = await request<{ session: Session }>('/sessions', {
     method: 'POST',
     token: input.token,
-    body: input.title ? { title: input.title } : {},
+    body: {
+      ...(input.title ? { title: input.title } : {}),
+      ...(input.ownerGroupId ? { ownerGroupId: input.ownerGroupId } : {}),
+      ...(input.visibility ? { visibility: input.visibility } : {}),
+      ...(input.writePolicy ? { writePolicy: input.writePolicy } : {}),
+    },
   });
   return body.session;
 }
@@ -292,6 +432,25 @@ export async function updateSession(input: { sessionId: string; title: string; t
     method: 'PATCH',
     token: input.token,
     body: { title: input.title },
+  });
+  return body.session;
+}
+
+export async function updateSessionAccess(input: {
+  sessionId: string;
+  ownerGroupId: string;
+  visibility?: SessionVisibility;
+  writePolicy?: SessionWritePolicy;
+  token: string;
+}): Promise<Session> {
+  const body = await request<{ session: Session }>(`/sessions/${input.sessionId}/access`, {
+    method: 'PATCH',
+    token: input.token,
+    body: {
+      ownerGroupId: input.ownerGroupId,
+      ...(input.visibility ? { visibility: input.visibility } : {}),
+      ...(input.writePolicy ? { writePolicy: input.writePolicy } : {}),
+    },
   });
   return body.session;
 }

@@ -11,6 +11,7 @@ import { GitHubApiError } from '../../src/integrations/github/client.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
 import type { CreateSandboxInput, SandboxHealth, SandboxPreviewUrlInput, SandboxRef } from '../../src/sandbox/types.js';
 import { MemoryStore } from '../../src/store/memory.js';
+import { defaultGroupId } from '../../src/store/types.js';
 import {
   expectArtifactPreviewResponse,
   expectArtifactsResponse,
@@ -303,7 +304,89 @@ describe('core API', () => {
     expect(logout.headers.get('set-cookie')).toContain('Max-Age=0');
   });
 
-  it('supports GitHub OAuth login with allowed users', async () => {
+  it('allows super admins to promote existing users', async () => {
+    await closeServer(server);
+    store = new MemoryStore();
+    services = createServices(store);
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_STATIC_USERNAME: 'dev',
+        AUTH_STATIC_PASSWORD: 'password',
+        AUTH_SESSION_SECRET: 'test-secret',
+      }),
+      services,
+    );
+    baseUrl = await listen(server);
+    const target = await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000222',
+      accountId: '00000000-0000-4000-8000-000000000223',
+      provider: 'github',
+      providerAccountId: '222',
+      username: 'teammate',
+      role: 'user',
+      profile: {},
+      now: new Date(),
+    });
+
+    const login = await postJson(`${baseUrl}/auth/login`, { username: 'dev', password: 'password' });
+    const cookie = login.headers.get('set-cookie');
+    const loginBody = (await login.json()) as { user: { id: string } };
+    const promote = await fetch(`${baseUrl}/users/${target.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: cookie! },
+      body: JSON.stringify({ role: 'super_admin' }),
+    });
+
+    expect(promote.status).toBe(200);
+    await expect(promote.json()).resolves.toMatchObject({ user: { username: 'teammate', role: 'super_admin' } });
+
+    const reauthenticated = await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000224',
+      accountId: '00000000-0000-4000-8000-000000000225',
+      provider: 'github',
+      providerAccountId: '222',
+      username: 'teammate',
+      role: 'user',
+      profile: {},
+      now: new Date(),
+    });
+    expect(reauthenticated.role).toBe('super_admin');
+
+    const demoteOther = await fetch(`${baseUrl}/users/${target.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: cookie! },
+      body: JSON.stringify({ role: 'user' }),
+    });
+    expect(demoteOther.status).toBe(200);
+    await expect(demoteOther.json()).resolves.toMatchObject({ user: { username: 'teammate', role: 'user' } });
+
+    const demotedReauthenticated = await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000226',
+      accountId: '00000000-0000-4000-8000-000000000227',
+      provider: 'github',
+      providerAccountId: '222',
+      username: 'teammate',
+      role: 'super_admin',
+      profile: {},
+      now: new Date(),
+    });
+    expect(demotedReauthenticated.role).toBe('super_admin');
+
+    const demoteSelf = await fetch(`${baseUrl}/users/${loginBody.user.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: cookie! },
+      body: JSON.stringify({ role: 'user' }),
+    });
+    expect(demoteSelf.status).toBe(409);
+
+    await store.updateAuthUserRole({ userId: loginBody.user.id, role: 'user', updatedAt: new Date() });
+    const demotedStaticLogin = await postJson(`${baseUrl}/auth/login`, { username: 'dev', password: 'password' });
+    expect(demotedStaticLogin.status).toBe(200);
+    await expect(demotedStaticLogin.json()).resolves.toMatchObject({ user: { username: 'dev', role: 'super_admin' } });
+  });
+
+  it('supports GitHub OAuth login with admin users', async () => {
     await closeServer(server);
     store = new MemoryStore();
     server = createServer(
@@ -358,10 +441,63 @@ describe('core API', () => {
 
     const me = await fetch(`${baseUrl}/auth/me`, { headers: { cookie: cookie! } });
     expect(me.status).toBe(200);
-    await expect(me.json()).resolves.toMatchObject({ user: { username: 'octocat', displayName: 'The Octocat' } });
+    await expect(me.json()).resolves.toMatchObject({
+      user: { username: 'octocat', displayName: 'The Octocat', role: 'super_admin' },
+    });
   });
 
-  it('allows GitHub viewers to read but blocks writes', async () => {
+  it('supports GitHub OAuth login with allowed organizations and a default group role', async () => {
+    await closeServer(server);
+    store = new MemoryStore();
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_PROVIDER: 'github',
+        AUTH_SESSION_SECRET: 'test-secret',
+        GITHUB_OAUTH_CLIENT_ID: 'client-id',
+        GITHUB_OAUTH_CLIENT_SECRET: 'client-secret',
+        GITHUB_OAUTH_BASE_URL: 'https://github.example',
+        AUTH_GITHUB_ALLOWED_ORGANIZATIONS: 'acme',
+        AUTH_GITHUB_DEFAULT_GROUP_ROLE: 'member',
+      }),
+      {
+        ...createServices(store),
+        githubOAuthClient: {
+          async exchangeCode() {
+            return 'github-access-token';
+          },
+          async getUser() {
+            return { id: 42, login: 'teammate' };
+          },
+          async listOrganizations() {
+            return ['acme'];
+          },
+        },
+      },
+    );
+    baseUrl = await listen(server);
+
+    const start = await fetch(`${baseUrl}/auth/oauth/github/start`, { redirect: 'manual' });
+    const state = new URL(start.headers.get('location')!).searchParams.get('state');
+    const callback = await fetch(
+      `${baseUrl}/auth/oauth/github/callback?code=oauth-code&state=${encodeURIComponent(state!)}`,
+      { redirect: 'manual' },
+    );
+    expect(callback.status).toBe(200);
+    const cookie = callback.headers.get('set-cookie');
+
+    const me = await fetch(`${baseUrl}/auth/me`, { headers: { cookie: cookie! } });
+    expect(me.status).toBe(200);
+    await expect(me.json()).resolves.toMatchObject({
+      user: {
+        username: 'teammate',
+        role: 'user',
+        memberships: [{ groupId: defaultGroupId, role: 'member' }],
+      },
+    });
+  });
+
+  it('allows public GitHub users to create sessions as group members', async () => {
     await closeServer(server);
     store = new MemoryStore();
     services = createServices(store);
@@ -373,7 +509,7 @@ describe('core API', () => {
         GITHUB_OAUTH_CLIENT_ID: 'client-id',
         GITHUB_OAUTH_CLIENT_SECRET: 'client-secret',
         GITHUB_OAUTH_BASE_URL: 'https://github.example',
-        UNSAFE_AUTH_GITHUB_ALLOW_ALL_VIEWERS: 'true',
+        UNSAFE_AUTH_GITHUB_ALLOW_ALL: 'true',
       }),
       {
         ...services,
@@ -402,7 +538,9 @@ describe('core API', () => {
 
     const me = await fetch(`${baseUrl}/auth/me`, { headers: { cookie: cookie! } });
     expect(me.status).toBe(200);
-    await expect(me.json()).resolves.toMatchObject({ user: { username: 'viewer', role: 'viewer' } });
+    await expect(me.json()).resolves.toMatchObject({
+      user: { username: 'viewer', role: 'user', memberships: [{ role: 'member' }] },
+    });
 
     const listSessions = await fetch(`${baseUrl}/sessions`, { headers: { cookie: cookie! } });
     expect(listSessions.status).toBe(200);
@@ -420,7 +558,7 @@ describe('core API', () => {
       headers: { 'content-type': 'application/json', cookie: cookie! },
       body: JSON.stringify({ title: 'Viewer write' }),
     });
-    expect(createSession.status).toBe(403);
+    expect(createSession.status).toBe(201);
 
     const openSandbox = await fetch(`${baseUrl}/sessions/${session.id}/services/3000`, {
       headers: { cookie: cookie! },
@@ -440,6 +578,38 @@ describe('core API', () => {
     expect(response.status).toBe(204);
     expect(response.headers.get('access-control-allow-methods')).toContain('PATCH');
     expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:5173');
+  });
+
+  it('keeps archived groups for existing sessions but blocks new targets', async () => {
+    const now = new Date();
+    const archivedGroup = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000333',
+      name: 'Archived group',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'creator_only',
+      archivedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const createInArchivedGroup = await postJson(`${baseUrl}/sessions`, {
+      title: 'Blocked archived group',
+      ownerGroupId: archivedGroup.id,
+    });
+    expect(createInArchivedGroup.status).toBe(409);
+    await expect(createInArchivedGroup.json()).resolves.toMatchObject({ error: 'archived_group' });
+
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Active group' });
+    expect(createSession.status).toBe(201);
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const moveToArchivedGroup = await fetch(`${baseUrl}/sessions/${session.id}/access`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ownerGroupId: archivedGroup.id }),
+    });
+    expect(moveToArchivedGroup.status).toBe(409);
+    await expect(moveToArchivedGroup.json()).resolves.toMatchObject({ error: 'archived_group' });
   });
 
   it('does not grant credentialed CORS access to untrusted origins', async () => {
@@ -1350,6 +1520,9 @@ describe('core API', () => {
       await store.updateSession({
         ...session,
         status: 'idle',
+        ownerGroupId: defaultGroupId,
+        visibility: 'organization',
+        writePolicy: 'group_members',
         createdAt: new Date(session.createdAt),
         updatedAt: new Date(session.updatedAt),
         context: { services: [{ port: 3000, providerSandboxId: 'old-sandbox' }] },
@@ -1393,6 +1566,9 @@ describe('core API', () => {
       await store.updateSession({
         ...session,
         status: 'idle',
+        ownerGroupId: defaultGroupId,
+        visibility: 'organization',
+        writePolicy: 'group_members',
         createdAt: new Date(session.createdAt),
         updatedAt: new Date(session.updatedAt),
         context: { services: [{ port: 3000, providerSandboxId: sandbox.providerSandboxId, runtimeId: 'old-runtime' }] },
@@ -1811,6 +1987,9 @@ describe('core API', () => {
         return {
           id: '00000000-0000-4000-8000-000000000001',
           status: 'active' as const,
+          ownerGroupId: defaultGroupId,
+          visibility: 'organization' as const,
+          writePolicy: 'group_members' as const,
           createdAt: new Date('2026-05-01T00:00:00.000Z'),
           updatedAt: new Date('2026-05-01T00:00:00.000Z'),
         };

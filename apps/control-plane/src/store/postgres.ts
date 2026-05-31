@@ -1,5 +1,6 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 import type { NormalizedEvent, NormalizedEventPayload, NormalizedEventType } from '../events/types.js';
+import { defaultGroupId } from './types.js';
 import type {
   AppStore,
   ArtifactRecord,
@@ -19,6 +20,10 @@ import type {
   EventRecord,
   ExternalResourceRecord,
   ExternalThreadRecord,
+  GroupMemberRecord,
+  GroupMemberWithUserRecord,
+  GroupRecord,
+  GroupRole,
   IntegrationDeliveryRecord,
   MessageRecord,
   MessageStatus,
@@ -30,6 +35,8 @@ import type {
   SandboxStatus,
   SessionRecord,
   SessionStatus,
+  SessionVisibility,
+  SessionWritePolicy,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -40,6 +47,10 @@ type SessionRow = QueryResultRow & {
   status: SessionStatus;
   title: string | null;
   context: Record<string, unknown> | null;
+  owner_group_id: string;
+  visibility: SessionVisibility;
+  write_policy: SessionWritePolicy;
+  created_by_user_id: string | null;
   created_at: Date;
   updated_at: Date;
   queue_paused_at: Date | null;
@@ -47,13 +58,44 @@ type SessionRow = QueryResultRow & {
 
 type PgInteger = number | string;
 
+const sessionSelectColumns =
+  'id, status, title, context, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, queue_paused_at';
+
 type AuthUserRow = QueryResultRow & {
   id: string;
   username: string;
+  role: 'user' | 'super_admin';
   display_name: string | null;
   avatar_url: string | null;
   created_at: Date;
   updated_at: Date;
+};
+
+type GroupRow = QueryResultRow & {
+  id: string;
+  name: string;
+  default_visibility: SessionVisibility;
+  default_write_policy: SessionWritePolicy;
+  archived_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type GroupMemberRow = QueryResultRow & {
+  group_id: string;
+  user_id: string;
+  role: GroupRole;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type GroupMemberWithUserRow = GroupMemberRow & {
+  username: string;
+  user_role: 'user' | 'super_admin';
+  display_name: string | null;
+  avatar_url: string | null;
+  user_created_at: Date;
+  user_updated_at: Date;
 };
 
 type AuthSessionRow = QueryResultRow & {
@@ -282,6 +324,10 @@ export class PostgresStore implements AppStore {
         [record.provider, record.providerAccountId],
       );
       const userId = existing.rows[0]?.user_id ?? record.userId;
+      const existingUser = await client.query<Pick<AuthUserRow, 'role'>>('SELECT role FROM auth_users WHERE id = $1', [
+        userId,
+      ]);
+      const role = existingUser.rows[0]?.role === 'super_admin' ? 'super_admin' : record.role;
       const userResult = await client.query<AuthUserRow>(
         `INSERT INTO auth_users (id, username, role, display_name, avatar_url, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $6)
@@ -292,7 +338,7 @@ export class PostgresStore implements AppStore {
              avatar_url = EXCLUDED.avatar_url,
              updated_at = EXCLUDED.updated_at
           RETURNING id, username, role, display_name, avatar_url, created_at, updated_at`,
-        [userId, record.username, record.role, record.displayName ?? null, record.avatarUrl ?? null, record.now],
+        [userId, record.username, role, record.displayName ?? null, record.avatarUrl ?? null, record.now],
       );
       await client.query(
         `INSERT INTO auth_accounts (id, user_id, provider, provider_account_id, username, profile, created_at, updated_at)
@@ -346,22 +392,195 @@ export class PostgresStore implements AppStore {
     await this.pool.query('DELETE FROM auth_sessions WHERE id = $1', [sessionId]);
   }
 
+  async listAuthUsers(input: { query?: string } = {}): Promise<AuthUserRecord[]> {
+    const query = input.query?.trim();
+    const result = query
+      ? await this.pool.query<AuthUserRow>(
+          `SELECT id, username, role, display_name, avatar_url, created_at, updated_at
+           FROM auth_users
+           WHERE username ILIKE $1 OR display_name ILIKE $1 OR id::text = $2
+           ORDER BY username ASC`,
+          [`%${query}%`, query],
+        )
+      : await this.pool.query<AuthUserRow>(
+          `SELECT id, username, role, display_name, avatar_url, created_at, updated_at
+           FROM auth_users
+           ORDER BY username ASC`,
+        );
+    return result.rows.map(toAuthUser);
+  }
+
+  async updateAuthUserRole(input: { userId: string; role: AuthUserRecord['role']; updatedAt: Date }) {
+    const result = await this.pool.query<AuthUserRow>(
+      `UPDATE auth_users
+       SET role = $2,
+           updated_at = $3
+       WHERE id = $1
+       RETURNING id, username, role, display_name, avatar_url, created_at, updated_at`,
+      [input.userId, input.role, input.updatedAt],
+    );
+    return result.rows[0] ? toAuthUser(result.rows[0]) : null;
+  }
+
+  async createGroup(record: GroupRecord): Promise<GroupRecord> {
+    const result = await this.pool.query<GroupRow>(
+      `INSERT INTO groups (id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at`,
+      [
+        record.id,
+        record.name,
+        record.defaultVisibility,
+        record.defaultWritePolicy,
+        record.archivedAt ?? null,
+        record.createdAt,
+        record.updatedAt,
+      ],
+    );
+    return toGroup(result.rows[0]!);
+  }
+
+  async getGroup(id: string): Promise<GroupRecord | null> {
+    const result = await this.pool.query<GroupRow>(
+      `SELECT id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at
+       FROM groups
+       WHERE id = $1`,
+      [id],
+    );
+    return result.rows[0] ? toGroup(result.rows[0]) : null;
+  }
+
+  async listGroups(): Promise<GroupRecord[]> {
+    const result = await this.pool.query<GroupRow>(
+      `SELECT id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at
+       FROM groups
+       ORDER BY archived_at ASC NULLS FIRST, name ASC`,
+    );
+    return result.rows.map(toGroup);
+  }
+
+  async updateGroup(record: GroupRecord): Promise<GroupRecord> {
+    const result = await this.pool.query<GroupRow>(
+      `UPDATE groups
+       SET name = $2,
+           default_visibility = $3,
+           default_write_policy = $4,
+           archived_at = $5,
+           updated_at = $6
+       WHERE id = $1
+       RETURNING id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at`,
+      [
+        record.id,
+        record.name,
+        record.defaultVisibility,
+        record.defaultWritePolicy,
+        record.archivedAt ?? null,
+        record.updatedAt,
+      ],
+    );
+    if (!result.rows[0]) throw new Error(`Group does not exist: ${record.id}`);
+    return toGroup(result.rows[0]);
+  }
+
+  async upsertGroupMember(record: GroupMemberRecord): Promise<GroupMemberRecord> {
+    const result = await this.pool.query<GroupMemberRow>(
+      `INSERT INTO group_members (group_id, user_id, role, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (group_id, user_id) DO UPDATE
+       SET role = EXCLUDED.role,
+           updated_at = EXCLUDED.updated_at
+       RETURNING group_id, user_id, role, created_at, updated_at`,
+      [record.groupId, record.userId, record.role, record.createdAt, record.updatedAt],
+    );
+    return toGroupMember(result.rows[0]!);
+  }
+
+  async deleteGroupMember(input: { groupId: string; userId: string }): Promise<void> {
+    await this.pool.query('DELETE FROM group_members WHERE group_id = $1 AND user_id = $2', [
+      input.groupId,
+      input.userId,
+    ]);
+  }
+
+  async getGroupMember(input: { groupId: string; userId: string }): Promise<GroupMemberRecord | null> {
+    const result = await this.pool.query<GroupMemberRow>(
+      `SELECT group_id, user_id, role, created_at, updated_at
+       FROM group_members
+       WHERE group_id = $1 AND user_id = $2`,
+      [input.groupId, input.userId],
+    );
+    return result.rows[0] ? toGroupMember(result.rows[0]) : null;
+  }
+
+  async listGroupMembers(groupId: string): Promise<GroupMemberWithUserRecord[]> {
+    const result = await this.pool.query<GroupMemberWithUserRow>(
+      `SELECT m.group_id,
+              m.user_id,
+              m.role,
+              m.created_at,
+              m.updated_at,
+              u.username,
+              u.role AS user_role,
+              u.display_name,
+              u.avatar_url,
+              u.created_at AS user_created_at,
+              u.updated_at AS user_updated_at
+       FROM group_members m
+       JOIN auth_users u ON u.id = m.user_id
+       WHERE m.group_id = $1
+       ORDER BY u.username ASC`,
+      [groupId],
+    );
+    return result.rows.map(toGroupMemberWithUser);
+  }
+
+  async listUserGroupMemberships(userId: string): Promise<GroupMemberRecord[]> {
+    const result = await this.pool.query<GroupMemberRow>(
+      `SELECT group_id, user_id, role, created_at, updated_at
+       FROM group_members
+       WHERE user_id = $1`,
+      [userId],
+    );
+    return result.rows.map(toGroupMember);
+  }
+
   async createSession(record: CreateSessionRecord): Promise<SessionRecord> {
     const result = await this.pool.query<SessionRow>(
-      `INSERT INTO sessions (id, status, title, context, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, status, title, context, created_at, updated_at, queue_paused_at`,
-      [record.id, record.status, record.title ?? null, record.context ?? null, record.createdAt, record.updatedAt],
+      `INSERT INTO sessions (
+         id,
+         status,
+         title,
+         context,
+         owner_group_id,
+         visibility,
+         write_policy,
+         created_by_user_id,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING ${sessionSelectColumns}`,
+      [
+        record.id,
+        record.status,
+        record.title ?? null,
+        record.context ?? null,
+        record.ownerGroupId,
+        record.visibility,
+        record.writePolicy,
+        record.createdByUserId ?? null,
+        record.createdAt,
+        record.updatedAt,
+      ],
     );
 
     return toSession(result.rows[0]!);
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
-    const result = await this.pool.query<SessionRow>(
-      'SELECT id, status, title, context, created_at, updated_at, queue_paused_at FROM sessions WHERE id = $1',
-      [id],
-    );
+    const result = await this.pool.query<SessionRow>(`SELECT ${sessionSelectColumns} FROM sessions WHERE id = $1`, [
+      id,
+    ]);
 
     const row = result.rows[0];
     return row ? toSession(row) : null;
@@ -369,7 +588,7 @@ export class PostgresStore implements AppStore {
 
   async listSessions(): Promise<SessionRecord[]> {
     const result = await this.pool.query<SessionRow>(
-      'SELECT id, status, title, context, created_at, updated_at, queue_paused_at FROM sessions ORDER BY updated_at DESC, created_at DESC',
+      `SELECT ${sessionSelectColumns} FROM sessions ORDER BY updated_at DESC, created_at DESC`,
     );
 
     return result.rows.map(toSession);
@@ -378,10 +597,29 @@ export class PostgresStore implements AppStore {
   async updateSession(record: SessionRecord): Promise<SessionRecord> {
     const result = await this.pool.query<SessionRow>(
       `UPDATE sessions
-       SET status = $2, title = $3, context = $4, created_at = $5, updated_at = $6
+       SET status = $2,
+           title = $3,
+           context = $4,
+           created_at = $5,
+           updated_at = $6,
+           owner_group_id = $7,
+           visibility = $8,
+           write_policy = $9,
+           created_by_user_id = $10
        WHERE id = $1
-       RETURNING id, status, title, context, created_at, updated_at, queue_paused_at`,
-      [record.id, record.status, record.title ?? null, record.context ?? null, record.createdAt, record.updatedAt],
+       RETURNING ${sessionSelectColumns}`,
+      [
+        record.id,
+        record.status,
+        record.title ?? null,
+        record.context ?? null,
+        record.createdAt,
+        record.updatedAt,
+        record.ownerGroupId,
+        record.visibility,
+        record.writePolicy,
+        record.createdByUserId ?? null,
+      ],
     );
 
     const row = result.rows[0];
@@ -408,7 +646,7 @@ export class PostgresStore implements AppStore {
         `UPDATE sessions
          SET status = 'archived', updated_at = $2
          WHERE id = $1
-         RETURNING id, status, title, context, created_at, updated_at, queue_paused_at`,
+         RETURNING ${sessionSelectColumns}`,
         [input.sessionId, input.archivedAt],
       );
 
@@ -429,17 +667,25 @@ export class PostgresStore implements AppStore {
   }): Promise<SessionRecord | null> {
     const result = await this.pool.query<SessionRow>(
       `UPDATE sessions
-       SET status = $2, title = $3, context = $4, created_at = $5, updated_at = $6
+       SET status = $2,
+           title = $3,
+           context = $4,
+           created_at = $5,
+           updated_at = $6,
+           owner_group_id = $10,
+           visibility = $11,
+           write_policy = $12,
+           created_by_user_id = $13
        WHERE id = $1
          AND EXISTS (
            SELECT 1 FROM runs
            WHERE id = $7
-             AND session_id = $1
-             AND lease_owner = $8
-             AND status IN ('running', 'cancelling')
-             AND lease_expires_at > $9
+              AND session_id = $1
+              AND lease_owner = $8
+              AND status IN ('running', 'cancelling')
+              AND lease_expires_at > $9
          )
-       RETURNING id, status, title, context, created_at, updated_at, queue_paused_at`,
+       RETURNING ${sessionSelectColumns}`,
       [
         input.record.id,
         input.record.status,
@@ -450,6 +696,10 @@ export class PostgresStore implements AppStore {
         input.runId,
         input.leaseOwner,
         input.now,
+        input.record.ownerGroupId,
+        input.record.visibility,
+        input.record.writePolicy,
+        input.record.createdByUserId ?? null,
       ],
     );
 
@@ -459,7 +709,7 @@ export class PostgresStore implements AppStore {
   async pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord> {
     const result = await this.pool.query<SessionRow>(
       `UPDATE sessions SET queue_paused_at = $2, updated_at = $2 WHERE id = $1
-       RETURNING id, status, title, context, created_at, updated_at, queue_paused_at`,
+       RETURNING ${sessionSelectColumns}`,
       [input.sessionId, input.pausedAt],
     );
     if (!result.rows[0]) throw new Error(`Session does not exist: ${input.sessionId}`);
@@ -470,7 +720,7 @@ export class PostgresStore implements AppStore {
     const now = new Date();
     const result = await this.pool.query<SessionRow>(
       `UPDATE sessions SET queue_paused_at = NULL, updated_at = $2 WHERE id = $1
-       RETURNING id, status, title, context, created_at, updated_at, queue_paused_at`,
+       RETURNING ${sessionSelectColumns}`,
       [input.sessionId, now],
     );
     if (!result.rows[0]) throw new Error(`Session does not exist: ${input.sessionId}`);
@@ -1586,15 +1836,56 @@ function toAuthSession(row: AuthSessionRow): AuthSessionRecord {
   };
 }
 
+function toGroup(row: GroupRow): GroupRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    defaultVisibility: row.default_visibility,
+    defaultWritePolicy: row.default_write_policy,
+    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toGroupMember(row: GroupMemberRow): GroupMemberRecord {
+  return {
+    groupId: row.group_id,
+    userId: row.user_id,
+    role: row.role,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toGroupMemberWithUser(row: GroupMemberWithUserRow): GroupMemberWithUserRecord {
+  return {
+    ...toGroupMember(row),
+    user: {
+      id: row.user_id,
+      username: row.username,
+      role: row.user_role,
+      createdAt: row.user_created_at,
+      updatedAt: row.user_updated_at,
+      ...(row.display_name ? { displayName: row.display_name } : {}),
+      ...(row.avatar_url ? { avatarUrl: row.avatar_url } : {}),
+    },
+  };
+}
+
 function toSession(row: SessionRow): SessionRecord {
   const record: SessionRecord = {
     id: row.id,
     status: row.status,
+    ownerGroupId: row.owner_group_id ?? defaultGroupId,
+    visibility: row.visibility ?? 'organization',
+    writePolicy: row.write_policy ?? 'group_members',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
   if (row.title) record.title = row.title;
   if (row.queue_paused_at) record.queuePausedAt = row.queue_paused_at;
+  if (row.created_by_user_id) record.createdByUserId = row.created_by_user_id;
   if (row.context) record.context = row.context;
   return record;
 }

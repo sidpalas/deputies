@@ -4,6 +4,7 @@ import tls from 'node:tls';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Context } from 'hono';
+import { canReadSession, canWriteSession, type RequestAuthorization } from '../auth/authorization.js';
 import {
   createPreviewCookie,
   previewBootstrapMaxAgeSeconds,
@@ -27,6 +28,7 @@ type ServiceProxyServices = {
 
 type PreviewAuthorization = {
   user: AuthUserRecord;
+  canWrite: boolean;
   cookie?: string;
 };
 
@@ -118,16 +120,11 @@ export function parseServiceHostFromRequest(config: AppConfig, c: Context): { se
   return parsePreviewHostFromHosts(previewRequestHosts(config, c), previewAllowedDomains(config, c));
 }
 
-export async function isAuthorizedRequest(
-  config: AppConfig,
-  store: AppStore,
-  c: Context,
-  options: { role?: 'admin' } = {},
-): Promise<boolean> {
+export async function isAuthorizedRequest(config: AppConfig, store: AppStore, c: Context): Promise<boolean> {
   if (config.apiAuthMode === 'none') return true;
   if (config.apiAuthMode === 'bearer')
     return c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
-  const authorization = await authorizePreviewRequest(config, store, c, options);
+  const authorization = await authorizePreviewRequest(config, store, c);
   return Boolean(authorization);
 }
 
@@ -135,7 +132,6 @@ export async function authorizePreviewRequest(
   config: AppConfig,
   store: AppStore,
   c: Context,
-  options: { role?: 'admin' } = {},
 ): Promise<PreviewAuthorization | null> {
   if (config.apiAuthMode === 'none') return null;
   if (config.apiAuthMode === 'bearer') return null;
@@ -144,7 +140,7 @@ export async function authorizePreviewRequest(
     kind: 'cookie',
     renew: true,
   });
-  if (!authorization || (options.role && authorization.user.role !== options.role)) return null;
+  if (!authorization || (requiresPreviewWriteAccess(c.req.method) && !authorization.canWrite)) return null;
   return authorization;
 }
 
@@ -172,7 +168,7 @@ export async function authorizePreviewToken(
   const authorization = await readPreviewAuthUser(config, store, authToken, previewRequestHost(config, c), {
     kind: 'bootstrap',
   });
-  if (!authorization || authorization.user.role !== 'admin') return new Response('Forbidden', { status: 403 });
+  if (!authorization) return new Response('Forbidden', { status: 403 });
 
   const cookieToken = createPreviewCookieToken(config, payload);
 
@@ -217,10 +213,7 @@ export async function handleServiceUpgrade(
   }
 
   const { sessionId, port } = hostPreview;
-  if (
-    !isTrustedPreviewUpgrade(config, request) ||
-    !(await isAuthorizedUpgrade(config, services, request, { role: 'admin' }))
-  ) {
+  if (!isTrustedPreviewUpgrade(config, request) || !(await isAuthorizedUpgrade(config, services, request))) {
     rejectUpgrade(socket, 403, 'Forbidden');
     return;
   }
@@ -510,7 +503,6 @@ async function isAuthorizedUpgrade(
   config: AppConfig,
   services: ServiceProxyServices,
   request: IncomingMessage,
-  options: { role?: 'admin' } = {},
 ): Promise<boolean> {
   if (config.apiAuthMode === 'none') return true;
   if (config.apiAuthMode === 'bearer')
@@ -522,7 +514,7 @@ async function isAuthorizedUpgrade(
     previewNodeRequestHosts(config, request)[0],
     { kind: 'cookie' },
   );
-  return Boolean(authorization && (!options.role || authorization.user.role === options.role));
+  return Boolean(authorization?.canWrite);
 }
 
 function stringHeader(value: string | string[] | undefined): string | undefined {
@@ -631,8 +623,13 @@ async function readPreviewAuthUser(
     return null;
   const user = await store.getAuthUserBySession({ sessionId: payload.authSessionId, now: new Date() });
   if (user?.id !== payload.userId) return null;
+  const session = await store.getSession(payload.previewSessionId);
+  if (!session) return null;
+  const memberships = await store.listUserGroupMemberships(user.id);
+  const auth: RequestAuthorization = { bypass: false, user, memberships };
+  if (!canReadSession(auth, session)) return null;
   const cookie = options.renew ? renewedPreviewCookie(config, payload) : undefined;
-  return { user, ...(cookie ? { cookie } : {}) };
+  return { user, canWrite: canWriteSession(auth, session), ...(cookie ? { cookie } : {}) };
 }
 
 function createPreviewCookieToken(config: AppConfig, payload: PreviewAuthToken): string {
@@ -661,7 +658,7 @@ function renewedPreviewCookie(config: AppConfig, payload: PreviewAuthToken): str
 }
 
 function isTrustedPreviewRequest(config: AppConfig, c: Context): boolean {
-  if (!unsafePreviewMethods.has(c.req.method.toUpperCase())) return true;
+  if (!requiresPreviewWriteAccess(c.req.method)) return true;
   const secFetchSite = c.req.header('sec-fetch-site')?.toLowerCase();
   if (secFetchSite === 'cross-site') return false;
   const origin = c.req.header('origin');
@@ -678,7 +675,9 @@ function isTrustedPreviewUpgrade(config: AppConfig, request: IncomingMessage): b
   return trustedPreviewOrigins(previewNodeRequestHosts(config, request)).has(origin);
 }
 
-const unsafePreviewMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+function requiresPreviewWriteAccess(method: string | undefined): boolean {
+  return !new Set(['GET', 'HEAD', 'OPTIONS']).has((method ?? '').toUpperCase());
+}
 
 function trustedPreviewOrigins(hosts: string[]): Set<string> {
   const origins = new Set<string>();

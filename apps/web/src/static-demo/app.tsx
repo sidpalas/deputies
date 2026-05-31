@@ -100,9 +100,11 @@ export function StaticDemoApp() {
             <ThreadSidebar
               archivedSessionsOpen
               authRequired={false}
-              canAdmin={false}
               canCallApi={false}
+              canViewGroups={false}
+              canStartNewThread={false}
               canViewSetup={false}
+              canWriteSession={() => false}
               connectionStatus={{ state: 'ok', message: 'Static demo data loaded.' }}
               health={{ status: 'ok', runMode: 'static-demo', apiAuthMode: 'none' }}
               loading={false}
@@ -117,6 +119,7 @@ export function StaticDemoApp() {
                 if (window.matchMedia('(min-width: 768px)').matches) setSidebarCollapsed(true);
               }}
               onNewThread={() => undefined}
+              onOpenGroups={() => undefined}
               onOpenSetup={() => undefined}
               onRefresh={() => undefined}
               onSelect={(sessionId) => {
@@ -147,7 +150,7 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
     <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">
       <ThreadHeader
         selectedSession={session}
-        canAdmin={false}
+        canWriteSession={false}
         canOpenWorkspaceTools
         workspaceToolsDisabled
         showOpenSidebar
@@ -167,14 +170,14 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
               services={services}
               externalResources={props.demoSession.externalResources}
               callbacks={props.demoSession.callbacks}
-              canAdmin={false}
+              canWriteSession={false}
               onExtendSandbox={() => undefined}
               onReplayCallback={() => undefined}
             />
             <ChatPanel
               activeProgress={{}}
               artifacts={props.demoSession.artifacts}
-              canAdmin={false}
+              canWriteSession={false}
               services={services}
               canRetryMessages={false}
               editingMessageId=""
@@ -226,7 +229,7 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
           services={services}
           externalResources={props.demoSession.externalResources}
           callbacks={props.demoSession.callbacks}
-          canAdmin={false}
+          canWriteSession={false}
           onExtendSandbox={() => undefined}
           onReplayCallback={() => undefined}
         />

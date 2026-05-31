@@ -6,6 +6,17 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { ArtifactService, ArtifactServiceError } from '../artifacts/service.js';
 import type { ArtifactObjectStorage } from '../artifacts/storage.js';
+import {
+  canCreateSessionInGroup,
+  canManageAllGroups,
+  canManageGroup,
+  canMoveSession,
+  canReadSession,
+  canWriteSession,
+  groupRole,
+  readRequestAuthorization,
+  type RequestAuthorization,
+} from '../auth/authorization.js';
 import { FetchGitHubOAuthClient, type GitHubOAuthClient } from '../auth/github.js';
 import {
   apiAdminMiddleware,
@@ -56,7 +67,20 @@ import type { SandboxProvider } from '../sandbox/types.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
-import type { AppStore, AuthRole, AuthUserRecord, SandboxRecord, SessionRecord } from '../store/types.js';
+import { defaultGroupId } from '../store/types.js';
+import type {
+  AppStore,
+  AuthRole,
+  AuthUserRecord,
+  EventRecord,
+  GroupMemberRecord,
+  GroupRecord,
+  GroupRole,
+  SandboxRecord,
+  SessionRecord,
+  SessionVisibility,
+  SessionWritePolicy,
+} from '../store/types.js';
 import { writeGlobalEventStream, writeSessionEventStream } from './event-stream.js';
 import { configuredModels, ModelAvailabilityService, modelOptions } from './model-availability.js';
 import { buildSetupStatus } from './setup-status.js';
@@ -162,7 +186,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       origin: allowedCorsOrigin(config),
       credentials: true,
       allowHeaders: ['authorization', 'content-type', 'x-request-id'],
-      allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+      allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
   );
 
@@ -214,12 +238,13 @@ export function createApp(config: AppConfig, services = createServices()) {
       provider: 'static',
       providerAccountId: username,
       username,
-      role: 'admin',
+      role: 'super_admin',
       profile: {},
       now: new Date(),
     });
+    await ensureDefaultGroupMembership(services.store, user.id, 'admin');
     await setAuthSessionCookie(c, config, services.store, user.id);
-    return c.json({ user: serializeAuthUser(user) });
+    return c.json({ user: await serializeAuthUser(services.store, user) });
   });
 
   app.get('/auth/oauth/github/start', (c) => {
@@ -260,8 +285,8 @@ export function createApp(config: AppConfig, services = createServices()) {
     const accessToken = await client.exchangeCode({ code, redirectUri: githubOAuthCallbackUrl(c, config) });
     const githubUser = await client.getUser(accessToken);
     const organizations = hasGitHubOrganizationRoleAllowlist(config) ? await client.listOrganizations(accessToken) : [];
-    const role = githubAuthRole(githubUser.login, organizations, config);
-    if (!role) {
+    const authAssignment = githubAuthAssignment(githubUser.login, organizations, config);
+    if (!authAssignment) {
       return writeError(c, 403, 'forbidden', 'GitHub user is not allowed');
     }
 
@@ -271,12 +296,13 @@ export function createApp(config: AppConfig, services = createServices()) {
       provider: 'github',
       providerAccountId: String(githubUser.id),
       username: githubUser.login,
-      role,
+      role: authAssignment.role,
       ...(githubUser.name ? { displayName: githubUser.name } : {}),
       ...(githubUser.avatar_url ? { avatarUrl: githubUser.avatar_url } : {}),
       profile: { login: githubUser.login, id: githubUser.id },
       now: new Date(),
     });
+    await ensureDefaultGroupMembership(services.store, user.id, authAssignment.defaultGroupRole);
     await setAuthSessionCookie(c, config, services.store, user.id);
     return c.html(oauthSuccessHtml(config.webBaseUrl ?? '/'));
   });
@@ -303,7 +329,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     const sessionId = readSessionId(c);
     const user = sessionId ? await services.store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
     if (!user) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    return c.json({ user: serializeAuthUser(user) });
+    return c.json({ user: await serializeAuthUser(services.store, user) });
   });
 
   app.use('/sessions/*', apiAuthMiddleware(config, services.store));
@@ -311,17 +337,20 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('/repositories/*', apiAuthMiddleware(config, services.store));
   app.use('/repositories', apiAuthMiddleware(config, services.store));
   app.use('/models', apiAuthMiddleware(config, services.store));
+  app.use('/groups/*', apiAuthMiddleware(config, services.store));
+  app.use('/groups', apiAuthMiddleware(config, services.store));
+  app.use('/users/*', apiAuthMiddleware(config, services.store));
+  app.use('/users', apiAuthMiddleware(config, services.store));
   app.use('/setup/*', apiAuthMiddleware(config, services.store));
   app.use('/setup', apiAuthMiddleware(config, services.store));
   app.use('/events/*', apiAuthMiddleware(config, services.store));
   app.use('/events', apiAuthMiddleware(config, services.store));
 
-  app.use('/sessions/:sessionId/sandbox/*', apiAdminMiddleware(config, services.store));
-  app.use('/sessions/:sessionId/workspace-tools/*', apiAdminMiddleware(config, services.store));
-  app.use('/sessions/*', apiUnsafeMethodAdminMiddleware(config, services.store));
-  app.use('/sessions', apiUnsafeMethodAdminMiddleware(config, services.store));
   app.use('/setup/*', apiUnsafeMethodAdminMiddleware(config, services.store));
   app.use('/setup', apiUnsafeMethodAdminMiddleware(config, services.store));
+
+  app.use('/sessions/:sessionId/*', sessionAuthorizationMiddleware(config, services));
+  app.use('/sessions/:sessionId', sessionAuthorizationMiddleware(config, services));
 
   app.use('*', async (c, next) => {
     const serviceHost = parseServiceHostFromRequest(config, c);
@@ -332,9 +361,9 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (new URL(c.req.url).pathname === '/__preview_auth') {
       return authorizePreviewToken(config, services.store, c, serviceHost.sessionId, serviceHost.port);
     }
-    const authorization = await authorizePreviewRequest(config, services.store, c, { role: 'admin' });
+    const authorization = await authorizePreviewRequest(config, services.store, c);
     if (config.apiAuthMode === 'session' && !authorization) {
-      return writeError(c, 403, 'forbidden', 'Admin access is required');
+      return writeError(c, 403, 'forbidden', 'Preview access is required');
     }
     const session = await services.sessions.get(serviceHost.sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
@@ -342,7 +371,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!service) return writeError(c, 404, 'not_found', 'Service URL is not available for this sandbox');
     if (config.apiAuthMode === 'bearer') {
       const serviceAuthorized = c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
-      if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Admin access is required');
+      if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Preview access is required');
     }
     return appendPreviewCookie(
       await proxyService(c, config, serviceHost.sessionId, serviceHost.port, service),
@@ -351,16 +380,52 @@ export function createApp(config: AppConfig, services = createServices()) {
   });
 
   app.post('/sessions', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const title = optionalString(body.title);
-    const session = await services.sessions.create(title ? { title } : {});
+    const group = await resolveSessionCreateGroup(services.store, auth, body.ownerGroupId);
+    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
+    if (group.archivedAt) return writeError(c, 409, 'archived_group', 'Cannot create sessions in an archived group');
+    if (!canCreateSessionInGroup(auth, group.id)) {
+      return writeError(c, 403, 'forbidden', 'Group member access is required');
+    }
+    const requestedVisibility = body.visibility === undefined ? undefined : parseSessionVisibility(body.visibility);
+    const requestedWritePolicy = body.writePolicy === undefined ? undefined : parseSessionWritePolicy(body.writePolicy);
+    if (body.visibility !== undefined && !requestedVisibility) {
+      return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
+    }
+    if (body.writePolicy !== undefined && !requestedWritePolicy) {
+      return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
+    }
+    const defaults = sessionCreateDefaults(config, auth, group);
+    const canOverrideAccessDefaults = canManageGroup(auth, group.id);
+    if (
+      !canOverrideAccessDefaults &&
+      ((requestedVisibility && requestedVisibility !== defaults.visibility) ||
+        (requestedWritePolicy && requestedWritePolicy !== defaults.writePolicy))
+    ) {
+      return writeError(c, 403, 'forbidden', 'Group admin access is required to override access defaults');
+    }
+    const visibility = requestedVisibility ?? defaults.visibility;
+    const writePolicy = requestedWritePolicy ?? defaults.writePolicy;
+    const session = await services.sessions.create({
+      ...(title ? { title } : {}),
+      ownerGroupId: group.id,
+      visibility,
+      writePolicy,
+      ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
+    });
     return c.json({ session: await serializeSessionWithSandbox(config, services, session) }, 201);
   });
 
   app.get('/sessions', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const sessions = await services.sessions.list();
+    const visible = sessions.filter((session) => canReadSession(auth, session));
     return c.json({
-      sessions: await Promise.all(sessions.map((session) => serializeSessionWithSandbox(config, services, session))),
+      sessions: await Promise.all(visible.map((session) => serializeSessionWithSandbox(config, services, session))),
     });
   });
 
@@ -410,17 +475,150 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/setup/status', async (c) => c.json(await buildSetupStatus(config, services)));
 
+  app.get('/groups', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const groups = await visibleGroups(services.store, auth);
+    return c.json({ groups: groups.map((group) => serializeGroupForAuth(group, auth)) });
+  });
+
+  app.post('/groups', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    if (!canManageAllGroups(auth)) return writeError(c, 403, 'forbidden', 'Super admin access is required');
+
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    const name = optionalString(body.name);
+    if (!name) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: name');
+    const now = new Date();
+    const group = await services.store.createGroup({
+      id: randomUUID(),
+      name,
+      defaultVisibility: parseSessionVisibility(body.defaultVisibility) ?? 'organization',
+      defaultWritePolicy: parseSessionWritePolicy(body.defaultWritePolicy) ?? 'group_members',
+      createdAt: now,
+      updatedAt: now,
+    });
+    return c.json({ group: serializeGroupForAuth(group, auth) }, 201);
+  });
+
+  app.patch('/groups/:groupId', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const group = await services.store.getGroup(c.req.param('groupId'));
+    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
+    if (!canManageGroup(auth, group.id)) return writeError(c, 403, 'forbidden', 'Group admin access is required');
+
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    const name = body.name === undefined ? group.name : optionalString(body.name);
+    if (!name) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: name');
+    const visibility =
+      body.defaultVisibility === undefined ? group.defaultVisibility : parseSessionVisibility(body.defaultVisibility);
+    const writePolicy =
+      body.defaultWritePolicy === undefined
+        ? group.defaultWritePolicy
+        : parseSessionWritePolicy(body.defaultWritePolicy);
+    const archived = typeof body.archived === 'boolean' ? body.archived : undefined;
+    if (!visibility) return writeError(c, 400, 'invalid_request', 'Expected valid defaultVisibility');
+    if (!writePolicy) return writeError(c, 400, 'invalid_request', 'Expected valid defaultWritePolicy');
+
+    const now = new Date();
+    const nextGroup: GroupRecord = {
+      ...group,
+      name,
+      defaultVisibility: visibility,
+      defaultWritePolicy: writePolicy,
+      updatedAt: now,
+    };
+    if (archived === true) nextGroup.archivedAt = group.archivedAt ?? now;
+    if (archived === false) delete nextGroup.archivedAt;
+
+    const updated = await services.store.updateGroup(nextGroup);
+    return c.json({ group: serializeGroupForAuth(updated, auth) });
+  });
+
+  app.get('/groups/:groupId/members', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const group = await services.store.getGroup(c.req.param('groupId'));
+    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
+    if (!canManageGroup(auth, group.id)) return writeError(c, 403, 'forbidden', 'Group admin access is required');
+    return c.json({ members: (await services.store.listGroupMembers(group.id)).map(serializeGroupMemberWithUser) });
+  });
+
+  app.post('/groups/:groupId/members', async (c) => upsertGroupMemberRoute(c, config, services.store));
+  app.patch('/groups/:groupId/members/:userId', async (c) => upsertGroupMemberRoute(c, config, services.store));
+
+  app.delete('/groups/:groupId/members/:userId', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const groupId = c.req.param('groupId');
+    const userId = c.req.param('userId');
+    if (!groupId) return writeError(c, 400, 'invalid_request', 'Expected groupId');
+    if (!userId) return writeError(c, 400, 'invalid_request', 'Expected userId');
+    const group = await services.store.getGroup(groupId);
+    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
+    if (!canManageGroup(auth, group.id)) return writeError(c, 403, 'forbidden', 'Group admin access is required');
+    if (!canManageAllGroups(auth) && (await wouldRemoveLastGroupAdmin(services.store, group.id, userId))) {
+      return writeError(c, 409, 'last_group_admin', 'Cannot remove the last group admin');
+    }
+    await services.store.deleteGroupMember({ groupId: group.id, userId });
+    return c.json({ ok: true });
+  });
+
+  app.get('/users', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    if (!canManageAllGroups(auth) && !auth.memberships.some((membership) => membership.role === 'admin')) {
+      return writeError(c, 403, 'forbidden', 'Group admin access is required');
+    }
+    const users = await visibleUsersForGroupManager(services.store, auth, optionalString(c.req.query('query')));
+    return c.json({ users: users.map(serializeBasicAuthUser) });
+  });
+
+  app.patch('/users/:userId', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    if (!canManageAllGroups(auth)) return writeError(c, 403, 'forbidden', 'Super admin access is required');
+
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    const role = parseAuthRole(body.role);
+    if (!role) return writeError(c, 400, 'invalid_request', 'Expected valid user role');
+    const userId = c.req.param('userId');
+    if (!auth.bypass && role === 'user' && userId === auth.user.id) {
+      return writeError(c, 409, 'self_super_admin', 'Cannot remove your own super admin access');
+    }
+
+    const user = await services.store.updateAuthUserRole({
+      userId,
+      role,
+      updatedAt: new Date(),
+    });
+    if (!user) return writeError(c, 404, 'not_found', 'User not found');
+    return c.json({ user: serializeBasicAuthUser(user) });
+  });
+
   app.get('/events', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const after = parseCursor(c.req.query('after') ?? null);
     const includeAll = c.req.query('include') === 'all';
-    const events = includeAll ? await services.events.listAllEvents(after) : await services.events.listAll(after);
+    const events = await readableEvents(
+      services.store,
+      auth,
+      includeAll ? await services.events.listAllEvents(after) : await services.events.listAll(after),
+    );
     return c.json({ events });
   });
 
   app.get('/events/stream', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const after = parseCursor(c.req.query('after') ?? c.req.header('last-event-id') ?? null) ?? 0;
     const includeAll = c.req.query('include') === 'all';
-    return writeGlobalEventStream(c, services.events, after, c.req.query('replay') !== 'false', includeAll);
+    return writeGlobalEventStream(c, services.events, after, c.req.query('replay') !== 'false', includeAll, {
+      filter: (event) => canReadEvent(services.store, auth, event),
+    });
   });
 
   app.post('/webhooks/generic/:sourceKey', async (c) => {
@@ -559,6 +757,40 @@ export function createApp(config: AppConfig, services = createServices()) {
       }
       throw error;
     }
+  });
+
+  app.patch('/sessions/:sessionId/access', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const session = await services.sessions.get(c.req.param('sessionId'));
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    const nextOwnerGroupId = optionalString(body.ownerGroupId) ?? session.ownerGroupId;
+    const nextGroup = await services.store.getGroup(nextOwnerGroupId);
+    if (!nextGroup) return writeError(c, 404, 'not_found', 'Group not found');
+    const groupChanged = nextOwnerGroupId !== session.ownerGroupId;
+    if (groupChanged && nextGroup.archivedAt) {
+      return writeError(c, 409, 'archived_group', 'Cannot move sessions to an archived group');
+    }
+    let visibility: SessionVisibility | null = groupChanged ? nextGroup.defaultVisibility : session.visibility;
+    let writePolicy: SessionWritePolicy | null = groupChanged ? nextGroup.defaultWritePolicy : session.writePolicy;
+    if (body.visibility !== undefined) visibility = parseSessionVisibility(body.visibility);
+    if (body.writePolicy !== undefined) writePolicy = parseSessionWritePolicy(body.writePolicy);
+    if (!visibility) return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
+    if (!writePolicy) return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
+    if (!canMoveSession(auth, session, nextOwnerGroupId)) {
+      return writeError(c, 403, 'forbidden', 'Group admin access is required for both groups');
+    }
+
+    const updated = await services.sessions.update({
+      id: session.id,
+      ...(session.title ? { title: session.title } : {}),
+      ownerGroupId: nextOwnerGroupId,
+      visibility,
+      writePolicy,
+    });
+    return c.json({ session: await serializeSessionWithSandbox(config, services, updated) });
   });
 
   app.post('/sessions/:sessionId/archive', async (c) => {
@@ -797,8 +1029,9 @@ export function createApp(config: AppConfig, services = createServices()) {
     const session = await services.sessions.get(sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
-    const isAdmin = await isAdminRequest(config, services.store, c);
-    const requestedPort = isAdmin ? parseServicePort(c.req.query('port')) : undefined;
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    const canRequestPort = auth ? canWriteSession(auth, session) : false;
+    const requestedPort = canRequestPort ? parseServicePort(c.req.query('port')) : undefined;
     const published = readServices(session.context ?? {});
     const requested = requestedPort ? [{ port: requestedPort }] : published;
     const liveServices = [];
@@ -1065,6 +1298,33 @@ function writeGitHubRepositoryError(c: Context, error: unknown) {
   throw error;
 }
 
+function sessionAuthorizationMiddleware(config: AppConfig, services: AppServices): MiddlewareHandler {
+  return async (c, next) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const sessionId = c.req.param('sessionId');
+    if (!sessionId) return writeError(c, 400, 'invalid_request', 'Expected sessionId');
+    const session = await services.sessions.get(sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+
+    const allowed = unsafeMethods.has(c.req.method.toUpperCase())
+      ? canWriteSession(auth, session)
+      : canReadSession(auth, session);
+    if (!allowed) return writeError(c, 403, 'forbidden', 'Session access is required');
+    await next();
+  };
+}
+
+async function requireRequestAuthorization(
+  config: AppConfig,
+  store: AppStore,
+  c: Context,
+): Promise<RequestAuthorization | null> {
+  return readRequestAuthorization(config, store, c);
+}
+
+const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
 function configuredRepositoryOptions(config: AppConfig) {
   return config.githubAllowedRepositories
     .filter((repository) => repository.includes('/') && !repository.includes('*'))
@@ -1184,7 +1444,10 @@ async function previewAuthTokenForRequest(
   if (config.apiAuthMode !== 'session') return undefined;
   const authSessionId = readSessionId(c);
   const user = authSessionId ? await store.getAuthUserBySession({ sessionId: authSessionId, now: new Date() }) : null;
-  if (!authSessionId || user?.role !== 'admin') return undefined;
+  const session = await store.getSession(previewSessionId);
+  if (!authSessionId || !user || !session) return undefined;
+  const memberships = await store.listUserGroupMemberships(user.id);
+  if (!canReadSession({ bypass: false, user, memberships }, session)) return undefined;
   return createPreviewAuthToken(config, { authSessionId, previewSessionId, port, userId: user.id });
 }
 
@@ -1211,7 +1474,14 @@ async function setAuthSessionCookie(c: Context, config: AppConfig, store: AppSto
   c.header('set-cookie', createSessionCookie(config, sessionId));
 }
 
-function serializeAuthUser(user: AuthUserRecord) {
+async function serializeAuthUser(store: AppStore, user: AuthUserRecord) {
+  return {
+    ...serializeBasicAuthUser(user),
+    memberships: (await store.listUserGroupMemberships(user.id)).map(serializeGroupMember),
+  };
+}
+
+function serializeBasicAuthUser(user: AuthUserRecord) {
   return {
     id: user.id,
     username: user.username,
@@ -1221,11 +1491,177 @@ function serializeAuthUser(user: AuthUserRecord) {
   };
 }
 
-async function isAdminRequest(config: AppConfig, store: AppStore, c: Context): Promise<boolean> {
-  if (config.apiAuthMode !== 'session') return true;
-  const sessionId = readSessionId(c);
-  const user = sessionId ? await store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
-  return user?.role === 'admin';
+function serializeGroupMember(member: GroupMemberRecord) {
+  return {
+    groupId: member.groupId,
+    userId: member.userId,
+    role: member.role,
+    createdAt: member.createdAt,
+    updatedAt: member.updatedAt,
+  };
+}
+
+function serializeGroupMemberWithUser(member: GroupMemberRecord & { user: AuthUserRecord }) {
+  return {
+    ...serializeGroupMember(member),
+    user: serializeBasicAuthUser(member.user),
+  };
+}
+
+function serializeGroupForAuth(group: GroupRecord, auth: RequestAuthorization) {
+  return {
+    id: group.id,
+    name: group.name,
+    defaultVisibility: group.defaultVisibility,
+    defaultWritePolicy: group.defaultWritePolicy,
+    ...(group.archivedAt ? { archivedAt: group.archivedAt } : {}),
+    createdAt: group.createdAt,
+    updatedAt: group.updatedAt,
+    membershipRole: groupRole(auth, group.id),
+    canCreateSessions: canCreateSessionInGroup(auth, group.id),
+    canManage: canManageGroup(auth, group.id),
+  };
+}
+
+async function visibleGroups(store: AppStore, auth: RequestAuthorization): Promise<GroupRecord[]> {
+  const groups = await store.listGroups();
+  if (canManageAllGroups(auth)) return groups;
+  const groupIds = new Set(auth.memberships.map((membership) => membership.groupId));
+  return groups.filter((group) => groupIds.has(group.id));
+}
+
+async function upsertGroupMemberRoute(c: Context, config: AppConfig, store: AppStore): Promise<Response> {
+  const auth = await requireRequestAuthorization(config, store, c);
+  if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+  const groupId = c.req.param('groupId');
+  if (!groupId) return writeError(c, 400, 'invalid_request', 'Expected groupId');
+  const group = await store.getGroup(groupId);
+  if (!group) return writeError(c, 404, 'not_found', 'Group not found');
+  if (!canManageGroup(auth, group.id)) return writeError(c, 403, 'forbidden', 'Group admin access is required');
+
+  const body = await readJsonBody(c, config.maxJsonBodyBytes);
+  const userId = c.req.param('userId') || optionalString(body.userId);
+  const role = parseGroupRole(body.role);
+  if (!userId) return writeError(c, 400, 'invalid_request', 'Expected userId');
+  if (!role) return writeError(c, 400, 'invalid_request', 'Expected valid group role');
+  if (!(await store.listAuthUsers({ query: userId })).some((user) => user.id === userId)) {
+    return writeError(c, 404, 'not_found', 'User not found');
+  }
+  if (!canManageAllGroups(auth) && role !== 'admin' && (await wouldRemoveLastGroupAdmin(store, group.id, userId))) {
+    return writeError(c, 409, 'last_group_admin', 'Cannot remove the last group admin');
+  }
+  const now = new Date();
+  const member = await store.upsertGroupMember({ groupId: group.id, userId, role, createdAt: now, updatedAt: now });
+  return c.json({ member: serializeGroupMember(member) });
+}
+
+async function wouldRemoveLastGroupAdmin(store: AppStore, groupId: string, userId: string): Promise<boolean> {
+  const members = await store.listGroupMembers(groupId);
+  const member = members.find((candidate) => candidate.userId === userId);
+  if (member?.role !== 'admin') return false;
+  return members.filter((candidate) => candidate.role === 'admin').length <= 1;
+}
+
+async function visibleUsersForGroupManager(
+  store: AppStore,
+  auth: RequestAuthorization,
+  query: string | undefined,
+): Promise<AuthUserRecord[]> {
+  if (canManageAllGroups(auth)) return store.listAuthUsers(query ? { query } : {});
+  const normalized = query?.trim().toLowerCase();
+  if (normalized && normalized.length >= 2) return store.listAuthUsers({ query: normalized });
+
+  const managedGroupIds = auth.memberships
+    .filter((membership) => membership.role === 'admin')
+    .map((membership) => membership.groupId);
+  const users = new Map<string, AuthUserRecord>();
+  for (const groupId of managedGroupIds) {
+    for (const member of await store.listGroupMembers(groupId)) {
+      users.set(member.user.id, member.user);
+    }
+  }
+
+  return [...users.values()]
+    .filter(
+      (user) =>
+        !normalized ||
+        user.id.toLowerCase() === normalized ||
+        user.username.toLowerCase().includes(normalized) ||
+        user.displayName?.toLowerCase().includes(normalized),
+    )
+    .sort((a, b) => a.username.localeCompare(b.username));
+}
+
+async function resolveSessionCreateGroup(
+  store: AppStore,
+  auth: RequestAuthorization,
+  requestedGroupId: unknown,
+): Promise<GroupRecord | null> {
+  const groupId = optionalString(requestedGroupId);
+  if (groupId) return store.getGroup(groupId);
+
+  const groups = await store.listGroups();
+  const activeGroups = groups.filter((group) => !group.archivedAt);
+  const defaultGroup = activeGroups.find((group) => group.id === defaultGroupId) ?? activeGroups[0];
+  if (auth.bypass || !defaultGroup) return defaultGroup ?? null;
+
+  const creatable = activeGroups.find((group) => canCreateSessionInGroup(auth, group.id));
+  return creatable ?? defaultGroup;
+}
+
+function sessionCreateDefaults(
+  config: AppConfig,
+  auth: RequestAuthorization,
+  group: GroupRecord,
+): { visibility: SessionVisibility; writePolicy: SessionWritePolicy } {
+  const publicTrialMember =
+    config.unsafeAuthGithubAllowAll &&
+    group.id === defaultGroupId &&
+    !auth.bypass &&
+    auth.user.role !== 'super_admin' &&
+    groupRole(auth, group.id) === 'member';
+  return {
+    visibility: group.defaultVisibility,
+    writePolicy: publicTrialMember ? 'creator_only' : group.defaultWritePolicy,
+  };
+}
+
+async function readableEvents(
+  store: AppStore,
+  auth: RequestAuthorization,
+  events: EventRecord[],
+): Promise<EventRecord[]> {
+  const readable: EventRecord[] = [];
+  for (const event of events) {
+    if (await canReadEvent(store, auth, event)) readable.push(event);
+  }
+  return readable;
+}
+
+async function canReadEvent(store: AppStore, auth: RequestAuthorization, event: EventRecord): Promise<boolean> {
+  const session = await store.getSession(event.sessionId);
+  return Boolean(session && canReadSession(auth, session));
+}
+
+function parseGroupRole(value: unknown): GroupRole | null {
+  return value === 'viewer' || value === 'member' || value === 'admin' ? value : null;
+}
+
+function parseAuthRole(value: unknown): AuthRole | null {
+  return value === 'user' || value === 'super_admin' ? value : null;
+}
+
+function parseSessionVisibility(value: unknown): SessionVisibility | null {
+  return value === 'group' || value === 'organization' ? value : null;
+}
+
+function parseSessionWritePolicy(value: unknown): SessionWritePolicy | null {
+  return value === 'group_members' || value === 'creator_only' ? value : null;
+}
+
+async function ensureDefaultGroupMembership(store: AppStore, userId: string, role: GroupRole): Promise<void> {
+  const now = new Date();
+  await store.upsertGroupMember({ groupId: defaultGroupId, userId, role, createdAt: now, updatedAt: now });
 }
 
 function githubOAuthCallbackUrl(c: Context, config: AppConfig): string {
@@ -1233,28 +1669,33 @@ function githubOAuthCallbackUrl(c: Context, config: AppConfig): string {
   return new URL('/auth/oauth/github/callback', c.req.url).toString();
 }
 
-function githubAuthRole(username: string, organizations: string[], config: AppConfig): AuthRole | null {
-  const adminUsers = config.authGithubAdminUsers;
-  const adminOrganizations = config.authGithubAdminOrganizations;
-  if (matchesGitHubAllowlist(username, organizations, adminUsers, adminOrganizations)) return 'admin';
-  if (
-    config.unsafeAuthGithubAllowAllViewers ||
-    matchesGitHubAllowlist(username, organizations, config.authGithubViewerUsers, config.authGithubViewerOrganizations)
-  ) {
-    return 'viewer';
+function githubAuthAssignment(
+  username: string,
+  organizations: string[],
+  config: AppConfig,
+): { role: AuthRole; defaultGroupRole: GroupRole } | null {
+  if (matchesGitHubUserAllowlist(username, config.authGithubAdminUsers)) {
+    return { role: 'super_admin', defaultGroupRole: 'admin' };
   }
-
-  const hasAnyRoleAllowlist = Boolean(
-    adminUsers.length ||
-    adminOrganizations.length ||
-    config.authGithubViewerUsers.length ||
-    config.authGithubViewerOrganizations.length,
-  );
-  return hasAnyRoleAllowlist ? null : 'admin';
+  if (
+    matchesGitHubAllowlist(
+      username,
+      organizations,
+      config.authGithubAllowedUsers,
+      config.authGithubAllowedOrganizations,
+    )
+  )
+    return { role: 'user', defaultGroupRole: config.authGithubDefaultGroupRole };
+  if (config.unsafeAuthGithubAllowAll) return { role: 'user', defaultGroupRole: 'member' };
+  return null;
 }
 
 function hasGitHubOrganizationRoleAllowlist(config: AppConfig): boolean {
-  return Boolean(config.authGithubAdminOrganizations.length || config.authGithubViewerOrganizations.length);
+  return Boolean(config.authGithubAllowedOrganizations.length);
+}
+
+function matchesGitHubUserAllowlist(username: string, allowedUsers: string[]): boolean {
+  return new Set(allowedUsers.map((user) => user.toLowerCase())).has(username.toLowerCase());
 }
 
 function matchesGitHubAllowlist(

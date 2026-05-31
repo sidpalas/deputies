@@ -40,7 +40,8 @@ export function apiAdminMiddleware(config: AppConfig, store: AppStore): Middlewa
 
     const user = await readAuthUser(c, store);
     if (!user) return writeAuthError(c, 'Missing or invalid session');
-    if (user.role !== 'admin') return c.json({ error: 'forbidden', message: 'Admin access is required' }, 403);
+    if (user.role !== 'super_admin')
+      return c.json({ error: 'forbidden', message: 'Super admin access is required' }, 403);
     await next();
   };
 }
