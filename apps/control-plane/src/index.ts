@@ -28,6 +28,8 @@ import { RealFlueAgentFactory, type RealFlueAgentFactoryOptions } from './runner
 import { loadOpenAICodexApiKey } from './runner-flue/openai-codex-auth.js';
 import { FlueRunner } from './runner-flue/runner.js';
 import { PostgresFlueSessionStore } from './runner-flue/session-store.js';
+import { PiRunner, type PiRunnerOptions } from './runner-pi/runner.js';
+import { PostgresPiSessionStore } from './runner-pi/session-store.js';
 import { DaytonaSandboxProvider } from './sandbox/daytona.js';
 import { DockerSandboxProvider, HttpDockerOrchestratorClient, InProcessDockerOrchestrator } from './sandbox/docker.js';
 import { FakeSandboxProvider } from './sandbox/fake.js';
@@ -266,6 +268,30 @@ async function createRunner(): Promise<Runner> {
   }
 
   const model = requireFlueModel(config);
+  if (config.runner === 'pi') {
+    const piOptions: PiRunnerOptions = {
+      model,
+      ...(config.flueOpenaiCodexAuthFile ? { authFile: config.flueOpenaiCodexAuthFile } : {}),
+      ...(config.flueOpenaiCodexAuthBase64 ? { authBase64: config.flueOpenaiCodexAuthBase64 } : {}),
+      modelUnavailableReason: (inputModel: string | undefined) =>
+        services.modelAvailability.unavailableFor(inputModel || model)?.reason,
+    };
+    if (artifactObjectStorage) {
+      piOptions.artifacts = services.artifacts;
+      piOptions.artifactToolMaxBytes = config.artifactCreateMaxBytes;
+    }
+    piOptions.repositoryAccess = createRepositoryAccess();
+    piOptions.externalResources = services.externalResources;
+    if (services.sandboxKeepalive) piOptions.sandboxKeepalive = services.sandboxKeepalive;
+    piOptions.sandboxKeepaliveMaxExtensionMs = config.sandboxKeepaliveMaxExtensionMs;
+    if (config.flueStateStore === 'postgres') {
+      const sessionStore = new PostgresPiSessionStore(requireDatabaseUrl(config));
+      resources.push(sessionStore);
+      piOptions.sessionStore = sessionStore;
+    }
+    return new PiRunner(piOptions);
+  }
+
   const options: RealFlueAgentFactoryOptions = {
     model,
   };

@@ -54,6 +54,7 @@ type MockApiOptions = {
   hangSessionsAfterFirst?: boolean;
   authMode?: 'none' | 'bearer' | 'session';
   sandboxProvider?: string;
+  notices?: unknown[];
   currentUser?: { username: string } | null;
   logins?: Array<{ username: string; password: string }>;
 };
@@ -1973,6 +1974,23 @@ it('warns when running in unsafe local sandbox mode', async () => {
   expect(screen.getByText(/Commands run on the API\/worker host runtime/)).toBeInTheDocument();
 });
 
+it('shows health notices such as the experimental Pi runner warning', async () => {
+  mockApi({
+    notices: [
+      {
+        severity: 'warning',
+        code: 'pi_runner_experimental',
+        message: 'The Pi runner is experimental.',
+        action: 'Validate behavior before relying on it in production.',
+      },
+    ],
+  });
+  render(<App />);
+
+  expect(await screen.findByText('The Pi runner is experimental.')).toBeInTheDocument();
+  expect(screen.getByText(/Validate behavior before relying on it in production/)).toBeInTheDocument();
+});
+
 function mockApi(options: MockApiOptions = {}) {
   let currentSession = { ...session, ...options.sessionOverride };
   let currentUser = options.currentUser;
@@ -1990,6 +2008,7 @@ function mockApi(options: MockApiOptions = {}) {
         apiAuthMode: options.authMode ?? 'none',
         sandboxProvider: options.sandboxProvider ?? 'fake',
         hideSetupPage: true,
+        ...(options.notices ? { notices: options.notices } : {}),
       });
     }
 

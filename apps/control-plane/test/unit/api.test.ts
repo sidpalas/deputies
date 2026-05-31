@@ -60,6 +60,32 @@ describe('core API', () => {
     await expect(response.json()).resolves.toMatchObject({ status: 'ok', runMode: 'combined' });
   });
 
+  it('reports Pi runner as experimental without degrading health', async () => {
+    await closeServer(server);
+    store = new MemoryStore();
+    services = createServices(store);
+    server = createServer(
+      loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi', FLUE_MODEL: 'openai-codex/gpt-5.5' }),
+      services,
+    );
+    baseUrl = await listen(server);
+
+    const health = await fetch(`${baseUrl}/health`);
+    expect(health.status).toBe(200);
+    await expect(health.json()).resolves.toMatchObject({
+      status: 'ok',
+      notices: [{ code: 'pi_runner_experimental', severity: 'warning' }],
+    });
+
+    const setupStatus = await fetch(`${baseUrl}/setup/status`);
+    expect(setupStatus.status).toBe(200);
+    const setup = (await setupStatus.json()) as { items: Array<{ id: string; state: string; guidance?: string }> };
+    expect(setup.items.find((item) => item.id === 'runner')).toMatchObject({
+      state: 'warning',
+      guidance: expect.stringContaining('experimental'),
+    });
+  });
+
   it('reports degraded health and unavailable model options', async () => {
     await closeServer(server);
     store = new MemoryStore();

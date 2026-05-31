@@ -58,7 +58,7 @@ import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
 import type { AppStore, AuthRole, AuthUserRecord, SandboxRecord, SessionRecord } from '../store/types.js';
 import { writeGlobalEventStream, writeSessionEventStream } from './event-stream.js';
-import { configuredModels, ModelAvailabilityService, modelOptions } from './model-availability.js';
+import { configuredModels, type AppNotice, ModelAvailabilityService, modelOptions } from './model-availability.js';
 import { buildSetupStatus } from './setup-status.js';
 import {
   appendPreviewCookie,
@@ -152,6 +152,18 @@ export function createServices(
   return services;
 }
 
+function runnerNotices(config: AppConfig): AppNotice[] {
+  if (config.runner !== 'pi') return [];
+  return [
+    {
+      severity: 'warning',
+      code: 'pi_runner_experimental',
+      message: 'The Pi runner is experimental.',
+      action: 'Expect a smaller tool surface and validate behavior before relying on it in production.',
+    },
+  ];
+}
+
 export function createApp(config: AppConfig, services = createServices()) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -176,9 +188,10 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.notFound((c) => c.json({ error: 'not_found', message: 'Route not found' }, 404));
 
   app.get('/health', (c) => {
-    const notices = services.modelAvailability.notices();
+    const modelNotices = services.modelAvailability.notices();
+    const notices = [...modelNotices, ...runnerNotices(config)];
     return c.json({
-      status: notices.length ? 'degraded' : 'ok',
+      status: modelNotices.length ? 'degraded' : 'ok',
       runMode: config.runMode,
       apiAuthMode: config.apiAuthMode,
       authProvider: config.apiAuthMode === 'session' ? config.authProvider : undefined,

@@ -28,6 +28,8 @@ export const defaultLocalAllowedCommands = [
   'date',
   'dirname',
   'env',
+  'fd',
+  'fdfind',
   'find',
   'gh',
   'git',

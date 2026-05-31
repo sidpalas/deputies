@@ -6,6 +6,11 @@ import type { CompletionCallbackSender } from '../../src/callbacks/service.js';
 import { loadConfig } from '../../src/config/index.js';
 import { runMigrations } from '../../src/db/migrate.js';
 import { PostgresFlueSessionStore } from '../../src/runner-flue/session-store.js';
+import {
+  PI_SESSION_DATA_VERSION,
+  PostgresPiSessionStore,
+  type PiSessionData,
+} from '../../src/runner-pi/session-store.js';
 import { FakeRunner } from '../../src/runner/fake.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
 import { PostgresStore, type PostgresEventListener } from '../../src/store/postgres.js';
@@ -25,7 +30,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'TRUNCATE flue_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
+      'TRUNCATE pi_sessions, flue_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
     );
     store = new PostgresStore(testDatabaseUrl!);
   });
@@ -95,6 +100,25 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       await expect(flueStore.load('agent-1:default')).resolves.toBeNull();
     } finally {
       await flueStore.close();
+    }
+  });
+
+  it('persists Pi session data opaquely', async () => {
+    const piStore = new PostgresPiSessionStore(testDatabaseUrl!);
+    try {
+      const session = await createServices(store).sessions.create({ title: 'Pi session data' });
+      const data: PiSessionData = {
+        version: PI_SESSION_DATA_VERSION,
+        header: { id: session.id } as never,
+        entries: [{ type: 'message', role: 'user', content: 'Persist this prompt' } as never],
+      };
+
+      await piStore.save(session.id, data);
+      await expect(piStore.load(session.id)).resolves.toEqual(data);
+      await piStore.delete(session.id);
+      await expect(piStore.load(session.id)).resolves.toBeNull();
+    } finally {
+      await piStore.close();
     }
   });
 
@@ -228,6 +252,45 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(claimed).toHaveLength(1);
     expect(claimed[0]!.messages.map((message) => message.id)).toEqual([first.id, second.id]);
     expect(claims.filter((claim) => claim === null)).toHaveLength(1);
+  });
+
+  it('waits for recovery before reclaiming a session with an expired active run', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Postgres expired active run' });
+    const first = await services.messages.enqueue({ sessionId: session.id, prompt: 'first' });
+    const claimedAt = new Date('2026-05-06T00:00:00.000Z');
+
+    const staleClaim = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000925',
+      runnerType: 'fake',
+      leaseOwner: 'worker-1',
+      leaseExpiresAt: new Date(claimedAt.getTime() - 1_000),
+      now: claimedAt,
+    });
+    expect(staleClaim?.messages.map((message) => message.id)).toEqual([first.id]);
+
+    const second = await services.messages.enqueue({ sessionId: session.id, prompt: 'second' });
+    const afterExpiry = new Date(claimedAt.getTime() + 1_000);
+    await expect(
+      store.claimNextPendingMessageBatch({
+        runId: '00000000-0000-4000-8000-000000000926',
+        runnerType: 'fake',
+        leaseOwner: 'worker-2',
+        leaseExpiresAt: new Date(afterExpiry.getTime() + 60_000),
+        now: afterExpiry,
+      }),
+    ).resolves.toBeNull();
+
+    await store.recoverStaleRuns({ now: afterExpiry, limit: 10 });
+    const reclaimed = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000927',
+      runnerType: 'fake',
+      leaseOwner: 'worker-2',
+      leaseExpiresAt: new Date(afterExpiry.getTime() + 60_000),
+      now: afterExpiry,
+    });
+
+    expect(reclaimed?.messages.map((message) => message.id)).toEqual([first.id, second.id]);
   });
 
   it('skips locked sessions while preserving pending message order', async () => {

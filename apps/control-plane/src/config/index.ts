@@ -1,5 +1,5 @@
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
-export type RunnerKind = 'fake' | 'flue';
+export type RunnerKind = 'fake' | 'flue' | 'pi';
 export type SandboxProviderKind = 'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'k8s-agent-sandbox' | 'ecs';
 export type DockerOrchestratorMode = 'in-process' | 'http';
 export type AgentSandboxOrchestratorMode = 'in-process' | 'http';
@@ -146,7 +146,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       ) * 1000,
     sandboxWorkspacePath: env.SANDBOX_WORKSPACE_PATH ?? '/workspace',
     runMode: parseEnum(env.RUN_MODE, ['combined', 'all', 'api', 'worker'], 'combined'),
-    runner: parseEnum(env.RUNNER, ['fake', 'flue'], 'fake'),
+    runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
       ['fake', 'unsafe-local', 'docker', 'daytona', 'k8s-agent-sandbox', 'ecs'],
@@ -428,7 +428,7 @@ export function requireAgentSandboxOrchestratorToken(config: AppConfig): string 
 
 export function requireFlueModel(config: AppConfig): string {
   if (!config.flueModel) {
-    throw new Error('FLUE_MODEL is required when RUNNER=flue');
+    throw new Error('FLUE_MODEL is required when RUNNER=flue or RUNNER=pi');
   }
 
   return config.flueModel;
