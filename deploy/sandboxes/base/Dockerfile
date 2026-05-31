@@ -29,8 +29,10 @@ RUN apt-get update \
     git \
     git-lfs \
     gnupg \
+    fd-find \
     jq \
     openssh-client \
+    ripgrep \
     rsync \
     sudo \
     ttyd \

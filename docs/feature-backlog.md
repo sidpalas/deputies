@@ -6,6 +6,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 - GitHub collaborator permission gating in addition to the current repository, user, org, and trigger-phrase gates.
 - GitHub label-based triggers for teams that want non-mention workflows.
+- Record existing or updated GitHub PRs as external resources, not only PRs created through `gh pr create`; include cases like `gh pr edit`, `gh pr view/checkout`, and branch pushes that resolve to an open PR.
 - Continue consolidating shared integration utilities, especially allowlist helpers, prompt section rendering, and callback target parsing before adding the next major integration.
 - Source-agnostic start/queued/final-response lifecycle so integrations add lightweight start signals while callback senders own exactly one final external reply.
 - Global runner/agent instruction injection for integration behavior that should not appear in chat-visible source prompts.
