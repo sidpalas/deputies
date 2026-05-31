@@ -10,7 +10,11 @@ import type { NormalizedEvent } from '../../src/events/types.js';
 import type { GitHubRepositoryAccess } from '../../src/repositories/setup.js';
 import { PiRunner } from '../../src/runner-pi/runner.js';
 import { createSandboxPiToolDefinitions } from '../../src/runner-pi/sandbox-tools.js';
-import { PI_SESSION_DATA_VERSION, type PiSessionData } from '../../src/runner-pi/session-store.js';
+import {
+  PI_SESSION_DATA_VERSION,
+  PostgresPiSessionStore,
+  type PiSessionData,
+} from '../../src/runner-pi/session-store.js';
 import type { SandboxKeepaliveService } from '../../src/sandbox/service.js';
 import type { FileStat, SandboxFileSystem, SandboxHandle } from '../../src/sandbox/types.js';
 import { MemoryStore } from '../../src/store/memory.js';
@@ -23,6 +27,7 @@ const piMock = vi.hoisted(() => ({
 
 type SandboxPiTool = ReturnType<typeof createSandboxPiToolDefinitions>[number];
 type SandboxPiToolResult = Awaited<ReturnType<SandboxPiTool['execute']>>;
+type ExecCall = { command: string; cwd?: string; timeoutMs?: number };
 
 vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
   const { readFileSync } = await import('node:fs');
@@ -344,6 +349,55 @@ describe('PiRunner', () => {
         .map((line) => JSON.parse(line)),
     ).toEqual([storedSession.header, ...storedSession.entries]);
     expect(sessionStore.save).toHaveBeenCalledWith('session-1', storedSession);
+  });
+
+  it('does not persist successful stored turns after losing run ownership', async () => {
+    const storedSession: PiSessionData = {
+      version: PI_SESSION_DATA_VERSION,
+      header: { id: 'session-1' } as never,
+      entries: [],
+    };
+    const sessionStore = {
+      load: vi.fn(async () => storedSession),
+      save: vi.fn(async () => {}),
+    };
+
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'completed after lease loss' }],
+            model: 'gpt-5.5',
+            stopReason: 'stop',
+          },
+        ],
+        prompt: vi.fn(async () => {}),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe: vi.fn(() => () => {}),
+      },
+      extensionsResult: {},
+    });
+
+    const result = await new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      sessionStore,
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'continue',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async () => {},
+      shouldPersist: async () => false,
+    });
+
+    expect(result.text).toBe('completed after lease loss');
+    expect(sessionStore.save).not.toHaveBeenCalled();
   });
 
   it('does not persist failed stored turns', async () => {
@@ -747,7 +801,7 @@ describe('PiRunner', () => {
 
 describe('createSandboxPiToolDefinitions', () => {
   it('backs read, write, edit, bash, grep, find, and ls with the sandbox handle', async () => {
-    const execCalls: Array<{ command: string; cwd?: string }> = [];
+    const execCalls: ExecCall[] = [];
     const sandbox = createMemorySandbox({ execCalls });
     const tools = createSandboxPiToolDefinitions(sandbox, sandbox.workspacePath);
 
@@ -766,24 +820,100 @@ describe('createSandboxPiToolDefinitions', () => {
 
     const bashResult = await executeTool(tools, 'bash', { command: 'pwd' });
     expect(textResult(bashResult)).toContain('ran: pwd');
-    expect(execCalls).toEqual([{ command: 'pwd', cwd: '/workspace' }]);
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]).toMatchObject({ command: 'pwd', cwd: '/workspace' });
 
     const grepResult = await executeTool(tools, 'grep', { pattern: 'greeting', glob: '*.ts' });
     expect(textResult(grepResult)).toContain('src/app.ts:1: const greeting = "hello";');
     expect(textResult(grepResult)).not.toContain('notes.md');
 
+    const cappedGrepResult = await executeTool(tools, 'grep', { pattern: 'greeting', context: 99, limit: 999 });
+    expect(cappedGrepResult.details).toMatchObject({ contextCapped: 10, limitCapped: 200 });
+
     const findResult = await executeTool(tools, 'find', { pattern: '*.ts' });
     expect(textResult(findResult)).toContain('src/app.ts');
     expect(textResult(findResult)).not.toContain('src/notes.md');
 
+    const cappedFindResult = await executeTool(tools, 'find', { pattern: '*.ts', limit: 999_999 });
+    expect(cappedFindResult.details).toMatchObject({ limitCapped: 5000 });
+
     const lsResult = await executeTool(tools, 'ls', { path: 'src' });
     expect(textResult(lsResult)).toContain('app.ts');
     expect(textResult(lsResult)).toContain('notes.md');
-    expect(execCalls).toEqual([
-      { command: 'pwd', cwd: '/workspace' },
-      { command: expect.stringContaining('rg --json'), cwd: '/workspace' },
-      { command: expect.stringContaining('fd'), cwd: '/workspace' },
+    expect(execCalls).toHaveLength(5);
+    expect(execCalls[0]).toMatchObject({ command: 'pwd', cwd: '/workspace' });
+    expect(execCalls[1]).toMatchObject({
+      command: expect.stringContaining('rg --json'),
+      cwd: '/workspace',
+      timeoutMs: 30_000,
+    });
+    expect(execCalls[2]).toMatchObject({
+      command: expect.stringContaining('--max-count 200'),
+      cwd: '/workspace',
+      timeoutMs: 30_000,
+    });
+    expect(execCalls[3]).toMatchObject({
+      command: expect.stringContaining('fd'),
+      cwd: '/workspace',
+      timeoutMs: 30_000,
+    });
+    expect(execCalls[4]).toMatchObject({
+      command: expect.stringContaining('--max-results 5000'),
+      cwd: '/workspace',
+      timeoutMs: 30_000,
+    });
+  });
+
+  it('skips grep context reads for large files', async () => {
+    const sandbox = createMemorySandbox();
+    await sandbox.fs!.writeFile('/workspace/large.txt', Buffer.alloc(1024 * 1024 + 1, 65));
+    const now = new Date();
+    sandbox.exec = async () => ({
+      exitCode: 0,
+      stdout: `${JSON.stringify({
+        type: 'match',
+        data: {
+          path: { text: '/workspace/large.txt' },
+          line_number: 1,
+          lines: { text: 'A\n' },
+        },
+      })}\n`,
+      stderr: '',
+      startedAt: now,
+      completedAt: now,
+    });
+
+    const result = await executeTool(createSandboxPiToolDefinitions(sandbox, sandbox.workspacePath), 'grep', {
+      pattern: 'A',
+      path: 'large.txt',
+      context: 1,
+    });
+
+    expect(textResult(result)).toContain('context skipped; file exceeds 1048576 bytes');
+    expect(result.details).toMatchObject({ linesTruncated: true });
+  });
+});
+
+describe('PostgresPiSessionStore', () => {
+  it('uses two-int advisory lock keys instead of hashtext', async () => {
+    const queries: Array<{ text: string; values?: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (text: string, values?: unknown[]) => {
+        queries.push({ text, ...(values ? { values } : {}) });
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn(async () => client) };
+    const store = new PostgresPiSessionStore(pool as never);
+
+    await expect(store.withLock('00000000-0000-4000-8000-000000000701', async () => 'locked')).resolves.toBe('locked');
+
+    expect(queries).toEqual([
+      { text: 'SELECT pg_advisory_lock($1::int, $2::int)', values: [0, 1793] },
+      { text: 'SELECT pg_advisory_unlock($1::int, $2::int)', values: [0, 1793] },
     ]);
+    expect(client.release).toHaveBeenCalledOnce();
   });
 });
 
@@ -825,7 +955,7 @@ const githubAccess: GitHubRepositoryAccess = {
   auth: { type: 'bearer', token: 'ghs_secret_token' },
 };
 
-function createMemorySandbox(options: { execCalls?: Array<{ command: string; cwd?: string }> } = {}): SandboxHandle {
+function createMemorySandbox(options: { execCalls?: ExecCall[] } = {}): SandboxHandle {
   const fs = new MemorySandboxFileSystem();
   return {
     provider: 'memory',
@@ -846,7 +976,11 @@ function createMemorySandbox(options: { execCalls?: Array<{ command: string; cwd
     },
     fs,
     async exec(input) {
-      options.execCalls?.push({ command: input.command, ...(input.cwd ? { cwd: input.cwd } : {}) });
+      options.execCalls?.push({
+        command: input.command,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      });
       const now = new Date();
       if (input.command.startsWith('rg ')) {
         return {

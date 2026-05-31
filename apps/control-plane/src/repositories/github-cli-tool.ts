@@ -7,6 +7,24 @@ import type { GitHubRepositoryAccess } from './setup.js';
 import { getPreparedRepository, resolveActiveRepositoryAccess, type RepositoryToolServices } from './tool.js';
 
 const BLOCKED_COMMANDS = new Set(['alias', 'auth', 'config', 'extension', 'gist', 'release']);
+const GH_API_VALUE_FLAGS = new Set([
+  '--cache',
+  '--field',
+  '--header',
+  '--hostname',
+  '--input',
+  '--jq',
+  '--method',
+  '--preview',
+  '--raw-field',
+  '--template',
+  '-F',
+  '-H',
+  '-X',
+  '-f',
+  '-q',
+  '-t',
+]);
 const FILE_INPUT_FLAGS = new Set(['--body-file', '--input']);
 const STRUCTURED_FIELD_FLAGS = new Set(['-F', '--field']);
 const MAX_ARGS = 64;
@@ -103,17 +121,39 @@ function validateArgs(value: unknown): string[] {
   if ((command === 'repo' || command === 'gist') && args[1] === 'clone') {
     throw new Error(`gh ${command} clone is not available through this tool`);
   }
+  if (isLocalMutatingCommand(args)) {
+    throw new Error(
+      `gh ${args.slice(0, 2).join(' ')} is not available because backend gh cannot mutate control-plane files`,
+    );
+  }
   if (isDirectCommentCommand(args)) {
     throw new Error(
       'Posting GitHub issue/PR comments directly through gh is not available. Return the final response normally; Deputies posts it back to GitHub through the callback layer.',
     );
   }
-  if (command === 'api' && isGitDatabaseApiRoute(args[1])) {
+  const api = command === 'api' ? parseApiCommand(args) : null;
+  if (api && isGitDatabaseApiRoute(api.route)) {
     throw new Error(
       'GitHub Git Database API routes are not available through gh. Use sandbox git commands and the authenticated git tool for branch/object pushes.',
     );
   }
   return args;
+}
+
+function isLocalMutatingCommand(args: string[]): boolean {
+  const [command, subcommand] = args;
+  if (args.includes('--web')) return true;
+  if (command === 'browse') return true;
+  if (command === 'issue' && subcommand === 'develop') return true;
+  if (command === 'pr' && subcommand === 'checkout') return true;
+  if (
+    command === 'repo' &&
+    (subcommand === 'clone' || subcommand === 'fork' || subcommand === 'sync' || subcommand === 'set-default')
+  ) {
+    return true;
+  }
+  if (command === 'run' && subcommand === 'download') return true;
+  return false;
 }
 
 function rejectControlPlaneFileInputs(args: string[]): void {
@@ -458,7 +498,11 @@ async function fetchPullRequestNumberForBranch(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<number> {
-  const query = new URLSearchParams({ head: `${access.owner}:${branch}`, state: 'all', per_page: '1' });
+  const query = new URLSearchParams({
+    head: branch.includes(':') ? branch : `${access.owner}:${branch}`,
+    state: 'all',
+    per_page: '1',
+  });
   const init = createGitHubApiRequestInit(access, { method: 'GET', signal });
   const response = await fetchImpl(
     `${githubApiBaseUrl(access)}/repos/${access.owner}/${access.repo}/pulls?${query.toString()}`,
@@ -509,12 +553,42 @@ function isDirectCommentCommand(args: string[]): boolean {
   const command = args[0];
   const subcommand = args[1];
   if ((command === 'issue' || command === 'pr') && subcommand === 'comment') return true;
-  if (command === 'api') return isCommentApiRoute(args[1], args);
+  if (command === 'api') {
+    const api = parseApiCommand(args);
+    return isCommentApiRoute(api.route, api.method);
+  }
   return false;
 }
 
-function isCommentApiRoute(route: string | undefined, args: string[]): boolean {
-  if (!route || !args.includes('--method') || !args.includes('POST')) return false;
+function parseApiCommand(args: string[]): { route?: string; method: string } {
+  let route: string | undefined;
+  let method = 'GET';
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index]!;
+    const [flag, inlineValue] = splitInlineFlagValue(arg);
+    if (flag === '--method') {
+      method = inlineValue ?? args[++index] ?? method;
+      continue;
+    }
+    if (arg === '-X') {
+      method = args[++index] ?? method;
+      continue;
+    }
+    if (arg.startsWith('-X') && arg.length > 2) {
+      method = arg.slice(2);
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      if (inlineValue === undefined && GH_API_VALUE_FLAGS.has(flag)) index += 1;
+      continue;
+    }
+    route ??= arg;
+  }
+  return { ...(route ? { route } : {}), method: method.toUpperCase() };
+}
+
+function isCommentApiRoute(route: string | undefined, method: string): boolean {
+  if (!route || method !== 'POST') return false;
   const normalized = route.replace(/^\/+/, '');
   return (
     /^repos\/[^/]+\/[^/]+\/issues\/\d+\/comments$/.test(normalized) ||

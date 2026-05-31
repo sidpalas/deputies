@@ -55,14 +55,34 @@ export class PostgresPiSessionStore implements PiSessionStore {
 
   async withLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
+    const key = advisoryLockKey(id);
     try {
-      await client.query('SELECT pg_advisory_lock(hashtext($1))', [id]);
+      await client.query('SELECT pg_advisory_lock($1::int, $2::int)', key);
       return await operation();
     } finally {
-      await client.query('SELECT pg_advisory_unlock(hashtext($1))', [id]).catch(() => undefined);
+      await client.query('SELECT pg_advisory_unlock($1::int, $2::int)', key).catch(() => undefined);
       client.release();
     }
   }
+}
+
+function advisoryLockKey(id: string): [number, number] {
+  const normalized = id.replace(/-/g, '').toLowerCase();
+  if (/^[0-9a-f]{32}$/.test(normalized)) {
+    return [signedInt32(normalized.slice(0, 8)), signedInt32(normalized.slice(24, 32))];
+  }
+
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of Buffer.from(id)) {
+    hash ^= BigInt(byte);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return [signedInt32(hash >> 32n), signedInt32(hash & 0xffffffffn)];
+}
+
+function signedInt32(value: string | bigint): number {
+  const parsed = typeof value === 'string' ? Number.parseInt(value, 16) : Number(value);
+  return parsed > 0x7fffffff ? parsed - 0x100000000 : parsed;
 }
 
 function parsePiSessionData(data: unknown): PiSessionData {

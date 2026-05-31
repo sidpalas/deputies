@@ -22,17 +22,27 @@ type GrepInput = {
   literal: boolean;
   context: number;
   limit: number;
+  requestedContext?: number;
+  requestedLimit?: number;
 };
 
 type FindInput = {
   pattern: string;
   path?: string;
   limit: number;
+  requestedLimit?: number;
 };
 
 const defaultGrepLimit = 100;
 const defaultFindLimit = 1000;
+const maxGrepLimit = 200;
+const maxGrepContext = 10;
+const maxFindLimit = 5000;
 const grepMaxLineLength = 2000;
+const grepMaxOutputBytes = 100 * 1024;
+const grepMaxContextFileBytes = 1024 * 1024;
+const grepExecTimeoutMs = 30_000;
+const findExecTimeoutMs = 30_000;
 
 const imageMimeTypes = new Map([
   ['.jpg', 'image/jpeg'],
@@ -173,14 +183,15 @@ function createSandboxGrepToolDefinition(sandbox: SandboxHandle, cwd: string): T
       const fs = requireFs(sandbox);
       const stat = await statExistingPath(fs, searchPath);
       const command = sandboxGrepCommand(input, searchPath);
-      const result = await sandbox.exec({ command, cwd, ...(signal ? { signal } : {}) });
+      const result = await sandbox.exec({ command, cwd, timeoutMs: grepExecTimeoutMs, ...(signal ? { signal } : {}) });
       if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error(grepErrorMessage(result));
       const outputLines: string[] = [];
       let matchCount = 0;
       let matchLimitReached = false;
       let linesTruncated = false;
+      let outputTruncated = false;
 
-      for (const event of parseRipgrepEvents(result.stdout)) {
+      events: for (const event of parseRipgrepEvents(result.stdout)) {
         assertNotAborted(signal);
         if (event.type !== 'match') continue;
         const filePath = typeof event.data?.path?.text === 'string' ? event.data.path.text : '';
@@ -196,15 +207,26 @@ function createSandboxGrepToolDefinition(sandbox: SandboxHandle, cwd: string): T
             lineNumber,
             input.context,
           );
-          for (const line of block.lines) outputLines.push(line);
+          for (const line of block.lines) {
+            if (!appendOutputLine(outputLines, line)) {
+              outputTruncated = true;
+              break events;
+            }
+          }
           if (block.truncated) linesTruncated = true;
         } else {
           const lineText = typeof event.data?.lines?.text === 'string' ? event.data.lines.text : '';
           const formatted = truncateGrepLine(lineText.replace(/\r\n/g, '\n').replace(/\r/g, '').replace(/\n$/, ''));
           if (formatted.truncated) linesTruncated = true;
-          outputLines.push(
-            `${formatGrepPath(searchPath, stat.isDirectory, filePath)}:${lineNumber}: ${formatted.text}`,
-          );
+          if (
+            !appendOutputLine(
+              outputLines,
+              `${formatGrepPath(searchPath, stat.isDirectory, filePath)}:${lineNumber}: ${formatted.text}`,
+            )
+          ) {
+            outputTruncated = true;
+            break;
+          }
         }
         if (matchCount >= input.limit) {
           matchLimitReached = true;
@@ -216,6 +238,14 @@ function createSandboxGrepToolDefinition(sandbox: SandboxHandle, cwd: string): T
 
       const notices: string[] = [];
       const details: Record<string, unknown> = {};
+      if (input.requestedLimit !== undefined && input.requestedLimit > input.limit) {
+        notices.push(`Requested limit capped to ${input.limit} matches`);
+        details.limitCapped = input.limit;
+      }
+      if (input.requestedContext !== undefined && input.requestedContext > input.context) {
+        notices.push(`Requested context capped to ${input.context} lines`);
+        details.contextCapped = input.context;
+      }
       if (matchLimitReached) {
         notices.push(`${input.limit} matches limit reached. Increase limit or refine pattern`);
         details.matchLimitReached = input.limit;
@@ -223,6 +253,10 @@ function createSandboxGrepToolDefinition(sandbox: SandboxHandle, cwd: string): T
       if (linesTruncated) {
         notices.push(`Some lines truncated to ${grepMaxLineLength} chars. Use read tool to see full lines`);
         details.linesTruncated = true;
+      }
+      if (outputTruncated) {
+        notices.push(`Output truncated to ${grepMaxOutputBytes} bytes. Refine pattern or lower context`);
+        details.outputTruncated = true;
       }
       if (notices.length > 0) outputLines.push('', `[${notices.join('. ')}]`);
       return {
@@ -245,7 +279,7 @@ function createSandboxFindToolDefinition(sandbox: SandboxHandle, cwd: string): T
       const searchPath = resolveSandboxPath(cwd, input.path ?? '.');
       if (!(await requireFs(sandbox).exists(searchPath))) throw new Error(`Path not found: ${searchPath}`);
       const command = sandboxFindCommand(input, searchPath);
-      const result = await sandbox.exec({ command, cwd, ...(signal ? { signal } : {}) });
+      const result = await sandbox.exec({ command, cwd, timeoutMs: findExecTimeoutMs, ...(signal ? { signal } : {}) });
       if (result.exitCode !== 0) throw new Error(findErrorMessage(result));
       const lines = result.stdout
         .split('\n')
@@ -258,6 +292,10 @@ function createSandboxFindToolDefinition(sandbox: SandboxHandle, cwd: string): T
       const resultLimitReached = relativized.length >= input.limit;
       const outputLines = [...relativized];
       const details: Record<string, unknown> = {};
+      if (input.requestedLimit !== undefined && input.requestedLimit > input.limit) {
+        outputLines.push('', `[Requested limit capped to ${input.limit} results]`);
+        details.limitCapped = input.limit;
+      }
       if (resultLimitReached) {
         outputLines.push('', `[${input.limit} results limit reached. Increase limit or refine pattern]`);
         details.resultLimitReached = input.limit;
@@ -285,9 +323,13 @@ function readGrepInput(params: Record<string, unknown>): GrepInput {
     pattern,
     ignoreCase: params.ignoreCase === true,
     literal: params.literal === true,
-    context: readNonNegativeInteger(params.context, 0),
-    limit: readPositiveInteger(params.limit, defaultGrepLimit),
+    context: readBoundedNonNegativeInteger(params.context, 0, maxGrepContext),
+    limit: readBoundedPositiveInteger(params.limit, defaultGrepLimit, maxGrepLimit),
   };
+  if (typeof params.context === 'number' && Number.isFinite(params.context))
+    input.requestedContext = Math.floor(params.context);
+  if (typeof params.limit === 'number' && Number.isFinite(params.limit))
+    input.requestedLimit = Math.floor(params.limit);
   if (typeof params.path === 'string' && params.path.trim()) input.path = params.path;
   if (typeof params.glob === 'string' && params.glob.trim()) input.glob = params.glob;
   return input;
@@ -296,7 +338,9 @@ function readGrepInput(params: Record<string, unknown>): GrepInput {
 function readFindInput(params: Record<string, unknown>): FindInput {
   const pattern = typeof params.pattern === 'string' ? params.pattern : '';
   if (!pattern) throw new Error('find pattern must be a non-empty string');
-  const input: FindInput = { pattern, limit: readPositiveInteger(params.limit, defaultFindLimit) };
+  const input: FindInput = { pattern, limit: readBoundedPositiveInteger(params.limit, defaultFindLimit, maxFindLimit) };
+  if (typeof params.limit === 'number' && Number.isFinite(params.limit))
+    input.requestedLimit = Math.floor(params.limit);
   if (typeof params.path === 'string' && params.path.trim()) input.path = params.path;
   return input;
 }
@@ -311,6 +355,15 @@ async function formatGrepContextBlock(
 ): Promise<{ lines: string[]; truncated: boolean }> {
   let content: string;
   try {
+    const stat = await fs.stat(filePath);
+    if (stat.size > grepMaxContextFileBytes) {
+      return {
+        lines: [
+          `${formatGrepPath(searchPath, isDirectory, filePath)}:${lineNumber}: (context skipped; file exceeds ${grepMaxContextFileBytes} bytes)`,
+        ],
+        truncated: true,
+      };
+    }
     content = await fs.readFile(filePath);
   } catch {
     return {
@@ -348,14 +401,14 @@ function truncateGrepLine(line: string): { text: string; truncated: boolean } {
   return { text: `${line.slice(0, grepMaxLineLength)}...`, truncated: true };
 }
 
-function readPositiveInteger(value: unknown, fallback: number): number {
+function readBoundedPositiveInteger(value: unknown, fallback: number, max: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-  return Math.max(1, Math.floor(value));
+  return Math.min(max, Math.max(1, Math.floor(value)));
 }
 
-function readNonNegativeInteger(value: unknown, fallback: number): number {
+function readBoundedNonNegativeInteger(value: unknown, fallback: number, max: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.floor(value));
+  return Math.min(max, Math.max(0, Math.floor(value)));
 }
 
 function resolveSandboxPath(cwd: string, requestedPath: string): string {
@@ -365,6 +418,13 @@ function resolveSandboxPath(cwd: string, requestedPath: string): string {
 
 function assertNotAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new Error('Operation aborted');
+}
+
+function appendOutputLine(lines: string[], line: string): boolean {
+  const next = lines.length ? `${lines.join('\n')}\n${line}` : line;
+  if (Buffer.byteLength(next, 'utf8') > grepMaxOutputBytes) return false;
+  lines.push(line);
+  return true;
 }
 
 function sandboxGrepCommand(input: GrepInput, searchPath: string): string {

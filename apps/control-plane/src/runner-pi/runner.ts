@@ -231,7 +231,7 @@ export class PiRunner implements Runner {
       input.signal?.removeEventListener('abort', abortSession);
       unsubscribe();
       session.dispose();
-      await this.persistAndCleanup(input.sessionId, lease, completed);
+      await this.persistAndCleanup(input, lease, completed);
     }
   }
 
@@ -272,11 +272,11 @@ export class PiRunner implements Runner {
     }
   }
 
-  private async persistAndCleanup(sessionId: string, lease: PiSessionLease, completed: boolean): Promise<void> {
+  private async persistAndCleanup(input: RunnerInput, lease: PiSessionLease, completed: boolean): Promise<void> {
     try {
-      if (completed) {
+      if (completed && (!input.shouldPersist || (await input.shouldPersist()))) {
         const store = this.options.sessionStore;
-        if (store) await store.save(sessionId, sessionManagerData(lease.manager));
+        if (store) await store.save(input.sessionId, sessionManagerData(lease.manager));
       }
     } finally {
       await lease.cleanup();
