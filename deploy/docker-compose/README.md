@@ -120,7 +120,7 @@ Compose bind mounts the host Codex auth file into containers that run workers:
 ${HOME}/.pi/agent/auth.json:/run/secrets/openai-codex-auth.json
 ```
 
-If you use `RUNNER_MODEL=openai-codex/<model>`, create the host auth file first:
+If you use `RUNNER_MODEL_DEFAULT=openai-codex/<model>`, create the host auth file first:
 
 ```sh
 mise run //apps/control-plane:auth:login:openai-codex

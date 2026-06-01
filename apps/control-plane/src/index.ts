@@ -11,7 +11,7 @@ import {
   requireDaytonaApiKey,
   requireDockerOrchestratorUrl,
   requireGitHubAppCredentials,
-  requireRunnerModel,
+  requireRunnerModelDefault,
 } from './config/index.js';
 import { GitHubArchivedSessionNotifier } from './integrations/github/archived-session-notifier.js';
 import { GitHubCompletionCallbackSender } from './integrations/github/callback-sender.js';
@@ -267,7 +267,7 @@ async function createRunner(): Promise<Runner> {
     return new FakeRunner(config.fakeRunnerArtifact ? { artifact: config.fakeRunnerArtifact } : {});
   }
 
-  const model = requireRunnerModel(config);
+  const model = requireRunnerModelDefault(config);
   if (config.runner === 'pi') {
     const piOptions: PiRunnerOptions = {
       model,
@@ -327,6 +327,6 @@ async function createRunner(): Promise<Runner> {
     ...(services.sandboxKeepalive ? { sandboxKeepalive: services.sandboxKeepalive } : {}),
     sandboxKeepaliveMaxExtensionMs: config.sandboxKeepaliveMaxExtensionMs,
     modelUnavailableReason: (inputModel) =>
-      services.modelAvailability.unavailableFor(inputModel || config.runnerModel)?.reason,
+      services.modelAvailability.unavailableFor(inputModel || config.runnerModelDefault)?.reason,
   });
 }

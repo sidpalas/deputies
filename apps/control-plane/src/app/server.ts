@@ -469,7 +469,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     return c.json({
       models,
       modelChoices: modelChoices(config, services.modelAvailability),
-      defaultModel: config.runnerModel ?? models[0] ?? null,
+      defaultModel: config.runnerModelDefault ?? models[0] ?? null,
     });
   });
 
@@ -862,7 +862,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     try {
       const repository = parseRepositoryBody(body.repository);
       const model = parseModelBody(body.model, config);
-      const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModel);
+      const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModelDefault);
       if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
       const branch = repository ? parseBranchBody(body.branch) : undefined;
       const context = {

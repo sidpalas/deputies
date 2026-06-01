@@ -127,7 +127,7 @@ it('submits the selected model without inherited repo or branch overrides', asyn
   render(<App />);
 
   const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
-  expect(await screen.findByText('gpt 4.1')).toBeInTheDocument();
+  expect(await screen.findByText('gpt 4.1 (OpenAI)')).toBeInTheDocument();
   fireEvent.change(composer, { target: { value: 'follow up' } });
   fireEvent.keyDown(composer, { key: 'Enter' });
 
@@ -196,7 +196,18 @@ it('keeps only one context picker open at a time', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Model' }));
   expect(screen.queryByRole('option', { name: 'owner/repo' })).not.toBeInTheDocument();
-  expect(screen.getByRole('option', { name: /gpt 4\.1/i })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: /gpt 4\.1 \(OpenAI\)/i })).toBeInTheDocument();
+});
+
+it('shows providers for models with the same model name', async () => {
+  mockApi({ models: ['openai/gpt-5.5', 'opencode/gpt-5.5'] });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+
+  expect(screen.getByRole('option', { name: 'gpt 5.5 (OpenAI)' })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: 'gpt 5.5 (OpenCode Zen)' })).toBeInTheDocument();
 });
 
 it('keeps Enter available for newlines in mobile composer text', async () => {

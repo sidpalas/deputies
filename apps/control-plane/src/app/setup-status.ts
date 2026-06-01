@@ -109,7 +109,9 @@ function runnerStatus(config: AppConfig): SetupStatusItem {
     state: realRunnerSelected ? 'configured' : 'warning',
     summary: `${config.runner} runner selected.`,
     guidance: realRunnerSelected ? undefined : 'Use Flue or Pi for real agent execution.',
-    guidanceItems: realRunnerSelected ? undefined : ['RUNNER=flue', 'RUNNER=pi', 'RUNNER_MODEL=<DEFAULT_MODEL_CHOICE>'],
+    guidanceItems: realRunnerSelected
+      ? undefined
+      : ['RUNNER=flue', 'RUNNER=pi', 'RUNNER_MODEL_DEFAULT=<DEFAULT_MODEL_CHOICE>'],
     details: [`Runner: ${config.runner}`],
     docsPath: 'README.md',
   };

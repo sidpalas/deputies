@@ -51,12 +51,16 @@ export class ModelAvailabilityService {
   }
 }
 
-export function configuredModels(config: Pick<AppConfig, 'runnerModel' | 'runnerModelChoices'>): string[] {
-  return config.runnerModelChoices.length ? config.runnerModelChoices : config.runnerModel ? [config.runnerModel] : [];
+export function configuredModels(config: Pick<AppConfig, 'runnerModelDefault' | 'runnerModelChoices'>): string[] {
+  return config.runnerModelChoices.length
+    ? config.runnerModelChoices
+    : config.runnerModelDefault
+      ? [config.runnerModelDefault]
+      : [];
 }
 
 export function modelChoices(
-  config: Pick<AppConfig, 'runnerModel' | 'runnerModelChoices'>,
+  config: Pick<AppConfig, 'runnerModelDefault' | 'runnerModelChoices'>,
   availability: ModelAvailabilityService,
 ): ModelChoice[] {
   return configuredModels(config).map((model) => {
@@ -77,10 +81,17 @@ export function modelChoices(
 }
 
 export function modelLabel(model: string): string {
-  return model.replace(/^[^/]+\//, '').replace(/-/g, ' ');
+  const separator = model.indexOf('/');
+  if (separator === -1) return model.replace(/-/g, ' ');
+
+  return `${model.slice(separator + 1).replace(/-/g, ' ')} (${modelProviderLabel(model.slice(0, separator))})`;
 }
 
 function modelProviderLabel(prefix: string): string {
-  if (prefix === 'openai-codex/') return 'OpenAI Codex';
-  return prefix.replace(/\/$/, '');
+  const provider = prefix.replace(/\/$/, '');
+  if (provider === 'anthropic') return 'Anthropic';
+  if (provider === 'openai') return 'OpenAI';
+  if (provider === 'openai-codex') return 'OpenAI Codex';
+  if (provider === 'opencode') return 'OpenCode Zen';
+  return provider.replace(/-/g, ' ');
 }

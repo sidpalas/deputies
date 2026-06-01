@@ -5,7 +5,7 @@ import { runMigrations } from '../../src/db/migrate.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 const enabled = process.env.RUN_REAL_DAYTONA_FLUE_UAT === 'true';
-const hasRequiredEnv = Boolean(testDatabaseUrl && process.env.DAYTONA_API_KEY && process.env.RUNNER_MODEL);
+const hasRequiredEnv = Boolean(testDatabaseUrl && process.env.DAYTONA_API_KEY && process.env.RUNNER_MODEL_DEFAULT);
 const uatPort = 4594;
 
 describe.skipIf(!enabled || !hasRequiredEnv)('real Daytona + Flue UAT', () => {
