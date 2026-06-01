@@ -1,6 +1,6 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 import type { NormalizedEvent, NormalizedEventPayload, NormalizedEventType } from '../events/types.js';
-import { defaultGroupId } from './types.js';
+import { defaultGroupId, StoreConflictError } from './types.js';
 import type {
   AppStore,
   ArtifactRecord,
@@ -423,21 +423,28 @@ export class PostgresStore implements AppStore {
   }
 
   async createGroup(record: GroupRecord): Promise<GroupRecord> {
-    const result = await this.pool.query<GroupRow>(
-      `INSERT INTO groups (id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at`,
-      [
-        record.id,
-        record.name,
-        record.defaultVisibility,
-        record.defaultWritePolicy,
-        record.archivedAt ?? null,
-        record.createdAt,
-        record.updatedAt,
-      ],
-    );
-    return toGroup(result.rows[0]!);
+    try {
+      const result = await this.pool.query<GroupRow>(
+        `INSERT INTO groups (id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at`,
+        [
+          record.id,
+          record.name.trim(),
+          record.defaultVisibility,
+          record.defaultWritePolicy,
+          record.archivedAt ?? null,
+          record.createdAt,
+          record.updatedAt,
+        ],
+      );
+      return toGroup(result.rows[0]!);
+    } catch (error) {
+      if (isUniqueViolation(error, 'groups_name_unique_idx')) {
+        throw new StoreConflictError('group_name_exists', 'Group name already exists');
+      }
+      throw error;
+    }
   }
 
   async getGroup(id: string): Promise<GroupRecord | null> {
@@ -460,26 +467,33 @@ export class PostgresStore implements AppStore {
   }
 
   async updateGroup(record: GroupRecord): Promise<GroupRecord> {
-    const result = await this.pool.query<GroupRow>(
-      `UPDATE groups
-       SET name = $2,
-           default_visibility = $3,
-           default_write_policy = $4,
-           archived_at = $5,
-           updated_at = $6
-       WHERE id = $1
-       RETURNING id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at`,
-      [
-        record.id,
-        record.name,
-        record.defaultVisibility,
-        record.defaultWritePolicy,
-        record.archivedAt ?? null,
-        record.updatedAt,
-      ],
-    );
-    if (!result.rows[0]) throw new Error(`Group does not exist: ${record.id}`);
-    return toGroup(result.rows[0]);
+    try {
+      const result = await this.pool.query<GroupRow>(
+        `UPDATE groups
+         SET name = $2,
+             default_visibility = $3,
+             default_write_policy = $4,
+             archived_at = $5,
+             updated_at = $6
+         WHERE id = $1
+         RETURNING id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at`,
+        [
+          record.id,
+          record.name.trim(),
+          record.defaultVisibility,
+          record.defaultWritePolicy,
+          record.archivedAt ?? null,
+          record.updatedAt,
+        ],
+      );
+      if (!result.rows[0]) throw new Error(`Group does not exist: ${record.id}`);
+      return toGroup(result.rows[0]);
+    } catch (error) {
+      if (isUniqueViolation(error, 'groups_name_unique_idx')) {
+        throw new StoreConflictError('group_name_exists', 'Group name already exists');
+      }
+      throw error;
+    }
   }
 
   async upsertGroupMember(record: GroupMemberRecord): Promise<GroupMemberRecord> {
@@ -1845,6 +1859,17 @@ function toGroup(row: GroupRow): GroupRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function isUniqueViolation(error: unknown, constraint: string): boolean {
+  return Boolean(
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    error.code === '23505' &&
+    'constraint' in error &&
+    error.constraint === constraint,
+  );
 }
 
 function toGroupMember(row: GroupMemberRow): GroupMemberRecord {

@@ -637,6 +637,28 @@ describe('core API', () => {
     await expect(moveToArchivedGroup.json()).resolves.toMatchObject({ error: 'archived_group' });
   });
 
+  it('rejects duplicate group names case-insensitively', async () => {
+    const createGroup = await postJson(`${baseUrl}/groups`, { name: ' Client access ' });
+    expect(createGroup.status).toBe(201);
+    await expect(createGroup.json()).resolves.toMatchObject({ group: { name: 'Client access' } });
+
+    const duplicateCreate = await postJson(`${baseUrl}/groups`, { name: 'client access' });
+    expect(duplicateCreate.status).toBe(409);
+    await expect(duplicateCreate.json()).resolves.toMatchObject({ error: 'group_name_exists' });
+
+    const otherGroup = await postJson(`${baseUrl}/groups`, { name: 'Other access' });
+    expect(otherGroup.status).toBe(201);
+    const { group } = (await otherGroup.json()) as { group: { id: string } };
+
+    const duplicateUpdate = await fetch(`${baseUrl}/groups/${group.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'CLIENT ACCESS' }),
+    });
+    expect(duplicateUpdate.status).toBe(409);
+    await expect(duplicateUpdate.json()).resolves.toMatchObject({ error: 'group_name_exists' });
+  });
+
   it('does not grant credentialed CORS access to untrusted origins', async () => {
     const response = await fetch(`${baseUrl}/sessions`, {
       method: 'OPTIONS',

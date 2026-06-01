@@ -113,6 +113,7 @@ import {
   SessionAuthPanel,
   SetupGuidePanel,
   GroupsPanel,
+  GroupsSidebar,
   StartupLoadingPanel,
   ThreadHeader,
   ThreadSidebar,
@@ -153,6 +154,7 @@ export function App() {
   const [groupFormName, setGroupFormName] = useState('');
   const [groupFormVisibility, setGroupFormVisibility] = useState<SessionVisibility>('organization');
   const [groupFormWritePolicy, setGroupFormWritePolicy] = useState<SessionWritePolicy>('group_members');
+  const [groupFormServerError, setGroupFormServerError] = useState('');
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
   const [memberSearchLoading, setMemberSearchLoading] = useState(false);
   const [memberUserId, setMemberUserId] = useState('');
@@ -233,6 +235,8 @@ export function App() {
   const canManageAllGroups = canCallApi && (!sessionAuthRequired || currentUser?.role === 'super_admin');
   const canManageGroups = canManageAllGroups || (canCallApi && manageableGroups.length > 0);
   const canViewGroups = canManageGroups || (canCallApi && sessionAuthRequired && groups.length > 0);
+  const groupFormValidationError = groupNameValidationError(groups, selectedGroupId, groupFormName);
+  const groupFormError = groupFormValidationError || groupFormServerError;
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) ?? null,
     [sessions, selectedSessionId],
@@ -524,6 +528,7 @@ export function App() {
     setGroupFormName(group.name);
     setGroupFormVisibility(group.defaultVisibility);
     setGroupFormWritePolicy(group.defaultWritePolicy);
+    setGroupFormServerError('');
     if (!groupsPanelOpen || !group.canManage) return;
     listGroupMembers({ groupId: group.id, token }).then(setGroupMembers).catch(handleApiError);
   }, [groupsPanelOpen, groups, groupsPanelView, selectedGroupId, token]);
@@ -1190,15 +1195,24 @@ export function App() {
     setSetupGuideOpen(false);
     setGroupsPanelOpen(true);
     sessionStorage.setItem(groupsPanelOpenStorageKey, 'true');
-    setSidebarOpen(false);
+    setSidebarCollapsed(false);
+    setSidebarOpen(!isDesktopViewport());
+  }
+
+  function showSessionsSidebar() {
+    setGroupsPanelOpen(false);
+    sessionStorage.removeItem(groupsPanelOpenStorageKey);
+    setSidebarCollapsed(false);
+    setSidebarOpen(true);
   }
 
   async function handleCreateGroup() {
     if (!canManageAllGroups) return;
+    const name = nextAccessGroupName(groups);
     setError('');
     try {
       const group = await createGroup({
-        name: 'New access group',
+        name,
         defaultVisibility: 'organization',
         defaultWritePolicy: 'group_members',
         token,
@@ -1213,10 +1227,21 @@ export function App() {
     }
   }
 
+  function handleGroupFormNameChange(value: string) {
+    setGroupFormName(value);
+    setGroupFormServerError('');
+  }
+
   async function handleSaveGroup() {
     const group = groups.find((candidate) => candidate.id === selectedGroupId);
     if (!group?.canManage || !groupFormName.trim()) return;
+    const validationError = groupNameValidationError(groups, group.id, groupFormName);
+    if (validationError) {
+      setGroupFormServerError(validationError);
+      return;
+    }
     setError('');
+    setGroupFormServerError('');
     try {
       const updated = await updateGroup({
         groupId: group.id,
@@ -1227,6 +1252,10 @@ export function App() {
       });
       setGroups((current) => current.map((candidate) => (candidate.id === updated.id ? updated : candidate)));
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setGroupFormServerError('An access group with this name already exists.');
+        return;
+      }
       handleApiError(err);
     }
   }
@@ -1347,12 +1376,14 @@ export function App() {
     sessionStorage.setItem(groupsPanelViewStorageKey, 'group');
     sessionStorage.setItem(groupsPanelSelectedGroupStorageKey, groupId);
     setSelectedGroupId(groupId);
+    if (!isDesktopViewport()) setSidebarOpen(false);
   }
 
   function selectSuperAdminsPanel() {
     if (!canManageAllGroups) return;
     setGroupsPanelView('super_admins');
     sessionStorage.setItem(groupsPanelViewStorageKey, 'super_admins');
+    if (!isDesktopViewport()) setSidebarOpen(false);
   }
 
   async function handleUpdateSessionAccess(input: { ownerGroupId: string }): Promise<boolean> {
@@ -1655,8 +1686,8 @@ export function App() {
                   variant="ghost"
                   size="icon"
                   onClick={expandSidebar}
-                  aria-label="Expand sessions"
-                  title="Expand sessions"
+                  aria-label={groupsPanelOpen ? 'Expand access groups' : 'Expand sessions'}
+                  title={groupsPanelOpen ? 'Expand access groups' : 'Expand sessions'}
                 >
                   <PanelLeftOpen className="h-4 w-4" />
                 </Button>
@@ -1668,33 +1699,60 @@ export function App() {
                   sidebarOpen && 'block',
                 )}
               >
-                <ThreadSidebar
-                  archivedSessionsOpen={archivedSessionsOpen || Boolean(selectedSessionArchived)}
-                  authRequired={bearerAuthRequired || sessionAuthRequired}
-                  canCallApi={canCallApi}
-                  canViewGroups={canViewGroups}
-                  canStartNewThread={canCreateThread}
-                  canViewSetup={canViewSetup}
-                  canWriteSession={userCanWriteSession}
-                  health={health}
-                  connectionStatus={connectionStatus}
-                  loading={loading}
-                  sessions={sortedSessions}
-                  selectedSessionId={selectedSessionId}
-                  token={token}
-                  onArchive={archiveFromList}
-                  onArchivedSessionsOpenChange={setArchivedSessionsOpen}
-                  onCollapse={collapseSidebar}
-                  onNewThread={startNewThread}
-                  onOpenGroups={openGroupsPanel}
-                  onOpenSetup={openSetupGuide}
-                  onRefresh={refreshSessions}
-                  onSelect={selectSession}
-                  onSignOut={signOut}
-                  onThemeChange={setThemePreference}
-                  themePreference={themePreference}
-                  onUnarchive={unarchiveFromList}
-                />
+                {groupsPanelOpen ? (
+                  <GroupsSidebar
+                    authRequired={bearerAuthRequired || sessionAuthRequired}
+                    canCreateGroups={canManageAllGroups}
+                    canViewGroups={canViewGroups}
+                    canViewSetup={canViewSetup}
+                    connectionStatus={connectionStatus}
+                    currentUser={currentUser}
+                    groups={groups}
+                    health={health}
+                    selectedGroupId={selectedGroupId}
+                    selectedView={groupsPanelView}
+                    superAdminUsers={currentSuperAdminUsers}
+                    themePreference={themePreference}
+                    token={token}
+                    onBackToSessions={showSessionsSidebar}
+                    onCollapse={collapseSidebar}
+                    onCreateGroup={handleCreateGroup}
+                    onOpenGroups={openGroupsPanel}
+                    onOpenSetup={openSetupGuide}
+                    onSelectGroup={selectGroupPanel}
+                    onSelectSuperAdmins={selectSuperAdminsPanel}
+                    onSignOut={signOut}
+                    onThemeChange={setThemePreference}
+                  />
+                ) : (
+                  <ThreadSidebar
+                    archivedSessionsOpen={archivedSessionsOpen || Boolean(selectedSessionArchived)}
+                    authRequired={bearerAuthRequired || sessionAuthRequired}
+                    canCallApi={canCallApi}
+                    canViewGroups={canViewGroups}
+                    canStartNewThread={canCreateThread}
+                    canViewSetup={canViewSetup}
+                    canWriteSession={userCanWriteSession}
+                    health={health}
+                    connectionStatus={connectionStatus}
+                    loading={loading}
+                    sessions={sortedSessions}
+                    selectedSessionId={selectedSessionId}
+                    token={token}
+                    onArchive={archiveFromList}
+                    onArchivedSessionsOpenChange={setArchivedSessionsOpen}
+                    onCollapse={collapseSidebar}
+                    onNewThread={startNewThread}
+                    onOpenGroups={openGroupsPanel}
+                    onOpenSetup={openSetupGuide}
+                    onRefresh={refreshSessions}
+                    onSelect={selectSession}
+                    onSignOut={signOut}
+                    onThemeChange={setThemePreference}
+                    themePreference={themePreference}
+                    onUnarchive={unarchiveFromList}
+                  />
+                )}
               </aside>
             )}
 
@@ -1708,6 +1766,7 @@ export function App() {
                     currentUser={currentUser}
                     groupMembers={groupMembers}
                     groups={groups}
+                    groupFormError={groupFormError}
                     groupFormName={groupFormName}
                     groupFormVisibility={groupFormVisibility}
                     groupFormWritePolicy={groupFormWritePolicy}
@@ -1723,15 +1782,17 @@ export function App() {
                     superAdminUserOptions={superAdminUserOptions}
                     superAdminUsers={currentSuperAdminUsers}
                     users={userOptions}
+                    showOpenSidebar={!sidebarOpen}
                     onAddMember={handleAddGroupMember}
                     onArchiveGroup={handleArchiveGroup}
                     onCreateGroup={handleCreateGroup}
-                    onGroupFormNameChange={setGroupFormName}
+                    onGroupFormNameChange={handleGroupFormNameChange}
                     onGroupFormVisibilityChange={setGroupFormVisibility}
                     onGroupFormWritePolicyChange={setGroupFormWritePolicy}
                     onMemberRoleChange={setMemberRole}
                     onMemberSearchQueryChange={setMemberSearchQuery}
                     onMemberUserIdChange={setMemberUserId}
+                    onOpenSidebar={expandSidebar}
                     onSelectMemberUser={selectMemberUser}
                     onPromoteSuperAdmin={handlePromoteSuperAdmin}
                     onRemoveMember={handleRemoveGroupMember}
@@ -2174,6 +2235,28 @@ function canWriteSession(user: AuthUser | null, session: Session, groups: Group[
 
 function groupCanManage(groups: Group[], groupId: string): boolean {
   return groups.some((group) => group.id === groupId && group.canManage);
+}
+
+function nextAccessGroupName(groups: Group[]): string {
+  const baseName = 'New access group';
+  const names = new Set(groups.map((group) => normalizeGroupName(group.name)));
+  if (!names.has(normalizeGroupName(baseName))) return baseName;
+
+  for (let index = 2; ; index += 1) {
+    const name = `${baseName} ${index}`;
+    if (!names.has(normalizeGroupName(name))) return name;
+  }
+}
+
+function groupNameValidationError(groups: Group[], groupId: string, name: string): string {
+  const normalized = normalizeGroupName(name);
+  if (!normalized) return '';
+  const duplicate = groups.some((group) => group.id !== groupId && normalizeGroupName(group.name) === normalized);
+  return duplicate ? 'An access group with this name already exists.' : '';
+}
+
+function normalizeGroupName(name: string): string {
+  return name.trim().toLowerCase();
 }
 
 function upsertAuthUser(users: AuthUser[], user: AuthUser): AuthUser[] {

@@ -17,6 +17,7 @@ import {
   Archive,
   ChevronDown,
   Code2,
+  CornerUpLeft,
   GitCompare,
   Monitor,
   Moon,
@@ -409,92 +410,138 @@ export function SetupGuidePanel(props: {
   );
 }
 
-export function GroupsPanel(props: {
+export function GroupsSidebar(props: {
+  authRequired: boolean;
   canCreateGroups: boolean;
+  canViewGroups: boolean;
+  canViewSetup: boolean;
+  connectionStatus: ConnectionStatus;
   currentUser: AuthUser | null;
-  groupMembers: GroupMember[];
   groups: Group[];
-  groupFormName: string;
-  groupFormVisibility: SessionVisibility;
-  groupFormWritePolicy: SessionWritePolicy;
-  memberRole: GroupRole;
-  memberSearchLoading: boolean;
-  memberSearchQuery: string;
-  memberUserId: string;
+  health: Health | null;
   selectedGroupId: string;
   selectedView: 'group' | 'super_admins';
-  superAdminSearchLoading: boolean;
-  superAdminSearchQuery: string;
-  superAdminUserId: string;
-  superAdminUserOptions: AuthUser[];
   superAdminUsers: AuthUser[];
-  users: AuthUser[];
-  onAddMember: () => void;
-  onArchiveGroup: (groupId: string, archived: boolean) => void;
+  themePreference: ThemePreference;
+  token: string;
+  onBackToSessions: () => void;
+  onCollapse: () => void;
   onCreateGroup: () => void;
-  onGroupFormNameChange: (value: string) => void;
-  onGroupFormVisibilityChange: (value: SessionVisibility) => void;
-  onGroupFormWritePolicyChange: (value: SessionWritePolicy) => void;
-  onMemberRoleChange: (value: GroupRole) => void;
-  onMemberSearchQueryChange: (value: string) => void;
-  onMemberUserIdChange: (value: string) => void;
-  onPromoteSuperAdmin: () => void;
-  onRemoveMember: (userId: string) => void;
-  onRemoveSuperAdmin: (userId: string) => void;
-  onSaveGroup: () => void;
+  onOpenGroups: () => void;
+  onOpenSetup: () => void;
   onSelectGroup: (groupId: string) => void;
-  onSelectMemberUser: (userId: string) => void;
-  onSelectSuperAdminUser: (userId: string) => void;
   onSelectSuperAdmins: () => void;
-  onSuperAdminSearchQueryChange: (value: string) => void;
-  onSuperAdminUserIdChange: (value: string) => void;
-  onUpdateMemberRole: (userId: string, role: GroupRole) => void;
+  onSignOut: () => void;
+  onThemeChange: (value: ThemePreference) => void;
 }) {
+  const [groupSearch, setGroupSearch] = useState('');
   const [archivedGroupsOpen, setArchivedGroupsOpen] = useState(
     () => sessionStorage.getItem(archivedGroupsOpenStorageKey) === 'true',
   );
-  const selectedGroup = props.groups.find((group) => group.id === props.selectedGroupId) ?? null;
-  const activeGroups = props.groups.filter((group) => !group.archivedAt);
-  const archivedGroups = props.groups.filter((group) => group.archivedAt);
-  const memberships = props.currentUser?.memberships ?? [];
+  const normalizedGroupSearch = groupSearch.trim().toLowerCase();
+  const searchingGroups = Boolean(normalizedGroupSearch);
+  const activeGroups = props.groups.filter(
+    (group) => !group.archivedAt && (!searchingGroups || group.name.toLowerCase().includes(normalizedGroupSearch)),
+  );
+  const archivedGroups = props.groups.filter(
+    (group) => group.archivedAt && (!searchingGroups || group.name.toLowerCase().includes(normalizedGroupSearch)),
+  );
   const currentUserDisplayName = props.currentUser?.displayName || props.currentUser?.username;
   const showCurrentUsername = Boolean(
     props.currentUser?.displayName && props.currentUser.displayName !== props.currentUser.username,
   );
-  const selectedMemberUser = props.users.find((user) => user.id === props.memberUserId);
-  const selectedSuperAdminUser = props.superAdminUserOptions.find((user) => user.id === props.superAdminUserId);
+  const archivedOpen = searchingGroups || archivedGroupsOpen;
+  const hasMatchingGroups = activeGroups.length > 0 || archivedGroups.length > 0;
 
   function handleArchivedGroupsToggle(event: SyntheticEvent<HTMLDetailsElement>) {
+    if (searchingGroups) return;
     const open = event.currentTarget.open;
     sessionStorage.setItem(archivedGroupsOpenStorageKey, String(open));
     setArchivedGroupsOpen(open);
   }
 
   return (
-    <section className="h-full overflow-auto px-3 py-6 md:px-8 xl:px-20">
-      <div className="mx-auto grid max-w-6xl gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <div>
-          <div className="mb-4">
-            <p className="text-sm font-medium text-muted-foreground">Access control</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight">Access groups</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Select a session to return to the workspace.</p>
-          </div>
-          {props.canCreateGroups ? (
-            <Card className="mb-3 p-2">
-              <button
-                type="button"
-                className={cn(
-                  'w-full rounded-md px-3 py-2 text-left text-sm hover:bg-accent',
-                  props.selectedView === 'super_admins' && 'bg-primary/15 text-primary',
-                )}
-                onClick={props.onSelectSuperAdmins}
-              >
-                <strong className="block truncate">Super admins</strong>
-                <span className="text-xs text-muted-foreground">{props.superAdminUsers.length} users</span>
-              </button>
-            </Card>
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+      <div className="mb-3 flex shrink-0 items-center gap-2">
+        <Button
+          className="shrink-0"
+          variant="ghost"
+          size="icon"
+          onClick={props.onCollapse}
+          aria-label="Hide sidebar"
+          title="Hide sidebar"
+        >
+          <PanelLeftClose className="h-4 w-4" />
+        </Button>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Access control</p>
+          <h2 className="truncate text-sm font-semibold">Access groups</h2>
+        </div>
+      </div>
+
+      <Button className="mb-3 w-full justify-start" variant="secondary" onClick={props.onBackToSessions}>
+        <CornerUpLeft className="h-4 w-4" /> Back to sessions
+      </Button>
+
+      <div className="min-h-0 min-w-0 flex-1 overflow-auto" data-thread-scroll-exclude="true">
+        <h3 className="mb-2 px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Access</h3>
+        <Card className="mb-3 p-3 text-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your access</p>
+          {props.currentUser ? (
+            <>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <strong className="min-w-0 truncate">{currentUserDisplayName}</strong>
+                <Badge>{authRoleLabel(props.currentUser.role)}</Badge>
+              </div>
+              {showCurrentUsername ? (
+                <p className="mt-1 truncate text-xs text-muted-foreground">{props.currentUser.username}</p>
+              ) : null}
+              <p className="mt-2 text-xs text-muted-foreground">Group access is shown in the list below.</p>
+            </>
+          ) : (
+            <p className="mt-2 text-xs text-muted-foreground">Session auth is not enabled.</p>
+          )}
+        </Card>
+
+        {props.canCreateGroups ? (
+          <Card className="mb-3 p-2">
+            <button
+              type="button"
+              className={cn(
+                'w-full rounded-md px-3 py-2 text-left text-sm hover:bg-accent',
+                props.selectedView === 'super_admins' && 'bg-primary/15 text-primary',
+              )}
+              onClick={props.onSelectSuperAdmins}
+            >
+              <strong className="block truncate">Manage super admins</strong>
+              <span className="text-xs text-muted-foreground">{props.superAdminUsers.length} users</span>
+            </button>
+          </Card>
+        ) : null}
+
+        <div className="relative mb-3">
+          <Input
+            className="pr-9"
+            value={groupSearch}
+            onChange={(event) => setGroupSearch(event.target.value)}
+            placeholder="Search groups..."
+          />
+          {groupSearch ? (
+            <Button
+              className="absolute right-1 top-1 h-8 w-8 p-0"
+              variant="ghost"
+              size="icon"
+              onClick={() => setGroupSearch('')}
+              aria-label="Clear group search"
+              title="Clear group search"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
           ) : null}
-          <h2 className="mb-2 px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Groups</h2>
+        </div>
+
+        <h3 className="mb-2 px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Groups</h3>
+        {activeGroups.length ? (
           <Card className="grid gap-2 p-2">
             {activeGroups.map((group) => (
               <button
@@ -510,85 +557,137 @@ export function GroupsPanel(props: {
                 <span className="text-xs text-muted-foreground">{groupAccessLabel(group, props.currentUser)}</span>
               </button>
             ))}
-            {!activeGroups.length ? (
-              <p className="p-3 text-sm text-muted-foreground">No access groups available.</p>
-            ) : null}
           </Card>
-          {archivedGroups.length ? (
-            <details className="mt-3" open={archivedGroupsOpen} onToggle={handleArchivedGroupsToggle}>
-              <summary className="flex cursor-pointer items-center gap-1 px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                <ChevronDown
-                  className={cn('h-4 w-4 -rotate-90 transition-transform', archivedGroupsOpen && 'rotate-0')}
-                />
-                Archived groups · {archivedGroups.length}
-              </summary>
-              <Card className="mt-2 grid gap-2 p-2 opacity-80">
-                {archivedGroups.map((group) => (
-                  <button
-                    key={group.id}
-                    type="button"
-                    className={cn(
-                      'rounded-md px-3 py-2 text-left text-sm hover:bg-accent',
-                      props.selectedView === 'group' &&
-                        group.id === props.selectedGroupId &&
-                        'bg-primary/15 text-primary',
-                    )}
-                    onClick={() => props.onSelectGroup(group.id)}
-                  >
-                    <strong className="block truncate">{group.name}</strong>
-                    <span className="text-xs text-muted-foreground">
-                      Archived · {groupAccessLabel(group, props.currentUser)}
-                    </span>
-                  </button>
-                ))}
-              </Card>
-            </details>
-          ) : null}
-          {props.canCreateGroups ? (
-            <Button className="mt-3 w-full" variant="secondary" onClick={props.onCreateGroup}>
-              <Plus className="h-4 w-4" /> New group
-            </Button>
-          ) : null}
-          <Card className="mt-3 p-3 text-sm">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your access</p>
-            {props.currentUser ? (
-              <>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <strong className="min-w-0 truncate">{currentUserDisplayName}</strong>
-                  <Badge>{authRoleLabel(props.currentUser.role)}</Badge>
-                </div>
-                {showCurrentUsername ? (
-                  <p className="mt-1 truncate text-xs text-muted-foreground">{props.currentUser.username}</p>
-                ) : null}
-                {memberships.length ? (
-                  <div className="mt-3 grid gap-2">
-                    {memberships.map((membership) => {
-                      const group = props.groups.find((candidate) => candidate.id === membership.groupId);
-                      return (
-                        <div
-                          key={`${membership.groupId}:${membership.userId}`}
-                          className="rounded-md bg-muted/50 px-2 py-1.5"
-                        >
-                          <strong className="block truncate text-xs">{group?.name ?? membership.groupId}</strong>
-                          <span className="text-xs text-muted-foreground">{groupRoleLabel(membership.role)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    {props.currentUser.role === 'super_admin'
-                      ? 'Super admins can manage all access groups.'
-                      : 'No access group memberships.'}
-                  </p>
-                )}
-              </>
-            ) : (
-              <p className="mt-2 text-xs text-muted-foreground">Session auth is not enabled.</p>
-            )}
-          </Card>
-        </div>
+        ) : searchingGroups && !hasMatchingGroups ? (
+          <Card className="p-3 text-sm text-muted-foreground">No matching groups.</Card>
+        ) : !searchingGroups ? (
+          <Card className="p-3 text-sm text-muted-foreground">No access groups available.</Card>
+        ) : null}
 
+        {archivedGroups.length ? (
+          <details className="mt-3" open={archivedOpen} onToggle={handleArchivedGroupsToggle}>
+            <summary className="flex cursor-pointer items-center gap-1 px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <ChevronDown className={cn('h-4 w-4 -rotate-90 transition-transform', archivedOpen && 'rotate-0')} />
+              Archived groups · {archivedGroups.length}
+            </summary>
+            <Card className="mt-2 grid gap-2 p-2 opacity-80">
+              {archivedGroups.map((group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  className={cn(
+                    'rounded-md px-3 py-2 text-left text-sm hover:bg-accent',
+                    props.selectedView === 'group' &&
+                      group.id === props.selectedGroupId &&
+                      'bg-primary/15 text-primary',
+                  )}
+                  onClick={() => props.onSelectGroup(group.id)}
+                >
+                  <strong className="block truncate">{group.name}</strong>
+                  <span className="text-xs text-muted-foreground">
+                    Archived · {groupAccessLabel(group, props.currentUser)}
+                  </span>
+                </button>
+              ))}
+            </Card>
+          </details>
+        ) : null}
+
+        {props.canCreateGroups ? (
+          <Button className="mt-3 w-full" variant="secondary" onClick={props.onCreateGroup}>
+            <Plus className="h-4 w-4" /> New group
+          </Button>
+        ) : null}
+      </div>
+
+      <ThemeToggle preference={props.themePreference} onChange={props.onThemeChange} />
+      <ApiStatusFooter
+        authRequired={props.authRequired}
+        canViewGroups={props.canViewGroups}
+        canViewSetup={props.canViewSetup}
+        connectionStatus={props.connectionStatus}
+        health={props.health}
+        token={props.token}
+        onOpenGroups={props.onOpenGroups}
+        onOpenSetup={props.onOpenSetup}
+        onSignOut={props.onSignOut}
+      />
+    </div>
+  );
+}
+
+export function GroupsPanel(props: {
+  canCreateGroups: boolean;
+  currentUser: AuthUser | null;
+  groupMembers: GroupMember[];
+  groups: Group[];
+  groupFormError: string;
+  groupFormName: string;
+  groupFormVisibility: SessionVisibility;
+  groupFormWritePolicy: SessionWritePolicy;
+  memberRole: GroupRole;
+  memberSearchLoading: boolean;
+  memberSearchQuery: string;
+  memberUserId: string;
+  selectedGroupId: string;
+  selectedView: 'group' | 'super_admins';
+  superAdminSearchLoading: boolean;
+  superAdminSearchQuery: string;
+  superAdminUserId: string;
+  superAdminUserOptions: AuthUser[];
+  superAdminUsers: AuthUser[];
+  users: AuthUser[];
+  showOpenSidebar: boolean;
+  onAddMember: () => void;
+  onArchiveGroup: (groupId: string, archived: boolean) => void;
+  onCreateGroup: () => void;
+  onGroupFormNameChange: (value: string) => void;
+  onGroupFormVisibilityChange: (value: SessionVisibility) => void;
+  onGroupFormWritePolicyChange: (value: SessionWritePolicy) => void;
+  onMemberRoleChange: (value: GroupRole) => void;
+  onMemberSearchQueryChange: (value: string) => void;
+  onMemberUserIdChange: (value: string) => void;
+  onOpenSidebar: () => void;
+  onPromoteSuperAdmin: () => void;
+  onRemoveMember: (userId: string) => void;
+  onRemoveSuperAdmin: (userId: string) => void;
+  onSaveGroup: () => void;
+  onSelectGroup: (groupId: string) => void;
+  onSelectMemberUser: (userId: string) => void;
+  onSelectSuperAdminUser: (userId: string) => void;
+  onSelectSuperAdmins: () => void;
+  onSuperAdminSearchQueryChange: (value: string) => void;
+  onSuperAdminUserIdChange: (value: string) => void;
+  onUpdateMemberRole: (userId: string, role: GroupRole) => void;
+}) {
+  const selectedGroup = props.groups.find((group) => group.id === props.selectedGroupId) ?? null;
+  const selectedMemberUser = props.users.find((user) => user.id === props.memberUserId);
+  const selectedSuperAdminUser = props.superAdminUserOptions.find((user) => user.id === props.superAdminUserId);
+
+  return (
+    <section className="h-full overflow-auto px-3 py-6 md:px-8 xl:px-20">
+      <div className="mx-auto max-w-4xl">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 items-start gap-2">
+            {props.showOpenSidebar ? (
+              <Button
+                className="mt-1 h-8 w-8 shrink-0 p-0 md:hidden"
+                variant="ghost"
+                size="icon"
+                onClick={props.onOpenSidebar}
+                aria-label="Open access groups"
+                title="Open access groups"
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </Button>
+            ) : null}
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">Access control</p>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight">Access groups</h1>
+              <p className="mt-1 text-sm text-muted-foreground">Manage access groups and user roles.</p>
+            </div>
+          </div>
+        </div>
         <div className="grid content-start gap-4">
           {props.selectedView === 'super_admins' && props.canCreateGroups ? (
             <Card className="p-4">
@@ -702,7 +801,13 @@ export function GroupsPanel(props: {
                       <Input
                         value={props.groupFormName}
                         onChange={(event) => props.onGroupFormNameChange(event.target.value)}
+                        aria-invalid={Boolean(props.groupFormError)}
                       />
+                      {props.groupFormError ? (
+                        <span className="text-xs text-destructive" role="alert">
+                          {props.groupFormError}
+                        </span>
+                      ) : null}
                     </label>
                     <label className="grid gap-1 text-sm">
                       <span className="text-xs font-medium text-muted-foreground">Default visibility</span>
@@ -728,7 +833,10 @@ export function GroupsPanel(props: {
                     </label>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Button onClick={props.onSaveGroup} disabled={!props.groupFormName.trim()}>
+                    <Button
+                      onClick={props.onSaveGroup}
+                      disabled={!props.groupFormName.trim() || Boolean(props.groupFormError)}
+                    >
                       Save group
                     </Button>
                     <Button

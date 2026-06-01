@@ -67,7 +67,7 @@ import type { SandboxProvider } from '../sandbox/types.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
-import { defaultGroupId } from '../store/types.js';
+import { defaultGroupId, StoreConflictError } from '../store/types.js';
 import type {
   AppStore,
   AuthRole,
@@ -488,18 +488,25 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!canManageAllGroups(auth)) return writeError(c, 403, 'forbidden', 'Super admin access is required');
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const name = optionalString(body.name);
+    const name = optionalString(body.name)?.trim();
     if (!name) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: name');
     const now = new Date();
-    const group = await services.store.createGroup({
-      id: randomUUID(),
-      name,
-      defaultVisibility: parseSessionVisibility(body.defaultVisibility) ?? 'organization',
-      defaultWritePolicy: parseSessionWritePolicy(body.defaultWritePolicy) ?? 'group_members',
-      createdAt: now,
-      updatedAt: now,
-    });
-    return c.json({ group: serializeGroupForAuth(group, auth) }, 201);
+    try {
+      const group = await services.store.createGroup({
+        id: randomUUID(),
+        name,
+        defaultVisibility: parseSessionVisibility(body.defaultVisibility) ?? 'organization',
+        defaultWritePolicy: parseSessionWritePolicy(body.defaultWritePolicy) ?? 'group_members',
+        createdAt: now,
+        updatedAt: now,
+      });
+      return c.json({ group: serializeGroupForAuth(group, auth) }, 201);
+    } catch (error) {
+      if (error instanceof StoreConflictError && error.code === 'group_name_exists') {
+        return writeError(c, 409, error.code, error.message);
+      }
+      throw error;
+    }
   });
 
   app.patch('/groups/:groupId', async (c) => {
@@ -510,7 +517,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!canManageGroup(auth, group.id)) return writeError(c, 403, 'forbidden', 'Group admin access is required');
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const name = body.name === undefined ? group.name : optionalString(body.name);
+    const name = body.name === undefined ? group.name : optionalString(body.name)?.trim();
     if (!name) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: name');
     const visibility =
       body.defaultVisibility === undefined ? group.defaultVisibility : parseSessionVisibility(body.defaultVisibility);
@@ -533,8 +540,15 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (archived === true) nextGroup.archivedAt = group.archivedAt ?? now;
     if (archived === false) delete nextGroup.archivedAt;
 
-    const updated = await services.store.updateGroup(nextGroup);
-    return c.json({ group: serializeGroupForAuth(updated, auth) });
+    try {
+      const updated = await services.store.updateGroup(nextGroup);
+      return c.json({ group: serializeGroupForAuth(updated, auth) });
+    } catch (error) {
+      if (error instanceof StoreConflictError && error.code === 'group_name_exists') {
+        return writeError(c, 409, error.code, error.message);
+      }
+      throw error;
+    }
   });
 
   app.get('/groups/:groupId/members', async (c) => {

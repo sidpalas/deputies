@@ -10,6 +10,12 @@ CREATE TABLE IF NOT EXISTS groups (
 
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS archived_at timestamptz;
 
+UPDATE groups
+SET name = btrim(name)
+WHERE name <> btrim(name);
+
+CREATE UNIQUE INDEX IF NOT EXISTS groups_name_unique_idx ON groups (lower(btrim(name)));
+
 INSERT INTO groups (id, name, default_visibility, default_write_policy, created_at, updated_at)
 VALUES (
   '00000000-0000-4000-8000-000000000001',

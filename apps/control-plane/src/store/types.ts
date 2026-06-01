@@ -68,6 +68,15 @@ export type GroupRecord = {
   updatedAt: Date;
 };
 
+export class StoreConflictError extends Error {
+  constructor(
+    readonly code: 'group_name_exists',
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 export type GroupMemberRecord = {
   groupId: string;
   userId: string;

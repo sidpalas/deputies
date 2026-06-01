@@ -1,5 +1,5 @@
 import type { NormalizedEvent } from '../events/types.js';
-import { defaultGroupId } from './types.js';
+import { defaultGroupId, StoreConflictError } from './types.js';
 import type {
   AppStore,
   ArtifactRecord,
@@ -136,8 +136,10 @@ export class MemoryStore implements AppStore {
 
   async createGroup(record: GroupRecord): Promise<GroupRecord> {
     if (this.groups.has(record.id)) throw new Error(`Group already exists: ${record.id}`);
-    this.groups.set(record.id, record);
-    return record;
+    const group = { ...record, name: record.name.trim() };
+    this.assertUniqueGroupName(group.name);
+    this.groups.set(group.id, group);
+    return group;
   }
 
   async getGroup(id: string): Promise<GroupRecord | null> {
@@ -150,8 +152,18 @@ export class MemoryStore implements AppStore {
 
   async updateGroup(record: GroupRecord): Promise<GroupRecord> {
     if (!this.groups.has(record.id)) throw new Error(`Group does not exist: ${record.id}`);
-    this.groups.set(record.id, record);
-    return record;
+    const group = { ...record, name: record.name.trim() };
+    this.assertUniqueGroupName(group.name, group.id);
+    this.groups.set(group.id, group);
+    return group;
+  }
+
+  private assertUniqueGroupName(name: string, currentGroupId?: string): void {
+    const key = normalizedGroupName(name);
+    const duplicate = [...this.groups.values()].some(
+      (group) => group.id !== currentGroupId && normalizedGroupName(group.name) === key,
+    );
+    if (duplicate) throw new StoreConflictError('group_name_exists', 'Group name already exists');
   }
 
   async upsertGroupMember(record: GroupMemberRecord): Promise<GroupMemberRecord> {
@@ -961,6 +973,10 @@ function authAccountKey(provider: string, providerAccountId: string): string {
 
 function groupMemberKey(groupId: string, userId: string): string {
   return `${groupId}:${userId}`;
+}
+
+function normalizedGroupName(name: string): string {
+  return name.trim().toLowerCase();
 }
 
 function isStaleSendingCallback(delivery: CallbackDeliveryRecord, staleSendingBefore: Date): boolean {

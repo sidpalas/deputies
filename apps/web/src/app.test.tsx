@@ -53,6 +53,9 @@ type MockApiOptions = {
   services?: unknown[];
   externalResources?: unknown[];
   groups?: unknown[];
+  createdGroups?: unknown[];
+  groupUpdateStatus?: number;
+  groupUpdateError?: unknown;
   groupMembers?: unknown[];
   users?: unknown[];
   artifactPreview?: unknown;
@@ -386,7 +389,9 @@ it('keeps the groups page open until a session is selected', async () => {
   expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
   expect(screen.getByText('Your access')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+  expect(screen.queryByPlaceholderText('Search sessions...')).not.toBeInTheDocument();
 
+  fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
   fireEvent.click(screen.getByRole('button', { name: /Existing session/ }));
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
@@ -421,7 +426,7 @@ it('persists and restores the super admins groups page view on refresh', async (
   const rendered = render(<App />);
   expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('button', { name: /Super admins/ }));
+  fireEvent.click(screen.getByRole('button', { name: /Manage super admins/ }));
   expect(sessionStorage.getItem('deputies-groups-panel-view')).toBe('super_admins');
 
   rendered.unmount();
@@ -480,6 +485,91 @@ it('restores the archived groups toggle after refresh', async () => {
   expect(archivedSummary.closest('details')).toHaveAttribute('open');
 });
 
+it('filters groups in the groups sidebar search', async () => {
+  const clientGroup = {
+    ...group,
+    id: '00000000-0000-4000-8000-000000000011',
+    name: 'Client access',
+  };
+  const archivedGroup = {
+    ...group,
+    id: '00000000-0000-4000-8000-000000000012',
+    name: 'Legacy access',
+    archivedAt: session.updatedAt,
+  };
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user, groups: [group, clientGroup, archivedGroup] });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  const search = screen.getByPlaceholderText('Search groups...');
+  const sidebar = search.closest('aside')!;
+
+  fireEvent.change(search, { target: { value: 'legacy' } });
+
+  expect(within(sidebar).getByRole('button', { name: /Manage super admins/ })).toBeInTheDocument();
+  expect(within(sidebar).queryByRole('button', { name: /Default group/ })).not.toBeInTheDocument();
+  expect(within(sidebar).queryByRole('button', { name: /Client access/ })).not.toBeInTheDocument();
+  expect(within(sidebar).getByText('Archived groups · 1').closest('details')).toHaveAttribute('open');
+  expect(within(sidebar).getByRole('button', { name: /Legacy access/ })).toBeInTheDocument();
+
+  fireEvent.change(search, { target: { value: 'missing' } });
+  expect(within(sidebar).getByText('No matching groups.')).toBeInTheDocument();
+});
+
+it('uses the next available default name when creating access groups', async () => {
+  const createdGroups: unknown[] = [];
+  const newGroup = { ...group, name: 'New access group' };
+  const newGroupTwo = {
+    ...group,
+    id: '00000000-0000-4000-8000-000000000011',
+    name: 'New access group 2',
+  };
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user, groups: [newGroup, newGroupTwo], createdGroups });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'New group' }));
+
+  await waitFor(() => expect(createdGroups).toHaveLength(1));
+  expect(createdGroups[0]).toMatchObject({ name: 'New access group 3' });
+});
+
+it('shows an inline error for duplicate access group names before saving', async () => {
+  const clientGroup = {
+    ...group,
+    id: '00000000-0000-4000-8000-000000000011',
+    name: 'Client access',
+  };
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user, groups: [group, clientGroup] });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: ' client ACCESS ' } });
+
+  expect(screen.getByText('An access group with this name already exists.')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save group' })).toBeDisabled();
+});
+
+it('shows an inline error when the server rejects a duplicate access group name', async () => {
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({
+    authMode: 'session',
+    currentUser: user,
+    groupUpdateStatus: 409,
+    groupUpdateError: { error: 'group_name_exists', message: 'Group name already exists' },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Race access' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save group' }));
+
+  expect(await screen.findByText('An access group with this name already exists.')).toBeInTheDocument();
+});
+
 it('saves session access group when selected', async () => {
   const accessUpdates: unknown[] = [];
   const clientGroup = {
@@ -505,7 +595,7 @@ it('persists the mobile context panel after refresh', async () => {
 
   const rendered = render(<App />);
   await screen.findByRole('heading', { name: 'Existing session' });
-  const contextSummary = screen.getAllByText('Context').find((element) => element.tagName === 'SUMMARY');
+  const contextSummary = (await screen.findAllByText('Context')).find((element) => element.tagName === 'SUMMARY');
   expect(contextSummary).toBeDefined();
 
   const contextDetails = contextSummary!.closest('details')!;
@@ -517,7 +607,7 @@ it('persists the mobile context panel after refresh', async () => {
   render(<App />);
 
   await screen.findByRole('heading', { name: 'Existing session' });
-  const restoredSummary = screen.getAllByText('Context').find((element) => element.tagName === 'SUMMARY');
+  const restoredSummary = (await screen.findAllByText('Context')).find((element) => element.tagName === 'SUMMARY');
   expect(restoredSummary?.closest('details')).toHaveAttribute('open');
 });
 
@@ -2270,10 +2360,17 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === '/groups' && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { name: string };
+      options.createdGroups?.push(body);
       return jsonResponse({ group: { ...group, id: '00000000-0000-4000-8000-000000000011', name: body.name } }, 201);
     }
 
     if (url.pathname.match(/^\/groups\/[^/]+$/) && method === 'PATCH') {
+      if (options.groupUpdateStatus) {
+        return jsonResponse(
+          options.groupUpdateError ?? { error: 'group_name_exists', message: 'Group name already exists' },
+          options.groupUpdateStatus,
+        );
+      }
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       const archivedAt = body.archived === true ? session.updatedAt : undefined;
       const archivedPatch = body.archived === undefined ? {} : archivedAt ? { archivedAt } : { archivedAt: undefined };
