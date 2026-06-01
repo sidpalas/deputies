@@ -40,7 +40,7 @@ import {
   Group,
   GroupMember,
   GroupRole,
-  ModelOption,
+  ModelChoice,
   RepositoryOption,
   Session,
   SessionVisibility,
@@ -1239,7 +1239,7 @@ export function NewThreadPanel(props: {
   branchOptionsLoading: boolean;
   branchOptionsError: string;
   model: string;
-  modelOptions: ModelOption[];
+  modelChoices: ModelChoice[];
   modelUnavailableReason: string;
   showOpenSidebar: boolean;
   onOpenSidebar: () => void;
@@ -1333,10 +1333,10 @@ export function NewThreadPanel(props: {
                 id="new-thread-model"
                 label="Model"
                 value={props.model}
-                options={props.modelOptions}
+                options={props.modelChoices}
                 emptyLabel="Default model"
                 onChange={props.onModelChange}
-                disabled={!props.canCallApi || props.modelOptions.length <= 1}
+                disabled={!props.canCallApi || props.modelChoices.length <= 1}
               />
             </div>
           </div>
@@ -1386,7 +1386,7 @@ export function MessageComposer(props: {
   branchOptionsError: string;
   model: string;
   inheritedModel: string;
-  modelOptions: ModelOption[];
+  modelChoices: ModelChoice[];
   modelUnavailableReason: string;
   onRepositoryChange: (value: string) => void;
   onBranchChange: (value: string) => void;
@@ -1499,10 +1499,10 @@ export function MessageComposer(props: {
             direction="up"
             label="Model"
             value={props.model}
-            options={props.modelOptions}
+            options={props.modelChoices}
             emptyLabel={props.inheritedModel ? formatModelLabel(props.inheritedModel) : 'Default model'}
             onChange={props.onModelChange}
-            disabled={props.archived || props.readOnly || props.modelOptions.length <= 1}
+            disabled={props.archived || props.readOnly || props.modelChoices.length <= 1}
           />
           {props.modelUnavailableReason ? (
             <p className="basis-full rounded-md border border-warning/50 bg-warning/10 px-2 py-1.5 text-warning-foreground dark:text-warning">

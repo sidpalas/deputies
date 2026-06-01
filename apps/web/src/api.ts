@@ -96,13 +96,13 @@ export type RepositoryOption = {
 
 export type BranchOption = { name: string };
 
-export type ModelOptions = {
+export type ModelChoices = {
   models: string[];
-  modelOptions?: ModelOption[];
+  modelChoices: ModelChoice[];
   defaultModel: string | null;
 };
 
-export type ModelOption = {
+export type ModelChoice = {
   value: string;
   label: string;
   available: boolean;
@@ -301,8 +301,8 @@ export async function listBranches(input: { repository: string; token: string })
   return body.branches;
 }
 
-export async function getModelOptions(token: string): Promise<ModelOptions> {
-  return request<ModelOptions>('/models', { token });
+export async function getModelChoices(token: string): Promise<ModelChoices> {
+  return request<ModelChoices>('/models', { token });
 }
 
 export async function getSetupStatus(token: string): Promise<SetupStatus> {

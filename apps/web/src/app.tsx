@@ -22,7 +22,7 @@ import {
   getCurrentUser,
   getArtifactPreview,
   getHealth,
-  getModelOptions,
+  getModelChoices,
   getSetupStatus,
   listBranches,
   login,
@@ -58,7 +58,7 @@ import {
   type Group,
   type GroupMember,
   type GroupRole,
-  type ModelOption,
+  type ModelChoice,
   type RepositoryOption,
   type SetupStatus,
   type SessionVisibility,
@@ -141,7 +141,7 @@ export function App() {
   const [callbacks, setCallbacks] = useState<CallbackDelivery[]>([]);
   const [repositoryOptions, setRepositoryOptions] = useState<RepositoryOption[]>([]);
   const [branchOptions, setBranchOptions] = useState<BranchOption[]>([]);
-  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [modelChoices, setModelChoices] = useState<ModelChoice[]>([]);
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [setupStatusLoading, setSetupStatusLoading] = useState(false);
   const [setupStatusError, setSetupStatusError] = useState('');
@@ -258,15 +258,15 @@ export function App() {
   const startupLoading = waitingForAuth || (canCallApi && !sessionsLoaded);
   const selectedRepository = repositoryLabel(selectedSession?.context?.repository);
   const selectedSessionModel = typeof selectedSession?.context?.model === 'string' ? selectedSession.context.model : '';
-  const availableModelValues = modelOptions.filter((model) => model.available).map((model) => model.value);
+  const availableModelValues = modelChoices.filter((model) => model.available).map((model) => model.value);
   const selectedFollowUpModel = resolveSelectableModel(
     followUpModel,
     selectedSessionModel,
     defaultModel,
     availableModelValues,
   );
-  const newThreadModelUnavailableReason = modelUnavailableReason(newThreadModel || defaultModel, modelOptions);
-  const followUpModelUnavailableReason = modelUnavailableReason(selectedFollowUpModel || defaultModel, modelOptions);
+  const newThreadModelUnavailableReason = modelUnavailableReason(newThreadModel || defaultModel, modelChoices);
+  const followUpModelUnavailableReason = modelUnavailableReason(selectedFollowUpModel || defaultModel, modelChoices);
   const selectedSessionBranch =
     typeof selectedSession?.context?.branch === 'string' ? selectedSession.context.branch : '';
   const selectedSessionArchived = selectedSession?.status === 'archived';
@@ -296,13 +296,13 @@ export function App() {
 
     setRepositoryOptionsLoading(true);
     setRepositoryOptionsError('');
-    Promise.all([listRepositoryOptions(token), getModelOptions(token)])
+    Promise.all([listRepositoryOptions(token), getModelChoices(token)])
       .then(([repositories, models]) => {
         if (cancelled) return;
         setRepositoryOptions(repositories);
-        const options = normalizeModelOptions(models);
-        const availableModels = options.filter((model) => model.available).map((model) => model.value);
-        setModelOptions(options);
+        const choices = normalizeModelChoices(models);
+        const availableModels = choices.filter((model) => model.available).map((model) => model.value);
+        setModelChoices(choices);
         setDefaultModel(models.defaultModel ?? models.models[0] ?? '');
         setNewThreadModel((current) => {
           if (current && availableModels.includes(current)) return current;
@@ -1770,7 +1770,7 @@ export function App() {
                     branchOptionsLoading={branchOptionsLoading}
                     branchOptionsError={branchOptionsError}
                     model={newThreadModel}
-                    modelOptions={modelOptions}
+                    modelChoices={modelChoices}
                     modelUnavailableReason={newThreadModelUnavailableReason}
                     showOpenSidebar={!sidebarOpen}
                     onOpenSidebar={expandSidebar}
@@ -1885,7 +1885,7 @@ export function App() {
                             branchOptionsError={branchOptionsError}
                             model={selectedFollowUpModel}
                             inheritedModel={selectedSessionModel || defaultModel}
-                            modelOptions={modelOptions}
+                            modelChoices={modelChoices}
                             modelUnavailableReason={followUpModelUnavailableReason}
                             onBranchChange={setFollowUpBranch}
                             onModelChange={setFollowUpModel}
@@ -2123,19 +2123,19 @@ function resolveSelectableModel(current: string, inherited: string, fallback: st
   return options[0] ?? '';
 }
 
-function normalizeModelOptions(models: { models: string[]; modelOptions?: ModelOption[] }): ModelOption[] {
+function normalizeModelChoices(models: { models: string[]; modelChoices?: ModelChoice[] }): ModelChoice[] {
   return (
-    models.modelOptions ??
+    models.modelChoices ??
     models.models.map((model) => ({ value: model, label: formatModelLabel(model), available: true }))
   );
 }
 
-function modelUnavailableReason(model: string, options: ModelOption[]): string {
-  const option = options.find((candidate) => candidate.value === model);
-  if (!option || option.available) return '';
-  return option.action
-    ? `${option.unavailableReason ?? 'This model is unavailable'} ${option.action}`
-    : (option.unavailableReason ?? 'This model is unavailable');
+function modelUnavailableReason(model: string, choices: ModelChoice[]): string {
+  const choice = choices.find((candidate) => candidate.value === model);
+  if (!choice || choice.available) return '';
+  return choice.action
+    ? `${choice.unavailableReason ?? 'This model is unavailable'} ${choice.action}`
+    : (choice.unavailableReason ?? 'This model is unavailable');
 }
 
 function formatModelLabel(model: string): string {

@@ -6,6 +6,11 @@ services:
     environment:
       API_AUTH_MODE: none
       AUTH_PROVIDER: static
+      AUTH_GITHUB_ADMIN_USERS: ''
+      AUTH_GITHUB_ALLOWED_USERS: ''
+      AUTH_GITHUB_ALLOWED_ORGANIZATIONS: ''
+      AUTH_GITHUB_DEFAULT_GROUP_ROLE: member
+      UNSAFE_AUTH_GITHUB_ALLOW_ALL: 'false'
       APP_DATA_STORE: postgres
       DATABASE_URL: postgres://flue:flue@postgres:5432/flue
       RUNNER: fake
@@ -13,8 +18,8 @@ services:
       FAKE_RUNNER_ARTIFACT_JSON: '{"type":"file","title":"Smoke Artifact","content":"hello artifact storage","contentType":"text/plain","fileName":"smoke-artifact.txt"}'
       ANTHROPIC_API_KEY: ''
       OPENAI_API_KEY: ''
-      FLUE_OPENAI_CODEX_AUTH_FILE: ''
-      FLUE_OPENAI_CODEX_AUTH_BASE64: ''
+      OPENAI_CODEX_AUTH_FILE: ''
+      OPENAI_CODEX_AUTH_BASE64: ''
       DAYTONA_API_KEY: ''
       GITHUB_APP_ID: ''
       GITHUB_APP_PRIVATE_KEY: ''
@@ -29,14 +34,19 @@ services:
     environment:
       API_AUTH_MODE: none
       AUTH_PROVIDER: static
+      AUTH_GITHUB_ADMIN_USERS: ''
+      AUTH_GITHUB_ALLOWED_USERS: ''
+      AUTH_GITHUB_ALLOWED_ORGANIZATIONS: ''
+      AUTH_GITHUB_DEFAULT_GROUP_ROLE: member
+      UNSAFE_AUTH_GITHUB_ALLOW_ALL: 'false'
       APP_DATA_STORE: postgres
       RUNNER: fake
       SANDBOX_PROVIDER: fake
       FAKE_RUNNER_ARTIFACT_JSON: '{"type":"file","title":"Smoke Artifact","content":"hello artifact storage","contentType":"text/plain","fileName":"smoke-artifact.txt"}'
       ANTHROPIC_API_KEY: ''
       OPENAI_API_KEY: ''
-      FLUE_OPENAI_CODEX_AUTH_FILE: ''
-      FLUE_OPENAI_CODEX_AUTH_BASE64: ''
+      OPENAI_CODEX_AUTH_FILE: ''
+      OPENAI_CODEX_AUTH_BASE64: ''
       DAYTONA_API_KEY: ''
       GITHUB_APP_ID: ''
       GITHUB_APP_PRIVATE_KEY: ''
@@ -46,8 +56,8 @@ services:
       GITHUB_ALLOWED_REPOSITORIES: acme/widget,acme/api
       SLACK_SIGNING_SECRET: ''
       SLACK_BOT_TOKEN: ''
-      FLUE_MODEL: fake/smoke-default
-      FLUE_MODEL_OPTIONS: fake/smoke-default,fake/smoke-fast
+      RUNNER_MODEL: fake/smoke-default
+      RUNNER_MODEL_CHOICES: fake/smoke-default,fake/smoke-fast
       ARTIFACT_STORAGE_PROVIDER: s3
       ARTIFACT_STORAGE_S3_ENDPOINT: http://seaweedfs:8333
       ARTIFACT_STORAGE_S3_BUCKET: deputies-artifacts

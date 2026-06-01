@@ -24,7 +24,7 @@ The template should be treated as equivalent to:
 ```sh
 RUN_MODE=combined
 APP_DATA_STORE=postgres
-FLUE_STATE_STORE=postgres
+RUNNER_STATE_STORE=postgres
 RUNNER=fake
 SANDBOX_PROVIDER=fake
 ARTIFACT_STORAGE_PROVIDER=s3
@@ -34,11 +34,11 @@ Railway provides service variables for Postgres and object storage connection de
 
 ## Configure Real Agent Work
 
-To run real Flue work, set:
+To run real agent work, set:
 
 ```sh
 RUNNER=flue
-FLUE_MODEL=<provider/model>
+RUNNER_MODEL=<provider/model>
 ```
 
 Then configure one of the supported model auth paths:
@@ -46,12 +46,13 @@ Then configure one of the supported model auth paths:
 ```sh
 ANTHROPIC_API_KEY=<secret>
 OPENAI_API_KEY=<secret>
+OPENCODE_API_KEY=<secret>
 ```
 
 For OpenAI Codex subscription auth, prefer a Railway variable containing base64-encoded auth JSON:
 
 ```sh
-FLUE_OPENAI_CODEX_AUTH_BASE64=<base64-auth-json>
+OPENAI_CODEX_AUTH_BASE64=<base64-auth-json>
 ```
 
 ## Configure A Real Sandbox Provider

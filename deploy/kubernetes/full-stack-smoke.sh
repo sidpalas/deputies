@@ -96,13 +96,13 @@ config:
   apiAuthMode: none
   webBaseUrl: https://deputies-k8s.localhost
   serviceBaseDomain: deputies-k8s.localhost
-  flueModel: fake/smoke-default
+  runnerModel: fake/smoke-default
   hideSetupPage: "true"
   appDataStore: postgres
-  flueStateStore: postgres
+  runnerStateStore: postgres
   artifactStorageProvider: s3
   extraEnv:
-    FLUE_MODEL_OPTIONS: fake/smoke-default,fake/smoke-fast
+    RUNNER_MODEL_CHOICES: fake/smoke-default,fake/smoke-fast
     GITHUB_ALLOWED_REPOSITORIES: acme/widget,acme/api
     FAKE_RUNNER_ARTIFACT_JSON: '{"type":"file","title":"Smoke Artifact","content":"hello artifact storage","contentType":"text/plain","fileName":"smoke-artifact.txt"}'
 secrets:

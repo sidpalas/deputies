@@ -10,8 +10,8 @@ import {
   requireDatabaseUrl,
   requireDaytonaApiKey,
   requireDockerOrchestratorUrl,
-  requireFlueModel,
   requireGitHubAppCredentials,
+  requireRunnerModel,
 } from './config/index.js';
 import { GitHubArchivedSessionNotifier } from './integrations/github/archived-session-notifier.js';
 import { GitHubCompletionCallbackSender } from './integrations/github/callback-sender.js';
@@ -267,12 +267,12 @@ async function createRunner(): Promise<Runner> {
     return new FakeRunner(config.fakeRunnerArtifact ? { artifact: config.fakeRunnerArtifact } : {});
   }
 
-  const model = requireFlueModel(config);
+  const model = requireRunnerModel(config);
   if (config.runner === 'pi') {
     const piOptions: PiRunnerOptions = {
       model,
-      ...(config.flueOpenaiCodexAuthFile ? { authFile: config.flueOpenaiCodexAuthFile } : {}),
-      ...(config.flueOpenaiCodexAuthBase64 ? { authBase64: config.flueOpenaiCodexAuthBase64 } : {}),
+      ...(config.openaiCodexAuthFile ? { authFile: config.openaiCodexAuthFile } : {}),
+      ...(config.openaiCodexAuthBase64 ? { authBase64: config.openaiCodexAuthBase64 } : {}),
       modelUnavailableReason: (inputModel: string | undefined) =>
         services.modelAvailability.unavailableFor(inputModel || model)?.reason,
     };
@@ -284,7 +284,7 @@ async function createRunner(): Promise<Runner> {
     piOptions.externalResources = services.externalResources;
     if (services.sandboxKeepalive) piOptions.sandboxKeepalive = services.sandboxKeepalive;
     piOptions.sandboxKeepaliveMaxExtensionMs = config.sandboxKeepaliveMaxExtensionMs;
-    if (config.flueStateStore === 'postgres') {
+    if (config.runnerStateStore === 'postgres') {
       const sessionStore = new PostgresPiSessionStore(requireDatabaseUrl(config));
       resources.push(sessionStore);
       piOptions.sessionStore = sessionStore;
@@ -297,8 +297,8 @@ async function createRunner(): Promise<Runner> {
   };
   if (configuredModels(config).some((configuredModel) => configuredModel.startsWith('openai-codex/'))) {
     const codexAuth = {};
-    if (config.flueOpenaiCodexAuthFile) Object.assign(codexAuth, { authFile: config.flueOpenaiCodexAuthFile });
-    if (config.flueOpenaiCodexAuthBase64) Object.assign(codexAuth, { authBase64: config.flueOpenaiCodexAuthBase64 });
+    if (config.openaiCodexAuthFile) Object.assign(codexAuth, { authFile: config.openaiCodexAuthFile });
+    if (config.openaiCodexAuthBase64) Object.assign(codexAuth, { authBase64: config.openaiCodexAuthBase64 });
     try {
       const { apiKey } = await loadOpenAICodexApiKey(codexAuth);
       options.providers = { 'openai-codex': { apiKey } };
@@ -313,7 +313,7 @@ async function createRunner(): Promise<Runner> {
       console.error(`OpenAI Codex models unavailable: ${message}`);
     }
   }
-  if (config.flueStateStore === 'postgres') {
+  if (config.runnerStateStore === 'postgres') {
     const sessionStore = new PostgresFlueSessionStore(requireDatabaseUrl(config));
     resources.push(sessionStore);
     options.sessionStore = sessionStore;
@@ -327,6 +327,6 @@ async function createRunner(): Promise<Runner> {
     ...(services.sandboxKeepalive ? { sandboxKeepalive: services.sandboxKeepalive } : {}),
     sandboxKeepaliveMaxExtensionMs: config.sandboxKeepaliveMaxExtensionMs,
     modelUnavailableReason: (inputModel) =>
-      services.modelAvailability.unavailableFor(inputModel || config.flueModel)?.reason,
+      services.modelAvailability.unavailableFor(inputModel || config.runnerModel)?.reason,
   });
 }

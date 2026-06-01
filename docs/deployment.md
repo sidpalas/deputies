@@ -110,7 +110,7 @@ RUN_MODE=combined
 API_AUTH_MODE=session
 APP_DATA_STORE=postgres
 DATABASE_URL=postgres://user:password@host:5432/db
-FLUE_STATE_STORE=postgres
+RUNNER_STATE_STORE=postgres
 ```
 
 `API_AUTH_MODE` is required and must be one of:
@@ -130,7 +130,7 @@ Recommended durable configuration:
 ```sh
 APP_DATA_STORE=postgres
 DATABASE_URL=postgres://user:password@host:5432/db
-FLUE_STATE_STORE=postgres
+RUNNER_STATE_STORE=postgres
 ```
 
 Run migrations before serving traffic:
@@ -143,7 +143,7 @@ Memory mode is only for demos/tests:
 
 ```sh
 APP_DATA_STORE=memory
-FLUE_STATE_STORE=memory
+RUNNER_STATE_STORE=memory
 ```
 
 Do not use memory mode for multi-replica deployments.
@@ -255,7 +255,7 @@ Real Flue runner:
 
 ```sh
 RUNNER=flue
-FLUE_MODEL=anthropic/claude-haiku-4-5
+RUNNER_MODEL=anthropic/claude-haiku-4-5
 ```
 
 Provider credentials:
@@ -263,15 +263,16 @@ Provider credentials:
 ```sh
 ANTHROPIC_API_KEY=<secret>
 OPENAI_API_KEY=<secret>
+OPENCODE_API_KEY=<secret>
 ```
 
-Optional model picker override:
+Optional model picker choices override:
 
 ```sh
-FLUE_MODEL_OPTIONS=anthropic/claude-haiku-4-5,openai/gpt-5.5
+RUNNER_MODEL_CHOICES=anthropic/claude-haiku-4-5,openai/gpt-5.5
 ```
 
-If unset, model options are derived from available provider credentials.
+If unset, model choices are derived from Pi's catalog for providers with configured credentials.
 
 OpenAI Codex subscription auth:
 
@@ -279,15 +280,15 @@ OpenAI Codex subscription auth:
 mise run //apps/control-plane:auth:login:openai-codex
 ```
 
-The login task writes OAuth credentials to `~/.pi/agent/auth.json` by default. Use `FLUE_OPENAI_CODEX_AUTH_FILE` when the runtime should read a mounted copy from another path.
+The login task writes OAuth credentials to `~/.pi/agent/auth.json` by default. Use `OPENAI_CODEX_AUTH_FILE` when the runtime should read a mounted copy from another path.
 
 ```sh
-FLUE_MODEL=openai-codex/gpt-5.5
-FLUE_OPENAI_CODEX_AUTH_FILE=/run/secrets/openai-codex-auth.json
-FLUE_OPENAI_CODEX_AUTH_BASE64=<base64-auth-json>
+RUNNER_MODEL=openai-codex/gpt-5.5
+OPENAI_CODEX_AUTH_FILE=/run/secrets/openai-codex-auth.json
+OPENAI_CODEX_AUTH_BASE64=<base64-auth-json>
 ```
 
-Prefer a mounted secret file or `FLUE_OPENAI_CODEX_AUTH_BASE64` for hosted deployments.
+Prefer a mounted secret file or `OPENAI_CODEX_AUTH_BASE64` for hosted deployments.
 
 ## Sandbox Providers
 
@@ -563,8 +564,9 @@ SLACK_SIGNING_SECRET
 SLACK_BOT_TOKEN
 ANTHROPIC_API_KEY
 OPENAI_API_KEY
-FLUE_OPENAI_CODEX_AUTH_FILE contents
-FLUE_OPENAI_CODEX_AUTH_BASE64
+OPENCODE_API_KEY
+OPENAI_CODEX_AUTH_FILE contents
+OPENAI_CODEX_AUTH_BASE64
 DAYTONA_API_KEY
 DOCKER_ORCHESTRATOR_TOKEN
 SANDBOX_SECRET_ENCRYPTION_KEY

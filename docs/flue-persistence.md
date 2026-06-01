@@ -160,12 +160,12 @@ Rules:
 - `RUN_MODE=combined` still uses Postgres Flue store.
 - `RUN_MODE=worker` uses Postgres Flue store.
 - Tests should fail if production config accidentally uses in-memory Flue sessions.
-- Local development may opt into memory only with explicit config such as `FLUE_STATE_STORE=memory`.
+- Local development may opt into memory only with explicit config such as `RUNNER_STATE_STORE=memory`.
 
 Recommended default:
 
 ```txt
-FLUE_STATE_STORE=postgres
+RUNNER_STATE_STORE=postgres
 ```
 
 ## Testing Requirements

@@ -64,6 +64,25 @@ Check proxied API health:
 curl http://localhost:5173/health
 ```
 
+## Product Auth
+
+Compose loads the repository-root `.env.local` through `env_file` for the control-plane services. For GitHub login with access groups, set the GitHub OAuth credentials and allowlists there:
+
+```txt
+API_AUTH_MODE=session
+AUTH_PROVIDER=github
+AUTH_SESSION_SECRET=replace-with-random-secret
+GITHUB_OAUTH_CLIENT_ID=<client-id>
+GITHUB_OAUTH_CLIENT_SECRET=<client-secret>
+AUTH_GITHUB_ADMIN_USERS=<github-login>
+AUTH_GITHUB_ALLOWED_USERS=
+AUTH_GITHUB_ALLOWED_ORGANIZATIONS=<github-org>
+AUTH_GITHUB_DEFAULT_GROUP_ROLE=member
+UNSAFE_AUTH_GITHUB_ALLOW_ALL=false
+```
+
+The Compose service `environment` blocks intentionally do not re-list these variables, so `.env.local` remains the single source of truth for local auth settings.
+
 ## Artifact Storage
 
 The Compose stacks enable stored artifacts by default with SeaweedFS' S3-compatible API:
@@ -101,13 +120,13 @@ Compose bind mounts the host Codex auth file into containers that run workers:
 ${HOME}/.pi/agent/auth.json:/run/secrets/openai-codex-auth.json
 ```
 
-If you use `FLUE_MODEL=openai-codex/<model>`, create the host auth file first:
+If you use `RUNNER_MODEL=openai-codex/<model>`, create the host auth file first:
 
 ```sh
 mise run //apps/control-plane:auth:login:openai-codex
 ```
 
-The Compose files set `FLUE_OPENAI_CODEX_AUTH_FILE=/run/secrets/openai-codex-auth.json` for worker-capable containers.
+The Compose files set `OPENAI_CODEX_AUTH_FILE=/run/secrets/openai-codex-auth.json` for worker-capable containers.
 
 ## Docker Sandbox Provider
 

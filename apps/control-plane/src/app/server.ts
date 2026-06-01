@@ -82,7 +82,7 @@ import type {
   SessionWritePolicy,
 } from '../store/types.js';
 import { writeGlobalEventStream, writeSessionEventStream } from './event-stream.js';
-import { configuredModels, ModelAvailabilityService, modelOptions } from './model-availability.js';
+import { configuredModels, ModelAvailabilityService, modelChoices } from './model-availability.js';
 import { buildSetupStatus } from './setup-status.js';
 import {
   appendPreviewCookie,
@@ -468,8 +468,8 @@ export function createApp(config: AppConfig, services = createServices()) {
     const models = configuredModels(config);
     return c.json({
       models,
-      modelOptions: modelOptions(config, services.modelAvailability),
-      defaultModel: config.flueModel ?? models[0] ?? null,
+      modelChoices: modelChoices(config, services.modelAvailability),
+      defaultModel: config.runnerModel ?? models[0] ?? null,
     });
   });
 
@@ -862,7 +862,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     try {
       const repository = parseRepositoryBody(body.repository);
       const model = parseModelBody(body.model, config);
-      const unavailable = services.modelAvailability.unavailableFor(model || config.flueModel);
+      const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModel);
       if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
       const branch = repository ? parseBranchBody(body.branch) : undefined;
       const context = {

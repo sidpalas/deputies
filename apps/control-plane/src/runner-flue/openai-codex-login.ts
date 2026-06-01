@@ -8,7 +8,7 @@ import {
 } from './openai-codex-auth.js';
 
 async function main(): Promise<void> {
-  const authFile = process.env.FLUE_OPENAI_CODEX_AUTH_FILE || defaultOpenAICodexAuthFile();
+  const authFile = process.env.OPENAI_CODEX_AUTH_FILE || defaultOpenAICodexAuthFile();
   const credentials = await loginOpenAICodex({
     originator: 'deputies',
     onAuth: printAuthInfo,

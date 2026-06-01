@@ -62,13 +62,15 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --set secrets.name=deputies-app-secrets
 ```
 
-The referenced Secret should contain the environment-variable keys the app needs, such as `AUTH_SESSION_SECRET`, `DAYTONA_API_KEY`, `ANTHROPIC_API_KEY`, `ARTIFACT_STORAGE_S3_ACCESS_KEY_ID`, and `ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY`.
+The referenced Secret should contain the environment-variable keys the app needs, such as `AUTH_SESSION_SECRET`, `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `DAYTONA_API_KEY`, `ANTHROPIC_API_KEY`, `OPENCODE_API_KEY`, `ARTIFACT_STORAGE_S3_ACCESS_KEY_ID`, and `ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY`.
 
 Inline secret values are acceptable for short-lived local validation, but production users should manage secrets through their normal mechanism, such as External Secrets Operator, SOPS, Sealed Secrets, Vault, or cloud provider secret sync.
 
 By default, the chart consumes the `deputies-postgres-app` secret created by `deputies-platform-reference`. For externally managed Postgres, point `postgres.existingSecret` at your platform secret, or set it to an empty string and provide `postgres.*` values so this chart creates a simple connection secret. Set `postgres.sslMode` when the database requires SSL, for example `postgres.sslMode=require&uselibpqcompat=true` for providers that require TLS but present a self-signed certificate chain.
 
-For static session auth, include `AUTH_STATIC_USERNAME` and `AUTH_STATIC_PASSWORD` in the referenced Secret. Service subdomains use signed preview tokens and preview-only cookies; the main session cookie stays host-only.
+For static session auth, include `AUTH_STATIC_USERNAME` and `AUTH_STATIC_PASSWORD` in the referenced Secret. For GitHub session auth, set `config.apiAuthMode=session`, `config.authProvider=github`, `secrets.githubOAuthClientId`, `secrets.githubOAuthClientSecret`, and one or more access controls such as `config.authGithubAdminUsers`, `config.authGithubAllowedUsers`, or `config.authGithubAllowedOrganizations`. `config.authGithubDefaultGroupRole` controls default access-group membership for non-admin GitHub users, and `config.unsafeAuthGithubAllowAll=true` is only intended for public trial access.
+
+Service subdomains use signed preview tokens and preview-only cookies; the main session cookie stays host-only.
 
 Pods roll automatically when chart-rendered config or chart-created Secrets change. If you use externally managed Secrets, bump `rollout.revision` during `helm upgrade` after changing Secret data so Kubernetes replaces pods that consume those values as environment variables.
 
