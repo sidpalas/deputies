@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AnchorHTMLAttributes, MouseEvent, ReactNode, ToggleEvent } from 'react';
-import { Check, ChevronDown, Copy, Download, ExternalLink, Play, RotateCcw, X } from 'lucide-react';
+import { ChevronDown, Download, ExternalLink, Play, RotateCcw, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type {
@@ -18,6 +18,16 @@ import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Textarea } from '../ui/textarea.js';
 import { cn } from '../../lib/utils.js';
+import {
+  buildAssistantText,
+  formatAssistantDisplayText,
+  groupDiagnosticsByRun,
+  groupMessagesByRun,
+  isActiveRunGroup,
+  isCancellingRunGroup,
+  type MessageGroup,
+} from './content/chat-helpers.js';
+import { HighlightedCode } from './content/highlighted-code.js';
 
 const mobileContextOpenStorageKey = 'deputies-mobile-context-open';
 
@@ -379,152 +389,6 @@ function MarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
     >
       {downloading ? 'Downloading...' : props.children}
     </a>
-  );
-}
-
-type ResolvedColorTheme = 'light' | 'dark';
-
-function getResolvedColorTheme(): ResolvedColorTheme {
-  return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-}
-
-function useResolvedColorTheme(): ResolvedColorTheme {
-  const [theme, setTheme] = useState<ResolvedColorTheme>(getResolvedColorTheme);
-
-  useEffect(() => {
-    const updateTheme = () => setTheme(getResolvedColorTheme());
-    const observer = new MutationObserver(updateTheme);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    updateTheme();
-
-    return () => observer.disconnect();
-  }, []);
-
-  return theme;
-}
-
-function codeHighlightTheme(theme: ResolvedColorTheme): 'github-light-default' | 'github-dark-default' {
-  return theme === 'dark' ? 'github-dark-default' : 'github-light-default';
-}
-
-const HIGHLIGHTED_CODE_HTML_CACHE_LIMIT = 100;
-const highlightedCodeHtmlCache = new Map<string, string>();
-let shikiCodeToHtmlPromise: Promise<typeof import('shiki').codeToHtml> | null = null;
-
-function highlightedCodeCacheKey(code: string, language: string | undefined, theme: ResolvedColorTheme): string {
-  return `${theme}\0${language ?? 'text'}\0${code}`;
-}
-
-function loadShikiCodeToHtml() {
-  shikiCodeToHtmlPromise ??= import('shiki').then(({ codeToHtml }) => codeToHtml);
-  return shikiCodeToHtmlPromise;
-}
-
-function cacheHighlightedCodeHtml(key: string, html: string) {
-  if (highlightedCodeHtmlCache.has(key)) highlightedCodeHtmlCache.delete(key);
-  highlightedCodeHtmlCache.set(key, html);
-  while (highlightedCodeHtmlCache.size > HIGHLIGHTED_CODE_HTML_CACHE_LIMIT) {
-    const oldestKey = highlightedCodeHtmlCache.keys().next().value;
-    if (!oldestKey) return;
-    highlightedCodeHtmlCache.delete(oldestKey);
-  }
-}
-
-function HighlightedCode(props: {
-  code: string;
-  language?: string;
-  wrap?: boolean;
-  chrome?: boolean;
-  highlight?: boolean;
-}) {
-  const colorTheme = useResolvedColorTheme();
-  const highlight = props.highlight ?? true;
-  const cacheKey = highlightedCodeCacheKey(props.code, props.language, colorTheme);
-  const [html, setHtml] = useState(() => (highlight ? (highlightedCodeHtmlCache.get(cacheKey) ?? '') : ''));
-  const [copied, setCopied] = useState(false);
-  const copiedResetTimer = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (copiedResetTimer.current !== null) window.clearTimeout(copiedResetTimer.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!highlight) {
-      setHtml('');
-      return;
-    }
-
-    const cachedHtml = highlightedCodeHtmlCache.get(cacheKey);
-    if (cachedHtml) {
-      setHtml(cachedHtml);
-      return;
-    }
-
-    let cancelled = false;
-    setHtml('');
-    loadShikiCodeToHtml()
-      .then((codeToHtml) =>
-        codeToHtml(props.code, { lang: props.language ?? 'text', theme: codeHighlightTheme(colorTheme) }),
-      )
-      .then((nextHtml) => {
-        cacheHighlightedCodeHtml(cacheKey, nextHtml);
-        if (!cancelled) setHtml(nextHtml);
-      })
-      .catch(() => {
-        if (!cancelled) setHtml('');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [cacheKey, highlight, props.code, props.language, colorTheme]);
-
-  async function copyCode() {
-    await navigator.clipboard.writeText(props.code);
-    setCopied(true);
-    if (copiedResetTimer.current !== null) window.clearTimeout(copiedResetTimer.current);
-    copiedResetTimer.current = window.setTimeout(() => {
-      copiedResetTimer.current = null;
-      setCopied(false);
-    }, 1400);
-  }
-
-  return (
-    <figure className="my-3 w-full max-w-full min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-[0_12px_32px_rgb(0_0_0_/_0.18)]">
-      {props.chrome !== false ? (
-        <figcaption className="flex items-center justify-between border-b border-border bg-muted/80 px-3 py-1.5 text-[0.7rem] font-medium uppercase tracking-widest text-muted-foreground">
-          <span>{props.language ?? 'text'}</span>
-          <button
-            className="inline-flex items-center gap-1 rounded border border-border bg-background px-2 py-1 text-[0.65rem] text-muted-foreground transition hover:text-foreground"
-            type="button"
-            onClick={copyCode}
-            aria-label="Copy code"
-          >
-            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-        </figcaption>
-      ) : null}
-      {html ? (
-        <div
-          className={cn(
-            'highlighted-code text-sm leading-6',
-            props.wrap ? 'highlighted-code-wrap overflow-hidden' : 'overflow-x-auto overflow-y-hidden',
-          )}
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      ) : (
-        <pre
-          className={cn(
-            'p-3 text-sm leading-6 text-foreground',
-            props.wrap ? 'overflow-hidden whitespace-pre-wrap break-words' : 'overflow-x-auto overflow-y-hidden',
-          )}
-        >
-          <code>{props.code}</code>
-        </pre>
-      )}
-    </figure>
   );
 }
 
@@ -1492,86 +1356,6 @@ function callbackEventLabel(eventType: string): string {
   return eventType.replace(/_/g, ' ');
 }
 
-function buildAssistantText(events: AgentEvent[]): Record<string, string> {
-  const messageIdsBySequence: Record<number, string> = {};
-  const outputByMessageId: Record<string, string> = {};
-  let currentSequence = 0;
-  let currentMessageId = '';
-
-  for (const event of events) {
-    const maybeSequence = event.payload.sequence;
-    if (typeof maybeSequence === 'number') {
-      currentSequence = maybeSequence;
-      if (event.messageId) messageIdsBySequence[maybeSequence] = event.messageId;
-    }
-    if (event.messageId) currentMessageId = event.messageId;
-    const messageId = event.messageId || currentMessageId || messageIdsBySequence[currentSequence];
-    if (!messageId) continue;
-    const text = event.payload.text;
-    if (typeof text !== 'string') continue;
-    if (event.type === 'agent_response_final') {
-      outputByMessageId[messageId] = text;
-    } else if (event.type === 'agent_text_delta') {
-      outputByMessageId[messageId] = `${outputByMessageId[messageId] ?? ''}${text}`;
-    }
-  }
-
-  return outputByMessageId;
-}
-
-function formatAssistantDisplayText(text: string): string {
-  return text.replace(/([.!?])(?=[A-Z])/g, '$1 ').replace(/:(?=[A-Z][a-z])/g, ': ');
-}
-
-type MessageGroup = {
-  key: string;
-  messages: Message[];
-  responseMessageId: string;
-  runId?: string;
-};
-
-function groupMessagesByRun(messages: Message[], events: AgentEvent[]): MessageGroup[] {
-  const batchBySequence = new Map<number, { runId: string; sequences: number[] }>();
-  for (const event of events) {
-    if (event.type !== 'message_started' || !event.runId) continue;
-    const sequences = Array.isArray(event.payload.sequences)
-      ? event.payload.sequences.filter((value): value is number => typeof value === 'number')
-      : [];
-    if (sequences.length <= 1) continue;
-    for (const sequence of sequences) batchBySequence.set(sequence, { runId: event.runId, sequences });
-  }
-
-  const groups: MessageGroup[] = [];
-  const seen = new Set<string>();
-
-  for (const message of messages) {
-    if (seen.has(message.id)) continue;
-    const batch = batchBySequence.get(message.sequence);
-    if (!batch) {
-      groups.push({ key: message.id, messages: [message], responseMessageId: message.id });
-      seen.add(message.id);
-      continue;
-    }
-
-    const minSequence = Math.min(...batch.sequences);
-    const maxSequence = Math.max(...batch.sequences);
-    const batchSequenceSet = new Set(batch.sequences);
-    const batchMessages = messages.filter((candidate) => {
-      if (batchSequenceSet.has(candidate.sequence)) return true;
-      return candidate.status === 'cancelled' && candidate.sequence > minSequence && candidate.sequence < maxSequence;
-    });
-    for (const item of batchMessages) seen.add(item.id);
-    groups.push({
-      key: batch.runId,
-      messages: batchMessages,
-      responseMessageId: batchMessages[0]?.id ?? message.id,
-      runId: batch.runId,
-    });
-  }
-
-  return groups;
-}
-
 function artifactsForGroup(artifacts: Artifact[], group: MessageGroup): Artifact[] {
   const messageIds = new Set(group.messages.map((message) => message.id));
   return artifacts.filter((artifact) => {
@@ -1750,31 +1534,6 @@ function externalResourceDescription(
   if (!repository) return resource.url;
   if (!number) return repository;
   return `${repository} #${number}`;
-}
-
-function isActiveRunGroup(messages: Message[]): boolean {
-  return messages.some((message) => message.status === 'processing' || message.status === 'cancelling');
-}
-
-function isCancellingRunGroup(messages: Message[]): boolean {
-  return messages.some((message) => message.status === 'cancelling');
-}
-
-function groupDiagnosticsByRun(events: AgentEvent[]): Record<string, AgentEvent[]> {
-  const grouped: Record<string, AgentEvent[]> = {};
-  for (const event of events) {
-    if (event.type === 'message_created' || event.type === 'agent_text_delta' || event.type === 'agent_response_final')
-      continue;
-    for (const key of diagnosticGroupKeys(event)) {
-      grouped[key] = [...(grouped[key] ?? []), event];
-    }
-  }
-  return grouped;
-}
-
-function diagnosticGroupKeys(event: AgentEvent): string[] {
-  const keys = [event.runId, event.messageId].filter((key): key is string => Boolean(key));
-  return Array.from(new Set(keys));
 }
 
 function analyzeDiagnosticFailure(events: AgentEvent[]): DiagnosticFailureAnalysis | null {
