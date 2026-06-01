@@ -491,6 +491,7 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'local' })).toThrow(
       'Expected one of fake, unsafe-local, docker, daytona, k8s-agent-sandbox, ecs',
     );
+    expect(loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi' }).runner).toBe('pi');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_COOKIE_SAME_SITE: 'strict' })).toThrow(
       'Expected one of lax, none',
     );

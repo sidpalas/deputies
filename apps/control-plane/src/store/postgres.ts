@@ -845,6 +845,7 @@ export class PostgresStore implements AppStore {
     now: Date;
   }): Promise<ClaimedMessageBatch | null> {
     return this.transaction(async (client) => {
+      // Expired active runs still satisfy runs_one_active_per_session_idx until recovery marks them stale.
       const candidate = await client.query<{ session_id: string }>(
         `SELECT m.session_id
          FROM messages m
@@ -852,16 +853,14 @@ export class PostgresStore implements AppStore {
          WHERE m.status = 'pending'
            AND s.status <> 'archived'
            AND s.queue_paused_at IS NULL
-           AND NOT EXISTS (
-             SELECT 1 FROM runs r
-             WHERE r.session_id = s.id
-               AND r.status IN ('starting', 'running', 'cancelling')
-               AND (r.lease_expires_at IS NULL OR r.lease_expires_at > $1)
-           )
-         ORDER BY m.created_at ASC, m.sequence ASC
-         FOR UPDATE OF s SKIP LOCKED
-         LIMIT 1`,
-        [input.now],
+            AND NOT EXISTS (
+              SELECT 1 FROM runs r
+              WHERE r.session_id = s.id
+                AND r.status IN ('starting', 'running', 'cancelling')
+            )
+          ORDER BY m.created_at ASC, m.sequence ASC
+          FOR UPDATE OF s SKIP LOCKED
+          LIMIT 1`,
       );
 
       const sessionId = candidate.rows[0]?.session_id;

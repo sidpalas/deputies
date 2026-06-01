@@ -6,6 +6,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 - GitHub collaborator permission gating in addition to the current repository, user, org, and trigger-phrase gates.
 - GitHub label-based triggers for teams that want non-mention workflows.
+- Record existing or updated GitHub PRs as external resources, not only PRs created through `gh pr create`; include cases like `gh pr edit`, `gh pr view/checkout`, and branch pushes that resolve to an open PR.
 - Continue consolidating shared integration utilities, especially allowlist helpers, prompt section rendering, and callback target parsing before adding the next major integration.
 - Source-agnostic start/queued/final-response lifecycle so integrations add lightweight start signals while callback senders own exactly one final external reply.
 - Global runner/agent instruction injection for integration behavior that should not appear in chat-visible source prompts.
@@ -28,6 +29,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 ## Agent Runtime
 
+- Agent-facing Deputies control/API surface, likely exposed through an MCP server, so agents can inspect available deputies, view sessions and session state, spawn new sessions, send follow-up messages, and coordinate handoffs or sub-agent work safely with scoped permissions and auditability.
 - Agent authentication to external services through MCP, CLI credentials, API tokens, and short-lived provider tokens.
 - Credential scoping and injection policy for tools, commands, MCP servers, and sandbox environments.
 - First-class multi-repository task support, including environments made of one or more repositories, one primary writable repo by default, auxiliary read-only context repos, and explicit multi-writable change sets when a task spans repos.

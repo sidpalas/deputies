@@ -81,6 +81,7 @@ type MockApiOptions = {
   authMode?: 'none' | 'bearer' | 'session';
   sandboxProvider?: string;
   currentUser?: (typeof user & { memberships?: unknown[] }) | null;
+  notices?: unknown[];
   logins?: Array<{ username: string; password: string }>;
 };
 
@@ -2158,6 +2159,23 @@ it('warns when running in unsafe local sandbox mode', async () => {
   expect(screen.getByText(/Commands run on the API\/worker host runtime/)).toBeInTheDocument();
 });
 
+it('shows health notices from the API', async () => {
+  mockApi({
+    notices: [
+      {
+        severity: 'warning',
+        code: 'openai_codex_auth_unavailable',
+        message: 'Codex auth is unavailable.',
+        action: 'Re-authenticate Codex, then refresh this page.',
+      },
+    ],
+  });
+  render(<App />);
+
+  expect(await screen.findByText('Codex auth is unavailable.')).toBeInTheDocument();
+  expect(screen.getByText(/Re-authenticate Codex/)).toBeInTheDocument();
+});
+
 function mockApi(options: MockApiOptions = {}) {
   let currentSession = { ...session, ...options.sessionOverride };
   let currentUser = options.currentUser;
@@ -2175,6 +2193,7 @@ function mockApi(options: MockApiOptions = {}) {
         apiAuthMode: options.authMode ?? 'none',
         sandboxProvider: options.sandboxProvider ?? 'fake',
         hideSetupPage: true,
+        ...(options.notices ? { notices: options.notices } : {}),
       });
     }
 

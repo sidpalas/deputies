@@ -12,6 +12,7 @@ export type RunnerInput = {
   signal?: AbortSignal;
   emit: (event: NormalizedEvent) => Promise<void>;
   updateSessionContext?: (context: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  shouldPersist?: () => Promise<boolean>;
 };
 
 export type RunnerResult = {

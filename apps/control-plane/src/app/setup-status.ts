@@ -102,13 +102,14 @@ function githubWebhookStatus(config: AppConfig): SetupStatusItem {
 }
 
 function runnerStatus(config: AppConfig): SetupStatusItem {
+  const realRunnerSelected = config.runner === 'flue' || config.runner === 'pi';
   return {
     id: 'runner',
     label: 'Runner',
-    state: config.runner === 'flue' ? 'configured' : 'warning',
+    state: realRunnerSelected ? 'configured' : 'warning',
     summary: `${config.runner} runner selected.`,
-    guidance: config.runner === 'flue' ? undefined : 'Use Flue for real agent execution.',
-    guidanceItems: config.runner === 'flue' ? undefined : ['RUNNER=flue', 'FLUE_MODEL=<DEFAULT_MODEL_CHOICE>'],
+    guidance: realRunnerSelected ? undefined : 'Use Flue or Pi for real agent execution.',
+    guidanceItems: realRunnerSelected ? undefined : ['RUNNER=flue', 'RUNNER=pi', 'FLUE_MODEL=<DEFAULT_MODEL_CHOICE>'],
     details: [`Runner: ${config.runner}`],
     docsPath: 'README.md',
   };

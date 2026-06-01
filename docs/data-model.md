@@ -27,6 +27,7 @@ events
 sandboxes
 artifacts
 flue_sessions
+pi_sessions
 external_threads
 integration_deliveries
 callback_deliveries
@@ -54,6 +55,7 @@ Current implemented tables:
 - `sandboxes`
 - `artifacts`
 - `flue_sessions`
+- `pi_sessions`
 - `external_threads`
 - `integration_deliveries`
 - `callback_deliveries`
@@ -427,9 +429,19 @@ Current implementation:
 - Text-like stored artifacts are previewable through `GET /sessions/:sessionId/artifacts/:artifactId/preview`; unsupported previews return `415 unsupported_preview`.
 - Generic webhook HTTP callbacks, Slack completion replies, and GitHub completion comments are recorded in `callback_deliveries` with `pending`, `sending`, `sent`, or `failed` status.
 
-## Flue Sessions
+## Runner Runtime Sessions
 
-Stores Flue's internal session history for Node deployments. This is separate from product session state.
+Stores runner-owned internal session history for durable runner continuation. This is separate from product session state.
+
+Product state remains in `sessions`, `messages`, `runs`, `events`, `artifacts`, and `sandboxes`. Runner runtime tables are opaque SDK state used only by the runner adapter that wrote them.
+
+Changing a product session from one runner to another does not continue the previous runner's internal history. For example, a session that starts on `RUNNER=flue` can later receive work with `RUNNER=pi`, but Pi starts a new Pi runtime history for that product session. The product UI still shows the prior messages/events, but the Pi agent does not read or convert `flue_sessions`. Cross-runner continuation requires an explicit transcript conversion layer or a future runner-agnostic transcript store.
+
+The runner tables are intentionally separate for now. A future shared `agent_sessions` table is viable, but it should include an explicit `runner` discriminator, runner-owned key, product `session_id`, schema/data version fields, and tests that prevent one runner from loading another runner's state. Without those guardrails, a shared table makes divergent SDK shapes easier to mix accidentally, weakens table-level constraints such as Pi's `sessions(id)` foreign key, and couples Flue and Pi storage migrations even though each runtime owns a different opaque format.
+
+### Flue Sessions
+
+Stores Flue's internal session history for Node deployments.
 
 Suggested columns:
 
@@ -446,10 +458,29 @@ Rules:
 - Treat `data` as opaque Flue-owned serialized state.
 - Use a custom Postgres-backed Flue session store in production and CI.
 - Do not rely on Flue's Node in-memory default outside local experiments.
-- Product state remains in `sessions`, `messages`, `runs`, `events`, `artifacts`, and `sandboxes`.
-- The current `flue_sessions` table is implemented by `006_flue_sessions.sql` and stores only Flue's opaque session store key as `id`; it does not persist separate `agent_id`, `session_id`, or `app_session_id` metadata columns.
+- The current `flue_sessions` table is implemented by `004_flue_sessions.sql` and stores only Flue's opaque session store key as `id`; it does not persist separate `agent_id`, `session_id`, or `app_session_id` metadata columns.
 
 See [Flue Persistence](./flue-persistence.md) for details.
+
+### Pi Sessions
+
+Stores Pi's internal JSONL-equivalent session history.
+
+Current columns:
+
+```txt
+id uuid primary key references sessions(id) on delete cascade
+data jsonb not null
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Rules:
+
+- Treat `data` as opaque Pi-owned serialized state.
+- The stored JSON shape is `{ version, header, entries }`, where `header` and `entries` are Pi SDK session records.
+- `id` is the product `sessions.id`; deleting the product session cascades Pi runtime state.
+- Pi does not read `flue_sessions`, and Flue does not read `pi_sessions`.
 
 ## External Threads
 

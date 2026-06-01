@@ -210,6 +210,25 @@ describe('GitHub CLI Flue tool', () => {
     expect(requests[1]?.init.signal).toBe(abort.signal);
   });
 
+  it('edits pull requests by resolving fork branch selectors', async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init: init ?? {} });
+      if (String(url).includes('/pulls?')) return new Response(JSON.stringify([{ number: 10 }]), { status: 200 });
+      return new Response(JSON.stringify({ html_url: 'https://github.com/manaflow-ai/manaflow/pull/10' }), {
+        status: 200,
+      });
+    };
+    const tool = createGitHubCliTool(repositoryServices(), { fetchImpl });
+
+    const result = await tool.execute({ args: ['pr', 'edit', 'fork-user:feature', '--title', 'Fork update'] });
+
+    expect(result).toContain('/pull/10');
+    expect(requests[0]?.url).toBe(
+      'https://api.github.com/repos/manaflow-ai/manaflow/pulls?head=fork-user%3Afeature&state=all&per_page=1',
+    );
+  });
+
   it('rejects auth and clone escape-hatch commands', async () => {
     const tool = createGitHubCliTool(repositoryServices(), {
       runner: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
@@ -223,6 +242,29 @@ describe('GitHub CLI Flue tool', () => {
     await expect(tool.execute({ args: ['api', 'repos/manaflow-ai/manaflow/git/refs/heads/main'] })).rejects.toThrow(
       'GitHub Git Database API routes',
     );
+  });
+
+  it('rejects gh commands that can mutate control-plane files', async () => {
+    const tool = createGitHubCliTool(repositoryServices(), {
+      runner: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    });
+
+    await expect(tool.execute({ args: ['pr', 'checkout', '7'] })).rejects.toThrow(
+      'backend gh cannot mutate control-plane files',
+    );
+    await expect(tool.execute({ args: ['repo', 'fork'] })).rejects.toThrow(
+      'backend gh cannot mutate control-plane files',
+    );
+    await expect(tool.execute({ args: ['issue', 'develop', '42'] })).rejects.toThrow(
+      'backend gh cannot mutate control-plane files',
+    );
+    await expect(tool.execute({ args: ['pr', 'view', '7', '--web'] })).rejects.toThrow(
+      'backend gh cannot mutate control-plane files',
+    );
+    await expect(tool.execute({ args: ['run', 'download', '123'] })).rejects.toThrow(
+      'backend gh cannot mutate control-plane files',
+    );
+    await expect(tool.execute({ args: ['browse'] })).rejects.toThrow('backend gh cannot mutate control-plane files');
   });
 
   it('rejects gh commands and options that can read control-plane files', async () => {
@@ -261,6 +303,34 @@ describe('GitHub CLI Flue tool', () => {
         args: ['api', 'repos/manaflow-ai/manaflow/issues/42/comments', '--method', 'POST', '-f', 'body=Done'],
       }),
     ).rejects.toThrow('Posting GitHub issue/PR comments directly through gh is not available');
+    await expect(
+      tool.execute({
+        args: ['api', '--method=POST', 'repos/manaflow-ai/manaflow/issues/42/comments', '-f', 'body=Done'],
+      }),
+    ).rejects.toThrow('Posting GitHub issue/PR comments directly through gh is not available');
+    await expect(
+      tool.execute({
+        args: ['api', '-XPOST', 'repos/manaflow-ai/manaflow/pulls/7/reviews', '-f', 'body=Done'],
+      }),
+    ).rejects.toThrow('Posting GitHub issue/PR comments directly through gh is not available');
+    await expect(
+      tool.execute({
+        args: ['api', '-X', 'POST', 'repos/manaflow-ai/manaflow/pulls/comments/1/replies', '-f', 'body=Done'],
+      }),
+    ).rejects.toThrow('Posting GitHub issue/PR comments directly through gh is not available');
+  });
+
+  it('rejects Git Database API routes even when gh api flags precede the route', async () => {
+    const tool = createGitHubCliTool(repositoryServices(), {
+      runner: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    });
+
+    await expect(
+      tool.execute({ args: ['api', '--method', 'GET', 'repos/manaflow-ai/manaflow/git/refs/heads/main'] }),
+    ).rejects.toThrow('GitHub Git Database API routes');
+    await expect(
+      tool.execute({ args: ['api', '--paginate', 'repos/manaflow-ai/manaflow/git/refs/heads/main'] }),
+    ).rejects.toThrow('GitHub Git Database API routes');
   });
 
   it('requires an active repository', async () => {

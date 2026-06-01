@@ -267,6 +267,10 @@ export class WorkerService {
             payload: event.payload,
           });
         },
+        shouldPersist: async () =>
+          !signal.aborted &&
+          !(await this.isRunCancellationRequested(claimed.run.id)) &&
+          (await this.isRunOwnedByThisWorker(claimed.run.id)),
       });
       if (await this.isRunCancellationRequested(claimed.run.id)) return;
       if (!(await this.isRunOwnedByThisWorker(claimed.run.id))) return;
