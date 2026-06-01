@@ -3,6 +3,7 @@ export const selectedSessionStorageKey = 'deputies-selected-session-id';
 export const newSessionSelectedStorageKey = 'deputies-new-session-selected';
 export const setupGuideOpenStorageKey = 'deputies-setup-guide-open';
 export const groupsPanelOpenStorageKey = 'deputies-groups-panel-open';
+export const sidebarPanelStorageKey = 'deputies-sidebar-panel';
 export const groupsPanelViewStorageKey = 'deputies-groups-panel-view';
 export const groupsPanelSelectedGroupStorageKey = 'deputies-groups-panel-selected-group-id';
 export const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
@@ -58,6 +59,12 @@ export function loadInitialSetupGuideOpen(): boolean {
 
 export function loadInitialGroupsPanelOpen(): boolean {
   return sessionStorage.getItem(groupsPanelOpenStorageKey) === 'true';
+}
+
+export function loadInitialSidebarPanel(): 'sessions' | 'groups' {
+  const stored = sessionStorage.getItem(sidebarPanelStorageKey);
+  if (stored === 'sessions' || stored === 'groups') return stored;
+  return loadInitialGroupsPanelOpen() ? 'groups' : 'sessions';
 }
 
 export function loadInitialGroupsPanelView(): 'group' | 'super_admins' {

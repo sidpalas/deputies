@@ -83,6 +83,7 @@ import {
   loadInitialGroupsPanelSelectedGroupId,
   loadInitialGroupsPanelView,
   loadInitialIsCreatingThread,
+  loadInitialSidebarPanel,
   loadInitialSetupGuideOpen,
   loadInitialSelectedSessionId,
   loadStoredToken,
@@ -93,6 +94,7 @@ import {
   scrollThreadByWheel,
   selectedSessionStorageKey,
   setupGuideOpenStorageKey,
+  sidebarPanelStorageKey,
   shouldLetWheelTargetHandleScroll,
   startupConnectionDelayMs,
   startupDelayedConnectionStatus,
@@ -134,6 +136,7 @@ export function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string>(loadInitialSelectedSessionId);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarPanel, setSidebarPanel] = useState<'sessions' | 'groups'>(loadInitialSidebarPanel);
   const [isCreatingThread, setIsCreatingThread] = useState(loadInitialIsCreatingThread);
   const [messages, setMessages] = useState<Message[]>([]);
   const [events, setEvents] = useState<AgentEvent[]>([]);
@@ -1115,6 +1118,7 @@ export function App() {
     clearSessionSearchParam();
     sessionStorage.removeItem(newSessionSelectedStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
+    sessionStorage.removeItem(sidebarPanelStorageKey);
     sessionStorage.removeItem(groupsPanelViewStorageKey);
     sessionStorage.removeItem(groupsPanelSelectedGroupStorageKey);
     sessionStorage.removeItem(setupGuideOpenStorageKey);
@@ -1197,21 +1201,40 @@ export function App() {
     setSidebarOpen(false);
   }
 
+  function setActiveSidebarPanel(panel: 'sessions' | 'groups') {
+    setSidebarPanel(panel);
+    sessionStorage.setItem(sidebarPanelStorageKey, panel);
+  }
+
   function openGroupsPanel() {
     if (!canViewGroups) return;
+    const desktop = isDesktopViewport();
     setSetupGuideOpen(false);
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     setGroupsPanelOpen(true);
     sessionStorage.setItem(groupsPanelOpenStorageKey, 'true');
+    setActiveSidebarPanel('groups');
     setSidebarCollapsed(false);
-    setSidebarOpen(!isDesktopViewport());
+    setSidebarOpen(!desktop);
   }
 
   function showSessionsSidebar() {
+    const desktop = isDesktopViewport();
     setSetupGuideOpen(false);
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     setGroupsPanelOpen(false);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
+    if (!desktop) setActiveSidebarPanel('sessions');
+    setSidebarCollapsed(false);
+    setSidebarOpen(true);
+  }
+
+  function backToSessionsSidebar() {
+    setSetupGuideOpen(false);
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
+    setGroupsPanelOpen(false);
+    sessionStorage.removeItem(groupsPanelOpenStorageKey);
+    setActiveSidebarPanel('sessions');
     setSidebarCollapsed(false);
     setSidebarOpen(true);
   }
@@ -1695,8 +1718,8 @@ export function App() {
                   variant="ghost"
                   size="icon"
                   onClick={expandSidebar}
-                  aria-label={groupsPanelOpen ? 'Expand access groups' : 'Expand sessions'}
-                  title={groupsPanelOpen ? 'Expand access groups' : 'Expand sessions'}
+                  aria-label={sidebarPanel === 'groups' ? 'Expand access' : 'Expand sessions'}
+                  title={sidebarPanel === 'groups' ? 'Expand access' : 'Expand sessions'}
                 >
                   <PanelLeftOpen className="h-4 w-4" />
                 </Button>
@@ -1708,7 +1731,7 @@ export function App() {
                   sidebarOpen && 'block',
                 )}
               >
-                {groupsPanelOpen ? (
+                {sidebarPanel === 'groups' && canViewGroups ? (
                   <GroupsSidebar
                     authRequired={bearerAuthRequired || sessionAuthRequired}
                     canCreateGroups={canManageAllGroups}
@@ -1723,10 +1746,12 @@ export function App() {
                     superAdminUsers={currentSuperAdminUsers}
                     themePreference={themePreference}
                     token={token}
-                    onBackToSessions={showSessionsSidebar}
+                    navPage={showingSetupGuide ? 'setup' : groupsPanelOpen ? 'groups' : 'sessions'}
+                    onBackToSessions={backToSessionsSidebar}
                     onCollapse={collapseSidebar}
                     onCreateGroup={handleCreateGroup}
                     onOpenGroups={openGroupsPanel}
+                    onOpenSessions={showSessionsSidebar}
                     onOpenSetup={openSetupGuide}
                     onSelectGroup={selectGroupPanel}
                     onSelectSuperAdmins={selectSuperAdminsPanel}
@@ -1845,6 +1870,7 @@ export function App() {
                     modelChoices={modelChoices}
                     modelUnavailableReason={newThreadModelUnavailableReason}
                     showOpenSidebar={!sidebarOpen}
+                    openSidebarLabel={sidebarPanel === 'groups' && canViewGroups ? 'Open access' : 'Open sessions'}
                     onOpenSidebar={expandSidebar}
                     onGroupChange={setNewThreadGroupId}
                     onPromptChange={setNewThreadPrompt}
@@ -1859,6 +1885,7 @@ export function App() {
                       selectedSession={selectedSession}
                       canWriteSession={canWriteSelectedSession}
                       showOpenSidebar={!sidebarOpen}
+                      openSidebarLabel={sidebarPanel === 'groups' && canViewGroups ? 'Open access' : 'Open sessions'}
                       onArchive={handleArchiveSession}
                       onOpenSidebar={expandSidebar}
                       onUpdateTitle={handleUpdateTitle}

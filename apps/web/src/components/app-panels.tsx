@@ -423,6 +423,7 @@ export function GroupsSidebar(props: {
   currentUser: AuthUser | null;
   groups: Group[];
   health: Health | null;
+  navPage: 'sessions' | 'setup' | 'groups';
   selectedGroupId: string;
   selectedView: 'group' | 'super_admins';
   superAdminUsers: AuthUser[];
@@ -432,6 +433,7 @@ export function GroupsSidebar(props: {
   onCollapse: () => void;
   onCreateGroup: () => void;
   onOpenGroups: () => void;
+  onOpenSessions: () => void;
   onOpenSetup: () => void;
   onSelectGroup: (groupId: string) => void;
   onSelectSuperAdmins: () => void;
@@ -613,10 +615,10 @@ export function GroupsSidebar(props: {
         canViewSetup={props.canViewSetup}
         connectionStatus={props.connectionStatus}
         health={props.health}
-        navPage="groups"
+        navPage={props.navPage}
         token={props.token}
         onOpenGroups={props.onOpenGroups}
-        onOpenSessions={props.onBackToSessions}
+        onOpenSessions={props.onOpenSessions}
         onOpenSetup={props.onOpenSetup}
         onSignOut={props.onSignOut}
       />
@@ -1168,7 +1170,7 @@ function ApiStatusFooter(props: {
             aria-current={props.navPage === 'groups' ? 'page' : undefined}
             onClick={props.onOpenGroups}
           >
-            Groups
+            Access
           </Button>
         ) : null}
         {props.authRequired && (props.token || props.health?.apiAuthMode === 'session') ? (
@@ -1377,6 +1379,7 @@ export function NewThreadPanel(props: {
   modelChoices: ModelChoice[];
   modelUnavailableReason: string;
   showOpenSidebar: boolean;
+  openSidebarLabel?: string;
   onOpenSidebar: () => void;
   onGroupChange: (value: string) => void;
   onPromptChange: (value: string) => void;
@@ -1393,8 +1396,8 @@ export function NewThreadPanel(props: {
           variant="ghost"
           size="icon"
           onClick={props.onOpenSidebar}
-          aria-label="Open sessions"
-          title="Open sessions"
+          aria-label={props.openSidebarLabel ?? 'Open sessions'}
+          title={props.openSidebarLabel ?? 'Open sessions'}
         >
           <PanelLeftOpen className="h-4 w-4" />
         </Button>
@@ -1953,6 +1956,7 @@ type ThreadHeaderProps = {
   workspaceToolsDisabled?: boolean;
   selectedSession: Session;
   showOpenSidebar: boolean;
+  openSidebarLabel?: string;
   workspaceToolsUnavailableReason?: string;
   onArchive: () => void;
   onOpenSidebar: () => void;
@@ -2039,8 +2043,8 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             variant="ghost"
             size="icon"
             onClick={props.onOpenSidebar}
-            aria-label="Open sessions"
-            title="Open sessions"
+            aria-label={props.openSidebarLabel ?? 'Open sessions'}
+            title={props.openSidebarLabel ?? 'Open sessions'}
           >
             <PanelLeftOpen className="h-4 w-4" />
           </Button>
