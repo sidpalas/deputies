@@ -13,6 +13,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Flue Persistence](./flue-persistence.md): Postgres-backed Flue session store and how it relates to product session state.
 - [Integrations](./integrations.md): generic webhook, GitHub, Slack, Linear, callbacks, auth, and external thread mapping.
 - [Web UI](./web-ui.md): separate Vite React operator UI, browser auth, and static deployment notes.
+- [Access Groups](./access-groups.md): RBAC roles, session access policies, group management, and GitHub auth allowlists.
 - [Local Development](./contributing-local-development.md): contributor setup, Postgres, Portless, Docker Compose, real Flue, and local integrations.
 - [Development Tasks](./development-tasks.md): where to put `package.json` scripts versus `mise` tasks in this monorepo.
 - [Deployment](./deployment.md): provider-agnostic deployment topology, env vars, integrations, sandbox providers, and operations checklist.

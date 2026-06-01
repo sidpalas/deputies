@@ -105,7 +105,7 @@ The UI supports all product API auth modes exposed by `/health`:
 
 `API_AUTH_MODE` is required. Browser-facing deployments use `session`. Reserve `bearer` for development tooling or programmatic/internal API access, and use `none` only for intentional local or test no-auth runs.
 
-Session-cookie auth is an API access gate only. Product sessions remain multiplayer/shared by default: authenticated users can list and open the same global session set, and sessions are not currently owned by, filtered to, or authorized per authenticated user. Treat per-user session ownership/authorization as future work for a comprehensive users/organizations/RBAC push rather than a narrow session-only patch.
+Session-cookie auth enables access-group RBAC for browser-facing product routes. Sessions belong to one access group and use group/organization visibility plus group-members/creator-only write policies. See [Access Groups](./access-groups.md) for roles, defaults, archived-group behavior, and GitHub auth allowlists.
 
 Local static session-auth example:
 
@@ -158,6 +158,7 @@ The SSE client uses `fetch()` streaming instead of native `EventSource` because 
 - Edit or cancel pending queued messages.
 - Request cancellation of an active run.
 - Archive and restore sessions. Archived sessions are read-only until restored.
+- Manage access groups, group members, group defaults, archived groups, and super admins when the signed-in user has sufficient access.
 - Replay and stream session events internally, rendering assistant text in the transcript and non-text run/message events as collapsible diagnostics.
 - List session artifacts in the context panel.
 - Render run-created image and text artifacts inline with the relevant transcript group when they are safe to preview.

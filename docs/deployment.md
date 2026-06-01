@@ -188,7 +188,7 @@ AUTH_GITHUB_ALLOWED_ORGANIZATIONS=
 AUTH_GITHUB_DEFAULT_GROUP_ROLE=member
 ```
 
-`AUTH_GITHUB_ADMIN_USERS` grants super-admin access and is restored on login. `AUTH_GITHUB_ALLOWED_*` controls which non-admin GitHub users can sign in, and `AUTH_GITHUB_DEFAULT_GROUP_ROLE` sets their default access group role.
+`AUTH_GITHUB_ADMIN_USERS` grants super-admin access and is restored on login. `AUTH_GITHUB_ALLOWED_*` controls which non-admin GitHub users can sign in, and `AUTH_GITHUB_DEFAULT_GROUP_ROLE` sets their default access group role. See [Access Groups](./access-groups.md) for RBAC behavior and role semantics.
 
 ## Web Entrypoint, Proxying, And Cookies
 
