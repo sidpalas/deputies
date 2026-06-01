@@ -72,18 +72,18 @@ export function parseRepositoryBody(value: unknown): RepositoryReference | undef
 
 export function parseModelBody(
   value: unknown,
-  config: Pick<AppConfig, 'flueModel' | 'flueModelOptions'>,
+  config: Pick<AppConfig, 'runnerModel' | 'runnerModelChoices'>,
 ): string | undefined {
   const model = optionalString(value);
   if (!model) return undefined;
 
-  const allowedModels = config.flueModelOptions.length
-    ? config.flueModelOptions
-    : config.flueModel
-      ? [config.flueModel]
+  const allowedModels = config.runnerModelChoices.length
+    ? config.runnerModelChoices
+    : config.runnerModel
+      ? [config.runnerModel]
       : [];
   if (allowedModels.length && !allowedModels.includes(model)) {
-    throw new HttpRequestError(400, 'invalid_request', 'Expected model to be one of the configured model options');
+    throw new HttpRequestError(400, 'invalid_request', 'Expected model to be one of the configured model choices');
   }
   return model;
 }

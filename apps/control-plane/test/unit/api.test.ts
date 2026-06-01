@@ -65,7 +65,7 @@ describe('core API', () => {
     store = new MemoryStore();
     services = createServices(store);
     server = createServer(
-      loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi', FLUE_MODEL: 'openai-codex/gpt-5.5' }),
+      loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi', RUNNER_MODEL: 'openai-codex/gpt-5.5' }),
       services,
     );
     baseUrl = await listen(server);
@@ -84,7 +84,7 @@ describe('core API', () => {
     });
   });
 
-  it('reports degraded health and unavailable model options', async () => {
+  it('reports degraded health and unavailable model choices', async () => {
     await closeServer(server);
     store = new MemoryStore();
     services = createServices(store);
@@ -96,8 +96,8 @@ describe('core API', () => {
     server = createServer(
       loadConfig({
         API_AUTH_MODE: 'none',
-        FLUE_MODEL: 'anthropic/claude-sonnet',
-        FLUE_MODEL_OPTIONS: 'anthropic/claude-sonnet,openai-codex/gpt-5.5',
+        RUNNER_MODEL: 'anthropic/claude-sonnet',
+        RUNNER_MODEL_CHOICES: 'anthropic/claude-sonnet,openai-codex/gpt-5.5',
       }),
       services,
     );
@@ -114,7 +114,7 @@ describe('core API', () => {
     expect(models.status).toBe(200);
     await expect(models.json()).resolves.toMatchObject({
       models: ['anthropic/claude-sonnet', 'openai-codex/gpt-5.5'],
-      modelOptions: [
+      modelChoices: [
         { value: 'anthropic/claude-sonnet', available: true },
         {
           value: 'openai-codex/gpt-5.5',
@@ -137,8 +137,8 @@ describe('core API', () => {
     server = createServer(
       loadConfig({
         API_AUTH_MODE: 'none',
-        FLUE_MODEL: 'anthropic/claude-sonnet',
-        FLUE_MODEL_OPTIONS: 'anthropic/claude-sonnet,openai-codex/gpt-5.5',
+        RUNNER_MODEL: 'anthropic/claude-sonnet',
+        RUNNER_MODEL_CHOICES: 'anthropic/claude-sonnet,openai-codex/gpt-5.5',
       }),
       services,
     );

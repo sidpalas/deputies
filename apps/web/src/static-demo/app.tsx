@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { PanelLeftOpen } from 'lucide-react';
-import type { ArtifactPreview, ModelOption, Session } from '../api.js';
+import type { ArtifactPreview, ModelChoice, Session } from '../api.js';
 import { MessageComposer, ThreadHeader, ThreadSidebar } from '../components/app-panels.js';
 import type { ThemePreference } from '../components/app-panels.js';
 import { ChatPanel, DesktopContextPanel, MobileContextPanel } from '../components/thread/thread-content.js';
@@ -140,7 +140,7 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
   const repository = repositoryLabel(session.context?.repository);
   const branch = typeof session.context?.branch === 'string' ? session.context.branch : null;
   const model = typeof session.context?.model === 'string' ? session.context.model : '';
-  const modelOptions = model ? [modelOption(model)] : [];
+  const modelChoices = model ? [modelChoice(model)] : [];
   const services = props.demoSession.services ?? [];
 
   return (
@@ -210,7 +210,7 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
             branchOptionsError=""
             model={model}
             inheritedModel={model}
-            modelOptions={modelOptions}
+            modelChoices={modelChoices}
             modelUnavailableReason=""
             onBranchChange={() => undefined}
             onModelChange={() => undefined}
@@ -261,7 +261,7 @@ function repositoryLabel(value: unknown): string | null {
   return owner && repo ? `${owner}/${repo}` : null;
 }
 
-function modelOption(model: string): ModelOption {
+function modelChoice(model: string): ModelChoice {
   return { value: model, label: model.replace(/^[^/]+\//, '').replace(/-/g, ' '), available: true };
 }
 

@@ -1,3 +1,5 @@
+import { getModels, type KnownProvider } from '@earendil-works/pi-ai';
+
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue' | 'pi';
 export type SandboxProviderKind = 'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'k8s-agent-sandbox' | 'ecs';
@@ -9,20 +11,11 @@ export type AuthProviderKind = 'static' | 'github';
 export type AuthCookieSameSite = 'lax' | 'none';
 export type ArtifactStorageKind = 'disabled' | 'filesystem' | 's3';
 
-const ANTHROPIC_FLUE_MODELS = [
-  'anthropic/claude-haiku-4-5',
-  'anthropic/claude-sonnet-4-5',
-  'anthropic/claude-sonnet-4-6',
-  'anthropic/claude-opus-4-5',
-  'anthropic/claude-opus-4-6',
-  'anthropic/claude-opus-4-7',
-];
-const OPENAI_FLUE_MODELS = ['openai/gpt-5.2', 'openai/gpt-5.4', 'openai/gpt-5.5'];
-const OPENAI_CODEX_FLUE_MODELS = [
-  'openai-codex/gpt-5.2-codex',
-  'openai-codex/gpt-5.3-codex',
-  'openai-codex/gpt-5.3-codex-spark',
-  'openai-codex/gpt-5.5',
+const RUNNER_MODEL_PROVIDER_AUTH: Array<{ provider: KnownProvider; env: string[] }> = [
+  { provider: 'anthropic', env: ['ANTHROPIC_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'] },
+  { provider: 'openai', env: ['OPENAI_API_KEY'] },
+  { provider: 'openai-codex', env: ['OPENAI_CODEX_AUTH_FILE', 'OPENAI_CODEX_AUTH_BASE64'] },
+  { provider: 'opencode', env: ['OPENCODE_API_KEY'] },
 ];
 const sandboxSecretEncryptionKeyPlaceholder = 'replace-with-random-sandbox-secret';
 
@@ -80,11 +73,11 @@ export type AppConfig = {
   authGithubViewerOrganizations: string[];
   unsafeAuthGithubAllowAllViewers: boolean;
   databaseUrl?: string;
-  flueStateStore: 'postgres' | 'memory';
-  flueModel?: string;
-  flueModelOptions: string[];
-  flueOpenaiCodexAuthFile?: string;
-  flueOpenaiCodexAuthBase64?: string;
+  runnerStateStore: 'postgres' | 'memory';
+  runnerModel?: string;
+  runnerModelChoices: string[];
+  openaiCodexAuthFile?: string;
+  openaiCodexAuthBase64?: string;
   fakeRunnerArtifact?: Record<string, unknown>;
   daytonaApiKey?: string;
   daytonaApiUrl?: string;
@@ -176,8 +169,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       false,
       'UNSAFE_AUTH_GITHUB_ALLOW_ALL_VIEWERS',
     ),
-    flueStateStore: parseEnum(env.FLUE_STATE_STORE, ['postgres', 'memory'], 'postgres'),
-    flueModelOptions: parseStringList(env.FLUE_MODEL_OPTIONS),
+    runnerStateStore: parseEnum(env.RUNNER_STATE_STORE, ['postgres', 'memory'], 'postgres'),
+    runnerModelChoices: parseStringList(env.RUNNER_MODEL_CHOICES),
     slackApiBaseUrl: env.SLACK_API_BASE_URL ?? 'https://slack.com/api',
     unsafeSlackWebhookAllowAllIds: parseBoolean(
       env.UNSAFE_SLACK_WEBHOOK_ALLOW_ALL_IDS,
@@ -233,9 +226,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.GITHUB_OAUTH_CLIENT_SECRET) config.githubOAuthClientSecret = env.GITHUB_OAUTH_CLIENT_SECRET;
   if (env.GITHUB_OAUTH_CALLBACK_URL) config.githubOAuthCallbackUrl = env.GITHUB_OAUTH_CALLBACK_URL;
   if (env.DATABASE_URL) config.databaseUrl = env.DATABASE_URL;
-  if (env.FLUE_MODEL) config.flueModel = env.FLUE_MODEL;
-  if (env.FLUE_OPENAI_CODEX_AUTH_FILE) config.flueOpenaiCodexAuthFile = env.FLUE_OPENAI_CODEX_AUTH_FILE;
-  if (env.FLUE_OPENAI_CODEX_AUTH_BASE64) config.flueOpenaiCodexAuthBase64 = env.FLUE_OPENAI_CODEX_AUTH_BASE64;
+  if (env.RUNNER_MODEL) config.runnerModel = env.RUNNER_MODEL;
+  if (env.OPENAI_CODEX_AUTH_FILE) config.openaiCodexAuthFile = env.OPENAI_CODEX_AUTH_FILE;
+  if (env.OPENAI_CODEX_AUTH_BASE64) config.openaiCodexAuthBase64 = env.OPENAI_CODEX_AUTH_BASE64;
   if (env.FAKE_RUNNER_ARTIFACT_JSON) {
     config.fakeRunnerArtifact = parseJsonRecord(env.FAKE_RUNNER_ARTIFACT_JSON, 'FAKE_RUNNER_ARTIFACT_JSON');
   }
@@ -267,7 +260,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY)
     config.artifactStorageS3SecretAccessKey = env.ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY;
 
-  config.flueModelOptions = deriveFlueModelOptions(env, config.flueModelOptions, config.flueModel);
+  config.runnerModelChoices = deriveRunnerModelChoices(env, config.runnerModelChoices, config.runnerModel);
 
   validateProductAuthConfig(config);
   validateArtifactStorageConfig(config);
@@ -426,12 +419,12 @@ export function requireAgentSandboxOrchestratorToken(config: AppConfig): string 
   return config.agentSandboxOrchestratorToken;
 }
 
-export function requireFlueModel(config: AppConfig): string {
-  if (!config.flueModel) {
-    throw new Error('FLUE_MODEL is required when RUNNER=flue or RUNNER=pi');
+export function requireRunnerModel(config: AppConfig): string {
+  if (!config.runnerModel) {
+    throw new Error('RUNNER_MODEL is required when RUNNER=flue or RUNNER=pi');
   }
 
-  return config.flueModel;
+  return config.runnerModel;
 }
 
 export function requireDatabaseUrl(config: AppConfig): string {
@@ -516,21 +509,19 @@ function parseJsonRecord(value: string, name: string): Record<string, unknown> {
   throw new Error(`${name} must be a JSON object`);
 }
 
-function deriveFlueModelOptions(
+function deriveRunnerModelChoices(
   env: NodeJS.ProcessEnv,
-  explicitOptions: string[],
+  explicitChoices: string[],
   defaultModel: string | undefined,
 ): string[] {
-  const derived = explicitOptions.length ? explicitOptions : providerDerivedFlueModels(env);
+  const derived = explicitChoices.length ? explicitChoices : providerDerivedRunnerModels(env);
   return dedupeStrings(defaultModel ? [defaultModel, ...derived] : derived);
 }
 
-function providerDerivedFlueModels(env: NodeJS.ProcessEnv): string[] {
-  return [
-    ...(env.ANTHROPIC_API_KEY ? ANTHROPIC_FLUE_MODELS : []),
-    ...(env.OPENAI_API_KEY ? OPENAI_FLUE_MODELS : []),
-    ...(env.FLUE_OPENAI_CODEX_AUTH_FILE || env.FLUE_OPENAI_CODEX_AUTH_BASE64 ? OPENAI_CODEX_FLUE_MODELS : []),
-  ];
+function providerDerivedRunnerModels(env: NodeJS.ProcessEnv): string[] {
+  return RUNNER_MODEL_PROVIDER_AUTH.flatMap(({ provider, env: envNames }) =>
+    envNames.some((name) => env[name]) ? getModels(provider).map((model) => `${provider}/${model.id}`) : [],
+  );
 }
 
 function dedupeStrings(values: string[]): string[] {

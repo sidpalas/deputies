@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig, requireFlueModel } from '../../src/config/index.js';
+import { loadConfig, requireRunnerModel } from '../../src/config/index.js';
 import { RealFlueAgentFactory } from '../../src/runner-flue/agent-factory.js';
 import { FlueRunner } from '../../src/runner-flue/runner.js';
 import type { RepositoryAccessProvider } from '../../src/repositories/setup.js';
@@ -9,7 +9,7 @@ import { LocalSandboxProvider } from '../../src/sandbox/local.js';
 import type { SandboxHandle } from '../../src/sandbox/types.js';
 
 const enabled = process.env.RUN_REAL_LOCAL_FLUE_UAT === 'true';
-const hasRequiredEnv = Boolean(process.env.FLUE_MODEL);
+const hasRequiredEnv = Boolean(process.env.RUNNER_MODEL);
 
 describe.skipIf(!enabled || !hasRequiredEnv)('real Flue + local sandbox UAT', () => {
   let rootDir: string;
@@ -33,7 +33,7 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Flue + local sandbox UAT', ()
     const remotePath = await createLocalGitRemote(sandbox);
     const events: unknown[] = [];
 
-    const result = await new FlueRunner(new RealFlueAgentFactory({ model: requireFlueModel(config) }), {
+    const result = await new FlueRunner(new RealFlueAgentFactory({ model: requireRunnerModel(config) }), {
       repositoryAccess: { github: new LocalGitAccessProvider(remotePath) },
     }).run({
       sessionId: 'real-local-flue-uat',

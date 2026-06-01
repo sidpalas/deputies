@@ -88,8 +88,8 @@ config:
   serviceBaseDomain: deputies-k8s.localhost
   serviceTrustForwardedHosts: 'true'
   appDataStore: postgres
-  flueStateStore: postgres
-  flueModel: anthropic/claude-haiku-4-5
+  runnerStateStore: postgres
+  runnerModel: anthropic/claude-haiku-4-5
   artifactStorageProvider: s3
   artifactStorageS3Endpoint: http://seaweedfs:8333
   artifactStorageS3Region: us-east-1
@@ -121,7 +121,8 @@ secrets:
   daytonaApiKey: ''
   anthropicApiKey: ''
   openaiApiKey: ''
-  flueOpenaiCodexAuthBase64: ''
+  opencodeApiKey: ''
+  openaiCodexAuthBase64: ''
   artifactStorageS3AccessKeyId: seaweed
   artifactStorageS3SecretAccessKey: seaweed
   githubOAuthClientId: ''

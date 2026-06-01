@@ -62,7 +62,7 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --set secrets.name=deputies-app-secrets
 ```
 
-The referenced Secret should contain the environment-variable keys the app needs, such as `AUTH_SESSION_SECRET`, `DAYTONA_API_KEY`, `ANTHROPIC_API_KEY`, `ARTIFACT_STORAGE_S3_ACCESS_KEY_ID`, and `ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY`.
+The referenced Secret should contain the environment-variable keys the app needs, such as `AUTH_SESSION_SECRET`, `DAYTONA_API_KEY`, `ANTHROPIC_API_KEY`, `OPENCODE_API_KEY`, `ARTIFACT_STORAGE_S3_ACCESS_KEY_ID`, and `ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY`.
 
 Inline secret values are acceptable for short-lived local validation, but production users should manage secrets through their normal mechanism, such as External Secrets Operator, SOPS, Sealed Secrets, Vault, or cloud provider secret sync.
 

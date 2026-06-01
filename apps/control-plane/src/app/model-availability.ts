@@ -6,7 +6,7 @@ export type ModelUnavailableDetails = {
   action?: string;
 };
 
-export type ModelOption = {
+export type ModelChoice = {
   value: string;
   label: string;
   available: boolean;
@@ -51,14 +51,14 @@ export class ModelAvailabilityService {
   }
 }
 
-export function configuredModels(config: Pick<AppConfig, 'flueModel' | 'flueModelOptions'>): string[] {
-  return config.flueModelOptions.length ? config.flueModelOptions : config.flueModel ? [config.flueModel] : [];
+export function configuredModels(config: Pick<AppConfig, 'runnerModel' | 'runnerModelChoices'>): string[] {
+  return config.runnerModelChoices.length ? config.runnerModelChoices : config.runnerModel ? [config.runnerModel] : [];
 }
 
-export function modelOptions(
-  config: Pick<AppConfig, 'flueModel' | 'flueModelOptions'>,
+export function modelChoices(
+  config: Pick<AppConfig, 'runnerModel' | 'runnerModelChoices'>,
   availability: ModelAvailabilityService,
-): ModelOption[] {
+): ModelChoice[] {
   return configuredModels(config).map((model) => {
     const unavailable = availability.unavailableFor(model);
     return {

@@ -40,8 +40,8 @@ describe('loadConfig', () => {
       authGithubViewerUsers: [],
       authGithubViewerOrganizations: [],
       unsafeAuthGithubAllowAllViewers: false,
-      flueStateStore: 'postgres',
-      flueModelOptions: [],
+      runnerStateStore: 'postgres',
+      runnerModelChoices: [],
       slackApiBaseUrl: 'https://slack.com/api',
       unsafeSlackWebhookAllowAllIds: false,
       slackAllowedTeamIds: [],
@@ -62,6 +62,12 @@ describe('loadConfig', () => {
       unsafeAllowLocalHttpCallbacks: false,
       hideSetupPage: false,
     });
+  });
+
+  it('derives OpenCode Zen model choices from Pi catalog when OPENCODE_API_KEY is set', () => {
+    expect(loadConfig({ API_AUTH_MODE: 'none', OPENCODE_API_KEY: 'opencode-key' }).runnerModelChoices).toEqual(
+      expect.arrayContaining(['opencode/kimi-k2.6', 'opencode/claude-sonnet-4-6', 'opencode/gpt-5.5']),
+    );
   });
 
   it('parses supported run modes and providers', () => {
@@ -115,10 +121,10 @@ describe('loadConfig', () => {
         AUTH_GITHUB_VIEWER_ORGANIZATIONS: 'viewers',
         UNSAFE_AUTH_GITHUB_ALLOW_ALL_VIEWERS: 'true',
         DATABASE_URL: 'postgres://example',
-        FLUE_MODEL: 'anthropic/claude-haiku-4-5',
-        FLUE_OPENAI_CODEX_AUTH_FILE: '/tmp/pi-auth.json',
-        FLUE_OPENAI_CODEX_AUTH_BASE64: 'eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19',
-        FLUE_STATE_STORE: 'memory',
+        RUNNER_MODEL: 'anthropic/claude-haiku-4-5',
+        OPENAI_CODEX_AUTH_FILE: '/tmp/pi-auth.json',
+        OPENAI_CODEX_AUTH_BASE64: 'eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19',
+        RUNNER_STATE_STORE: 'memory',
         DAYTONA_API_KEY: 'daytona-key',
         DAYTONA_API_URL: 'https://daytona.example',
         DAYTONA_TARGET: 'eu',
@@ -202,10 +208,10 @@ describe('loadConfig', () => {
       authGithubViewerOrganizations: ['viewers'],
       unsafeAuthGithubAllowAllViewers: true,
       databaseUrl: 'postgres://example',
-      flueModel: 'anthropic/claude-haiku-4-5',
-      flueOpenaiCodexAuthFile: '/tmp/pi-auth.json',
-      flueOpenaiCodexAuthBase64: 'eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19',
-      flueStateStore: 'memory',
+      runnerModel: 'anthropic/claude-haiku-4-5',
+      openaiCodexAuthFile: '/tmp/pi-auth.json',
+      openaiCodexAuthBase64: 'eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19',
+      runnerStateStore: 'memory',
       daytonaApiKey: 'daytona-key',
       daytonaApiUrl: 'https://daytona.example',
       daytonaTarget: 'eu',

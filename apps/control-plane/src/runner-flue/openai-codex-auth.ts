@@ -21,11 +21,11 @@ export async function loadOpenAICodexApiKey(
   const { authFile = defaultOpenAICodexAuthFile(), authBase64 } =
     typeof options === 'string' ? { authFile: options } : options;
   const auth = authBase64
-    ? parseAuthFile(Buffer.from(authBase64, 'base64').toString('utf8'), 'FLUE_OPENAI_CODEX_AUTH_BASE64')
+    ? parseAuthFile(Buffer.from(authBase64, 'base64').toString('utf8'), 'OPENAI_CODEX_AUTH_BASE64')
     : await readAuthFile(authFile);
   const result = await getOAuthApiKey(openAICodexProvider, auth as Record<string, OAuthCredentials>);
   if (!result) {
-    const source = authBase64 ? 'FLUE_OPENAI_CODEX_AUTH_BASE64' : authFile;
+    const source = authBase64 ? 'OPENAI_CODEX_AUTH_BASE64' : authFile;
     throw new Error(
       `Missing ${openAICodexProvider} OAuth credentials in ${source}. Run pnpm --dir apps/control-plane auth:login:openai-codex first.`,
     );

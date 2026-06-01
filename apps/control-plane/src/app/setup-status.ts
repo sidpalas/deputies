@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { access, mkdir, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HeadBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { CreateBucketCommand, HeadBucketCommand, NoSuchBucket, S3Client } from '@aws-sdk/client-s3';
 import { Pool } from 'pg';
 import type { AppConfig } from '../config/index.js';
 import type { AppServices } from './server.js';
@@ -109,7 +109,7 @@ function runnerStatus(config: AppConfig): SetupStatusItem {
     state: realRunnerSelected ? 'configured' : 'warning',
     summary: `${config.runner} runner selected.`,
     guidance: realRunnerSelected ? undefined : 'Use Flue or Pi for real agent execution.',
-    guidanceItems: realRunnerSelected ? undefined : ['RUNNER=flue', 'RUNNER=pi', 'FLUE_MODEL=<DEFAULT_MODEL_CHOICE>'],
+    guidanceItems: realRunnerSelected ? undefined : ['RUNNER=flue', 'RUNNER=pi', 'RUNNER_MODEL=<DEFAULT_MODEL_CHOICE>'],
     details: [`Runner: ${config.runner}`],
     docsPath: 'README.md',
   };
@@ -216,17 +216,18 @@ function modelProviderStatus(config: AppConfig): SetupStatusItem {
     guidance: providers.length ? undefined : 'Set model provider credentials, such as:',
     guidanceItems: providers.length
       ? undefined
-      : ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'FLUE_OPENAI_CODEX_AUTH_BASE64'],
-    details: [`Models available: ${config.flueModelOptions.length}`],
+      : ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENCODE_API_KEY', 'OPENAI_CODEX_AUTH_BASE64'],
+    details: [`Models available: ${config.runnerModelChoices.length}`],
     docsPath: 'README.md',
   };
 }
 
 function modelProviders(config: AppConfig): string[] {
   const providers: string[] = [];
-  if (config.flueModelOptions.some((model) => model.startsWith('anthropic/'))) providers.push('Anthropic');
-  if (config.flueModelOptions.some((model) => model.startsWith('openai/'))) providers.push('OpenAI');
-  if (config.flueModelOptions.some((model) => model.startsWith('openai-codex/'))) providers.push('OpenAI Codex');
+  if (config.runnerModelChoices.some((model) => model.startsWith('anthropic/'))) providers.push('Anthropic');
+  if (config.runnerModelChoices.some((model) => model.startsWith('openai/'))) providers.push('OpenAI');
+  if (config.runnerModelChoices.some((model) => model.startsWith('openai-codex/'))) providers.push('OpenAI Codex');
+  if (config.runnerModelChoices.some((model) => model.startsWith('opencode/'))) providers.push('OpenCode Zen');
   return providers;
 }
 
@@ -259,7 +260,7 @@ async function objectStoreStatus(config: AppConfig): Promise<SetupStatusItem> {
       ...(config.artifactStorageS3Endpoint ? { endpoint: config.artifactStorageS3Endpoint } : {}),
     });
     try {
-      await client.send(new HeadBucketCommand({ Bucket: config.artifactStorageS3Bucket! }));
+      await ensureS3Bucket(client, config.artifactStorageS3Bucket!, config.artifactStorageS3CreateBucket);
       return {
         id: 'object-store',
         label: 'Artifact Storage',
@@ -289,6 +290,23 @@ async function objectStoreStatus(config: AppConfig): Promise<SetupStatusItem> {
     details: [`Provider: ${config.artifactStorage}`],
     docsPath: 'README.md',
   };
+}
+
+async function ensureS3Bucket(client: S3Client, bucket: string, createBucket: boolean): Promise<void> {
+  try {
+    await client.send(new HeadBucketCommand({ Bucket: bucket }));
+  } catch (error) {
+    if (!createBucket || !isS3BucketNotFoundError(error)) throw error;
+    await client.send(new CreateBucketCommand({ Bucket: bucket }));
+  }
+}
+
+function isS3BucketNotFoundError(error: unknown): boolean {
+  if (error instanceof NoSuchBucket) return true;
+  if (!error || typeof error !== 'object') return false;
+  const name = 'name' in error ? error.name : undefined;
+  const statusCode = '$metadata' in error && isRecord(error.$metadata) ? error.$metadata.httpStatusCode : undefined;
+  return name === 'NoSuchBucket' || name === 'NotFound' || statusCode === 404;
 }
 
 function objectStoreErrorStatus(config: AppConfig, error: unknown, summary: string): SetupStatusItem {
@@ -364,4 +382,8 @@ async function postgresStatus(config: AppConfig): Promise<SetupStatusItem> {
 async function migrationFiles(): Promise<string[]> {
   const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), '../db/migrations');
   return (await readdir(migrationsDir)).filter((file) => file.endsWith('.sql')).sort();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
