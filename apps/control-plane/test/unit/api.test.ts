@@ -65,7 +65,7 @@ describe('core API', () => {
     store = new MemoryStore();
     services = createServices(store);
     server = createServer(
-      loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi', RUNNER_MODEL: 'openai-codex/gpt-5.5' }),
+      loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi', RUNNER_MODEL_DEFAULT: 'openai-codex/gpt-5.5' }),
       services,
     );
     baseUrl = await listen(server);
@@ -96,7 +96,7 @@ describe('core API', () => {
     server = createServer(
       loadConfig({
         API_AUTH_MODE: 'none',
-        RUNNER_MODEL: 'anthropic/claude-sonnet',
+        RUNNER_MODEL_DEFAULT: 'anthropic/claude-sonnet',
         RUNNER_MODEL_CHOICES: 'anthropic/claude-sonnet,openai-codex/gpt-5.5',
       }),
       services,
@@ -115,9 +115,10 @@ describe('core API', () => {
     await expect(models.json()).resolves.toMatchObject({
       models: ['anthropic/claude-sonnet', 'openai-codex/gpt-5.5'],
       modelChoices: [
-        { value: 'anthropic/claude-sonnet', available: true },
+        { value: 'anthropic/claude-sonnet', label: 'claude sonnet (Anthropic)', available: true },
         {
           value: 'openai-codex/gpt-5.5',
+          label: 'gpt 5.5 (OpenAI Codex)',
           available: false,
           unavailableCode: 'openai_codex_auth_unavailable',
           unavailableReason: 'Codex auth expired.',
@@ -137,7 +138,7 @@ describe('core API', () => {
     server = createServer(
       loadConfig({
         API_AUTH_MODE: 'none',
-        RUNNER_MODEL: 'anthropic/claude-sonnet',
+        RUNNER_MODEL_DEFAULT: 'anthropic/claude-sonnet',
         RUNNER_MODEL_CHOICES: 'anthropic/claude-sonnet,openai-codex/gpt-5.5',
       }),
       services,

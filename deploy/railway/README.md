@@ -38,7 +38,7 @@ To run real agent work, set:
 
 ```sh
 RUNNER=flue
-RUNNER_MODEL=<provider/model>
+RUNNER_MODEL_DEFAULT=<provider/model>
 ```
 
 Then configure one of the supported model auth paths:

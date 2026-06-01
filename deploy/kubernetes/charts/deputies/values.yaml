@@ -89,7 +89,7 @@ config:
   serviceTrustForwardedHosts: 'true'
   appDataStore: postgres
   runnerStateStore: postgres
-  runnerModel: anthropic/claude-haiku-4-5
+  runnerModelDefault: anthropic/claude-haiku-4-5
   artifactStorageProvider: s3
   artifactStorageS3Endpoint: http://seaweedfs:8333
   artifactStorageS3Region: us-east-1

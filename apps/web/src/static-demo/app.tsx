@@ -262,7 +262,22 @@ function repositoryLabel(value: unknown): string | null {
 }
 
 function modelChoice(model: string): ModelChoice {
-  return { value: model, label: model.replace(/^[^/]+\//, '').replace(/-/g, ' '), available: true };
+  return { value: model, label: formatModelLabel(model), available: true };
+}
+
+function formatModelLabel(model: string): string {
+  const separator = model.indexOf('/');
+  if (separator === -1) return model.replace(/-/g, ' ');
+
+  return `${model.slice(separator + 1).replace(/-/g, ' ')} (${formatModelProvider(model.slice(0, separator))})`;
+}
+
+function formatModelProvider(provider: string): string {
+  if (provider === 'anthropic') return 'Anthropic';
+  if (provider === 'openai') return 'OpenAI';
+  if (provider === 'openai-codex') return 'OpenAI Codex';
+  if (provider === 'opencode') return 'OpenCode Zen';
+  return provider.replace(/-/g, ' ');
 }
 
 function shouldOpenSessionsOnMobile(): boolean {

@@ -72,15 +72,15 @@ export function parseRepositoryBody(value: unknown): RepositoryReference | undef
 
 export function parseModelBody(
   value: unknown,
-  config: Pick<AppConfig, 'runnerModel' | 'runnerModelChoices'>,
+  config: Pick<AppConfig, 'runnerModelDefault' | 'runnerModelChoices'>,
 ): string | undefined {
   const model = optionalString(value);
   if (!model) return undefined;
 
   const allowedModels = config.runnerModelChoices.length
     ? config.runnerModelChoices
-    : config.runnerModel
-      ? [config.runnerModel]
+    : config.runnerModelDefault
+      ? [config.runnerModelDefault]
       : [];
   if (allowedModels.length && !allowedModels.includes(model)) {
     throw new HttpRequestError(400, 'invalid_request', 'Expected model to be one of the configured model choices');

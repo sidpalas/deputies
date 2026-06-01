@@ -11,7 +11,7 @@ export type AuthProviderKind = 'static' | 'github';
 export type AuthCookieSameSite = 'lax' | 'none';
 export type ArtifactStorageKind = 'disabled' | 'filesystem' | 's3';
 
-const RUNNER_MODEL_PROVIDER_AUTH: Array<{ provider: KnownProvider; env: string[] }> = [
+const MODEL_PROVIDER_AUTH: Array<{ provider: KnownProvider; env: string[] }> = [
   { provider: 'anthropic', env: ['ANTHROPIC_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'] },
   { provider: 'openai', env: ['OPENAI_API_KEY'] },
   { provider: 'openai-codex', env: ['OPENAI_CODEX_AUTH_FILE', 'OPENAI_CODEX_AUTH_BASE64'] },
@@ -74,7 +74,7 @@ export type AppConfig = {
   unsafeAuthGithubAllowAllViewers: boolean;
   databaseUrl?: string;
   runnerStateStore: 'postgres' | 'memory';
-  runnerModel?: string;
+  runnerModelDefault?: string;
   runnerModelChoices: string[];
   openaiCodexAuthFile?: string;
   openaiCodexAuthBase64?: string;
@@ -226,7 +226,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.GITHUB_OAUTH_CLIENT_SECRET) config.githubOAuthClientSecret = env.GITHUB_OAUTH_CLIENT_SECRET;
   if (env.GITHUB_OAUTH_CALLBACK_URL) config.githubOAuthCallbackUrl = env.GITHUB_OAUTH_CALLBACK_URL;
   if (env.DATABASE_URL) config.databaseUrl = env.DATABASE_URL;
-  if (env.RUNNER_MODEL) config.runnerModel = env.RUNNER_MODEL;
+  if (env.RUNNER_MODEL_DEFAULT) config.runnerModelDefault = env.RUNNER_MODEL_DEFAULT;
   if (env.OPENAI_CODEX_AUTH_FILE) config.openaiCodexAuthFile = env.OPENAI_CODEX_AUTH_FILE;
   if (env.OPENAI_CODEX_AUTH_BASE64) config.openaiCodexAuthBase64 = env.OPENAI_CODEX_AUTH_BASE64;
   if (env.FAKE_RUNNER_ARTIFACT_JSON) {
@@ -260,7 +260,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY)
     config.artifactStorageS3SecretAccessKey = env.ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY;
 
-  config.runnerModelChoices = deriveRunnerModelChoices(env, config.runnerModelChoices, config.runnerModel);
+  config.runnerModelChoices = deriveRunnerModelChoices(env, config.runnerModelChoices, config.runnerModelDefault);
 
   validateProductAuthConfig(config);
   validateArtifactStorageConfig(config);
@@ -419,12 +419,12 @@ export function requireAgentSandboxOrchestratorToken(config: AppConfig): string 
   return config.agentSandboxOrchestratorToken;
 }
 
-export function requireRunnerModel(config: AppConfig): string {
-  if (!config.runnerModel) {
-    throw new Error('RUNNER_MODEL is required when RUNNER=flue or RUNNER=pi');
+export function requireRunnerModelDefault(config: AppConfig): string {
+  if (!config.runnerModelDefault) {
+    throw new Error('RUNNER_MODEL_DEFAULT is required when RUNNER=flue or RUNNER=pi');
   }
 
-  return config.runnerModel;
+  return config.runnerModelDefault;
 }
 
 export function requireDatabaseUrl(config: AppConfig): string {
@@ -519,7 +519,7 @@ function deriveRunnerModelChoices(
 }
 
 function providerDerivedRunnerModels(env: NodeJS.ProcessEnv): string[] {
-  return RUNNER_MODEL_PROVIDER_AUTH.flatMap(({ provider, env: envNames }) =>
+  return MODEL_PROVIDER_AUTH.flatMap(({ provider, env: envNames }) =>
     envNames.some((name) => env[name]) ? getModels(provider).map((model) => `${provider}/${model.id}`) : [],
   );
 }

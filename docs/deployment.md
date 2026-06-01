@@ -255,7 +255,7 @@ Real Flue runner:
 
 ```sh
 RUNNER=flue
-RUNNER_MODEL=anthropic/claude-haiku-4-5
+RUNNER_MODEL_DEFAULT=anthropic/claude-haiku-4-5
 ```
 
 Provider credentials:
@@ -283,7 +283,7 @@ mise run //apps/control-plane:auth:login:openai-codex
 The login task writes OAuth credentials to `~/.pi/agent/auth.json` by default. Use `OPENAI_CODEX_AUTH_FILE` when the runtime should read a mounted copy from another path.
 
 ```sh
-RUNNER_MODEL=openai-codex/gpt-5.5
+RUNNER_MODEL_DEFAULT=openai-codex/gpt-5.5
 OPENAI_CODEX_AUTH_FILE=/run/secrets/openai-codex-auth.json
 OPENAI_CODEX_AUTH_BASE64=<base64-auth-json>
 ```

@@ -68,7 +68,7 @@ VITE_API_BASE_URL=
 VITE_PORTLESS_URL=https://deputies.localhost
 
 RUNNER=flue
-RUNNER_MODEL=anthropic/claude-haiku-4-5
+RUNNER_MODEL_DEFAULT=anthropic/claude-haiku-4-5
 ANTHROPIC_API_KEY=<secret>
 
 SANDBOX_PROVIDER=docker
@@ -81,7 +81,7 @@ SANDBOX_SECRET_ENCRYPTION_KEY=<generated-secret>
 For OpenAI instead of Anthropic:
 
 ```sh
-RUNNER_MODEL=openai/gpt-5.5
+RUNNER_MODEL_DEFAULT=openai/gpt-5.5
 OPENAI_API_KEY=<secret>
 ANTHROPIC_API_KEY=
 ```

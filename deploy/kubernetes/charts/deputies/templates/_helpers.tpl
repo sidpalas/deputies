@@ -95,8 +95,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ $root.Values.config.serviceBaseDomain | quote }}
 - name: SERVICE_TRUST_FORWARDED_HOSTS
   value: {{ $root.Values.config.serviceTrustForwardedHosts | quote }}
-- name: RUNNER_MODEL
-  value: {{ $root.Values.config.runnerModel | quote }}
+- name: RUNNER_MODEL_DEFAULT
+  value: {{ $root.Values.config.runnerModelDefault | quote }}
 - name: DAYTONA_IMAGE
   value: {{ $root.Values.config.daytonaImage | quote }}
 - name: AGENT_SANDBOX_ORCHESTRATOR_MODE

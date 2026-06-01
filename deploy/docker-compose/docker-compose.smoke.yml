@@ -46,7 +46,7 @@ services:
       GITHUB_ALLOWED_REPOSITORIES: acme/widget,acme/api
       SLACK_SIGNING_SECRET: ''
       SLACK_BOT_TOKEN: ''
-      RUNNER_MODEL: fake/smoke-default
+      RUNNER_MODEL_DEFAULT: fake/smoke-default
       RUNNER_MODEL_CHOICES: fake/smoke-default,fake/smoke-fast
       ARTIFACT_STORAGE_PROVIDER: s3
       ARTIFACT_STORAGE_S3_ENDPOINT: http://seaweedfs:8333

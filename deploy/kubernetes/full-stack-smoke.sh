@@ -96,7 +96,7 @@ config:
   apiAuthMode: none
   webBaseUrl: https://deputies-k8s.localhost
   serviceBaseDomain: deputies-k8s.localhost
-  runnerModel: fake/smoke-default
+  runnerModelDefault: fake/smoke-default
   hideSetupPage: "true"
   appDataStore: postgres
   runnerStateStore: postgres
