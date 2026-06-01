@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/sidpalas/deputies/compare/v0.4.0...v0.5.0) (2026-06-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* GitHub product login env vars changed. Removed AUTH_GITHUB_ADMIN_ORGANIZATIONS, AUTH_GITHUB_VIEWER_USERS, AUTH_GITHUB_VIEWER_ORGANIZATIONS, and UNSAFE_AUTH_GITHUB_ALLOW_ALL_VIEWERS. Use AUTH_GITHUB_ALLOWED_USERS, AUTH_GITHUB_ALLOWED_ORGANIZATIONS, AUTH_GITHUB_DEFAULT_GROUP_ROLE, and UNSAFE_AUTH_GITHUB_ALLOW_ALL instead.
+* RUNNER_MODEL is removed; use RUNNER_MODEL_DEFAULT to configure the default runner model.
+
+### Features
+
+* add access groups rbac ([#41](https://github.com/sidpalas/deputies/issues/41)) ([22a1537](https://github.com/sidpalas/deputies/commit/22a1537a4e26efe793bce8d099175c1b583efcac))
+* rename runner default model config ([3ab5b28](https://github.com/sidpalas/deputies/commit/3ab5b28357198afe02f4c2abda4c9c32c8e0a7bc))
+
 ## [0.4.0](https://github.com/sidpalas/deputies/compare/v0.3.0...v0.4.0) (2026-06-01)
 
 
