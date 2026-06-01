@@ -60,7 +60,7 @@ describe('core API', () => {
     await expect(response.json()).resolves.toMatchObject({ status: 'ok', runMode: 'combined' });
   });
 
-  it('reports Pi runner as experimental without degrading health', async () => {
+  it('reports Pi runner as configured without adding an app notice', async () => {
     await closeServer(server);
     store = new MemoryStore();
     services = createServices(store);
@@ -72,17 +72,15 @@ describe('core API', () => {
 
     const health = await fetch(`${baseUrl}/health`);
     expect(health.status).toBe(200);
-    await expect(health.json()).resolves.toMatchObject({
-      status: 'ok',
-      notices: [{ code: 'pi_runner_experimental', severity: 'warning' }],
-    });
+    const healthBody = await health.json();
+    expect(healthBody).toMatchObject({ status: 'ok' });
+    expect(healthBody).not.toHaveProperty('notices');
 
     const setupStatus = await fetch(`${baseUrl}/setup/status`);
     expect(setupStatus.status).toBe(200);
     const setup = (await setupStatus.json()) as { items: Array<{ id: string; state: string; guidance?: string }> };
     expect(setup.items.find((item) => item.id === 'runner')).toMatchObject({
-      state: 'warning',
-      guidance: expect.stringContaining('experimental'),
+      state: 'configured',
     });
   });
 

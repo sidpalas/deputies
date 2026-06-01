@@ -1974,21 +1974,21 @@ it('warns when running in unsafe local sandbox mode', async () => {
   expect(screen.getByText(/Commands run on the API\/worker host runtime/)).toBeInTheDocument();
 });
 
-it('shows health notices such as the experimental Pi runner warning', async () => {
+it('shows health notices from the API', async () => {
   mockApi({
     notices: [
       {
         severity: 'warning',
-        code: 'pi_runner_experimental',
-        message: 'The Pi runner is experimental.',
-        action: 'Validate behavior before relying on it in production.',
+        code: 'openai_codex_auth_unavailable',
+        message: 'Codex auth is unavailable.',
+        action: 'Re-authenticate Codex, then refresh this page.',
       },
     ],
   });
   render(<App />);
 
-  expect(await screen.findByText('The Pi runner is experimental.')).toBeInTheDocument();
-  expect(screen.getByText(/Validate behavior before relying on it in production/)).toBeInTheDocument();
+  expect(await screen.findByText('Codex auth is unavailable.')).toBeInTheDocument();
+  expect(screen.getByText(/Re-authenticate Codex/)).toBeInTheDocument();
 });
 
 function mockApi(options: MockApiOptions = {}) {

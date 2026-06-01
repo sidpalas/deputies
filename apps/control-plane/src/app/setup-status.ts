@@ -102,20 +102,7 @@ function githubWebhookStatus(config: AppConfig): SetupStatusItem {
 }
 
 function runnerStatus(config: AppConfig): SetupStatusItem {
-  if (config.runner === 'pi') {
-    return {
-      id: 'runner',
-      label: 'Runner',
-      state: 'warning',
-      summary: 'pi runner selected (experimental).',
-      guidance:
-        'The Pi runner is experimental and currently has a smaller tool surface than the default Flue runner. Use it for testing before relying on it in production.',
-      details: ['Runner: pi', 'Status: experimental'],
-      docsPath: 'docs/data-model.md',
-    };
-  }
-
-  const realRunnerSelected = config.runner === 'flue';
+  const realRunnerSelected = config.runner === 'flue' || config.runner === 'pi';
   return {
     id: 'runner',
     label: 'Runner',
