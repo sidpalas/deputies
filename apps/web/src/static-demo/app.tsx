@@ -108,6 +108,7 @@ export function StaticDemoApp() {
               connectionStatus={{ state: 'ok', message: 'Static demo data loaded.' }}
               health={{ status: 'ok', runMode: 'static-demo', apiAuthMode: 'none' }}
               loading={false}
+              navPage="sessions"
               sessions={sessions}
               selectedSessionId={selected.session.id}
               themePreference={themePreference}
@@ -120,6 +121,7 @@ export function StaticDemoApp() {
               }}
               onNewThread={() => undefined}
               onOpenGroups={() => undefined}
+              onOpenSessions={() => undefined}
               onOpenSetup={() => undefined}
               onRefresh={() => undefined}
               onSelect={(sessionId) => {

@@ -83,6 +83,7 @@ import {
   loadInitialGroupsPanelSelectedGroupId,
   loadInitialGroupsPanelView,
   loadInitialIsCreatingThread,
+  loadInitialSetupGuideOpen,
   loadInitialSelectedSessionId,
   loadStoredToken,
   loadThemePreference,
@@ -91,6 +92,7 @@ import {
   realtimeReconnectMaxDelayMs,
   scrollThreadByWheel,
   selectedSessionStorageKey,
+  setupGuideOpenStorageKey,
   shouldLetWheelTargetHandleScroll,
   startupConnectionDelayMs,
   startupDelayedConnectionStatus,
@@ -146,7 +148,7 @@ export function App() {
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [setupStatusLoading, setSetupStatusLoading] = useState(false);
   const [setupStatusError, setSetupStatusError] = useState('');
-  const [setupGuideOpen, setSetupGuideOpen] = useState(false);
+  const [setupGuideOpen, setSetupGuideOpen] = useState(loadInitialSetupGuideOpen);
   const [groupsPanelOpen, setGroupsPanelOpen] = useState(loadInitialGroupsPanelOpen);
   const [groupsPanelView, setGroupsPanelView] = useState<'group' | 'super_admins'>(loadInitialGroupsPanelView);
   const [selectedGroupId, setSelectedGroupId] = useState(loadInitialGroupsPanelSelectedGroupId);
@@ -1115,6 +1117,7 @@ export function App() {
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.removeItem(groupsPanelViewStorageKey);
     sessionStorage.removeItem(groupsPanelSelectedGroupStorageKey);
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
     setSessions([]);
     setGroups([]);
     setGroupMembers([]);
@@ -1136,6 +1139,7 @@ export function App() {
     setExternalResources([]);
     setCallbacks([]);
     setSetupGuideOpen(false);
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
     setGroupsPanelOpen(false);
     setSetupStatus(null);
     setSetupStatusError('');
@@ -1144,6 +1148,7 @@ export function App() {
   function startNewThread() {
     if (!canCreateThread) return;
     setSetupGuideOpen(false);
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
     setGroupsPanelOpen(false);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     setSidebarOpen(false);
@@ -1168,6 +1173,7 @@ export function App() {
 
   function selectSession(sessionId: string) {
     setSetupGuideOpen(false);
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
     setGroupsPanelOpen(false);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     autoScrolledSessionId.current = '';
@@ -1185,6 +1191,7 @@ export function App() {
 
   function openSetupGuide() {
     setSetupGuideOpen(true);
+    sessionStorage.setItem(setupGuideOpenStorageKey, 'true');
     setGroupsPanelOpen(false);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     setSidebarOpen(false);
@@ -1193,6 +1200,7 @@ export function App() {
   function openGroupsPanel() {
     if (!canViewGroups) return;
     setSetupGuideOpen(false);
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
     setGroupsPanelOpen(true);
     sessionStorage.setItem(groupsPanelOpenStorageKey, 'true');
     setSidebarCollapsed(false);
@@ -1200,6 +1208,8 @@ export function App() {
   }
 
   function showSessionsSidebar() {
+    setSetupGuideOpen(false);
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
     setGroupsPanelOpen(false);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     setSidebarCollapsed(false);
@@ -1656,7 +1666,6 @@ export function App() {
         </div>
       ) : null}
       {!startupLoading && connectionStatus.state !== 'ok' ? <ConnectionStatusBanner status={connectionStatus} /> : null}
-      {!startupLoading && sessionAuthRequired && currentUser && !canCreateThread ? <ReadOnlyModeBanner /> : null}
 
       {startupLoading ? (
         <StartupLoadingPanel connectionStatus={connectionStatus} />
@@ -1736,6 +1745,7 @@ export function App() {
                     health={health}
                     connectionStatus={connectionStatus}
                     loading={loading}
+                    navPage={showingSetupGuide ? 'setup' : 'sessions'}
                     sessions={sortedSessions}
                     selectedSessionId={selectedSessionId}
                     token={token}
@@ -1744,6 +1754,7 @@ export function App() {
                     onCollapse={collapseSidebar}
                     onNewThread={startNewThread}
                     onOpenGroups={openGroupsPanel}
+                    onOpenSessions={showSessionsSidebar}
                     onOpenSetup={openSetupGuide}
                     onRefresh={refreshSessions}
                     onSelect={selectSession}
@@ -1986,18 +1997,6 @@ export function App() {
         </>
       )}
     </main>
-  );
-}
-
-function ReadOnlyModeBanner() {
-  return (
-    <div
-      className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-sm text-warning-foreground dark:text-warning"
-      role="status"
-    >
-      <strong>Read-only mode:</strong> You can inspect sessions, messages, artifacts, and service metadata. Group
-      members and admins can start work or modify writable sessions.
-    </div>
   );
 }
 

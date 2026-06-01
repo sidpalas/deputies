@@ -387,7 +387,8 @@ it('keeps the groups page open until a session is selected', async () => {
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  expect(screen.getByText('Your access')).toBeInTheDocument();
+  expect(screen.queryByText('Your access')).not.toBeInTheDocument();
+  expect(screen.getByText('Manage super admins (you are one)')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
   expect(screen.queryByPlaceholderText('Search sessions...')).not.toBeInTheDocument();
 
@@ -433,6 +434,20 @@ it('persists and restores the super admins groups page view on refresh', async (
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Super admins' })).toBeInTheDocument();
+});
+
+it('persists and restores the setup page view on refresh', async () => {
+  sessionStorage.setItem('deputies-setup-guide-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user });
+
+  const rendered = render(<App />);
+  expect(await screen.findByRole('heading', { name: 'Setup guide' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Setup' })).toHaveAttribute('aria-current', 'page');
+
+  rendered.unmount();
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Setup guide' })).toBeInTheDocument();
 });
 
 it('collapses member search results after selecting a user', async () => {
@@ -2352,6 +2367,10 @@ function mockApi(options: MockApiOptions = {}) {
     if (url.pathname === '/models' && method === 'GET') {
       const models = options.models ?? ['anthropic/claude-sonnet', 'openai/gpt-4.1'];
       return jsonResponse({ models, defaultModel: models[0] ?? null });
+    }
+
+    if (url.pathname === '/setup/status' && method === 'GET') {
+      return jsonResponse({ checkedAt: session.updatedAt, items: [] });
     }
 
     if (url.pathname === '/groups' && method === 'GET') {

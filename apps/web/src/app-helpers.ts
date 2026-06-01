@@ -1,6 +1,7 @@
 export const tokenStorageKey = 'deputies-api-token';
 export const selectedSessionStorageKey = 'deputies-selected-session-id';
 export const newSessionSelectedStorageKey = 'deputies-new-session-selected';
+export const setupGuideOpenStorageKey = 'deputies-setup-guide-open';
 export const groupsPanelOpenStorageKey = 'deputies-groups-panel-open';
 export const groupsPanelViewStorageKey = 'deputies-groups-panel-view';
 export const groupsPanelSelectedGroupStorageKey = 'deputies-groups-panel-selected-group-id';
@@ -49,6 +50,10 @@ export function loadInitialIsCreatingThread(): boolean {
     !new URLSearchParams(window.location.search).get('session') &&
     sessionStorage.getItem(newSessionSelectedStorageKey) === 'true'
   );
+}
+
+export function loadInitialSetupGuideOpen(): boolean {
+  return sessionStorage.getItem(setupGuideOpenStorageKey) === 'true';
 }
 
 export function loadInitialGroupsPanelOpen(): boolean {
