@@ -1388,10 +1388,14 @@ function serializeSandboxKeepalive(
 type SessionDisplayStatus = { status: string; tooltip: string };
 
 async function serializeSessionWithSandbox(config: AppConfig, services: AppServices, session: SessionRecord) {
-  const sandbox = await services.store.getLatestSandbox(session.id, config.sandboxProvider);
+  const [sandbox, ownerGroup] = await Promise.all([
+    services.store.getLatestSandbox(session.id, config.sandboxProvider),
+    services.store.getGroup(session.ownerGroupId),
+  ]);
   const display = sessionDisplayStatus(session, sandbox);
   const serialized = {
     ...session,
+    ...(ownerGroup ? { ownerGroupName: ownerGroup.name } : {}),
     displayStatus: display.status,
     displayStatusTooltip: display.tooltip,
   };

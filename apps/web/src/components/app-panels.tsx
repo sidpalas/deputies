@@ -1004,6 +1004,7 @@ export function SessionAccessPanel(props: {
   const [ownerGroupId, setOwnerGroupId] = useState(props.session.ownerGroupId);
   const [saving, setSaving] = useState(false);
   const ownerGroup = props.groups.find((group) => group.id === props.session.ownerGroupId);
+  const ownerGroupName = ownerGroup?.name ?? props.session.ownerGroupName ?? 'Unknown access group';
   const editableGroups = props.groups.filter(
     (group) => group.id === props.session.ownerGroupId || (group.canManage && !group.archivedAt),
   );
@@ -1048,7 +1049,7 @@ export function SessionAccessPanel(props: {
             </SelectWithCaret>
           ) : (
             <span className="rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground">
-              {ownerGroup?.name ?? props.session.ownerGroupId}
+              {ownerGroupName}
             </span>
           )}
         </label>

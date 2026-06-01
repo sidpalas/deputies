@@ -66,6 +66,7 @@ type MockApiOptions = {
     context?: Record<string, unknown>;
     displayStatus?: string;
     displayStatusTooltip?: string;
+    ownerGroupName?: string;
     sandbox?: Record<string, unknown>;
   };
   onCancelRun?: () => void;
@@ -603,6 +604,25 @@ it('saves session access group when selected', async () => {
 
   await waitFor(() => expect(accessGroup).toHaveValue(clientGroup.id));
   await waitFor(() => expect(accessUpdates).toEqual([{ ownerGroupId: clientGroup.id }]));
+});
+
+it('shows an organization-visible session owner group name for non-members', async () => {
+  const clientGroupId = '00000000-0000-4000-8000-000000000011';
+  mockApi({
+    authMode: 'session',
+    currentUser: { ...user, role: 'user', memberships: [] },
+    groups: [],
+    sessionOverride: {
+      ownerGroupId: clientGroupId,
+      ownerGroupName: 'Client access',
+      visibility: 'organization',
+    },
+  });
+  render(<App />);
+
+  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  expect(await contextPanel.findByText('Client access')).toBeInTheDocument();
+  expect(contextPanel.queryByText(clientGroupId)).not.toBeInTheDocument();
 });
 
 it('persists the mobile context panel after refresh', async () => {

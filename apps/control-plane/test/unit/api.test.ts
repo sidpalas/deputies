@@ -591,6 +591,63 @@ describe('core API', () => {
     expect(openSandbox.status).toBe(404);
   });
 
+  it('includes owner group names for organization-visible sessions', async () => {
+    await closeServer(server);
+    store = new MemoryStore();
+    services = createServices(store);
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_SESSION_SECRET: 'test-secret',
+        AUTH_STATIC_USERNAME: 'admin',
+        AUTH_STATIC_PASSWORD: 'password',
+      }),
+      services,
+    );
+    baseUrl = await listen(server);
+
+    const now = new Date();
+    const user = await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000020',
+      accountId: '00000000-0000-4000-8000-000000000021',
+      provider: 'test',
+      providerAccountId: 'reader',
+      username: 'reader',
+      role: 'user',
+      profile: {},
+      now,
+    });
+    await store.createAuthSession({
+      id: 'reader-session',
+      userId: user.id,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    const group = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000022',
+      name: 'Client access',
+      defaultVisibility: 'organization',
+      defaultWritePolicy: 'group_members',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await services.sessions.create({
+      title: 'Organization visible',
+      ownerGroupId: group.id,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+    });
+
+    const groups = await fetch(`${baseUrl}/groups`, { headers: { cookie: 'dev_deputies_session=reader-session' } });
+    await expect(groups.json()).resolves.toEqual({ groups: [] });
+
+    const list = await fetch(`${baseUrl}/sessions`, { headers: { cookie: 'dev_deputies_session=reader-session' } });
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toMatchObject({
+      sessions: [{ title: 'Organization visible', ownerGroupId: group.id, ownerGroupName: 'Client access' }],
+    });
+  });
+
   it('allows PATCH session title updates through CORS preflight', async () => {
     const response = await fetch(`${baseUrl}/sessions/00000000-0000-4000-8000-000000000001`, {
       method: 'OPTIONS',

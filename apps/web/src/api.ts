@@ -24,6 +24,7 @@ export type Session = {
   displayStatus?: string;
   displayStatusTooltip?: string;
   ownerGroupId: string;
+  ownerGroupName?: string;
   visibility: SessionVisibility;
   writePolicy: SessionWritePolicy;
   createdByUserId?: string;
