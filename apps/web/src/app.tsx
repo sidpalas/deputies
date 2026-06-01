@@ -1245,12 +1245,11 @@ export function App() {
   }
 
   function showSessionsSidebar() {
-    const desktop = isDesktopViewport();
     setSetupGuideOpen(false);
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     setGroupsPanelOpen(false);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
-    if (!desktop) setActiveSidebarPanel('sessions');
+    setActiveSidebarPanel('sessions');
     setSidebarCollapsed(false);
     setSidebarOpen(true);
   }
@@ -1872,6 +1871,9 @@ export function App() {
                     loading={setupStatusLoading}
                     setupStatus={setupStatus}
                     setupError={setupStatusError}
+                    showOpenSidebar={!sidebarOpen}
+                    openSidebarLabel={sidebarPanel === 'groups' && canViewGroups ? 'Open access' : 'Open sessions'}
+                    onOpenSidebar={expandSidebar}
                     onRefresh={refreshSetupStatus}
                     onStartNewThread={startNewThread}
                     canStartNewThread={canCreateThread}

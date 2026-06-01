@@ -368,7 +368,7 @@ it('groups header session actions in a tools menu', async () => {
   expect(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' })).toBeInTheDocument();
 });
 
-it('keeps the access side panel open when navigating back to sessions from the footer on desktop', async () => {
+it('reopens the sessions side panel when navigating back to sessions from the footer on desktop', async () => {
   sessionStorage.setItem('deputies-groups-panel-open', 'true');
   mockApi({ authMode: 'session', currentUser: user });
   render(<App />);
@@ -377,8 +377,8 @@ it('keeps the access side panel open when navigating back to sessions from the f
   fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
-  expect(screen.getByPlaceholderText('Search groups...')).toBeInTheDocument();
-  expect(screen.queryByPlaceholderText('Search sessions...')).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Search sessions...')).toBeInTheDocument();
+  expect(screen.queryByPlaceholderText('Search groups...')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Access' })).toBeInTheDocument();
 });
 
@@ -463,6 +463,33 @@ it('persists and restores the setup page view on refresh', async () => {
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Setup guide' })).toBeInTheDocument();
+});
+
+it('opens the sessions sidebar from the setup page', async () => {
+  sessionStorage.setItem('deputies-setup-guide-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Setup guide' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Open sessions' }));
+
+  expect(screen.getByPlaceholderText('Search sessions...')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+});
+
+it('opens the access sidebar from the setup page when access is the active sidebar', async () => {
+  sessionStorage.setItem('deputies-setup-guide-open', 'true');
+  sessionStorage.setItem('deputies-sidebar-panel', 'groups');
+  mockApi({ authMode: 'session', currentUser: user });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Setup guide' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Open access' }));
+
+  expect(screen.getByPlaceholderText('Search groups...')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Access' }));
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
 });
 
 it('collapses member search results after selecting a user', async () => {

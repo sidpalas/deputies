@@ -1,4 +1,4 @@
-import { RefreshCw } from 'lucide-react';
+import { PanelLeftOpen, RefreshCw } from 'lucide-react';
 import type { SetupStatus, SetupStatusItem } from '../../api.js';
 import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
@@ -10,6 +10,9 @@ export function SetupGuidePanel(props: {
   loading: boolean;
   setupStatus: SetupStatus | null;
   setupError: string;
+  showOpenSidebar: boolean;
+  openSidebarLabel?: string;
+  onOpenSidebar: () => void;
   onRefresh: () => void;
   onStartNewThread: () => void;
 }) {
@@ -20,13 +23,27 @@ export function SetupGuidePanel(props: {
     <section className="h-full overflow-auto px-3 py-6 md:px-8 xl:px-20">
       <div className="mx-auto max-w-5xl">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <p className="text-sm font-medium text-muted-foreground">Admin setup</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight">Setup guide</h1>
-            <p className="mt-2 max-w-2xl text-sm text-muted-foreground">Quick checks for the Deputies deployment.</p>
-            <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
-              To skip this page on startup, set {renderSetupText('HIDE_SETUP_PAGE=true')}.
-            </p>
+          <div className="flex min-w-0 items-start gap-2">
+            {props.showOpenSidebar ? (
+              <Button
+                className="mt-1 h-8 w-8 shrink-0 p-0 md:hidden"
+                variant="ghost"
+                size="icon"
+                onClick={props.onOpenSidebar}
+                aria-label={props.openSidebarLabel ?? 'Open sessions'}
+                title={props.openSidebarLabel ?? 'Open sessions'}
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </Button>
+            ) : null}
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">Admin setup</p>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight">Setup guide</h1>
+              <p className="mt-2 max-w-2xl text-sm text-muted-foreground">Quick checks for the Deputies deployment.</p>
+              <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
+                To skip this page on startup, set {renderSetupText('HIDE_SETUP_PAGE=true')}.
+              </p>
+            </div>
           </div>
           <div className="flex shrink-0 gap-2">
             <Button variant="secondary" onClick={props.onRefresh} disabled={props.loading}>
