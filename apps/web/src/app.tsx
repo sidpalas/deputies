@@ -65,6 +65,32 @@ import {
   type SessionWritePolicy,
   type WorkspaceToolId,
 } from './api.js';
+import {
+  activeProgressDisplayText,
+  appendActiveProgress,
+  buildActiveProgress,
+  canWriteSession,
+  errorMessage,
+  filterActiveProgressEvents,
+  groupCanManage,
+  groupNameValidationError,
+  isWorkspaceToolPreflightError,
+  modelUnavailableReason,
+  nextAccessGroupName,
+  normalizeModelChoices,
+  omitActiveProgress,
+  repositoryLabel,
+  resolveSelectableModel,
+  shouldRefreshSessionDetail,
+  shouldRefreshSessions,
+  shouldUseActiveProgressEvent,
+  sortSessionsByLastActivity,
+  titleFromPrompt,
+  upsertAuthUser,
+  upsertEvent,
+  waitForRealtimeReconnect,
+  type ActiveProgressByMessageId,
+} from './app-state.js';
 import { Button } from './components/ui/button.js';
 import {
   archivedSessionsOpenStorageKey,
@@ -2033,249 +2059,9 @@ function isDesktopViewport(): boolean {
   return window.innerWidth >= 768;
 }
 
-function upsertEvent(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
-  if (events.some((current) => current.sequence === event.sequence)) return events;
-  return [...events, event].sort((a, b) => a.sequence - b.sequence);
-}
-
-type ActiveProgress = { text: string; omitted: number };
-type ActiveProgressByMessageId = Record<string, ActiveProgress>;
-
-const activeProgressMaxChars = 20_000;
-
-function shouldUseActiveProgressEvent(event: AgentEvent, messages: Message[]): boolean {
-  return event.type === 'agent_text_delta' && Boolean(activeProgressMessageId(event, messages));
-}
-
-function appendActiveProgress(progress: ActiveProgressByMessageId, event: AgentEvent): ActiveProgressByMessageId {
-  const messageId = event.messageId;
-  const text = event.payload.text;
-  if (!messageId || typeof text !== 'string') return progress;
-
-  const current = progress[messageId] ?? { text: '', omitted: 0 };
-  const next = truncateActiveProgress(current.text + text, current.omitted);
-  return { ...progress, [messageId]: next };
-}
-
-function omitActiveProgress(progress: ActiveProgressByMessageId, messageId: string): ActiveProgressByMessageId {
-  if (!progress[messageId]) return progress;
-  const { [messageId]: _removed, ...next } = progress;
-  return next;
-}
-
-function buildActiveProgress(events: AgentEvent[], messages: Message[]): ActiveProgressByMessageId {
-  let progress: ActiveProgressByMessageId = {};
-  for (const event of events) {
-    if (shouldUseActiveProgressEvent(event, messages)) {
-      progress = appendActiveProgress(progress, event);
-    } else if (event.type === 'agent_response_final' && event.messageId) {
-      progress = omitActiveProgress(progress, event.messageId);
-    }
-  }
-  return progress;
-}
-
-function filterActiveProgressEvents(events: AgentEvent[], messages: Message[]): AgentEvent[] {
-  return events.filter((event) => !shouldUseActiveProgressEvent(event, messages));
-}
-
-function activeProgressDisplayText(progress: ActiveProgressByMessageId, messages: Message[]): Record<string, string> {
-  const activeMessageIds = new Set(messages.filter(isActiveProgressMessage).map((message) => message.id));
-  return Object.fromEntries(
-    Object.entries(progress)
-      .filter(([messageId]) => activeMessageIds.has(messageId))
-      .map(([messageId, value]) => [messageId, formatActiveProgressText(value)]),
-  );
-}
-
-function activeProgressMessageId(event: AgentEvent, messages: Message[]): string | null {
-  if (!event.messageId || typeof event.payload.text !== 'string') return null;
-  const message = messages.find((candidate) => candidate.id === event.messageId);
-  return message && isActiveProgressMessage(message) ? event.messageId : null;
-}
-
-function isActiveProgressMessage(message: Message): boolean {
-  return message.status === 'processing' || message.status === 'cancelling';
-}
-
-function truncateActiveProgress(text: string, omitted: number): ActiveProgress {
-  if (text.length <= activeProgressMaxChars) return { text, omitted };
-  const nextOmitted = omitted + text.length - activeProgressMaxChars;
-  return { text: text.slice(-activeProgressMaxChars), omitted: nextOmitted };
-}
-
-function formatActiveProgressText(progress: ActiveProgress): string {
-  if (progress.omitted <= 0) return progress.text;
-  return `Showing latest deputy progress; ${progress.omitted.toLocaleString()} earlier characters hidden while the run is active.\n\n…${progress.text}`;
-}
-
-function shouldRefreshSessionDetail(eventType: string): boolean {
-  return new Set([
-    'message_created',
-    'message_started',
-    'message_completed',
-    'message_failed',
-    'message_cancelled',
-    'sandbox_ready',
-    'sandbox_stopped',
-    'sandbox_destroyed',
-    'session_updated',
-    'run_cancel_requested',
-    'run_cancelled',
-    'artifact_created',
-    'external_resource_created',
-    'callback_sent',
-    'callback_retry_scheduled',
-    'callback_failed',
-    'callback_replay_requested',
-  ]).has(eventType);
-}
-
-function shouldRefreshSessions(eventType: string): boolean {
-  return new Set([
-    'session_created',
-    'session_updated',
-    'session_archived',
-    'session_unarchived',
-    'session_queue_paused',
-    'session_queue_resumed',
-    'message_created',
-    'message_started',
-    'message_completed',
-    'message_failed',
-    'message_cancelled',
-    'run_failed',
-    'run_cancelled',
-    'sandbox_ready',
-    'sandbox_stopped',
-    'sandbox_destroyed',
-  ]).has(eventType);
-}
-
-function waitForRealtimeReconnect(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timeout = window.setTimeout(resolve, delayMs);
-    signal.addEventListener(
-      'abort',
-      () => {
-        window.clearTimeout(timeout);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-}
-
-function repositoryLabel(value: unknown): string | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const repository = value as Record<string, unknown>;
-  if (repository.provider !== 'github') return null;
-  const owner = typeof repository.owner === 'string' ? repository.owner : '';
-  const repo = typeof repository.repo === 'string' ? repository.repo : '';
-  return owner && repo ? `${owner}/${repo}` : null;
-}
-
-function resolveSelectableModel(current: string, inherited: string, fallback: string, options: string[]): string {
-  for (const model of [current, inherited, fallback]) {
-    if (model && options.includes(model)) return model;
-  }
-  return options[0] ?? '';
-}
-
-function normalizeModelChoices(models: { models: string[]; modelChoices?: ModelChoice[] }): ModelChoice[] {
-  return (
-    models.modelChoices ??
-    models.models.map((model) => ({ value: model, label: formatModelLabel(model), available: true }))
-  );
-}
-
-function modelUnavailableReason(model: string, choices: ModelChoice[]): string {
-  const choice = choices.find((candidate) => candidate.value === model);
-  if (!choice || choice.available) return '';
-  return choice.action
-    ? `${choice.unavailableReason ?? 'This model is unavailable'} ${choice.action}`
-    : (choice.unavailableReason ?? 'This model is unavailable');
-}
-
-function formatModelLabel(model: string): string {
-  const separator = model.indexOf('/');
-  if (separator === -1) return model.replace(/-/g, ' ');
-
-  return `${model.slice(separator + 1).replace(/-/g, ' ')} (${formatModelProvider(model.slice(0, separator))})`;
-}
-
-function formatModelProvider(provider: string): string {
-  if (provider === 'anthropic') return 'Anthropic';
-  if (provider === 'openai') return 'OpenAI';
-  if (provider === 'openai-codex') return 'OpenAI Codex';
-  if (provider === 'opencode') return 'OpenCode Zen';
-  return provider.replace(/-/g, ' ');
-}
-
-function titleFromPrompt(prompt: string): string {
-  const normalized = prompt.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= 64) return normalized;
-  return `${normalized.slice(0, 61)}...`;
-}
-
-function sortSessionsByLastActivity(sessions: Session[]): Session[] {
-  return [...sessions].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-}
-
-function canWriteSession(user: AuthUser | null, session: Session, groups: Group[]): boolean {
-  if (!user) return false;
-  if (user.role === 'super_admin') return true;
-  if (session.createdByUserId === user.id && session.writePolicy === 'creator_only') return true;
-  const role = groups.find((group) => group.id === session.ownerGroupId)?.membershipRole;
-  if (role === 'admin') return true;
-  return role === 'member' && session.writePolicy === 'group_members';
-}
-
-function groupCanManage(groups: Group[], groupId: string): boolean {
-  return groups.some((group) => group.id === groupId && group.canManage);
-}
-
-function nextAccessGroupName(groups: Group[]): string {
-  const baseName = 'New access group';
-  const names = new Set(groups.map((group) => normalizeGroupName(group.name)));
-  if (!names.has(normalizeGroupName(baseName))) return baseName;
-
-  for (let index = 2; ; index += 1) {
-    const name = `${baseName} ${index}`;
-    if (!names.has(normalizeGroupName(name))) return name;
-  }
-}
-
-function groupNameValidationError(groups: Group[], groupId: string, name: string): string {
-  const normalized = normalizeGroupName(name);
-  if (!normalized) return '';
-  const duplicate = groups.some((group) => group.id !== groupId && normalizeGroupName(group.name) === normalized);
-  return duplicate ? 'An access group with this name already exists.' : '';
-}
-
-function normalizeGroupName(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-function upsertAuthUser(users: AuthUser[], user: AuthUser): AuthUser[] {
-  const next = users.some((candidate) => candidate.id === user.id)
-    ? users.map((candidate) => (candidate.id === user.id ? user : candidate))
-    : [...users, user];
-  return next.sort((a, b) => a.username.localeCompare(b.username));
-}
-
 function blurFocusedTextControl(): void {
   const activeElement = document.activeElement;
   if (activeElement instanceof HTMLTextAreaElement || activeElement instanceof HTMLInputElement) activeElement.blur();
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : 'Unexpected error';
-}
-
-function isWorkspaceToolPreflightError(err: unknown): boolean {
-  return err instanceof ApiError && (err.status === 404 || err.status === 409 || err.status === 401);
 }
 
 function writeWorkspaceToolTabMessage(tab: Window | null, title: string, message: string): void {
