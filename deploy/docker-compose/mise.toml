@@ -6,9 +6,17 @@ run = "./full-stack-smoke.sh"
 description = "Start combined stack with 1Password-injected .env.local"
 run = "./with-1password-env.mjs docker compose -f docker-compose.combined.yml up -d --build"
 
+[tasks."down:combined"]
+description = "Stop the combined Docker Compose stack"
+run = "docker compose -f docker-compose.combined.yml down"
+
 [tasks."up:split:1pass"]
 description = "Start split stack with 1Password-injected .env.local"
 run = "./with-1password-env.mjs docker compose -f docker-compose.split.yml up -d --build"
+
+[tasks."down:split"]
+description = "Stop the split Docker Compose stack"
+run = "docker compose -f docker-compose.split.yml down"
 
 [tasks."smoke:full-stack:1pass"]
 description = "Run the full-stack smoke test with 1Password injection"
