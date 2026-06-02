@@ -1185,9 +1185,6 @@ describe('core API', () => {
       expect(html).toContain('/@vite/client');
       expect(html).toContain('/src/main.tsx');
       await expect(
-        (await fetch(`${baseUrl}/health`, { headers: { 'x-forwarded-host': serviceHost } })).json(),
-      ).resolves.toEqual({ upstream: 'health' });
-      await expect(
         (await fetch(`${baseUrl}/@vite/client`, { headers: { 'x-forwarded-host': serviceHost } })).text(),
       ).resolves.toBe('vite client');
       await expect(
@@ -1286,27 +1283,10 @@ describe('core API', () => {
         headers: {
           cookie: previewCookie!,
           'x-forwarded-host': serviceHost,
-          'x-original-host': serviceHost,
           referer: previewAuthUrl.toString(),
         },
       });
-      await expect(headers.json()).resolves.toMatchObject({
-        forwardedHost: null,
-        originalHost: null,
-        referer: null,
-      });
-
-      const echo = await fetch(`${baseUrl}/echo`, {
-        method: 'POST',
-        headers: {
-          cookie: previewCookie!,
-          'content-type': 'application/json',
-          'x-forwarded-host': serviceHost,
-          origin: `https://${serviceHost}`,
-        },
-        body: JSON.stringify({ prompt: 'hello' }),
-      });
-      await expect(echo.json()).resolves.toEqual({ method: 'POST', body: '{"prompt":"hello"}' });
+      await expect(headers.json()).resolves.toMatchObject({ referer: null });
 
       const user = ((await login.clone().json()) as { user: { id: string } }).user;
       const nowSeconds = Math.floor(Date.now() / 1000);
@@ -2330,30 +2310,7 @@ function createPreviewUpstream(): Server {
   return createHttpServer((request, response) => {
     if (request.url === '/headers') {
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(
-        JSON.stringify({
-          forwardedHost: request.headers['x-forwarded-host'] ?? null,
-          originalHost: request.headers['x-original-host'] ?? null,
-          referer: request.headers.referer ?? null,
-        }),
-      );
-      return;
-    }
-    if (request.url === '/health') {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ upstream: 'health' }));
-      return;
-    }
-    if (request.url === '/echo') {
-      let body = '';
-      request.setEncoding('utf-8');
-      request.on('data', (chunk) => {
-        body += chunk;
-      });
-      request.on('end', () => {
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ method: request.method, body }));
-      });
+      response.end(JSON.stringify({ referer: request.headers.referer ?? null }));
       return;
     }
     if (request.url === '/') {

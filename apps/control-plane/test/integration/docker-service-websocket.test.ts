@@ -35,8 +35,6 @@ describe('Docker service WebSocket proxy integration', () => {
           `X-Upstream-Origin: ${request.headers.origin}\r\n` +
           `X-Upstream-Path: ${request.url}\r\n` +
           `X-Upstream-Host: ${request.headers.host}\r\n` +
-          `X-Upstream-Forwarded-Host: ${request.headers['x-forwarded-host'] ?? '<missing>'}\r\n` +
-          `X-Upstream-Original-Host: ${request.headers['x-original-host'] ?? '<missing>'}\r\n` +
           '\r\n',
       );
       socket.end();
@@ -115,7 +113,6 @@ describe('Docker service WebSocket proxy integration', () => {
     });
     const forwardedResponse = await rawUpgrade(controlPlaneUrl, {
       forwardedHost: serviceHost,
-      originalHost: serviceHost,
       cookie,
       origin: `https://${serviceHost}`,
       path: '/stable-code-server?reconnection=false',
@@ -126,10 +123,7 @@ describe('Docker service WebSocket proxy integration', () => {
       expect(response).toContain(`X-Upstream-Origin: https://${serviceHost}`);
       expect(response).toContain('X-Upstream-Path: /stable-code-server?reconnection=false');
       expect(response).toContain(`X-Upstream-Host: 127.0.0.1:${upstreamPort}`);
-      expect(response).toContain('X-Upstream-Original-Host: <missing>');
     }
-    expect(directResponse).toContain('X-Upstream-Forwarded-Host: <missing>');
-    expect(forwardedResponse).toContain(`X-Upstream-Forwarded-Host: ${serviceHost}`);
   });
 });
 
@@ -218,14 +212,7 @@ async function listen(server: Server): Promise<string> {
 
 function rawUpgrade(
   baseUrl: string,
-  input: {
-    host?: string;
-    forwardedHost?: string;
-    originalHost?: string;
-    cookie?: string;
-    origin: string;
-    path: string;
-  },
+  input: { host?: string; forwardedHost?: string; cookie?: string; origin: string; path: string },
 ): Promise<string> {
   const url = new URL(baseUrl);
   return new Promise((resolve, reject) => {
@@ -237,7 +224,6 @@ function rawUpgrade(
         `GET ${input.path} HTTP/1.1\r\n` +
           `Host: ${input.host ?? url.host}\r\n` +
           (input.forwardedHost ? `X-Forwarded-Host: ${input.forwardedHost}\r\n` : '') +
-          (input.originalHost ? `X-Original-Host: ${input.originalHost}\r\n` : '') +
           (input.forwardedHost ? 'X-Forwarded-Proto: https\r\n' : '') +
           (input.cookie ? `Cookie: ${input.cookie}\r\n` : '') +
           'Connection: Upgrade\r\n' +

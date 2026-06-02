@@ -236,7 +236,6 @@ describe('sandbox bridge server', () => {
           'Upgrade: websocket\r\n' +
           `X-Upstream-Origin: ${request.headers.origin}\r\n` +
           `X-Upstream-Forwarded-Host: ${request.headers['x-forwarded-host']}\r\n` +
-          `X-Upstream-Original-Host: ${request.headers['x-original-host'] ?? '<missing>'}\r\n` +
           '\r\n',
       );
       socket.end();
@@ -247,14 +246,12 @@ describe('sandbox bridge server', () => {
     if (typeof address !== 'object' || !address) throw new Error('Expected upstream address');
 
     try {
-      const response = await rawUpgrade(`/preview/${address.port}/stable-abc?reconnection=false`, {
-        origin: 'https://s-8080-session-1.deputies.localhost',
-        forwardedHost: 's-8080-session-1.deputies.localhost',
-        originalHost: 's-8080-session-1.deputies.localhost',
-      });
-      expect(response).toContain('X-Upstream-Origin: https://s-8080-session-1.deputies.localhost');
-      expect(response).toContain('X-Upstream-Forwarded-Host: s-8080-session-1.deputies.localhost');
-      expect(response).toContain('X-Upstream-Original-Host: <missing>');
+      await expect(
+        rawUpgrade(`/preview/${address.port}/stable-abc?reconnection=false`, {
+          origin: 'https://s-8080-session-1.deputies.localhost',
+          forwardedHost: 's-8080-session-1.deputies.localhost',
+        }),
+      ).resolves.toContain('X-Upstream-Origin: https://s-8080-session-1.deputies.localhost');
     } finally {
       await new Promise<void>((resolve, reject) => {
         upstream.close((error) => (error ? reject(error) : resolve()));
@@ -272,10 +269,7 @@ describe('sandbox bridge server', () => {
     });
   }
 
-  function rawUpgrade(
-    path: string,
-    headers: { origin?: string; forwardedHost?: string; originalHost?: string } = {},
-  ): Promise<string> {
+  function rawUpgrade(path: string, headers: { origin?: string; forwardedHost?: string } = {}): Promise<string> {
     const url = new URL(baseUrl);
     return new Promise((resolve, reject) => {
       const socket = net.connect({ host: url.hostname, port: Number(url.port) });
@@ -292,7 +286,6 @@ describe('sandbox bridge server', () => {
             'Sec-WebSocket-Version: 13\r\n' +
             (headers.origin ? `Origin: ${headers.origin}\r\n` : '') +
             (headers.forwardedHost ? `X-Forwarded-Host: ${headers.forwardedHost}\r\n` : '') +
-            (headers.originalHost ? `X-Original-Host: ${headers.originalHost}\r\n` : '') +
             '\r\n',
         );
       });
