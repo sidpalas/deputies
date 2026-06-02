@@ -5,7 +5,7 @@ services:
       context: ../..
       dockerfile: apps/control-plane/Dockerfile
     env_file:
-      - ../../.env.local
+      - ${DEPUTIES_ENV_FILE:-../../.env.local}
     environment:
       DATABASE_URL: postgres://flue:flue@postgres:5432/flue
     command: ['node', 'apps/control-plane/dist/db/migrate.js']

@@ -33,16 +33,32 @@ cp .env.example .env.local
 
 ## Start The Stack
 
+Compose reads the repository-root `.env.local` by default. If `.env.local` contains 1Password references such as `op://...`, use the helper tasks below. They run `op run --env-file .env.local`, write a temporary Compose-safe env file, preserve multiline values such as PEM keys, and clean up the file when Compose exits.
+
+Do not commit the rendered file. The `DEPUTIES_ENV_FILE` override applies to all control-plane services in the combined and split Compose stacks.
+
 Combined API/worker:
 
 ```sh
 docker compose -f deploy/docker-compose/docker-compose.combined.yml up -d --build
 ```
 
+With 1Password values in `.env.local`:
+
+```sh
+mise run //deploy/docker-compose:up:combined:1pass
+```
+
 Split API/worker/orchestrator:
 
 ```sh
 docker compose -f deploy/docker-compose/docker-compose.split.yml up -d --build
+```
+
+With 1Password values in `.env.local`:
+
+```sh
+mise run //deploy/docker-compose:up:split:1pass
 ```
 
 Scale split workers:
@@ -66,7 +82,7 @@ curl http://localhost:5173/health
 
 ## Product Auth
 
-Compose loads the repository-root `.env.local` through `env_file` for the control-plane services. For GitHub login with access groups, set the GitHub OAuth credentials and allowlists there:
+Compose loads the repository-root `.env.local` through `env_file` for the control-plane services, unless `DEPUTIES_ENV_FILE` points at a resolved replacement file. For GitHub login with access groups, set the GitHub OAuth credentials and allowlists there:
 
 ```txt
 API_AUTH_MODE=session

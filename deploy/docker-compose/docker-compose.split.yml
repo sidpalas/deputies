@@ -11,7 +11,7 @@ services:
       context: ../..
       dockerfile: apps/control-plane/Dockerfile
     env_file:
-      - ../../.env.local
+      - ${DEPUTIES_ENV_FILE:-../../.env.local}
     environment:
       PORT: 3583
       RUN_MODE: api
@@ -43,7 +43,7 @@ services:
       context: ../..
       dockerfile: apps/control-plane/Dockerfile
     env_file:
-      - ../../.env.local
+      - ${DEPUTIES_ENV_FILE:-../../.env.local}
     environment:
       RUN_MODE: worker
       OPENAI_CODEX_AUTH_FILE: /run/secrets/openai-codex-auth.json
@@ -75,7 +75,7 @@ services:
       context: ../..
       dockerfile: apps/control-plane/Dockerfile
     env_file:
-      - ../../.env.local
+      - ${DEPUTIES_ENV_FILE:-../../.env.local}
     environment:
       DOCKER_ORCHESTRATOR_PORT: 3585
       DOCKER_SANDBOX_BRIDGE_HOST: host.docker.internal

@@ -11,7 +11,7 @@ services:
       context: ../..
       dockerfile: apps/control-plane/Dockerfile
     env_file:
-      - ../../.env.local
+      - ${DEPUTIES_ENV_FILE:-../../.env.local}
     environment:
       PORT: 3583
       RUN_MODE: combined

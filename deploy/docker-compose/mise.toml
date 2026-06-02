@@ -1,3 +1,15 @@
 [tasks."smoke:full-stack"]
 description = "Run the Docker Compose full-stack smoke test"
 run = "./full-stack-smoke.sh"
+
+[tasks."up:combined:1pass"]
+description = "Start combined stack with 1Password-injected .env.local"
+run = "./with-1password-env.mjs docker compose -f docker-compose.combined.yml up -d --build"
+
+[tasks."up:split:1pass"]
+description = "Start split stack with 1Password-injected .env.local"
+run = "./with-1password-env.mjs docker compose -f docker-compose.split.yml up -d --build"
+
+[tasks."smoke:full-stack:1pass"]
+description = "Run the full-stack smoke test with 1Password injection"
+run = "./with-1password-env.mjs ./full-stack-smoke.sh"

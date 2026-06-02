@@ -5,6 +5,7 @@ services:
     env_file: !reset []
     environment:
       API_AUTH_MODE: none
+      HIDE_SETUP_PAGE: 'true'
       AUTH_PROVIDER: static
       AUTH_GITHUB_ADMIN_USERS: ''
       AUTH_GITHUB_ALLOWED_USERS: ''
@@ -33,6 +34,7 @@ services:
     env_file: !reset []
     environment:
       API_AUTH_MODE: none
+      HIDE_SETUP_PAGE: 'true'
       AUTH_PROVIDER: static
       AUTH_GITHUB_ADMIN_USERS: ''
       AUTH_GITHUB_ALLOWED_USERS: ''
@@ -78,8 +80,7 @@ services:
   seaweedfs:
     ports: !reset []
     healthcheck:
-      test:
-        ['CMD-SHELL', 'wget -q -O - http://127.0.0.1:8333/ >/dev/null; code=$$?; [ $$code -eq 0 ] || [ $$code -eq 8 ]']
+      test: ['CMD-SHELL', 'wget -q -O - http://127.0.0.1:8333/status >/dev/null']
       interval: 1s
       timeout: 5s
       retries: 30
