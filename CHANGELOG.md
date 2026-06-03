@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/sidpalas/deputies/compare/v0.6.1...v0.6.2) (2026-06-03)
+
+
+### Bug Fixes
+
+* **sandbox:** isolate agent command environments ([8c46eb1](https://github.com/sidpalas/deputies/commit/8c46eb185f10c05bd7ab23ff651bbc345c5ac406))
+* **web:** batch deputy progress updates ([e7982ab](https://github.com/sidpalas/deputies/commit/e7982ab3be5f7a7b5bb8aac79fe0f4a5a531cd8c))
+
 ## [0.6.1](https://github.com/sidpalas/deputies/compare/v0.6.0...v0.6.1) (2026-06-03)
 
 
