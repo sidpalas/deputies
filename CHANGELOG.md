@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.0](https://github.com/sidpalas/deputies/compare/v0.5.0...v0.6.0) (2026-06-03)
+
+
+### Features
+
+* **docker-compose:** add 1password env injection ([3c49a64](https://github.com/sidpalas/deputies/commit/3c49a643f3b943747f5dae08b85810229c59cff0))
+
+
+### Bug Fixes
+
+* preview auth proxying through sandbox bridge ([#45](https://github.com/sidpalas/deputies/issues/45)) ([f17072f](https://github.com/sidpalas/deputies/commit/f17072f169775cff8b478c89dd8000e94f5c704d))
+* **web:** disable static demo service links ([482256b](https://github.com/sidpalas/deputies/commit/482256b0385d8a8712c18b7e60246b766d9596e7))
+
+
+### Chores
+
+* **docker-compose:** add stack teardown tasks ([902f883](https://github.com/sidpalas/deputies/commit/902f883a9f283777eea85d1a954bd65c4e5817cd))
+
 ## [0.5.0](https://github.com/sidpalas/deputies/compare/v0.4.0...v0.5.0) (2026-06-01)
 
 
