@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/sidpalas/deputies/compare/v0.6.0...v0.6.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* harden sandbox image builds ([#46](https://github.com/sidpalas/deputies/issues/46)) ([6f4d736](https://github.com/sidpalas/deputies/commit/6f4d7364170648c6cd7826a53d6e6903623c0c34))
+
 ## [0.6.0](https://github.com/sidpalas/deputies/compare/v0.5.0...v0.6.0) (2026-06-03)
 
 
