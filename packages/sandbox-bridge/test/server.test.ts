@@ -185,6 +185,29 @@ describe('sandbox bridge server', () => {
     }
   });
 
+  it('does not trust forwarded hosts without a private Deputies preview host', async () => {
+    const upstream = createServer((request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ host: request.headers.host ?? null }));
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const address = upstream.address();
+    if (typeof address !== 'object' || !address) throw new Error('Expected upstream address');
+
+    try {
+      const response = await bridgeFetch(`/preview/${address.port}/`, {
+        headers: { 'x-forwarded-host': 's-3000-session-1.deputies.localhost' },
+      });
+
+      await expect(response.json()).resolves.toEqual({ host: `127.0.0.1:${address.port}` });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it('proxies preview POST bodies to localhost with content length', async () => {
     const upstream = createServer(async (request, response) => {
       const chunks: Buffer[] = [];

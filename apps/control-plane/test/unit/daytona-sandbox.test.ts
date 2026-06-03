@@ -191,6 +191,7 @@ describe('DaytonaSandboxProvider', () => {
         'x-daytona-skip-preview-warning': 'true',
       },
       preserveTargetHost: true,
+      forwardPreviewHost: true,
       secrets: { bridgeToken: 'bridge-token' },
     });
     expect(previewPorts).toEqual([3584]);
@@ -198,8 +199,39 @@ describe('DaytonaSandboxProvider', () => {
       expect.stringContaining('/opt/deputies/sandbox-bridge/dist/server.js'),
       undefined,
       undefined,
-      5,
+      10,
     );
+    expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
+      expect.stringContaining('http://127.0.0.1:3584/health'),
+      undefined,
+      undefined,
+      10,
+    );
+  });
+
+  it('rejects Daytona bridge preview URLs when the bridge does not become ready', async () => {
+    const sandbox = createMockDaytonaSandbox();
+    sandbox.getPreviewLink = async (port) => ({ url: `https://${port}-sandbox.daytona.test`, token: 'preview-token' });
+    sandbox.process.executeCommand = vi.fn(async () => ({ result: 'bridge failed', exitCode: 1 }));
+    const provider = new DaytonaSandboxProvider({
+      client: {
+        async create() {
+          return sandbox;
+        },
+        async get() {
+          return sandbox;
+        },
+      },
+    });
+
+    await expect(
+      provider.getPreviewUrl({
+        providerSandboxId: 'sandbox-1',
+        sessionId: 'session-1',
+        port: 3000,
+        secrets: { bridgeToken: 'bridge-token' },
+      }),
+    ).rejects.toThrow('bridge failed');
   });
 
   it('refreshes activity and extends autostop when keepalive exceeds fallback', async () => {

@@ -38,6 +38,7 @@ const previewBufferedBodyMaxBytes = 16 * 1024 * 1024;
 const previewHostHeader = 'x-deputies-preview-host';
 const noBodyResponseStatuses = new Set([101, 204, 205, 304]);
 const skippedPreviewProxyRequestHeaders = new Set([
+  'accept-encoding',
   'authorization',
   'connection',
   'content-length',
@@ -193,8 +194,14 @@ function proxyServiceRequest(
 
 async function previewRequestBody(request: Request): Promise<RequestInit['body'] | undefined> {
   if (request.method === 'GET' || request.method === 'HEAD') return undefined;
-  const contentLength = Number(request.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength <= previewBufferedBodyMaxBytes) {
+  const contentLengthHeader = request.headers.get('content-length');
+  const contentLength = contentLengthHeader === null ? undefined : Number(contentLengthHeader);
+  if (
+    contentLength !== undefined &&
+    Number.isFinite(contentLength) &&
+    contentLength >= 0 &&
+    contentLength <= previewBufferedBodyMaxBytes
+  ) {
     return request.arrayBuffer();
   }
   return request.body ?? undefined;
@@ -333,8 +340,8 @@ function previewTargetHeaders(preview: SandboxPreviewUrl, host: string | undefin
   if (!host) return headers;
   headers['x-forwarded-host'] = host;
   headers['x-original-host'] = host;
-  if (preview.preserveTargetHost) headers[previewHostHeader] = host;
-  else headers.host = stripPort(host);
+  if (preview.forwardPreviewHost) headers[previewHostHeader] = host;
+  if (!preview.preserveTargetHost) headers.host = stripPort(host);
   return headers;
 }
 
@@ -443,7 +450,9 @@ function previewTargetUrlFromUrl(incoming: URL, targetUrl: string): string {
   const suffix = incoming.pathname || '/';
   const target = new URL(targetUrl);
   target.pathname = joinUrlPath(target.pathname, suffix);
-  target.search = incoming.search;
+  for (const [key, value] of incoming.searchParams.entries()) {
+    if (!target.searchParams.has(key)) target.searchParams.append(key, value);
+  }
   return target.toString();
 }
 
@@ -855,6 +864,7 @@ function previewRequestHeaders(input: Headers, injected: Record<string, string> 
   }
   const cookie = previewCookieHeader(input.get('cookie'));
   if (cookie) headers.set('cookie', cookie);
+  headers.set('accept-encoding', 'identity');
   for (const [key, value] of Object.entries(injected)) headers.set(key, value);
   return headers;
 }
@@ -863,8 +873,7 @@ function previewResponseHeaders(input: Headers): Headers {
   const headers = new Headers();
   for (const [key, value] of input.entries()) {
     const lower = key.toLowerCase();
-    if (['connection', 'content-encoding', 'content-length', 'set-cookie', 'transfer-encoding'].includes(lower))
-      continue;
+    if (['connection', 'content-length', 'set-cookie', 'transfer-encoding'].includes(lower)) continue;
     headers.set(key, value);
   }
   for (const cookie of previewSetCookieHeaders(input)) {

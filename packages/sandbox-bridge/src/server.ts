@@ -261,8 +261,14 @@ async function previewRequestBody(
   maxBodyBytes: number,
 ): Promise<Buffer | IncomingMessage | undefined> {
   if (request.method === 'GET' || request.method === 'HEAD') return undefined;
-  const contentLength = Number(request.headers['content-length']);
-  if (Number.isFinite(contentLength) && contentLength <= previewBufferedBodyMaxBytes) {
+  const contentLengthHeader = request.headers['content-length'];
+  const contentLength = contentLengthHeader === undefined ? undefined : Number(contentLengthHeader);
+  if (
+    contentLength !== undefined &&
+    Number.isFinite(contentLength) &&
+    contentLength >= 0 &&
+    contentLength <= previewBufferedBodyMaxBytes
+  ) {
     return readBody(request, Math.min(maxBodyBytes, previewBufferedBodyMaxBytes));
   }
   return request;
@@ -293,11 +299,7 @@ function previewHeaders(input: IncomingMessage['headers']): Record<string, strin
 }
 
 function previewForwardedHost(input: IncomingMessage['headers']): string | undefined {
-  return (
-    lastForwardedValue(input[previewHostHeader]) ??
-    lastForwardedValue(input['x-forwarded-host']) ??
-    lastForwardedValue(input['x-original-host'])
-  );
+  return lastForwardedValue(input[previewHostHeader]);
 }
 
 function lastForwardedValue(value: string | string[] | undefined): string | undefined {

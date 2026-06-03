@@ -316,6 +316,7 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
       port: input.port,
       targetUrl: `${descriptor.bridgeUrl}/preview/${input.port}`,
       targetHeaders: { authorization: `Bearer ${descriptor.bridgeToken}` },
+      forwardPreviewHost: true,
     };
   }
 

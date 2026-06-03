@@ -178,6 +178,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         authorization: `Bearer ${bridgeToken}`,
       },
       preserveTargetHost: true,
+      forwardPreviewHost: true,
       secrets: { bridgeToken },
     };
   }
@@ -290,21 +291,43 @@ async function ensureDaytonaBridge(
 ): Promise<void> {
   const pidFile = '/tmp/deputies-sandbox-bridge.pid';
   const logFile = '/tmp/deputies-sandbox-bridge.log';
-  await sandbox.process.executeCommand(
+  const response = await sandbox.process.executeCommand(
     [
-      `if [ ! -f ${quoteShell(pidFile)} ] || ! kill -0 "$(cat ${quoteShell(pidFile)})" 2>/dev/null; then`,
-      `DEPUTIES_SANDBOX_TOKEN=${quoteShell(bridgeToken)}`,
-      `DEPUTIES_WORKSPACE=${quoteShell(workspacePath)}`,
+      `TOKEN=${quoteShell(bridgeToken)};`,
+      `WORKSPACE=${quoteShell(workspacePath)};`,
+      `PID_FILE=${quoteShell(pidFile)};`,
+      `LOG_FILE=${quoteShell(logFile)};`,
+      `HEALTH_URL=${quoteShell(`http://127.0.0.1:${daytonaBridgePort}/health`)};`,
+      'export TOKEN HEALTH_URL;',
+      `HEALTH_CHECK=${quoteShell(
+        'const http=require("node:http");const req=http.get(process.env.HEALTH_URL,{headers:{Authorization:"Bearer "+process.env.TOKEN}},res=>{res.resume();process.exit(res.statusCode===200?0:1);});req.on("error",()=>process.exit(1));req.setTimeout(1000,()=>{req.destroy();process.exit(1);});',
+      )};`,
+      'health() { node -e "$HEALTH_CHECK" >/dev/null 2>&1; };',
+      'start_bridge() {',
+      'DEPUTIES_SANDBOX_TOKEN="$TOKEN"',
+      'DEPUTIES_WORKSPACE="$WORKSPACE"',
       'DEPUTIES_SANDBOX_BRIDGE_HOST=0.0.0.0',
       `DEPUTIES_SANDBOX_BRIDGE_PORT=${daytonaBridgePort}`,
-      'nohup node /opt/deputies/sandbox-bridge/dist/server.js',
-      `>> ${quoteShell(logFile)} 2>&1 & echo $! > ${quoteShell(pidFile)};`,
-      'fi',
+      'nohup node /opt/deputies/sandbox-bridge/dist/server.js >> "$LOG_FILE" 2>&1 & echo $! > "$PID_FILE";',
+      '};',
+      'if ! health; then',
+      '[ -f "$PID_FILE" ] && kill "$(cat "$PID_FILE")" 2>/dev/null || true;',
+      'start_bridge;',
+      'fi;',
+      'for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do',
+      'health && exit 0;',
+      'sleep 0.25;',
+      'done;',
+      'echo "deputies sandbox bridge did not become ready" >&2;',
+      'exit 1;',
     ].join(' '),
     undefined,
     undefined,
-    5,
+    10,
   );
+  if ((response.exitCode ?? 0) !== 0) {
+    throw new Error(response.result || 'Daytona sandbox bridge did not become ready');
+  }
 }
 
 function createDaytonaFileSystem(sandbox: DaytonaSandboxLike): SandboxFileSystem {

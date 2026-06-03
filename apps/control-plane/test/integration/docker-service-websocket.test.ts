@@ -198,6 +198,7 @@ class BridgeDockerOrchestrator implements DockerOrchestrator {
       port: input.port,
       targetUrl: `${this.options.bridgeUrl}/preview/${input.port}`,
       targetHeaders: { authorization: `Bearer ${this.options.bridgeToken}` },
+      forwardPreviewHost: true,
     };
   }
 }
