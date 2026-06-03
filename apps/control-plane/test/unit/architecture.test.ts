@@ -120,6 +120,13 @@ describe('architecture boundaries', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('installs CLIs required by authenticated repository tools in the runtime image', async () => {
+    const text = await readFile(join(root, 'Dockerfile'), 'utf8');
+
+    expect(text).toMatch(/apk add --no-cache[^\n]*\bdocker-cli\b/);
+    expect(text).toMatch(/apk add --no-cache[^\n]*\bgithub-cli\b/);
+  });
+
   it('declares source-owned schemas for public API response envelopes', async () => {
     const text = await readFile(join(srcRoot, 'app/server.ts'), 'utf8');
     const missingFields = [...jsonResponseEnvelopeFields(text)]
