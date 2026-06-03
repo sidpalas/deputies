@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/sidpalas/deputies/compare/v0.6.2...v0.6.3) (2026-06-03)
+
+
+### Bug Fixes
+
+* **control-plane:** install GitHub CLI for Pi gh tool ([#49](https://github.com/sidpalas/deputies/issues/49)) ([e359eae](https://github.com/sidpalas/deputies/commit/e359eaec814ae1455874f9a46ebc7e4af57c286c))
+
 ## [0.6.2](https://github.com/sidpalas/deputies/compare/v0.6.1...v0.6.2) (2026-06-03)
 
 
