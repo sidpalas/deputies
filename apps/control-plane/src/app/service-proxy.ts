@@ -1,8 +1,9 @@
 import net, { isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
 import tls from 'node:tls';
-import type { IncomingMessage } from 'node:http';
-import type { Duplex } from 'node:stream';
+import http, { type IncomingHttpHeaders, type IncomingMessage } from 'node:http';
+import https from 'node:https';
+import { Readable, type Duplex } from 'node:stream';
 import type { Context } from 'hono';
 import { canReadSession, canWriteSession, type RequestAuthorization } from '../auth/authorization.js';
 import {
@@ -12,6 +13,7 @@ import {
   previewCookieMaxAgeSeconds,
   previewGrantMaxAgeSeconds,
   readPreviewCookie,
+  sessionCookieName,
   signPreviewAuthToken,
   type PreviewAuthToken,
   verifyPreviewAuthToken,
@@ -32,6 +34,28 @@ type PreviewAuthorization = {
   cookie?: string;
 };
 
+const previewBufferedBodyMaxBytes = 16 * 1024 * 1024;
+const previewHostHeader = 'x-deputies-preview-host';
+const noBodyResponseStatuses = new Set([101, 204, 205, 304]);
+const skippedPreviewProxyRequestHeaders = new Set([
+  'accept-encoding',
+  'authorization',
+  'connection',
+  'content-length',
+  'cookie',
+  'host',
+  previewHostHeader,
+  'referer',
+]);
+const skippedPreviewUpgradeRequestHeaders = new Set([
+  'authorization',
+  'content-length',
+  'cookie',
+  'host',
+  previewHostHeader,
+  'referer',
+]);
+
 export async function getSessionService(
   config: AppConfig,
   services: ServiceProxyServices,
@@ -51,18 +75,9 @@ export async function getSessionService(
     port,
     secrets,
   });
-  return preview && (await isAllowedPreviewTarget(config, provider.name, preview.targetUrl)) ? preview : null;
-}
-
-export async function isActiveServiceSandbox(
-  services: ServiceProxyServices,
-  sessionId: string,
-  providerSandboxId: string,
-): Promise<boolean> {
-  const provider = services.sandboxProvider;
-  if (!provider) return false;
-  const sandbox = await services.store.getActiveSandbox(sessionId, provider.name);
-  return sandbox?.providerSandboxId === providerSandboxId;
+  if (!preview || !(await isAllowedPreviewTarget(config, provider.name, preview.targetUrl))) return null;
+  if (preview.secrets) await services.store.setSandboxSecrets(sandbox.id, preview.secrets);
+  return preview;
 }
 
 export function serializeService(
@@ -87,28 +102,109 @@ export function serializeService(
   };
 }
 
-export async function proxyService(
-  c: Context,
-  config: AppConfig,
-  sessionId: string,
-  port: number,
-  preview: SandboxPreviewUrl,
-): Promise<Response> {
+export async function proxyService(c: Context, config: AppConfig, preview: SandboxPreviewUrl): Promise<Response> {
   const target = previewTargetUrl(c, preview.targetUrl);
   const request = c.req.raw;
-  const response = await fetch(target, {
-    method: request.method,
-    headers: previewRequestHeaders(request.headers, preview.targetHeaders),
-    body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
-    redirect: 'manual',
-    duplex: 'half',
-  } as RequestInit & { duplex: 'half' });
-  const headers = previewResponseHeaders(response.headers);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
+  const body = await previewRequestBody(request);
+  const headers = previewRequestHeaders(request.headers, previewTargetHeaders(preview, previewRequestHost(config, c)));
+  const bodyLength = previewRequestBodyLength(body);
+  if (bodyLength !== undefined) headers.set('content-length', String(bodyLength));
+  return proxyServiceRequest(target, request.method, headers, body);
+}
+
+function previewRequestBodyLength(body: RequestInit['body']): number | undefined {
+  if (typeof body === 'string') return Buffer.byteLength(body);
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (ArrayBuffer.isView(body)) return body.byteLength;
+  return undefined;
+}
+
+function proxyServiceRequest(
+  target: string,
+  requestMethod: string | undefined,
+  requestHeaders: Headers,
+  requestBody: RequestInit['body'],
+): Promise<Response> {
+  const targetUrl = new URL(target);
+  if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
+    throw new Error(`Unsupported preview protocol: ${targetUrl.protocol}`);
+  }
+
+  const protocolClient = targetUrl.protocol === 'https:' ? https : http;
+
+  return new Promise<Response>((resolve, reject) => {
+    const requestOptions: http.RequestOptions & https.RequestOptions = {
+      method: requestMethod,
+      protocol: targetUrl.protocol,
+      hostname: targetUrl.hostname,
+      port: Number(targetUrl.port) || (targetUrl.protocol === 'https:' ? 443 : 80),
+      path: `${targetUrl.pathname}${targetUrl.search}`,
+      headers: requestHeadersToNodeHeaders(requestHeaders),
+    };
+    if (targetUrl.protocol === 'https:') requestOptions.servername = targetUrl.hostname;
+
+    const upstream = protocolClient.request(requestOptions, (upstreamResponse) => {
+      const responseHeaders = previewResponseHeadersFromNodeHeaders(upstreamResponse.headers);
+      const responseBody = Readable.toWeb(upstreamResponse);
+      const status = upstreamResponse.statusCode ?? 502;
+      const hasResponseBody = !noBodyResponseStatuses.has(status);
+      resolve(
+        new Response(hasResponseBody ? responseBody : null, {
+          status,
+          statusText: upstreamResponse.statusMessage ?? '',
+          headers: responseHeaders,
+        }),
+      );
+    });
+
+    upstream.once('error', reject);
+
+    if (requestBody === undefined || requestBody === null) {
+      upstream.end();
+      return;
+    }
+
+    if (ArrayBuffer.isView(requestBody)) {
+      upstream.end(Buffer.from(requestBody.buffer, requestBody.byteOffset, requestBody.byteLength));
+      return;
+    }
+
+    if (requestBody instanceof ArrayBuffer) {
+      upstream.end(Buffer.from(requestBody));
+      return;
+    }
+
+    if (typeof requestBody === 'string') {
+      upstream.end(requestBody);
+      return;
+    }
+
+    if (typeof requestBody === 'object' && requestBody !== null && 'getReader' in requestBody) {
+      const upstreamBody = Readable.fromWeb(requestBody as ReadableStream<Uint8Array>);
+      upstreamBody.once('error', (error) => {
+        upstream.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
+      upstreamBody.pipe(upstream);
+      return;
+    }
+
+    upstream.end(String(requestBody));
   });
+}
+
+async function previewRequestBody(request: Request): Promise<RequestInit['body'] | undefined> {
+  if (request.method === 'GET' || request.method === 'HEAD') return undefined;
+  const contentLengthHeader = request.headers.get('content-length');
+  const contentLength = contentLengthHeader === null ? undefined : Number(contentLengthHeader);
+  if (
+    contentLength !== undefined &&
+    Number.isFinite(contentLength) &&
+    contentLength >= 0 &&
+    contentLength <= previewBufferedBodyMaxBytes
+  ) {
+    return request.arrayBuffer();
+  }
+  return request.body ?? undefined;
 }
 
 export function appendPreviewCookie(response: Response, cookie: string | undefined): Response {
@@ -118,14 +214,6 @@ export function appendPreviewCookie(response: Response, cookie: string | undefin
 
 export function parseServiceHostFromRequest(config: AppConfig, c: Context): { sessionId: string; port: number } | null {
   return parsePreviewHostFromHosts(previewRequestHosts(config, c), previewAllowedDomains(config, c));
-}
-
-export async function isAuthorizedRequest(config: AppConfig, store: AppStore, c: Context): Promise<boolean> {
-  if (config.apiAuthMode === 'none') return true;
-  if (config.apiAuthMode === 'bearer')
-    return c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
-  const authorization = await authorizePreviewRequest(config, store, c);
-  return Boolean(authorization);
 }
 
 export async function authorizePreviewRequest(
@@ -242,8 +330,19 @@ export async function handleServiceUpgrade(
     targetUrl: previewTargetUrlFromUrl(incoming, preview.targetUrl),
     preserveOrigin: true,
   };
-  if (preview.targetHeaders) upgradeInput.targetHeaders = preview.targetHeaders;
+  const targetHeaders = previewTargetHeaders(preview, previewNodeRequestHosts(config, request)[0]);
+  if (Object.keys(targetHeaders).length) upgradeInput.targetHeaders = targetHeaders;
   proxyPreviewUpgrade(upgradeInput);
+}
+
+function previewTargetHeaders(preview: SandboxPreviewUrl, host: string | undefined): Record<string, string> {
+  const headers = { ...(preview.targetHeaders ?? {}) };
+  if (!host) return headers;
+  headers['x-forwarded-host'] = host;
+  headers['x-original-host'] = host;
+  if (preview.forwardPreviewHost) headers[previewHostHeader] = host;
+  if (!preview.preserveTargetHost) headers.host = stripPort(host);
+  return headers;
 }
 
 function rejectUpgrade(socket: Duplex, status: number, message: string): void {
@@ -351,7 +450,9 @@ function previewTargetUrlFromUrl(incoming: URL, targetUrl: string): string {
   const suffix = incoming.pathname || '/';
   const target = new URL(targetUrl);
   target.pathname = joinUrlPath(target.pathname, suffix);
-  target.search = incoming.search;
+  for (const [key, value] of incoming.searchParams.entries()) {
+    if (!target.searchParams.has(key)) target.searchParams.append(key, value);
+  }
   return target.toString();
 }
 
@@ -579,14 +680,25 @@ function previewUpgradeHeaders(
   const headers: Array<[string, string]> = [['host', target.host]];
   for (const [key, value] of Object.entries(request.headers)) {
     const lower = key.toLowerCase();
-    if (['authorization', 'cookie', 'host', 'content-length', 'referer'].includes(lower)) continue;
+    if (skippedPreviewUpgradeRequestHeaders.has(lower)) continue;
     if (lower === 'origin' && !preserveOrigin) continue;
     if (Array.isArray(value)) for (const item of value) headers.push([key, item]);
     else if (value !== undefined) headers.push([key, value]);
   }
+  const cookie = previewCookieHeader(stringHeader(request.headers.cookie) ?? null);
+  if (cookie) headers.push(['cookie', cookie]);
   const origin = previewUpstreamOrigin(target);
   if (!preserveOrigin && origin) headers.push(['origin', origin]);
-  for (const [key, value] of Object.entries(injected)) headers.push([key, value]);
+  for (const [key, value] of Object.entries(injected)) {
+    const lower = key.toLowerCase();
+    if (lower === 'host') {
+      const hostIndex = headers.findIndex(([headerName]) => headerName.toLowerCase() === 'host');
+      if (hostIndex >= 0) headers[hostIndex] = ['host', value];
+      else headers.push(['host', value]);
+      continue;
+    }
+    headers.push([key, value]);
+  }
   return headers;
 }
 
@@ -605,6 +717,49 @@ function parseCookieHeader(header: string): Record<string, string> {
     cookies[name] = rest.join('=');
   }
   return cookies;
+}
+
+function previewCookieHeader(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const cookies = header
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => {
+      const name = part.split('=')[0]?.trim();
+      return name && !isPlatformCookieName(name);
+    });
+  return cookies.length ? cookies.join('; ') : undefined;
+}
+
+function isPlatformCookieName(name: string): boolean {
+  return name === previewCookieName || name === sessionCookieName;
+}
+
+function previewSetCookieHeaders(input: Headers): string[] {
+  const getSetCookie = (input as Headers & { getSetCookie?: () => string[] }).getSetCookie;
+  if (typeof getSetCookie === 'function') return getSetCookie.call(input);
+  const header = input.get('set-cookie');
+  return header ? splitSetCookieHeader(header) : [];
+}
+
+function splitSetCookieHeader(header: string): string[] {
+  return header
+    .split(/,(?=\s*[^;,=\s]+=)/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function sanitizePreviewSetCookie(header: string): string | undefined {
+  const [nameValue, ...attributes] = header.split(';');
+  const name = nameValue?.split('=')[0]?.trim();
+  if (!nameValue || !name || isPlatformCookieName(name)) return undefined;
+  const sanitized = [nameValue.trim()];
+  for (const attribute of attributes) {
+    const value = attribute.trim();
+    if (!value || value.toLowerCase().startsWith('domain=')) continue;
+    sanitized.push(value);
+  }
+  return sanitized.join('; ');
 }
 
 async function readPreviewAuthUser(
@@ -704,9 +859,12 @@ function previewRequestHeaders(input: Headers, injected: Record<string, string> 
   const headers = new Headers();
   for (const [key, value] of input.entries()) {
     const lower = key.toLowerCase();
-    if (['authorization', 'cookie', 'host', 'connection', 'content-length', 'referer'].includes(lower)) continue;
+    if (skippedPreviewProxyRequestHeaders.has(lower)) continue;
     headers.set(key, value);
   }
+  const cookie = previewCookieHeader(input.get('cookie'));
+  if (cookie) headers.set('cookie', cookie);
+  headers.set('accept-encoding', 'identity');
   for (const [key, value] of Object.entries(injected)) headers.set(key, value);
   return headers;
 }
@@ -715,9 +873,35 @@ function previewResponseHeaders(input: Headers): Headers {
   const headers = new Headers();
   for (const [key, value] of input.entries()) {
     const lower = key.toLowerCase();
-    if (['connection', 'content-encoding', 'content-length', 'set-cookie', 'transfer-encoding'].includes(lower))
-      continue;
+    if (['connection', 'content-length', 'set-cookie', 'transfer-encoding'].includes(lower)) continue;
     headers.set(key, value);
   }
+  for (const cookie of previewSetCookieHeaders(input)) {
+    const sanitized = sanitizePreviewSetCookie(cookie);
+    if (sanitized) headers.append('set-cookie', sanitized);
+  }
   return headers;
+}
+
+function requestHeadersToNodeHeaders(input: Headers): Record<string, string | string[]> {
+  const headers: Record<string, string | string[]> = {};
+  for (const [name, value] of input.entries()) {
+    headers[name] = value;
+  }
+  return headers;
+}
+
+function previewResponseHeadersFromNodeHeaders(input: IncomingHttpHeaders): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(input)) {
+    if (!value) continue;
+    if (Array.isArray(value)) {
+      for (const header of value) {
+        headers.append(name, header);
+      }
+      continue;
+    }
+    headers.append(name, value);
+  }
+  return previewResponseHeaders(headers);
 }

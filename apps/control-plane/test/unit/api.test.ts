@@ -2,10 +2,16 @@ import { createServer as createHttpServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { ArtifactService } from '../../src/artifacts/service.js';
 import { FilesystemArtifactObjectStorage, type ArtifactObjectStorage } from '../../src/artifacts/storage.js';
 import { createServer, createServices, createWorkerHealthServer, type AppServices } from '../../src/app/server.js';
-import { previewCookieMaxAgeSeconds, previewCookieName, signPreviewAuthToken } from '../../src/auth/session.js';
+import {
+  previewCookieMaxAgeSeconds,
+  previewCookieName,
+  sessionCookieName,
+  signPreviewAuthToken,
+} from '../../src/auth/session.js';
 import { loadConfig } from '../../src/config/index.js';
 import { GitHubApiError } from '../../src/integrations/github/client.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
@@ -1200,6 +1206,72 @@ describe('core API', () => {
         headers: { 'x-forwarded-host': serviceHost },
       });
       expect(hostRedirect.headers.get('location')).toBe('/dashboard');
+
+      const compressed = await fetch(`${baseUrl}/compressed`, { headers: { 'x-forwarded-host': serviceHost } });
+      expect(compressed.headers.get('content-encoding')).toBe('gzip');
+      expect(compressed.headers.get('x-accept-encoding')).toBe('identity');
+      await expect(compressed.text()).resolves.toBe('compressed ok');
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('chunk-one'));
+          controller.enqueue(new TextEncoder().encode('-chunk-two'));
+          controller.close();
+        },
+      });
+      const streamedBody = await fetch(`${baseUrl}/echo-body`, {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain', 'x-forwarded-host': serviceHost },
+        body: stream,
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' });
+      await expect(streamedBody.json()).resolves.toEqual({
+        contentLength: null,
+        transferEncoding: 'chunked',
+        body: 'chunk-one-chunk-two',
+      });
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  it('preserves provider preview URL query parameters when forwarding service paths', async () => {
+    const upstream = createPreviewUpstream();
+    const upstreamBaseUrl = await listen(upstream);
+    await closeServer(server);
+    const provider = new ServiceSandboxProvider(`${upstreamBaseUrl}/bridge-base?provider=bridge-token`);
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        WEB_BASE_URL: 'https://deputies.localhost',
+        SERVICE_TRUST_FORWARDED_HOSTS: 'true',
+      }),
+      createServices(store, { sandboxProvider: provider }),
+    );
+    baseUrl = await listen(server);
+
+    try {
+      const session = await services.sessions.create({ title: 'Provider query forwarding' });
+      const sandbox = await provider.create({ sessionId: session.id });
+      const now = new Date();
+      await store.createSandbox({
+        id: '00000000-0000-4000-8000-000000000503',
+        sessionId: session.id,
+        provider: provider.name,
+        providerSandboxId: sandbox.providerSandboxId,
+        status: 'ready',
+        workspacePath: '/workspace',
+        metadata: { runtimeId: 'runtime-1' },
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const serviceHost = `s-3000-${session.id}.deputies.localhost`;
+      const response = await fetch(`${baseUrl}/nested/path?provider=browser&x=1`, {
+        headers: { 'x-forwarded-host': serviceHost },
+      });
+
+      await expect(response.json()).resolves.toEqual({ url: '/bridge-base/nested/path?provider=bridge-token&x=1' });
     } finally {
       await closeServer(upstream);
     }
@@ -1261,27 +1333,52 @@ describe('core API', () => {
       expect(previewAuth.headers.get('location')).toBe('/');
       const previewCookie = previewAuth.headers.get('set-cookie');
       expect(previewCookie).toContain('deputies_preview=');
+      const previewCookiePair = `${previewCookieName}=${cookieValue(previewCookie!, previewCookieName)}`;
 
       const previewGet = await fetch(`${baseUrl}/`, {
-        headers: { cookie: previewCookie!, 'x-forwarded-host': serviceHost },
+        headers: { cookie: previewCookiePair, 'x-forwarded-host': serviceHost },
       });
       expect(previewGet.status).toBe(200);
 
+      const appLogin = await fetch(`${baseUrl}/app-login`, {
+        method: 'POST',
+        headers: {
+          cookie: previewCookiePair,
+          'content-type': 'application/x-www-form-urlencoded',
+          'x-forwarded-host': serviceHost,
+        },
+        body: 'username=dev&password=password',
+      });
+      expect(appLogin.status).toBe(204);
+      expect(appLogin.headers.get('x-app-content-length')).toBe('30');
+      const appLoginCookie = appLogin.headers.get('set-cookie');
+      expect(appLoginCookie).toContain('app_session=ok');
+      expect(appLoginCookie).not.toContain('Domain=');
+      expect(appLoginCookie).not.toContain(`${previewCookieName}=upstream`);
+
+      const appMe = await fetch(`${baseUrl}/app-me`, {
+        headers: {
+          cookie: `${previewCookiePair}; ${sessionCookieName}=leak; app_session=ok`,
+          'x-forwarded-host': serviceHost,
+        },
+      });
+      await expect(appMe.json()).resolves.toEqual({ cookie: 'app_session=ok' });
+
       const crossSitePost = await fetch(`${baseUrl}/`, {
         method: 'POST',
-        headers: { cookie: previewCookie!, 'x-forwarded-host': serviceHost, origin: 'https://evil.example' },
+        headers: { cookie: previewCookiePair, 'x-forwarded-host': serviceHost, origin: 'https://evil.example' },
       });
       expect(crossSitePost.status).toBe(403);
 
       const sameOriginPost = await fetch(`${baseUrl}/`, {
         method: 'POST',
-        headers: { cookie: previewCookie!, 'x-forwarded-host': serviceHost, origin: `https://${serviceHost}` },
+        headers: { cookie: previewCookiePair, 'x-forwarded-host': serviceHost, origin: `https://${serviceHost}` },
       });
       expect(sameOriginPost.status).toBe(200);
 
       const headers = await fetch(`${baseUrl}/headers`, {
         headers: {
-          cookie: previewCookie!,
+          cookie: previewCookiePair,
           'x-forwarded-host': serviceHost,
           referer: previewAuthUrl.toString(),
         },
@@ -2311,6 +2408,55 @@ function createPreviewUpstream(): Server {
     if (request.url === '/headers') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ referer: request.headers.referer ?? null }));
+      return;
+    }
+    if (request.url?.startsWith('/bridge-base/')) {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ url: request.url }));
+      return;
+    }
+    if (request.url === '/compressed') {
+      const body = gzipSync('compressed ok');
+      response.writeHead(200, {
+        'content-encoding': 'gzip',
+        'content-length': String(body.byteLength),
+        'content-type': 'text/plain',
+        'x-accept-encoding': request.headers['accept-encoding'] ?? 'missing',
+      });
+      response.end(body);
+      return;
+    }
+    if (request.url === '/echo-body') {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      request.on('end', () => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            contentLength: request.headers['content-length'] ?? null,
+            transferEncoding: request.headers['transfer-encoding'] ?? null,
+            body: Buffer.concat(chunks).toString('utf-8'),
+          }),
+        );
+      });
+      return;
+    }
+    if (request.url === '/app-login') {
+      response.writeHead(204, {
+        'x-app-content-length': request.headers['content-length'] ?? 'missing',
+        'set-cookie': [
+          'app_session=ok; Path=/; HttpOnly; SameSite=Lax; Domain=.deputies.localhost',
+          `${previewCookieName}=upstream; Path=/`,
+        ],
+      });
+      response.end();
+      return;
+    }
+    if (request.url === '/app-me') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ cookie: request.headers.cookie ?? null }));
       return;
     }
     if (request.url === '/') {

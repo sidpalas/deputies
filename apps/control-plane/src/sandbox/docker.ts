@@ -322,6 +322,7 @@ export class InProcessDockerOrchestrator implements DockerOrchestrator {
       port: input.port,
       targetUrl: `${descriptor.bridgeUrl}/preview/${input.port}`,
       targetHeaders: { authorization: `Bearer ${descriptor.bridgeToken}` },
+      forwardPreviewHost: true,
     };
   }
 

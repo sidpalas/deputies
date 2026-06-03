@@ -27,7 +27,13 @@ describe('DaytonaSandboxProvider', () => {
       {
         image: 'ubuntu:latest',
         autoStopInterval: 15,
-        envVars: { NODE_ENV: 'test' },
+        envVars: {
+          NODE_ENV: 'test',
+          DEPUTIES_SANDBOX_TOKEN: expect.any(String),
+          DEPUTIES_WORKSPACE: '/workspace',
+          DEPUTIES_SANDBOX_BRIDGE_HOST: '0.0.0.0',
+          DEPUTIES_SANDBOX_BRIDGE_PORT: '3584',
+        },
         labels: { app: 'flue-bg-agents', 'flue-session-id': 'session-1' },
       },
     ]);
@@ -39,6 +45,7 @@ describe('DaytonaSandboxProvider', () => {
       metadata: { owner: 'test', target: 'us', state: 'started' },
       capabilities: { persistentFilesystem: true, exec: true, filesystem: true },
     });
+    expect(handle.secrets?.bridgeToken).toEqual(expect.any(String));
 
     await expect(handle.exec({ command: 'echo ok', cwd: '/workspace' })).resolves.toMatchObject({
       exitCode: 0,
@@ -149,9 +156,14 @@ describe('DaytonaSandboxProvider', () => {
     await expect(provider.destroy({ providerSandboxId: 'missing', sessionId: 'session-1' })).resolves.toBeUndefined();
   });
 
-  it('returns Daytona preview URLs with provider auth headers and warning bypass', async () => {
+  it('returns Daytona bridge preview URLs with provider and bridge auth headers', async () => {
     const sandbox = createMockDaytonaSandbox();
-    sandbox.getPreviewLink = async (port) => ({ url: `https://${port}-sandbox.daytona.test`, token: 'preview-token' });
+    const previewPorts: number[] = [];
+    sandbox.getPreviewLink = async (port) => {
+      previewPorts.push(port);
+      return { url: `https://${port}-sandbox.daytona.test`, token: 'preview-token' };
+    };
+    sandbox.process.executeCommand = vi.fn(async () => ({ result: 'bridge started', exitCode: 0 }));
     const provider = new DaytonaSandboxProvider({
       client: {
         async create() {
@@ -164,15 +176,62 @@ describe('DaytonaSandboxProvider', () => {
     });
 
     await expect(
-      provider.getPreviewUrl({ providerSandboxId: 'sandbox-1', sessionId: 'session-1', port: 3000 }),
+      provider.getPreviewUrl({
+        providerSandboxId: 'sandbox-1',
+        sessionId: 'session-1',
+        port: 3000,
+        secrets: { bridgeToken: 'bridge-token' },
+      }),
     ).resolves.toEqual({
       port: 3000,
-      targetUrl: 'https://3000-sandbox.daytona.test',
+      targetUrl: 'https://3584-sandbox.daytona.test/preview/3000',
       targetHeaders: {
+        authorization: 'Bearer bridge-token',
         'x-daytona-preview-token': 'preview-token',
         'x-daytona-skip-preview-warning': 'true',
       },
+      preserveTargetHost: true,
+      forwardPreviewHost: true,
+      secrets: { bridgeToken: 'bridge-token' },
     });
+    expect(previewPorts).toEqual([3584]);
+    expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
+      expect.stringContaining('/opt/deputies/sandbox-bridge/dist/server.js'),
+      undefined,
+      undefined,
+      10,
+    );
+    expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
+      expect.stringContaining('http://127.0.0.1:3584/health'),
+      undefined,
+      undefined,
+      10,
+    );
+  });
+
+  it('rejects Daytona bridge preview URLs when the bridge does not become ready', async () => {
+    const sandbox = createMockDaytonaSandbox();
+    sandbox.getPreviewLink = async (port) => ({ url: `https://${port}-sandbox.daytona.test`, token: 'preview-token' });
+    sandbox.process.executeCommand = vi.fn(async () => ({ result: 'bridge failed', exitCode: 1 }));
+    const provider = new DaytonaSandboxProvider({
+      client: {
+        async create() {
+          return sandbox;
+        },
+        async get() {
+          return sandbox;
+        },
+      },
+    });
+
+    await expect(
+      provider.getPreviewUrl({
+        providerSandboxId: 'sandbox-1',
+        sessionId: 'session-1',
+        port: 3000,
+        secrets: { bridgeToken: 'bridge-token' },
+      }),
+    ).rejects.toThrow('bridge failed');
   });
 
   it('refreshes activity and extends autostop when keepalive exceeds fallback', async () => {

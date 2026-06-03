@@ -136,13 +136,18 @@ describe('sandbox bridge server', () => {
     await expect(response.json()).resolves.toMatchObject({ exitCode: 0, stdout: output });
   });
 
-  it('proxies preview traffic to localhost and strips auth cookies', async () => {
+  it('proxies preview traffic to localhost and strips platform auth cookies', async () => {
     const upstream = createServer((request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({
           url: request.url,
+          host: request.headers.host ?? null,
+          forwardedHost: request.headers['x-forwarded-host'] ?? null,
+          originalHost: request.headers['x-original-host'] ?? null,
+          deputiesPreviewHost: request.headers['x-deputies-preview-host'] ?? null,
           authorization: request.headers.authorization ?? null,
+          daytonaToken: request.headers['x-daytona-preview-token'] ?? null,
           cookie: request.headers.cookie ?? null,
         }),
       );
@@ -154,13 +159,24 @@ describe('sandbox bridge server', () => {
 
     try {
       const response = await bridgeFetch(`/preview/${address.port}/nested/path?x=1`, {
-        headers: { cookie: 'secret=value' },
+        headers: {
+          cookie: 'deputies_preview=platform; dev_deputies_session=session; app_session=ok',
+          'x-daytona-preview-token': 'daytona-token',
+          'x-forwarded-host': '3584-sandbox.daytonaproxy01.net',
+          'x-original-host': '3584-sandbox.daytonaproxy01.net',
+          'x-deputies-preview-host': 's-3000-session-1.deputies.localhost',
+        },
       });
 
       await expect(response.json()).resolves.toEqual({
         url: '/nested/path?x=1',
+        host: 's-3000-session-1.deputies.localhost',
+        forwardedHost: 's-3000-session-1.deputies.localhost',
+        originalHost: 's-3000-session-1.deputies.localhost',
+        deputiesPreviewHost: null,
         authorization: null,
-        cookie: null,
+        daytonaToken: null,
+        cookie: 'app_session=ok',
       });
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -169,7 +185,129 @@ describe('sandbox bridge server', () => {
     }
   });
 
-  it('does not forward decoded response encoding metadata', async () => {
+  it('does not trust forwarded hosts without a private Deputies preview host', async () => {
+    const upstream = createServer((request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ host: request.headers.host ?? null }));
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const address = upstream.address();
+    if (typeof address !== 'object' || !address) throw new Error('Expected upstream address');
+
+    try {
+      const response = await bridgeFetch(`/preview/${address.port}/`, {
+        headers: { 'x-forwarded-host': 's-3000-session-1.deputies.localhost' },
+      });
+
+      await expect(response.json()).resolves.toEqual({ host: `127.0.0.1:${address.port}` });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it('proxies preview POST bodies to localhost with content length', async () => {
+    const upstream = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      response.writeHead(401, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          method: request.method,
+          url: request.url,
+          contentLength: request.headers['content-length'] ?? null,
+          contentType: request.headers['content-type'] ?? null,
+          transferEncoding: request.headers['transfer-encoding'] ?? null,
+          body: Buffer.concat(chunks).toString('utf-8'),
+        }),
+      );
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const address = upstream.address();
+    if (typeof address !== 'object' || !address) throw new Error('Expected upstream address');
+
+    try {
+      const response = await bridgeFetch(`/preview/${address.port}/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'username=dev&password=password',
+      });
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({
+        method: 'POST',
+        url: '/login',
+        contentLength: '30',
+        contentType: 'application/x-www-form-urlencoded',
+        transferEncoding: null,
+        body: 'username=dev&password=password',
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it('passes preview redirects back to the browser', async () => {
+    const upstream = createServer((request, response) => {
+      if (request.url === '/login') {
+        response.writeHead(302, { location: '/', 'set-cookie': 'app_session=ok; Path=/; HttpOnly; SameSite=Lax' });
+        response.end();
+        return;
+      }
+
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.end('home');
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const address = upstream.address();
+    if (typeof address !== 'object' || !address) throw new Error('Expected upstream address');
+
+    try {
+      const response = await bridgeFetch(`/preview/${address.port}/login`, {
+        method: 'POST',
+        redirect: 'manual',
+      });
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get('location')).toBe('/');
+      expect(response.headers.get('set-cookie')).toContain('app_session=ok');
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it('does not forward platform-only preview cookies', async () => {
+    const upstream = createServer((request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ cookie: request.headers.cookie ?? null }));
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const address = upstream.address();
+    if (typeof address !== 'object' || !address) throw new Error('Expected upstream address');
+
+    try {
+      const response = await bridgeFetch(`/preview/${address.port}/`, {
+        headers: { cookie: 'deputies_preview=platform; dev_deputies_session=session' },
+      });
+
+      await expect(response.json()).resolves.toEqual({ cookie: null });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it('preserves response encoding metadata when upstream ignores identity requests', async () => {
     const body = gzipSync('compressed ok');
     const upstream = createServer((request, response) => {
       response.writeHead(200, {
@@ -190,7 +328,7 @@ describe('sandbox bridge server', () => {
         headers: { 'accept-encoding': 'gzip, br' },
       });
 
-      expect(response.headers.get('content-encoding')).toBeNull();
+      expect(response.headers.get('content-encoding')).toBe('gzip');
       expect(response.headers.get('content-length')).toBeNull();
       expect(response.headers.get('x-accept-encoding')).toBe('identity');
       await expect(response.text()).resolves.toBe('compressed ok');
@@ -234,6 +372,7 @@ describe('sandbox bridge server', () => {
         'HTTP/1.1 101 Switching Protocols\r\n' +
           'Connection: Upgrade\r\n' +
           'Upgrade: websocket\r\n' +
+          `X-Upstream-Host: ${request.headers.host}\r\n` +
           `X-Upstream-Origin: ${request.headers.origin}\r\n` +
           `X-Upstream-Forwarded-Host: ${request.headers['x-forwarded-host']}\r\n` +
           '\r\n',
@@ -249,9 +388,24 @@ describe('sandbox bridge server', () => {
       await expect(
         rawUpgrade(`/preview/${address.port}/stable-abc?reconnection=false`, {
           origin: 'https://s-8080-session-1.deputies.localhost',
-          forwardedHost: 's-8080-session-1.deputies.localhost',
+          forwardedHost: '3584-sandbox.daytonaproxy01.net',
+          deputiesPreviewHost: 's-8080-session-1.deputies.localhost',
         }),
       ).resolves.toContain('X-Upstream-Origin: https://s-8080-session-1.deputies.localhost');
+      await expect(
+        rawUpgrade(`/preview/${address.port}/stable-abc?reconnection=false`, {
+          origin: 'https://s-8080-session-1.deputies.localhost',
+          forwardedHost: '3584-sandbox.daytonaproxy01.net',
+          deputiesPreviewHost: 's-8080-session-1.deputies.localhost',
+        }),
+      ).resolves.toContain('X-Upstream-Host: s-8080-session-1.deputies.localhost');
+      await expect(
+        rawUpgrade(`/preview/${address.port}/stable-abc?reconnection=false`, {
+          origin: 'https://s-8080-session-1.deputies.localhost',
+          forwardedHost: '3584-sandbox.daytonaproxy01.net',
+          deputiesPreviewHost: 's-8080-session-1.deputies.localhost',
+        }),
+      ).resolves.toContain('X-Upstream-Forwarded-Host: s-8080-session-1.deputies.localhost');
     } finally {
       await new Promise<void>((resolve, reject) => {
         upstream.close((error) => (error ? reject(error) : resolve()));
@@ -269,7 +423,10 @@ describe('sandbox bridge server', () => {
     });
   }
 
-  function rawUpgrade(path: string, headers: { origin?: string; forwardedHost?: string } = {}): Promise<string> {
+  function rawUpgrade(
+    path: string,
+    headers: { origin?: string; forwardedHost?: string; deputiesPreviewHost?: string } = {},
+  ): Promise<string> {
     const url = new URL(baseUrl);
     return new Promise((resolve, reject) => {
       const socket = net.connect({ host: url.hostname, port: Number(url.port) });
@@ -286,6 +443,8 @@ describe('sandbox bridge server', () => {
             'Sec-WebSocket-Version: 13\r\n' +
             (headers.origin ? `Origin: ${headers.origin}\r\n` : '') +
             (headers.forwardedHost ? `X-Forwarded-Host: ${headers.forwardedHost}\r\n` : '') +
+            (headers.forwardedHost ? `X-Original-Host: ${headers.forwardedHost}\r\n` : '') +
+            (headers.deputiesPreviewHost ? `X-Deputies-Preview-Host: ${headers.deputiesPreviewHost}\r\n` : '') +
             '\r\n',
         );
       });

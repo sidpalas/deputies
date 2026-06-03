@@ -31,4 +31,6 @@ RUN git lfs install --skip-repo
 
 # Daytona snapshots require a long-running command. If omitted, Daytona uses
 # sleep infinity by default; keep it explicit for local Docker smoke tests too.
-CMD ["sleep", "infinity"]
+EXPOSE 3584
+
+CMD ["sh", "-lc", "if [ -n \"$DEPUTIES_SANDBOX_TOKEN\" ]; then node /opt/deputies/sandbox-bridge/dist/server.js & echo $! > /tmp/deputies-sandbox-bridge.pid; fi; sleep infinity"]
