@@ -95,10 +95,13 @@ export class PostgresStore implements AppStore {
   async listenEvents(onEvent: (event: EventRecord) => void): Promise<PostgresEventListener> {
     const client = await this.pool.connect();
     let closed = false;
+    let notificationQueue: Promise<void> = Promise.resolve();
     const handleNotification = (message: { channel: string; payload?: string | undefined }) => {
       if (message.channel !== eventNotificationChannel || !message.payload) return;
-      void this.eventFromNotification(message.payload)
-        .then((event) => {
+      const payload = message.payload;
+      notificationQueue = notificationQueue
+        .then(async () => {
+          const event = await this.eventFromNotification(payload);
           if (!closed && event) onEvent(event);
         })
         .catch(() => {});

@@ -8,7 +8,7 @@ import {
   type Session,
 } from './api.js';
 
-export type ActiveProgress = { text: string; omitted: number };
+export type ActiveProgress = { text: string; omitted: number; lastSequence?: number };
 export type ActiveProgressByMessageId = Record<string, ActiveProgress>;
 
 const activeProgressMaxChars = 20_000;
@@ -31,8 +31,40 @@ export function appendActiveProgress(
   if (!messageId || typeof text !== 'string') return progress;
 
   const current = progress[messageId] ?? { text: '', omitted: 0 };
+  if (current.lastSequence !== undefined && event.sequence <= current.lastSequence) return progress;
+
   const next = truncateActiveProgress(current.text + text, current.omitted);
+  next.lastSequence = event.sequence;
   return { ...progress, [messageId]: next };
+}
+
+export function appendActiveProgressEvents(
+  progress: ActiveProgressByMessageId,
+  events: AgentEvent[],
+): ActiveProgressByMessageId {
+  if (events.length === 0) return progress;
+
+  const nextProgress = { ...progress };
+  for (const [messageId, messageEvents] of groupActiveProgressEvents(events)) {
+    const current = nextProgress[messageId] ?? { text: '', omitted: 0 };
+    let text = '';
+    let lastSequence = current.lastSequence;
+
+    for (const event of messageEvents) {
+      const delta = event.payload.text;
+      if (typeof delta !== 'string') continue;
+      if (lastSequence !== undefined && event.sequence <= lastSequence) continue;
+      text += delta;
+      lastSequence = event.sequence;
+    }
+
+    if (!text) continue;
+    const next = truncateActiveProgress(current.text + text, current.omitted);
+    if (lastSequence !== undefined) next.lastSequence = lastSequence;
+    nextProgress[messageId] = next;
+  }
+
+  return nextProgress;
 }
 
 export function omitActiveProgress(progress: ActiveProgressByMessageId, messageId: string): ActiveProgressByMessageId {
@@ -83,6 +115,17 @@ function truncateActiveProgress(text: string, omitted: number): ActiveProgress {
   if (text.length <= activeProgressMaxChars) return { text, omitted };
   const nextOmitted = omitted + text.length - activeProgressMaxChars;
   return { text: text.slice(-activeProgressMaxChars), omitted: nextOmitted };
+}
+
+function groupActiveProgressEvents(events: AgentEvent[]): Map<string, AgentEvent[]> {
+  const groups = new Map<string, AgentEvent[]>();
+  for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
+    if (!event.messageId) continue;
+    const messageEvents = groups.get(event.messageId) ?? [];
+    messageEvents.push(event);
+    groups.set(event.messageId, messageEvents);
+  }
+  return groups;
 }
 
 function formatActiveProgressText(progress: ActiveProgress): string {

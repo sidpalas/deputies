@@ -1003,6 +1003,55 @@ it('keeps large live deputy progress bounded while streaming', async () => {
   expect(screen.getByLabelText('Scrollable deputy progress').textContent?.length).toBeLessThan(25_000);
 });
 
+it('batches active deputy progress deltas and applies them in sequence order', async () => {
+  const messageId = '00000000-0000-4000-8000-000000000132';
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    sessionOverride: { status: 'active' },
+    messages: [
+      messageFixture({
+        id: messageId,
+        sequence: 1,
+        status: 'processing',
+        prompt: 'stream ordered progress',
+      }),
+    ],
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByText('stream ordered progress')).toBeInTheDocument();
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+
+  await act(async () => {
+    pushGlobalEvent?.(
+      eventFixture({
+        id: 3,
+        sequence: 3,
+        type: 'agent_text_delta',
+        messageId,
+        payload: { text: 'world' },
+      }),
+    );
+    pushGlobalEvent?.(
+      eventFixture({
+        id: 2,
+        sequence: 2,
+        type: 'agent_text_delta',
+        messageId,
+        payload: { text: 'hello ' },
+      }),
+    );
+  });
+
+  await waitFor(() => {
+    expect(screen.getByLabelText('Scrollable deputy progress')).toHaveTextContent('hello world');
+  });
+  expect(screen.getByLabelText('Scrollable deputy progress')).not.toHaveTextContent('worldhello');
+});
+
 it('retries a failed message from its message card', async () => {
   const retriedMessageIds: string[] = [];
   mockApi({

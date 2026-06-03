@@ -67,7 +67,7 @@ import {
 } from './api.js';
 import {
   activeProgressDisplayText,
-  appendActiveProgress,
+  appendActiveProgressEvents,
   buildActiveProgress,
   canWriteSession,
   errorMessage,
@@ -174,6 +174,8 @@ type NavigationState = {
   groupsPanelView: GroupsPanelView;
   selectedGroupId: string;
 };
+
+const activeProgressBatchDelayMs = 100;
 
 type SessionDetailState = {
   messages: Message[];
@@ -332,6 +334,8 @@ export function App() {
   const detailRefreshQueuedSessionIdRef = useRef<string | null>(null);
   const branchOptionsRepositoryRef = useRef('');
   const defaultSetupGuideOpenedRef = useRef(false);
+  const activeProgressTimerRef = useRef<number | null>(null);
+  const queuedActiveProgressRef = useRef<AgentEvent[]>([]);
 
   const repositoryOptions = repositoryOptionsState.data;
   const repositoryOptionsLoading = repositoryOptionsState.loading;
@@ -631,6 +635,15 @@ export function App() {
     messagesRef.current = messages;
   }, [messages]);
 
+  useEffect(
+    () => () => {
+      if (activeProgressTimerRef.current !== null) window.clearTimeout(activeProgressTimerRef.current);
+      activeProgressTimerRef.current = null;
+      queuedActiveProgressRef.current = [];
+    },
+    [],
+  );
+
   useEffect(() => {
     const handleConnectionOk = (event: Event) => {
       setConnectionStatus((current) => {
@@ -891,11 +904,11 @@ export function App() {
               ) {
                 eventCursor.current = Math.max(eventCursor.current, event.sequence);
                 if (shouldUseActiveProgressEvent(event, messagesRef.current)) {
-                  setSessionDetail((current) => ({
-                    ...current,
-                    activeProgress: appendActiveProgress(current.activeProgress, event),
-                  }));
+                  queueActiveProgressEvent(event);
                 } else {
+                  if (event.type === 'agent_response_final' && event.messageId) {
+                    discardQueuedActiveProgress(event.messageId);
+                  }
                   setSessionDetail((current) => ({
                     ...current,
                     activeProgress:
@@ -953,6 +966,40 @@ export function App() {
       sessionsRefreshTimerRef.current = null;
       refreshSessions().catch(() => undefined);
     }, delayMs);
+  }
+
+  function queueActiveProgressEvent(event: AgentEvent) {
+    queuedActiveProgressRef.current.push(event);
+    if (activeProgressTimerRef.current !== null) return;
+
+    activeProgressTimerRef.current = window.setTimeout(flushActiveProgressEvents, activeProgressBatchDelayMs);
+  }
+
+  function flushActiveProgressEvents() {
+    if (activeProgressTimerRef.current !== null) window.clearTimeout(activeProgressTimerRef.current);
+    activeProgressTimerRef.current = null;
+
+    const activeSessionId = selectedSessionIdRef.current;
+    const progressEvents = queuedActiveProgressRef.current.filter(
+      (event) => event.sessionId === activeSessionId && shouldUseActiveProgressEvent(event, messagesRef.current),
+    );
+    queuedActiveProgressRef.current = [];
+    if (progressEvents.length === 0) return;
+
+    setSessionDetail((current) => ({
+      ...current,
+      activeProgress: appendActiveProgressEvents(current.activeProgress, progressEvents),
+    }));
+  }
+
+  function discardQueuedActiveProgress(messageId: string) {
+    queuedActiveProgressRef.current = queuedActiveProgressRef.current.filter((event) => event.messageId !== messageId);
+  }
+
+  function clearQueuedActiveProgress() {
+    if (activeProgressTimerRef.current !== null) window.clearTimeout(activeProgressTimerRef.current);
+    activeProgressTimerRef.current = null;
+    queuedActiveProgressRef.current = [];
   }
 
   function userCanWriteSession(session: Session): boolean {
@@ -1324,6 +1371,7 @@ export function App() {
   }
 
   function clearSessionDetail() {
+    clearQueuedActiveProgress();
     setSessionDetail(emptySessionDetail());
   }
 
