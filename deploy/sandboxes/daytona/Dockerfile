@@ -55,14 +55,16 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-  --mount=type=cache,target=/root/.npm \
   apt-get update \
-  && apt-get install -y --no-install-recommends postgresql postgresql-contrib \
-  && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
-  && DEBUG=pw:install PLAYWRIGHT_SKIP_BROWSER_GC=1 \
-    timeout "${PLAYWRIGHT_INSTALL_TIMEOUT}" playwright install-deps chromium
+  && apt-get install -y --no-install-recommends postgresql postgresql-contrib
 
-COPY --from=playwright-browsers /ms-playwright /ms-playwright
+RUN --mount=type=cache,target=/root/.npm \
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g "playwright@${PLAYWRIGHT_VERSION}"
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+  DEBUG=pw:install PLAYWRIGHT_SKIP_BROWSER_GC=1 \
+    timeout "${PLAYWRIGHT_INSTALL_TIMEOUT}" playwright install-deps chromium
 
 RUN useradd -m -s /bin/bash daytona \
   && usermod -aG sudo daytona \
@@ -75,6 +77,8 @@ USER daytona
 WORKDIR /workspace
 
 RUN git lfs install --skip-repo
+
+COPY --from=playwright-browsers --chown=root:root /ms-playwright /ms-playwright
 
 # Daytona snapshots require a long-running command. If omitted, Daytona uses
 # sleep infinity by default; keep it explicit for local Docker smoke tests too.

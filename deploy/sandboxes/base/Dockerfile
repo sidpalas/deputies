@@ -49,10 +49,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
   && apt-get update \
   && apt-get install -y --no-install-recommends nodejs \
-  && corepack enable \
-  && curl -fsSL https://code-server.dev/install.sh | sh -s -- --version "${CODE_SERVER_VERSION}" \
-  && npm install -g "hunkdiff@${HUNKDIFF_VERSION}" \
-  && curl -fsSL https://mise.run | sh \
+  && corepack enable
+
+RUN curl -fsSL https://code-server.dev/install.sh | sh -s -- --version "${CODE_SERVER_VERSION}"
+
+RUN --mount=type=cache,target=/root/.npm \
+  npm install -g "hunkdiff@${HUNKDIFF_VERSION}"
+
+RUN curl -fsSL https://mise.run | sh \
   && mv /root/.local/bin/mise /usr/local/bin/mise
 
 RUN mkdir -p /opt/deputies/sandbox-bridge
