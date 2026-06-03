@@ -250,13 +250,7 @@ async function resolveDaytonaPreviewUrl(
   sandbox: DaytonaSandboxLike,
   port: number,
 ): Promise<{ targetUrl: string; targetHeaders?: Record<string, string> } | null> {
-  const preview = sandbox.getPreviewLink
-    ? await sandbox.getPreviewLink(port)
-    : sandbox.getPreviewUrl
-      ? await sandbox.getPreviewUrl(port)
-      : sandbox.getPublicUrl
-        ? await sandbox.getPublicUrl(port)
-        : null;
+  const preview = await getDaytonaPreviewUrl(sandbox, port);
   if (typeof preview === 'string') {
     return { targetUrl: preview, targetHeaders: { 'x-daytona-skip-preview-warning': 'true' } };
   }
@@ -269,6 +263,16 @@ async function resolveDaytonaPreviewUrl(
       },
     };
   }
+  return null;
+}
+
+async function getDaytonaPreviewUrl(
+  sandbox: DaytonaSandboxLike,
+  port: number,
+): Promise<string | DaytonaPreviewLink | null> {
+  if (sandbox.getPreviewLink) return sandbox.getPreviewLink(port);
+  if (sandbox.getPreviewUrl) return sandbox.getPreviewUrl(port);
+  if (sandbox.getPublicUrl) return sandbox.getPublicUrl(port);
   return null;
 }
 

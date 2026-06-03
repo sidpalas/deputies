@@ -36,6 +36,24 @@ type PreviewAuthorization = {
 
 const previewBufferedBodyMaxBytes = 16 * 1024 * 1024;
 const previewHostHeader = 'x-deputies-preview-host';
+const noBodyResponseStatuses = new Set([101, 204, 205, 304]);
+const skippedPreviewProxyRequestHeaders = new Set([
+  'authorization',
+  'connection',
+  'content-length',
+  'cookie',
+  'host',
+  previewHostHeader,
+  'referer',
+]);
+const skippedPreviewUpgradeRequestHeaders = new Set([
+  'authorization',
+  'content-length',
+  'cookie',
+  'host',
+  previewHostHeader,
+  'referer',
+]);
 
 export async function getSessionService(
   config: AppConfig,
@@ -124,7 +142,7 @@ function previewRequestBodyLength(body: RequestInit['body']): number | undefined
   return undefined;
 }
 
-async function proxyServiceRequest(
+function proxyServiceRequest(
   target: string,
   requestMethod: string | undefined,
   requestHeaders: Headers,
@@ -152,7 +170,7 @@ async function proxyServiceRequest(
       const responseHeaders = previewResponseHeadersFromNodeHeaders(upstreamResponse.headers);
       const responseBody = Readable.toWeb(upstreamResponse);
       const status = upstreamResponse.statusCode ?? 502;
-      const hasResponseBody = !new Set([101, 204, 205, 304]).has(status);
+      const hasResponseBody = !noBodyResponseStatuses.has(status);
       resolve(
         new Response(hasResponseBody ? responseBody : null, {
           status,
@@ -686,7 +704,7 @@ function previewUpgradeHeaders(
   const headers: Array<[string, string]> = [['host', target.host]];
   for (const [key, value] of Object.entries(request.headers)) {
     const lower = key.toLowerCase();
-    if (['authorization', 'cookie', 'host', 'content-length', 'referer', previewHostHeader].includes(lower)) continue;
+    if (skippedPreviewUpgradeRequestHeaders.has(lower)) continue;
     if (lower === 'origin' && !preserveOrigin) continue;
     if (Array.isArray(value)) for (const item of value) headers.push([key, item]);
     else if (value !== undefined) headers.push([key, value]);
@@ -865,10 +883,7 @@ function previewRequestHeaders(input: Headers, injected: Record<string, string> 
   const headers = new Headers();
   for (const [key, value] of input.entries()) {
     const lower = key.toLowerCase();
-    if (
-      ['authorization', 'cookie', 'host', 'connection', 'content-length', 'referer', previewHostHeader].includes(lower)
-    )
-      continue;
+    if (skippedPreviewProxyRequestHeaders.has(lower)) continue;
     headers.set(key, value);
   }
   const cookie = previewCookieHeader(input.get('cookie'));
