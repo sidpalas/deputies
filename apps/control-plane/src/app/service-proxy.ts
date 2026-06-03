@@ -1,8 +1,9 @@
 import net, { isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
 import tls from 'node:tls';
-import type { IncomingMessage } from 'node:http';
-import type { Duplex } from 'node:stream';
+import http, { type IncomingHttpHeaders, type IncomingMessage } from 'node:http';
+import https from 'node:https';
+import { Readable, type Duplex } from 'node:stream';
 import type { Context } from 'hono';
 import { canReadSession, canWriteSession, type RequestAuthorization } from '../auth/authorization.js';
 import {
@@ -34,6 +35,7 @@ type PreviewAuthorization = {
 };
 
 const previewBufferedBodyMaxBytes = 16 * 1024 * 1024;
+const previewHostHeader = 'x-deputies-preview-host';
 
 export async function getSessionService(
   config: AppConfig,
@@ -54,7 +56,9 @@ export async function getSessionService(
     port,
     secrets,
   });
-  return preview && (await isAllowedPreviewTarget(config, provider.name, preview.targetUrl)) ? preview : null;
+  if (!preview || !(await isAllowedPreviewTarget(config, provider.name, preview.targetUrl))) return null;
+  if (preview.secrets) await services.store.setSandboxSecrets(sandbox.id, preview.secrets);
+  return preview;
 }
 
 export async function isActiveServiceSandbox(
@@ -100,18 +104,96 @@ export async function proxyService(
   const target = previewTargetUrl(c, preview.targetUrl);
   const request = c.req.raw;
   const body = await previewRequestBody(request);
-  const response = await fetch(target, {
-    method: request.method,
-    headers: previewRequestHeaders(request.headers, preview.targetHeaders),
-    body,
-    redirect: 'manual',
-    duplex: 'half',
-  } as RequestInit & { duplex: 'half' });
-  const headers = previewResponseHeaders(response.headers);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
+  const headers = previewRequestHeaders(request.headers, preview.targetHeaders);
+  const host = previewRequestHost(config, c);
+  if (host) {
+    headers.set('x-forwarded-host', host);
+    headers.set('x-original-host', host);
+    if (preview.preserveTargetHost) headers.set(previewHostHeader, host);
+    if (!preview.preserveTargetHost) headers.set('host', stripPort(host));
+  }
+  const bodyLength = previewRequestBodyLength(body);
+  if (bodyLength !== undefined) headers.set('content-length', String(bodyLength));
+  return proxyServiceRequest(target, request.method, headers, body);
+}
+
+function previewRequestBodyLength(body: RequestInit['body']): number | undefined {
+  if (typeof body === 'string') return Buffer.byteLength(body);
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (ArrayBuffer.isView(body)) return body.byteLength;
+  return undefined;
+}
+
+async function proxyServiceRequest(
+  target: string,
+  requestMethod: string | undefined,
+  requestHeaders: Headers,
+  requestBody: RequestInit['body'],
+): Promise<Response> {
+  const targetUrl = new URL(target);
+  if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
+    throw new Error(`Unsupported preview protocol: ${targetUrl.protocol}`);
+  }
+
+  const protocolClient = targetUrl.protocol === 'https:' ? https : http;
+
+  return new Promise<Response>((resolve, reject) => {
+    const requestOptions: http.RequestOptions & https.RequestOptions = {
+      method: requestMethod,
+      protocol: targetUrl.protocol,
+      hostname: targetUrl.hostname,
+      port: Number(targetUrl.port) || (targetUrl.protocol === 'https:' ? 443 : 80),
+      path: `${targetUrl.pathname}${targetUrl.search}`,
+      headers: requestHeadersToNodeHeaders(requestHeaders),
+    };
+    if (targetUrl.protocol === 'https:') requestOptions.servername = targetUrl.hostname;
+
+    const upstream = protocolClient.request(requestOptions, (upstreamResponse) => {
+      const responseHeaders = previewResponseHeadersFromNodeHeaders(upstreamResponse.headers);
+      const responseBody = Readable.toWeb(upstreamResponse);
+      const status = upstreamResponse.statusCode ?? 502;
+      const hasResponseBody = !new Set([101, 204, 205, 304]).has(status);
+      resolve(
+        new Response(hasResponseBody ? responseBody : null, {
+          status,
+          statusText: upstreamResponse.statusMessage ?? '',
+          headers: responseHeaders,
+        }),
+      );
+    });
+
+    upstream.once('error', reject);
+
+    if (requestBody === undefined || requestBody === null) {
+      upstream.end();
+      return;
+    }
+
+    if (ArrayBuffer.isView(requestBody)) {
+      upstream.end(Buffer.from(requestBody.buffer, requestBody.byteOffset, requestBody.byteLength));
+      return;
+    }
+
+    if (requestBody instanceof ArrayBuffer) {
+      upstream.end(Buffer.from(requestBody));
+      return;
+    }
+
+    if (typeof requestBody === 'string') {
+      upstream.end(requestBody);
+      return;
+    }
+
+    if (typeof requestBody === 'object' && requestBody !== null && 'getReader' in requestBody) {
+      const upstreamBody = Readable.fromWeb(requestBody as ReadableStream<Uint8Array>);
+      upstreamBody.once('error', (error) => {
+        upstream.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
+      upstreamBody.pipe(upstream);
+      return;
+    }
+
+    upstream.end(String(requestBody));
   });
 }
 
@@ -255,7 +337,19 @@ export async function handleServiceUpgrade(
     targetUrl: previewTargetUrlFromUrl(incoming, preview.targetUrl),
     preserveOrigin: true,
   };
-  if (preview.targetHeaders) upgradeInput.targetHeaders = preview.targetHeaders;
+  const requestHost = previewNodeRequestHosts(config, request)[0];
+  if (preview.targetHeaders || requestHost) {
+    upgradeInput.targetHeaders = {
+      ...(preview.targetHeaders ?? {}),
+      ...(requestHost
+        ? {
+            'x-forwarded-host': requestHost,
+            'x-original-host': requestHost,
+            ...(preview.preserveTargetHost ? { [previewHostHeader]: requestHost } : { host: stripPort(requestHost) }),
+          }
+        : {}),
+    };
+  }
   proxyPreviewUpgrade(upgradeInput);
 }
 
@@ -592,7 +686,7 @@ function previewUpgradeHeaders(
   const headers: Array<[string, string]> = [['host', target.host]];
   for (const [key, value] of Object.entries(request.headers)) {
     const lower = key.toLowerCase();
-    if (['authorization', 'cookie', 'host', 'content-length', 'referer'].includes(lower)) continue;
+    if (['authorization', 'cookie', 'host', 'content-length', 'referer', previewHostHeader].includes(lower)) continue;
     if (lower === 'origin' && !preserveOrigin) continue;
     if (Array.isArray(value)) for (const item of value) headers.push([key, item]);
     else if (value !== undefined) headers.push([key, value]);
@@ -601,7 +695,16 @@ function previewUpgradeHeaders(
   if (cookie) headers.push(['cookie', cookie]);
   const origin = previewUpstreamOrigin(target);
   if (!preserveOrigin && origin) headers.push(['origin', origin]);
-  for (const [key, value] of Object.entries(injected)) headers.push([key, value]);
+  for (const [key, value] of Object.entries(injected)) {
+    const lower = key.toLowerCase();
+    if (lower === 'host') {
+      const hostIndex = headers.findIndex(([headerName]) => headerName.toLowerCase() === 'host');
+      if (hostIndex >= 0) headers[hostIndex] = ['host', value];
+      else headers.push(['host', value]);
+      continue;
+    }
+    headers.push([key, value]);
+  }
   return headers;
 }
 
@@ -762,7 +865,10 @@ function previewRequestHeaders(input: Headers, injected: Record<string, string> 
   const headers = new Headers();
   for (const [key, value] of input.entries()) {
     const lower = key.toLowerCase();
-    if (['authorization', 'cookie', 'host', 'connection', 'content-length', 'referer'].includes(lower)) continue;
+    if (
+      ['authorization', 'cookie', 'host', 'connection', 'content-length', 'referer', previewHostHeader].includes(lower)
+    )
+      continue;
     headers.set(key, value);
   }
   const cookie = previewCookieHeader(input.get('cookie'));
@@ -784,4 +890,27 @@ function previewResponseHeaders(input: Headers): Headers {
     if (sanitized) headers.append('set-cookie', sanitized);
   }
   return headers;
+}
+
+function requestHeadersToNodeHeaders(input: Headers): Record<string, string | string[]> {
+  const headers: Record<string, string | string[]> = {};
+  for (const [name, value] of input.entries()) {
+    headers[name] = value;
+  }
+  return headers;
+}
+
+function previewResponseHeadersFromNodeHeaders(input: IncomingHttpHeaders): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(input)) {
+    if (!value) continue;
+    if (Array.isArray(value)) {
+      for (const header of value) {
+        headers.append(name, header);
+      }
+      continue;
+    }
+    headers.append(name, value);
+  }
+  return previewResponseHeaders(headers);
 }

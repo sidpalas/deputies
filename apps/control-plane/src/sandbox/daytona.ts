@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Daytona } from '@daytona/sdk';
 import type { Sandbox as DaytonaSandbox } from '@daytona/sdk';
 import type {
@@ -16,6 +17,8 @@ import type {
   SandboxProviderCheck,
   SandboxRef,
 } from './types.js';
+
+const daytonaBridgePort = 3584;
 
 export type DaytonaClientLike = {
   create(params?: Record<string, unknown>, options?: { timeout?: number }): Promise<DaytonaSandboxLike>;
@@ -108,9 +111,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     const createOptions = this.options.createTimeoutSeconds
       ? { timeout: this.options.createTimeoutSeconds }
       : undefined;
-    const sandbox = await this.client.create(this.createParams(input), createOptions);
+    const bridgeToken = randomUUID();
+    const sandbox = await this.client.create(this.createParams(input, bridgeToken), createOptions);
     try {
-      return await this.toHandle(sandbox, input.sessionId, input.metadata ?? {});
+      return await this.toHandle(sandbox, input.sessionId, input.metadata ?? {}, { bridgeToken });
     } catch (error) {
       await sandbox.delete().catch(() => undefined);
       throw error;
@@ -119,7 +123,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   async connect(input: ConnectSandboxInput): Promise<SandboxHandle> {
     const sandbox = await this.client.get(input.providerSandboxId);
-    return this.toHandle(sandbox, input.sessionId, input.metadata ?? {});
+    return this.toHandle(sandbox, input.sessionId, input.metadata ?? {}, input.secrets);
   }
 
   async destroy(input: SandboxRef): Promise<void> {
@@ -161,8 +165,21 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   async getPreviewUrl(input: SandboxPreviewUrlInput): Promise<SandboxPreviewUrl | null> {
     const sandbox = await this.client.get(input.providerSandboxId);
-    const preview = await resolveDaytonaPreviewUrl(sandbox, input.port);
-    return preview ? { port: input.port, ...preview } : null;
+    const bridgeToken = input.secrets?.bridgeToken ?? randomUUID();
+    const workspacePath = this.options.workspacePath ?? (await sandbox.getWorkDir()) ?? '/workspace';
+    await ensureDaytonaBridge(sandbox, workspacePath, bridgeToken);
+    const preview = await resolveDaytonaPreviewUrl(sandbox, daytonaBridgePort);
+    if (!preview) return null;
+    return {
+      port: input.port,
+      targetUrl: daytonaBridgePreviewUrl(preview.targetUrl, input.port),
+      targetHeaders: {
+        ...preview.targetHeaders,
+        authorization: `Bearer ${bridgeToken}`,
+      },
+      preserveTargetHost: true,
+      secrets: { bridgeToken },
+    };
   }
 
   async refreshKeepalive(input: SandboxRef & { durationMs: number }): Promise<void> {
@@ -176,7 +193,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     await sandbox.refreshActivity?.();
   }
 
-  private createParams(input: CreateSandboxInput): Record<string, unknown> {
+  private createParams(input: CreateSandboxInput, bridgeToken: string): Record<string, unknown> {
     const labels = {
       ...this.options.labels,
       'flue-session-id': input.sessionId,
@@ -184,7 +201,13 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     const params: Record<string, unknown> = { labels };
     if (this.options.idleTimeoutMs)
       params.autoStopInterval = Math.max(1, Math.ceil(this.options.idleTimeoutMs / 60_000));
-    if (this.options.envVars) params.envVars = this.options.envVars;
+    params.envVars = {
+      ...(this.options.envVars ?? {}),
+      DEPUTIES_SANDBOX_TOKEN: bridgeToken,
+      DEPUTIES_WORKSPACE: this.options.workspacePath ?? '/workspace',
+      DEPUTIES_SANDBOX_BRIDGE_HOST: '0.0.0.0',
+      DEPUTIES_SANDBOX_BRIDGE_PORT: String(daytonaBridgePort),
+    };
     if (this.options.image) params.image = this.options.image;
     if (!this.options.image && this.options.snapshot) params.snapshot = this.options.snapshot;
     return params;
@@ -194,6 +217,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     sandbox: DaytonaSandboxLike,
     sessionId: string,
     metadata: Record<string, unknown>,
+    secrets: Record<string, string> | undefined,
   ): Promise<SandboxHandle> {
     const workspacePath = this.options.workspacePath ?? (await sandbox.getWorkDir()) ?? '/home/daytona';
     return {
@@ -207,6 +231,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         state: sandbox.state,
       },
       capabilities: this.capabilities,
+      ...(secrets?.bridgeToken ? { secrets: { bridgeToken: secrets.bridgeToken } } : {}),
       fs: createDaytonaFileSystem(sandbox),
       exec: (command) => execDaytonaCommand(sandbox, command),
     };
@@ -232,7 +257,9 @@ async function resolveDaytonaPreviewUrl(
       : sandbox.getPublicUrl
         ? await sandbox.getPublicUrl(port)
         : null;
-  if (typeof preview === 'string') return { targetUrl: preview };
+  if (typeof preview === 'string') {
+    return { targetUrl: preview, targetHeaders: { 'x-daytona-skip-preview-warning': 'true' } };
+  }
   if (preview?.url) {
     return {
       targetUrl: preview.url,
@@ -243,6 +270,37 @@ async function resolveDaytonaPreviewUrl(
     };
   }
   return null;
+}
+
+function daytonaBridgePreviewUrl(targetUrl: string, port: number): string {
+  const target = new URL(targetUrl);
+  const base = target.pathname.endsWith('/') ? target.pathname.slice(0, -1) : target.pathname;
+  target.pathname = `${base}/preview/${port}`;
+  return target.toString();
+}
+
+async function ensureDaytonaBridge(
+  sandbox: DaytonaSandboxLike,
+  workspacePath: string,
+  bridgeToken: string,
+): Promise<void> {
+  const pidFile = '/tmp/deputies-sandbox-bridge.pid';
+  const logFile = '/tmp/deputies-sandbox-bridge.log';
+  await sandbox.process.executeCommand(
+    [
+      `if [ ! -f ${quoteShell(pidFile)} ] || ! kill -0 "$(cat ${quoteShell(pidFile)})" 2>/dev/null; then`,
+      `DEPUTIES_SANDBOX_TOKEN=${quoteShell(bridgeToken)}`,
+      `DEPUTIES_WORKSPACE=${quoteShell(workspacePath)}`,
+      'DEPUTIES_SANDBOX_BRIDGE_HOST=0.0.0.0',
+      `DEPUTIES_SANDBOX_BRIDGE_PORT=${daytonaBridgePort}`,
+      'nohup node /opt/deputies/sandbox-bridge/dist/server.js',
+      `>> ${quoteShell(logFile)} 2>&1 & echo $! > ${quoteShell(pidFile)};`,
+      'fi',
+    ].join(' '),
+    undefined,
+    undefined,
+    5,
+  );
 }
 
 function createDaytonaFileSystem(sandbox: DaytonaSandboxLike): SandboxFileSystem {

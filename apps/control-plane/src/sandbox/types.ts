@@ -69,6 +69,8 @@ export type SandboxPreviewUrl = {
   port: number;
   targetUrl: string;
   targetHeaders?: Record<string, string>;
+  preserveTargetHost?: boolean;
+  secrets?: Record<string, string>;
 };
 
 export type SandboxFileSystem = {

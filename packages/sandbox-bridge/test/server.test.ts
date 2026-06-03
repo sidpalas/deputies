@@ -142,7 +142,12 @@ describe('sandbox bridge server', () => {
       response.end(
         JSON.stringify({
           url: request.url,
+          host: request.headers.host ?? null,
+          forwardedHost: request.headers['x-forwarded-host'] ?? null,
+          originalHost: request.headers['x-original-host'] ?? null,
+          deputiesPreviewHost: request.headers['x-deputies-preview-host'] ?? null,
           authorization: request.headers.authorization ?? null,
+          daytonaToken: request.headers['x-daytona-preview-token'] ?? null,
           cookie: request.headers.cookie ?? null,
         }),
       );
@@ -154,12 +159,23 @@ describe('sandbox bridge server', () => {
 
     try {
       const response = await bridgeFetch(`/preview/${address.port}/nested/path?x=1`, {
-        headers: { cookie: 'deputies_preview=platform; dev_deputies_session=session; app_session=ok' },
+        headers: {
+          cookie: 'deputies_preview=platform; dev_deputies_session=session; app_session=ok',
+          'x-daytona-preview-token': 'daytona-token',
+          'x-forwarded-host': '3584-sandbox.daytonaproxy01.net',
+          'x-original-host': '3584-sandbox.daytonaproxy01.net',
+          'x-deputies-preview-host': 's-3000-session-1.deputies.localhost',
+        },
       });
 
       await expect(response.json()).resolves.toEqual({
         url: '/nested/path?x=1',
+        host: 's-3000-session-1.deputies.localhost',
+        forwardedHost: 's-3000-session-1.deputies.localhost',
+        originalHost: 's-3000-session-1.deputies.localhost',
+        deputiesPreviewHost: null,
         authorization: null,
+        daytonaToken: null,
         cookie: 'app_session=ok',
       });
     } finally {
@@ -268,7 +284,7 @@ describe('sandbox bridge server', () => {
     }
   });
 
-  it('does not forward decoded response encoding metadata', async () => {
+  it('preserves response encoding metadata when upstream ignores identity requests', async () => {
     const body = gzipSync('compressed ok');
     const upstream = createServer((request, response) => {
       response.writeHead(200, {
@@ -289,7 +305,7 @@ describe('sandbox bridge server', () => {
         headers: { 'accept-encoding': 'gzip, br' },
       });
 
-      expect(response.headers.get('content-encoding')).toBeNull();
+      expect(response.headers.get('content-encoding')).toBe('gzip');
       expect(response.headers.get('content-length')).toBeNull();
       expect(response.headers.get('x-accept-encoding')).toBe('identity');
       await expect(response.text()).resolves.toBe('compressed ok');
@@ -333,6 +349,7 @@ describe('sandbox bridge server', () => {
         'HTTP/1.1 101 Switching Protocols\r\n' +
           'Connection: Upgrade\r\n' +
           'Upgrade: websocket\r\n' +
+          `X-Upstream-Host: ${request.headers.host}\r\n` +
           `X-Upstream-Origin: ${request.headers.origin}\r\n` +
           `X-Upstream-Forwarded-Host: ${request.headers['x-forwarded-host']}\r\n` +
           '\r\n',
@@ -348,9 +365,24 @@ describe('sandbox bridge server', () => {
       await expect(
         rawUpgrade(`/preview/${address.port}/stable-abc?reconnection=false`, {
           origin: 'https://s-8080-session-1.deputies.localhost',
-          forwardedHost: 's-8080-session-1.deputies.localhost',
+          forwardedHost: '3584-sandbox.daytonaproxy01.net',
+          deputiesPreviewHost: 's-8080-session-1.deputies.localhost',
         }),
       ).resolves.toContain('X-Upstream-Origin: https://s-8080-session-1.deputies.localhost');
+      await expect(
+        rawUpgrade(`/preview/${address.port}/stable-abc?reconnection=false`, {
+          origin: 'https://s-8080-session-1.deputies.localhost',
+          forwardedHost: '3584-sandbox.daytonaproxy01.net',
+          deputiesPreviewHost: 's-8080-session-1.deputies.localhost',
+        }),
+      ).resolves.toContain('X-Upstream-Host: s-8080-session-1.deputies.localhost');
+      await expect(
+        rawUpgrade(`/preview/${address.port}/stable-abc?reconnection=false`, {
+          origin: 'https://s-8080-session-1.deputies.localhost',
+          forwardedHost: '3584-sandbox.daytonaproxy01.net',
+          deputiesPreviewHost: 's-8080-session-1.deputies.localhost',
+        }),
+      ).resolves.toContain('X-Upstream-Forwarded-Host: s-8080-session-1.deputies.localhost');
     } finally {
       await new Promise<void>((resolve, reject) => {
         upstream.close((error) => (error ? reject(error) : resolve()));
@@ -368,7 +400,10 @@ describe('sandbox bridge server', () => {
     });
   }
 
-  function rawUpgrade(path: string, headers: { origin?: string; forwardedHost?: string } = {}): Promise<string> {
+  function rawUpgrade(
+    path: string,
+    headers: { origin?: string; forwardedHost?: string; deputiesPreviewHost?: string } = {},
+  ): Promise<string> {
     const url = new URL(baseUrl);
     return new Promise((resolve, reject) => {
       const socket = net.connect({ host: url.hostname, port: Number(url.port) });
@@ -385,6 +420,8 @@ describe('sandbox bridge server', () => {
             'Sec-WebSocket-Version: 13\r\n' +
             (headers.origin ? `Origin: ${headers.origin}\r\n` : '') +
             (headers.forwardedHost ? `X-Forwarded-Host: ${headers.forwardedHost}\r\n` : '') +
+            (headers.forwardedHost ? `X-Original-Host: ${headers.forwardedHost}\r\n` : '') +
+            (headers.deputiesPreviewHost ? `X-Deputies-Preview-Host: ${headers.deputiesPreviewHost}\r\n` : '') +
             '\r\n',
         );
       });

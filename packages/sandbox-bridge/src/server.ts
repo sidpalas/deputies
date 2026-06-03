@@ -2,7 +2,13 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import http, {
+  createServer,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
 import { dirname, isAbsolute, resolve, sep } from 'node:path';
@@ -11,6 +17,7 @@ const defaultPort = 3584;
 const defaultMaxBodyBytes = 16 * 1024 * 1024;
 const defaultMaxOutputBytes = 1024 * 1024;
 const previewBufferedBodyMaxBytes = 16 * 1024 * 1024;
+const previewHostHeader = 'x-deputies-preview-host';
 const skippedPreviewRequestHeaders = new Set([
   'accept-encoding',
   'authorization',
@@ -18,14 +25,20 @@ const skippedPreviewRequestHeaders = new Set([
   'content-length',
   'cookie',
   'host',
+  previewHostHeader,
+  'x-daytona-preview-token',
+  'x-daytona-skip-preview-warning',
 ]);
-const skippedPreviewResponseHeaders = new Set([
-  'connection',
-  'content-encoding',
+const skippedPreviewResponseHeaders = new Set(['connection', 'content-length', 'transfer-encoding']);
+const skippedPreviewUpgradeHeaders = new Set([
+  'authorization',
   'content-length',
-  'transfer-encoding',
+  'cookie',
+  'host',
+  previewHostHeader,
+  'x-daytona-preview-token',
+  'x-daytona-skip-preview-warning',
 ]);
-const skippedPreviewUpgradeHeaders = new Set(['authorization', 'content-length', 'cookie', 'host']);
 const skippedPreviewCookieNames = new Set(['deputies_preview', 'dev_deputies_session']);
 
 export type SandboxBridgeOptions = {
@@ -199,13 +212,19 @@ function proxyPreviewUpgrade(request: IncomingMessage, socket: Duplex, head: Buf
 }
 
 function upgradeRequestHead(request: IncomingMessage, target: URL): string {
-  const headers: Array<[string, string]> = [['host', target.host]];
+  const forwardedHost = previewForwardedHost(request.headers);
+  const headers: Array<[string, string]> = [['host', forwardedHost ?? target.host]];
   let hasOrigin = false;
   for (const [key, value] of Object.entries(request.headers)) {
     const lower = key.toLowerCase();
     if (skippedPreviewUpgradeHeaders.has(lower)) continue;
     if (lower === 'origin') hasOrigin = true;
+    if (forwardedHost && (lower === 'x-forwarded-host' || lower === 'x-original-host')) continue;
     appendHeaderValues(headers, key, value);
+  }
+  if (forwardedHost) {
+    headers.push(['x-forwarded-host', forwardedHost]);
+    headers.push(['x-original-host', forwardedHost]);
   }
   const cookie = previewCookieHeader(headerValue(request.headers.cookie));
   if (cookie) headers.push(['cookie', cookie]);
@@ -232,29 +251,9 @@ async function proxyPreviewRequest(
   target.search = requestUrl.search;
   const headers = previewHeaders(request.headers);
   const body = await previewRequestBody(request, maxBodyBytes);
-  const upstream = await fetch(target, {
-    method: request.method,
-    headers,
-    body,
-    redirect: 'manual',
-    duplex: 'half',
-  } as RequestInit & { duplex: 'half' });
-  response.writeHead(upstream.status, Object.fromEntries(previewResponseHeaders(upstream.headers).entries()));
-  if (!upstream.body) {
-    response.end();
-    return;
-  }
-  const reader = upstream.body.getReader();
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      response.write(Buffer.from(value));
-    }
-    response.end();
-  } finally {
-    reader.releaseLock();
-  }
+  const bodyLength = previewRequestBodyLength(body) ?? headerValue(request.headers['content-length']);
+  if (bodyLength !== undefined) headers['content-length'] = String(bodyLength);
+  await proxyPreviewHttpRequest(target, request.method, headers, body, response);
 }
 
 async function previewRequestBody(
@@ -269,25 +268,91 @@ async function previewRequestBody(
   return request;
 }
 
-function previewHeaders(input: IncomingMessage['headers']): Headers {
-  const headers = new Headers();
+function previewRequestBodyLength(body: Buffer | IncomingMessage | undefined): number | undefined {
+  return Buffer.isBuffer(body) ? body.byteLength : undefined;
+}
+
+function previewHeaders(input: IncomingMessage['headers']): Record<string, string | string[]> {
+  const headers: Record<string, string | string[]> = {};
   for (const [key, value] of Object.entries(input)) {
     const lower = key.toLowerCase();
     if (skippedPreviewRequestHeaders.has(lower)) continue;
-    if (Array.isArray(value)) for (const item of value) headers.append(key, item);
-    else if (value !== undefined) headers.set(key, value);
+    if (Array.isArray(value)) headers[key] = value;
+    else if (value !== undefined) headers[key] = value;
+  }
+  const forwardedHost = previewForwardedHost(input);
+  if (forwardedHost) {
+    headers.host = forwardedHost;
+    headers['x-forwarded-host'] = forwardedHost;
+    headers['x-original-host'] = forwardedHost;
   }
   const cookie = previewCookieHeader(headerValue(input.cookie));
-  if (cookie) headers.set('cookie', cookie);
-  headers.set('accept-encoding', 'identity');
+  if (cookie) headers.cookie = cookie;
+  headers['accept-encoding'] = 'identity';
   return headers;
 }
 
-function previewResponseHeaders(input: Headers): Headers {
-  const headers = new Headers();
-  for (const [key, value] of input.entries()) {
-    if (skippedPreviewResponseHeaders.has(key.toLowerCase())) continue;
-    headers.set(key, value);
+function previewForwardedHost(input: IncomingMessage['headers']): string | undefined {
+  return (
+    lastForwardedValue(input[previewHostHeader]) ??
+    lastForwardedValue(input['x-forwarded-host']) ??
+    lastForwardedValue(input['x-original-host'])
+  );
+}
+
+function lastForwardedValue(value: string | string[] | undefined): string | undefined {
+  const header = headerValue(value);
+  return header
+    ?.split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .at(-1);
+}
+
+function proxyPreviewHttpRequest(
+  target: URL,
+  method: string | undefined,
+  headers: Record<string, string | string[]>,
+  body: Buffer | IncomingMessage | undefined,
+  response: ServerResponse,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const upstream = http.request(
+      {
+        method,
+        hostname: target.hostname,
+        port: Number(target.port),
+        path: `${target.pathname}${target.search}`,
+        headers,
+      },
+      (upstreamResponse) => {
+        response.writeHead(
+          upstreamResponse.statusCode ?? 502,
+          previewResponseHeadersFromNodeHeaders(upstreamResponse.headers),
+        );
+        upstreamResponse.pipe(response);
+        upstreamResponse.once('end', resolve);
+        upstreamResponse.once('error', reject);
+      },
+    );
+    upstream.once('error', reject);
+    if (!body) {
+      upstream.end();
+      return;
+    }
+    if (Buffer.isBuffer(body)) {
+      upstream.end(body);
+      return;
+    }
+    body.pipe(upstream);
+  });
+}
+
+function previewResponseHeadersFromNodeHeaders(input: IncomingHttpHeaders): Record<string, string | string[]> {
+  const headers: Record<string, string | string[]> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (!value || skippedPreviewResponseHeaders.has(key.toLowerCase())) continue;
+    headers[key] = value;
   }
   return headers;
 }
