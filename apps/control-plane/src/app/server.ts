@@ -373,10 +373,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       const serviceAuthorized = c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
       if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Preview access is required');
     }
-    return appendPreviewCookie(
-      await proxyService(c, config, serviceHost.sessionId, serviceHost.port, service),
-      authorization?.cookie,
-    );
+    return appendPreviewCookie(await proxyService(c, config, service), authorization?.cookie);
   });
 
   app.post('/sessions', async (c) => {

@@ -79,17 +79,6 @@ export async function getSessionService(
   return preview;
 }
 
-export async function isActiveServiceSandbox(
-  services: ServiceProxyServices,
-  sessionId: string,
-  providerSandboxId: string,
-): Promise<boolean> {
-  const provider = services.sandboxProvider;
-  if (!provider) return false;
-  const sandbox = await services.store.getActiveSandbox(sessionId, provider.name);
-  return sandbox?.providerSandboxId === providerSandboxId;
-}
-
 export function serializeService(
   c: Context,
   config: AppConfig,
@@ -112,24 +101,11 @@ export function serializeService(
   };
 }
 
-export async function proxyService(
-  c: Context,
-  config: AppConfig,
-  sessionId: string,
-  port: number,
-  preview: SandboxPreviewUrl,
-): Promise<Response> {
+export async function proxyService(c: Context, config: AppConfig, preview: SandboxPreviewUrl): Promise<Response> {
   const target = previewTargetUrl(c, preview.targetUrl);
   const request = c.req.raw;
   const body = await previewRequestBody(request);
-  const headers = previewRequestHeaders(request.headers, preview.targetHeaders);
-  const host = previewRequestHost(config, c);
-  if (host) {
-    headers.set('x-forwarded-host', host);
-    headers.set('x-original-host', host);
-    if (preview.preserveTargetHost) headers.set(previewHostHeader, host);
-    if (!preview.preserveTargetHost) headers.set('host', stripPort(host));
-  }
+  const headers = previewRequestHeaders(request.headers, previewTargetHeaders(preview, previewRequestHost(config, c)));
   const bodyLength = previewRequestBodyLength(body);
   if (bodyLength !== undefined) headers.set('content-length', String(bodyLength));
   return proxyServiceRequest(target, request.method, headers, body);
@@ -231,14 +207,6 @@ export function appendPreviewCookie(response: Response, cookie: string | undefin
 
 export function parseServiceHostFromRequest(config: AppConfig, c: Context): { sessionId: string; port: number } | null {
   return parsePreviewHostFromHosts(previewRequestHosts(config, c), previewAllowedDomains(config, c));
-}
-
-export async function isAuthorizedRequest(config: AppConfig, store: AppStore, c: Context): Promise<boolean> {
-  if (config.apiAuthMode === 'none') return true;
-  if (config.apiAuthMode === 'bearer')
-    return c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
-  const authorization = await authorizePreviewRequest(config, store, c);
-  return Boolean(authorization);
 }
 
 export async function authorizePreviewRequest(
@@ -355,20 +323,19 @@ export async function handleServiceUpgrade(
     targetUrl: previewTargetUrlFromUrl(incoming, preview.targetUrl),
     preserveOrigin: true,
   };
-  const requestHost = previewNodeRequestHosts(config, request)[0];
-  if (preview.targetHeaders || requestHost) {
-    upgradeInput.targetHeaders = {
-      ...(preview.targetHeaders ?? {}),
-      ...(requestHost
-        ? {
-            'x-forwarded-host': requestHost,
-            'x-original-host': requestHost,
-            ...(preview.preserveTargetHost ? { [previewHostHeader]: requestHost } : { host: stripPort(requestHost) }),
-          }
-        : {}),
-    };
-  }
+  const targetHeaders = previewTargetHeaders(preview, previewNodeRequestHosts(config, request)[0]);
+  if (Object.keys(targetHeaders).length) upgradeInput.targetHeaders = targetHeaders;
   proxyPreviewUpgrade(upgradeInput);
+}
+
+function previewTargetHeaders(preview: SandboxPreviewUrl, host: string | undefined): Record<string, string> {
+  const headers = { ...(preview.targetHeaders ?? {}) };
+  if (!host) return headers;
+  headers['x-forwarded-host'] = host;
+  headers['x-original-host'] = host;
+  if (preview.preserveTargetHost) headers[previewHostHeader] = host;
+  else headers.host = stripPort(host);
+  return headers;
 }
 
 function rejectUpgrade(socket: Duplex, status: number, message: string): void {
