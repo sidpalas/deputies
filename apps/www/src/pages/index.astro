@@ -73,11 +73,33 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 
   <section class="demo-section" aria-labelledby="demo-title">
     <div class="section-heading">
-      <p class="eyebrow">Demo</p>
-      <h2 id="demo-title">See what a Deputies session looks like.</h2>
+      <p class="eyebrow">Try Deputies</p>
+      <h2 id="demo-title">Explore Deputies live or browse a read-only session.</h2>
       <p>
-        Browse a read-only snapshot of real agent work: the original request, progress updates, diagnostics, artifacts,
-        callbacks, and session context that Deputies keeps together while a background agent runs.
+        Log into the public demo to create real sessions, or use the embedded snapshot below to see the interface
+        without signing in.
+      </p>
+    </div>
+    <aside class="live-demo-callout" aria-labelledby="live-demo-title">
+      <div>
+        <p class="eyebrow">Live public demo</p>
+        <h3 id="live-demo-title">Try Deputies with your GitHub account.</h3>
+        <p>
+          <a href="https://demo.deputies.dev" target="_blank" rel="noopener noreferrer">demo.deputies.dev</a> is a
+          live public Deputies instance that any GitHub user can log into. Treat all activity there as public: other
+          users will be able to see the sessions you create, including prompts, progress, diagnostics, and outputs.
+        </p>
+      </div>
+      <a class="button primary" href="https://demo.deputies.dev" target="_blank" rel="noopener noreferrer">
+        Open live demo
+      </a>
+    </aside>
+    <div class="static-demo-heading">
+      <p class="eyebrow">Read-only snapshot</p>
+      <h3>Preview example sessions without logging in.</h3>
+      <p>
+        This embedded static demo is a read-only snapshot of prior agent work. It is separate from the live public demo
+        above.
       </p>
     </div>
     <div class="static-demo-breakout">

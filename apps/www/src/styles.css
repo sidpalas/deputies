@@ -355,6 +355,53 @@ h1 {
   transform: none;
 }
 
+.live-demo-callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid oklch(0.623 0.214 259.815 / 28%);
+  border-radius: 0.75rem;
+  background: linear-gradient(135deg, oklch(0.623 0.214 259.815 / 10%), oklch(1 0 0 / 88%)), var(--card);
+  padding: 1rem;
+  box-shadow: 0 18px 45px oklch(0.208 0.042 265.755 / 8%);
+}
+
+.live-demo-callout h3 {
+  margin: 0.15rem 0 0;
+  font-size: clamp(1.15rem, 2vw, 1.35rem);
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+}
+
+.live-demo-callout p:not(.eyebrow) {
+  margin: 0.55rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.95rem;
+}
+
+.live-demo-callout .button {
+  flex: 0 0 auto;
+}
+
+.static-demo-heading {
+  max-width: 44rem;
+  margin-top: 0.5rem;
+}
+
+.static-demo-heading h3 {
+  margin: 0.15rem 0 0;
+  font-size: clamp(1.15rem, 2vw, 1.35rem);
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+}
+
+.static-demo-heading p:not(.eyebrow) {
+  margin: 0.55rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.95rem;
+}
+
 .static-demo-breakout {
   width: min(96vw, 92rem);
   margin-left: calc(50% - min(48vw, 46rem));
@@ -1111,6 +1158,11 @@ h1 {
 }
 
 @media (max-width: 680px) {
+  .live-demo-callout {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .architecture-grid {
     grid-template-columns: 1fr;
     justify-items: center;
