@@ -31,7 +31,8 @@ FROM node:24-alpine AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
-RUN apk add --no-cache docker-cli github-cli
+RUN apk add --no-cache docker-cli github-cli \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=prod-deps --chown=node:node /app/apps/control-plane/node_modules ./apps/control-plane/node_modules

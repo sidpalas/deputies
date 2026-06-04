@@ -16,7 +16,7 @@ ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN pnpm --dir apps/web build
 
-FROM caddy:2.11-alpine AS runtime
+FROM caddy:2.11.4-alpine AS runtime
 
 ENV PORT=5173
 ENV API_UPSTREAM=http://control-plane:3583
