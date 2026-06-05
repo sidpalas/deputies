@@ -1,0 +1,60 @@
+[tools]
+"github:diggerhq/opencomputer" = "0.6.0.5"
+
+[tasks."snapshot:create"]
+description = "Create the default bridge OpenComputer sandbox snapshot"
+run = "pnpm snapshot:create"
+
+[tasks."snapshot:create:full"]
+description = "Create the full OpenComputer sandbox snapshot with Playwright and code-server"
+run = "pnpm snapshot:create:full"
+
+[tasks."snapshot:create:slim"]
+description = "Create the slim OpenComputer sandbox snapshot without Playwright or code-server"
+run = "pnpm snapshot:create:slim"
+
+[tasks."snapshot:create:bridge"]
+description = "Create an OpenComputer snapshot that only adds the Deputies sandbox bridge"
+run = "pnpm snapshot:create:bridge"
+
+[tasks."snapshot:create:minimal"]
+description = "Create a minimal OpenComputer snapshot with zero image steps for provider validation"
+run = "pnpm snapshot:create:minimal"
+
+[tasks.uat]
+description = "Run the live OpenComputer sandbox provider UAT"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${OPENCOMPUTER_API_KEY:?OPENCOMPUTER_API_KEY is required}"
+: "${OPENCOMPUTER_SNAPSHOT:?OPENCOMPUTER_SNAPSHOT is required}"
+
+RUN_REAL_OPENCOMPUTER_SANDBOX_UAT=true \
+  pnpm --dir ../../../apps/control-plane exec vitest run \
+    --config vitest.uat.config.ts \
+    test/uat/real-opencomputer-provider.test.ts
+'''
+
+[tasks."sandbox:kill"]
+description = "Kill one or more OpenComputer sandboxes by sandbox ID"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${OPENCOMPUTER_API_KEY:-}" == op://* ]]; then
+  printf '%s\n' 'OPENCOMPUTER_API_KEY is a 1Password reference. Run this command through `op run --env-file .env.local -- ...` so the reference is resolved before calling OpenComputer.' >&2
+  exit 1
+fi
+
+if [[ "$#" -eq 0 ]]; then
+  oc sandbox kill --help
+  exit 2
+fi
+
+status=0
+for sandbox_id in "$@"; do
+  oc sandbox kill "$sandbox_id" || status=$?
+done
+exit "$status"
+"""

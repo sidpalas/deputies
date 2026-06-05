@@ -10,6 +10,7 @@ export type SandboxProviderKind =
   | 'unsafe-local'
   | 'docker'
   | 'daytona'
+  | 'opencomputer'
   | 'tensorlake'
   | 'superserve'
   | 'lambda-microvm'
@@ -134,6 +135,13 @@ export type AppConfig = {
   daytonaSandboxGpu?: number;
   daytonaSandboxMemoryGiB?: number;
   daytonaSandboxDiskGiB?: number;
+  opencomputerApiKey?: string;
+  opencomputerApiUrl?: string;
+  opencomputerSnapshot?: string;
+  opencomputerSecretStore?: string;
+  opencomputerCpuCount?: number;
+  opencomputerMemoryMb?: number;
+  opencomputerDiskMb?: number;
   tensorlakeApiKey?: string;
   tensorlakeRegisteredImage?: string;
   tensorlakeSandboxCpu?: number;
@@ -242,7 +250,17 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'unsafe-local', 'docker', 'daytona', 'tensorlake', 'superserve', 'lambda-microvm', 'k8s-agent-sandbox'],
+      [
+        'fake',
+        'unsafe-local',
+        'docker',
+        'daytona',
+        'opencomputer',
+        'tensorlake',
+        'superserve',
+        'lambda-microvm',
+        'k8s-agent-sandbox',
+      ],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
@@ -393,6 +411,16 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     config.daytonaSandboxMemoryGiB = parsePositiveNumber(env.DAYTONA_SANDBOX_MEMORY_GIB, 'DAYTONA_SANDBOX_MEMORY_GIB');
   if (env.DAYTONA_SANDBOX_DISK_GIB)
     config.daytonaSandboxDiskGiB = parsePositiveNumber(env.DAYTONA_SANDBOX_DISK_GIB, 'DAYTONA_SANDBOX_DISK_GIB');
+  if (env.OPENCOMPUTER_API_KEY) config.opencomputerApiKey = env.OPENCOMPUTER_API_KEY;
+  if (env.OPENCOMPUTER_API_URL) config.opencomputerApiUrl = env.OPENCOMPUTER_API_URL;
+  if (env.OPENCOMPUTER_SNAPSHOT) config.opencomputerSnapshot = env.OPENCOMPUTER_SNAPSHOT;
+  if (env.OPENCOMPUTER_SECRET_STORE) config.opencomputerSecretStore = env.OPENCOMPUTER_SECRET_STORE;
+  if (env.OPENCOMPUTER_CPU_COUNT)
+    config.opencomputerCpuCount = parsePositiveInteger(env.OPENCOMPUTER_CPU_COUNT, 1, 'OPENCOMPUTER_CPU_COUNT');
+  if (env.OPENCOMPUTER_MEMORY_MB)
+    config.opencomputerMemoryMb = parsePositiveInteger(env.OPENCOMPUTER_MEMORY_MB, 1024, 'OPENCOMPUTER_MEMORY_MB');
+  if (env.OPENCOMPUTER_DISK_MB)
+    config.opencomputerDiskMb = parsePositiveInteger(env.OPENCOMPUTER_DISK_MB, 10240, 'OPENCOMPUTER_DISK_MB');
   if (env.TENSORLAKE_API_KEY) config.tensorlakeApiKey = env.TENSORLAKE_API_KEY;
   if (env.TENSORLAKE_REGISTERED_IMAGE) config.tensorlakeRegisteredImage = env.TENSORLAKE_REGISTERED_IMAGE;
   if (env.TENSORLAKE_SANDBOX_CPU)
@@ -499,6 +527,7 @@ function validateLambdaMicrovmConfig(config: AppConfig): void {
 function validateSandboxSecretConfig(config: AppConfig, env: NodeJS.ProcessEnv): void {
   const sandboxSecretsRequired =
     config.sandboxProvider === 'docker' ||
+    config.sandboxProvider === 'opencomputer' ||
     config.sandboxProvider === 'k8s-agent-sandbox' ||
     config.sandboxProvider === 'lambda-microvm';
   if (config.appDataStore === 'postgres' && sandboxSecretsRequired && !config.sandboxSecretEncryptionKey) {
@@ -610,6 +639,16 @@ export function requireDaytonaApiKey(config: AppConfig): string {
   }
 
   return config.daytonaApiKey;
+}
+
+export function requireOpenComputerApiKey(config: AppConfig): string {
+  if (!config.opencomputerApiKey) {
+    throw new Error('OPENCOMPUTER_API_KEY is required when SANDBOX_PROVIDER=opencomputer');
+  }
+  if (!config.opencomputerSnapshot) {
+    throw new Error('OPENCOMPUTER_SNAPSHOT is required when SANDBOX_PROVIDER=opencomputer');
+  }
+  return config.opencomputerApiKey;
 }
 
 export function requireTensorlakeApiKey(config: AppConfig): string {

@@ -14,6 +14,7 @@ import {
   requireDockerOrchestratorUrl,
   requireGitHubAppCredentials,
   requireLambdaMicrovmImageIdentifier,
+  requireOpenComputerApiKey,
   requireRunnerModelDefault,
   requireSuperserveApiKey,
   requireSuperserveTemplate,
@@ -49,6 +50,7 @@ import {
 } from './sandbox/k8s-agent-sandbox.js';
 import { LambdaMicrovmSandboxProvider } from './sandbox/lambda-microvm.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
+import { OpenComputerSandboxProvider } from './sandbox/opencomputer.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
 import { TensorlakeSandboxProvider } from './sandbox/tensorlake.js';
 import { SuperserveSandboxProvider } from './sandbox/superserve.js';
@@ -302,6 +304,21 @@ function createSandboxProvider(): SandboxProvider {
     if (config.tensorlakeAllowInternetAccess !== undefined)
       Object.assign(options, { allowInternetAccess: config.tensorlakeAllowInternetAccess });
     return new TensorlakeSandboxProvider(options);
+  }
+  if (config.sandboxProvider === 'opencomputer') {
+    const options = {
+      apiKey: requireOpenComputerApiKey(config),
+      workspacePath: config.sandboxWorkspacePath,
+      idleTimeoutMs: config.sandboxIdleTimeoutMs,
+      bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
+    };
+    if (config.opencomputerApiUrl) Object.assign(options, { apiUrl: config.opencomputerApiUrl });
+    if (config.opencomputerSnapshot) Object.assign(options, { snapshot: config.opencomputerSnapshot });
+    if (config.opencomputerSecretStore) Object.assign(options, { secretStore: config.opencomputerSecretStore });
+    if (config.opencomputerCpuCount !== undefined) Object.assign(options, { cpuCount: config.opencomputerCpuCount });
+    if (config.opencomputerMemoryMb !== undefined) Object.assign(options, { memoryMB: config.opencomputerMemoryMb });
+    if (config.opencomputerDiskMb !== undefined) Object.assign(options, { diskMB: config.opencomputerDiskMb });
+    return new OpenComputerSandboxProvider(options);
   }
   if (config.sandboxProvider === 'superserve') {
     const options = {

@@ -73,6 +73,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
+      '@opencomputer/sdk':
+        specifier: 0.11.2
+        version: 0.11.2
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.1
@@ -216,6 +219,22 @@ importers:
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
+
+  deploy/sandboxes/opencomputer:
+    dependencies:
+      '@opencomputer/sdk':
+        specifier: 0.11.2
+        version: 0.11.2
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.10
+        version: 22.19.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
 
   packages/browser-milestones: {}
 
@@ -1328,6 +1347,10 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@opencomputer/sdk@0.11.2':
+    resolution: {integrity: sha512-2CiSdt1wOYOoxnnD+SIVatLSvjJRIgWPtm1jsOEiqo41lGDAK2UfI1JAeTHOwNO4abBaXpsNx/HxvcSns/yu4A==}
+    engines: {node: '>=18'}
 
   '@opentelemetry/api-logs@0.217.0':
     resolution: {integrity: sha512-Cdq0jW2lknrNfrAm92MyEAvpe2cRsKjdnQLHUL6xRA4IVUnsWx6P65E7NcUO0Y+L4w1Aee5iV8FvjSwd+lrs9A==}
@@ -6818,6 +6841,8 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
+
+  '@opencomputer/sdk@0.11.2': {}
 
   '@opentelemetry/api-logs@0.217.0':
     dependencies:
