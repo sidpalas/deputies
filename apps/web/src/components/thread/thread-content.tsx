@@ -278,9 +278,9 @@ function StreamingProgressText(props: { text: string }) {
   const text = truncateStreamingProgressText(props.text);
   return (
     <div
-      className="max-h-[60vh] min-w-0 overflow-auto rounded-md border border-border/70 bg-muted/20 p-3"
+      className="min-w-0 rounded-md border border-border/70 bg-muted/20 p-3"
       role="region"
-      aria-label="Scrollable deputy progress"
+      aria-label="Deputy progress"
     >
       <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{text}</p>
     </div>
@@ -399,11 +399,7 @@ function MarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
 
 function JsonPayload(props: { value: unknown }) {
   return (
-    <DiagnosticCode
-      code={JSON.stringify(props.value, null, 2)}
-      language="json"
-      label="Scrollable diagnostic debug details"
-    />
+    <DiagnosticCode code={JSON.stringify(props.value, null, 2)} language="json" label="Diagnostic debug details" />
   );
 }
 
@@ -518,14 +514,12 @@ function DiagnosticActivityCard(props: { activity: DiagnosticActivity }) {
         </div>
         <Badge className={diagnosticStatusClass(activity.status)}>{diagnosticStatusLabel(activity.status)}</Badge>
       </div>
-      {activity.command ? (
-        <DiagnosticCode code={activity.command} language="bash" label="Scrollable diagnostic command" />
-      ) : null}
+      {activity.command ? <DiagnosticCode code={activity.command} language="bash" label="Diagnostic command" /> : null}
       {activity.detail ? <DiagnosticText text={activity.detail} /> : null}
       {activity.error ? <DiagnosticText text={activity.error} tone="error" /> : null}
       <details className="mt-2 min-w-0">
         <summary className="cursor-pointer text-xs text-muted-foreground">Debug details</summary>
-        <div className="mt-2 grid max-h-64 min-w-0 gap-2 overflow-auto text-xs [&_figure]:my-0 [&_figure]:shadow-none [&_.highlighted-code]:text-xs">
+        <div className="mt-2 grid min-w-0 gap-2 text-xs [&_figure]:my-0 [&_figure]:shadow-none [&_.highlighted-code]:text-xs">
           {activity.rawEvents.map((event) => (
             <div className="min-w-0 rounded border border-border p-2" key={`${event.sessionId}-${event.sequence}`}>
               <span className="text-muted-foreground">
@@ -565,10 +559,10 @@ function DiagnosticText(props: { text: string; tone?: 'error' }) {
   return (
     <div
       className={cn(
-        'mt-2 max-h-56 min-w-0 overflow-auto rounded-md border p-2',
+        'mt-2 min-w-0 rounded-md border p-2',
         props.tone === 'error' ? 'border-destructive/40 bg-destructive/10' : 'border-border bg-muted/30',
       )}
-      aria-label={props.tone === 'error' ? 'Scrollable diagnostic error' : 'Scrollable diagnostic output'}
+      aria-label={props.tone === 'error' ? 'Diagnostic error' : 'Diagnostic output'}
       role="region"
     >
       <p className={textClassName}>{text}</p>
@@ -578,11 +572,7 @@ function DiagnosticText(props: { text: string; tone?: 'error' }) {
 
 function DiagnosticCode(props: { code: string; language: string; label: string }) {
   return (
-    <div
-      className="mt-2 max-h-56 min-w-0 overflow-auto rounded-md border border-border bg-muted/30"
-      aria-label={props.label}
-      role="region"
-    >
+    <div className="mt-2 min-w-0 rounded-md border border-border bg-muted/30" aria-label={props.label} role="region">
       <HighlightedCode code={truncateDiagnosticText(props.code)} language={props.language} wrap chrome={false} />
     </div>
   );
@@ -870,7 +860,6 @@ export function DesktopContextPanel(props: {
     <aside
       aria-label="Desktop context"
       className="hidden min-h-0 overflow-auto border-l border-border bg-card/50 p-4 xl:block"
-      data-thread-scroll-exclude="true"
     >
       <h2 className="text-sm font-semibold">Context</h2>
       <ContextPanelContent {...props} />
@@ -1205,7 +1194,7 @@ function ArtifactPreviewCard(props: ArtifactPreviewCardProps) {
             <div>Created: {formatDate(artifact.createdAt)}</div>
             <div className="truncate">ID: {artifact.id}</div>
           </dl>
-          <div className="mt-2 max-h-44 min-w-0 overflow-auto text-xs [&_figure]:my-2 [&_figure]:shadow-none [&_.highlighted-code]:text-xs">
+          <div className="mt-2 min-w-0 text-xs [&_figure]:my-2 [&_figure]:shadow-none [&_.highlighted-code]:text-xs">
             <JsonPayload value={artifact.payload} />
           </div>
         </div>
@@ -1294,7 +1283,7 @@ function TextArtifactPreview(props: TextArtifactPreviewProps) {
   return (
     <details className="mt-3 min-w-0" onToggle={handleToggle}>
       <summary className="cursor-pointer text-sm font-medium text-primary">Preview {name}</summary>
-      <div className="mt-2 max-h-80 min-w-0 overflow-auto rounded-md border border-border bg-muted/30 p-2 text-xs">
+      <div className="mt-2 min-w-0 rounded-md border border-border bg-muted/30 p-2 text-xs">
         {loading ? <p className="text-muted-foreground">Loading preview...</p> : null}
         {error ? <p className="text-destructive">{error}</p> : null}
         {preview ? (

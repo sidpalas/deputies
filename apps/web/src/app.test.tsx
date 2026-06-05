@@ -954,7 +954,7 @@ it('renders active deputy progress without markdown code chrome', async () => {
   render(<App />);
 
   expect(await screen.findByText('Deputy progress')).toBeInTheDocument();
-  expect(screen.getByLabelText('Scrollable deputy progress')).toHaveTextContent('const mobile = true;');
+  expect(screen.getByLabelText('Deputy progress')).toHaveTextContent('const mobile = true;');
   expect(screen.queryByRole('button', { name: 'Copy code' })).not.toBeInTheDocument();
   expect(codeToHtmlMock).not.toHaveBeenCalled();
 });
@@ -998,9 +998,9 @@ it('keeps large live deputy progress bounded while streaming', async () => {
   });
 
   await waitFor(() => {
-    expect(screen.getByLabelText('Scrollable deputy progress')).toHaveTextContent('earlier characters hidden');
+    expect(screen.getByLabelText('Deputy progress')).toHaveTextContent('earlier characters hidden');
   });
-  expect(screen.getByLabelText('Scrollable deputy progress').textContent?.length).toBeLessThan(25_000);
+  expect(screen.getByLabelText('Deputy progress').textContent?.length).toBeLessThan(25_000);
 });
 
 it('batches active deputy progress deltas and applies them in sequence order', async () => {
@@ -1047,9 +1047,9 @@ it('batches active deputy progress deltas and applies them in sequence order', a
   });
 
   await waitFor(() => {
-    expect(screen.getByLabelText('Scrollable deputy progress')).toHaveTextContent('hello world');
+    expect(screen.getByLabelText('Deputy progress')).toHaveTextContent('hello world');
   });
-  expect(screen.getByLabelText('Scrollable deputy progress')).not.toHaveTextContent('worldhello');
+  expect(screen.getByLabelText('Deputy progress')).not.toHaveTextContent('worldhello');
 });
 
 it('retries a failed message from its message card', async () => {
@@ -1543,127 +1543,46 @@ it('pauses autoscroll while the message composer has focus', async () => {
   await waitFor(() => expect(screen.queryByRole('button', { name: /Jump to latest/ })).not.toBeInTheDocument());
 });
 
-it('scrolls session messages when wheeling outside nested scroll areas', async () => {
+it('uses the session message log as the only vertical thread scroller', async () => {
   mockApi({
     messages: [
       messageFixture({
         id: '00000000-0000-4000-8000-000000000133',
         sequence: 1,
         status: 'completed',
-        prompt: 'scrollable work',
+        prompt: 'inspect scroll ownership',
       }),
     ],
-  });
-  render(<App />);
-
-  const messageLog = setScrollMetrics(await screen.findByRole('log', { name: 'Session messages' }), {
-    clientHeight: 500,
-    scrollHeight: 2000,
-  });
-
-  fireEvent.wheel(screen.getByRole('heading', { name: 'Existing session' }), { deltaY: 180 });
-
-  expect(messageLog.scrollTop).toBe(180);
-});
-
-it('does not redirect wheel events when the sessions area can scroll', async () => {
-  mockApi({
-    sessions: [session, { ...session, id: '00000000-0000-4000-8000-000000000002', title: 'Second session' }],
-    messages: [
-      messageFixture({
-        id: '00000000-0000-4000-8000-000000000134',
+    events: [
+      eventFixture({
         sequence: 1,
-        status: 'completed',
-        prompt: 'scrollable work',
+        type: 'message_started',
+        runId: '00000000-0000-4000-8000-000000000233',
+        messageId: '00000000-0000-4000-8000-000000000133',
+        payload: { sequences: [1], batchSize: 1 },
+      }),
+      eventFixture({
+        sequence: 2,
+        type: 'tool_started',
+        runId: '00000000-0000-4000-8000-000000000233',
+        messageId: '00000000-0000-4000-8000-000000000133',
+        payload: { toolName: 'shell', toolCallId: 'tool-1', args: { command: 'npm test' } },
+      }),
+      eventFixture({
+        sequence: 3,
+        type: 'tool_finished',
+        runId: '00000000-0000-4000-8000-000000000233',
+        messageId: '00000000-0000-4000-8000-000000000133',
+        payload: { toolName: 'shell', toolCallId: 'tool-1', result: 'long output\n'.repeat(100) },
       }),
     ],
   });
   render(<App />);
 
-  const messageLog = setScrollMetrics(await screen.findByRole('log', { name: 'Session messages' }), {
-    clientHeight: 500,
-    scrollHeight: 2000,
-  });
+  const messageLog = await screen.findByRole('log', { name: 'Session messages' });
 
-  setScrollMetrics(screen.getByText('Second session').closest('[data-thread-scroll-exclude="true"]'), {
-    overflowY: 'auto',
-    clientHeight: 100,
-    scrollHeight: 400,
-  });
-
-  fireEvent.wheel(screen.getByText('Second session'), { deltaY: 180 });
-
-  expect(messageLog.scrollTop).toBe(0);
-
-  const sessionsPane = screen.getByText('Second session').closest('[data-thread-scroll-exclude="true"]') as HTMLElement;
-  sessionsPane.scrollTop = 300;
-  fireEvent.wheel(screen.getByText('Second session'), { deltaY: 180 });
-
-  expect(messageLog.scrollTop).toBe(0);
-});
-
-it('scrolls session messages from the sessions area when it has no scrollbar', async () => {
-  mockApi({
-    sessions: [session, { ...session, id: '00000000-0000-4000-8000-000000000002', title: 'Second session' }],
-    messages: [
-      messageFixture({
-        id: '00000000-0000-4000-8000-000000000136',
-        sequence: 1,
-        status: 'completed',
-        prompt: 'scrollable work',
-      }),
-    ],
-  });
-  render(<App />);
-
-  const messageLog = setScrollMetrics(await screen.findByRole('log', { name: 'Session messages' }), {
-    clientHeight: 500,
-    scrollHeight: 2000,
-  });
-
-  setScrollMetrics(screen.getByText('Second session').closest('[data-thread-scroll-exclude="true"]'), {
-    overflowY: 'auto',
-    clientHeight: 400,
-    scrollHeight: 400,
-  });
-
-  fireEvent.wheel(screen.getByText('Second session'), { deltaY: 180 });
-
-  expect(messageLog.scrollTop).toBe(180);
-});
-
-it('lets nested chat panes scroll first and releases wheel scroll at their edge', async () => {
-  mockApi({
-    messages: [
-      messageFixture({
-        id: '00000000-0000-4000-8000-000000000135',
-        sequence: 1,
-        status: 'completed',
-        prompt: 'nested scroll work',
-      }),
-    ],
-  });
-  render(<App />);
-
-  const messageLog = setScrollMetrics(await screen.findByRole('log', { name: 'Session messages' }), {
-    clientHeight: 500,
-    scrollHeight: 2000,
-  });
-
-  const nestedPane = document.createElement('div');
-  setScrollMetrics(nestedPane, {
-    overflowY: 'auto',
-    clientHeight: 100,
-    scrollHeight: 400,
-  });
-  messageLog.append(nestedPane);
-
-  fireEvent.wheel(nestedPane, { deltaY: 180 });
-  expect(messageLog.scrollTop).toBe(0);
-
-  nestedPane.scrollTop = 300;
-  fireEvent.wheel(nestedPane, { deltaY: 180 });
-  expect(messageLog.scrollTop).toBe(180);
+  expect(messageLog).toHaveClass('overflow-auto');
+  expect(messageLog.querySelector('.overflow-auto')).toBeNull();
 });
 
 it('opens only the global SSE stream for updates', async () => {
@@ -1965,7 +1884,7 @@ it('renders custom tool text content without exposing the result envelope', asyn
   expect(visibleToolOutput).not.toHaveTextContent('customTool');
 });
 
-it('contains long diagnostic output in a scrollable panel', async () => {
+it('renders long diagnostic output inline without a nested scroller', async () => {
   const longOutput = Array.from(
     { length: 12 },
     (_, index) => `line ${index + 1}: expect(messageLogHeight).toBeGreaterThan(300);`,
@@ -2007,13 +1926,13 @@ it('contains long diagnostic output in a scrollable panel', async () => {
 
   fireEvent.click(await screen.findByText(/Activity · 3 events/));
 
-  const panel = screen.getByRole('region', { name: 'Scrollable diagnostic output' });
-  expect(panel).toHaveClass('max-h-56');
-  expect(panel).toHaveClass('overflow-auto');
+  const panel = screen.getByRole('region', { name: 'Diagnostic output' });
+  expect(panel).not.toHaveClass('max-h-56');
+  expect(panel).not.toHaveClass('overflow-auto');
   expect(panel).toHaveTextContent('line 12:');
 });
 
-it('caps long diagnostic commands inside a scrollable panel', async () => {
+it('renders long diagnostic commands inline without a nested scroller', async () => {
   const longCommand = `python3 - <<'PY'\n${'print("synthetic sunset")\n'.repeat(180)}PY`;
   mockApi({
     messages: [
@@ -2057,9 +1976,9 @@ it('caps long diagnostic commands inside a scrollable panel', async () => {
 
   fireEvent.click(await screen.findByText(/Activity · 3 events/));
 
-  const panel = screen.getByRole('region', { name: 'Scrollable diagnostic command' });
-  expect(panel).toHaveClass('max-h-56');
-  expect(panel).toHaveClass('overflow-auto');
+  const panel = screen.getByRole('region', { name: 'Diagnostic command' });
+  expect(panel).not.toHaveClass('max-h-56');
+  expect(panel).not.toHaveClass('overflow-auto');
   expect(panel).toHaveTextContent('python3 - <<');
   expect(panel).toHaveTextContent('truncated');
   expect(panel.textContent!.length).toBeLessThan(longCommand.length);
@@ -2721,12 +2640,10 @@ type ScrollMetrics = {
   clientHeight: number;
   scrollHeight: number;
   scrollTop?: number;
-  overflowY?: string;
 };
 
 function setScrollMetrics(element: Element | null, metrics: ScrollMetrics): HTMLElement {
   if (!(element instanceof HTMLElement)) throw new Error('Expected an HTMLElement for scroll metrics');
-  if (metrics.overflowY) element.style.overflowY = metrics.overflowY;
   Object.defineProperties(element, {
     clientHeight: { configurable: true, value: metrics.clientHeight },
     scrollHeight: { configurable: true, value: metrics.scrollHeight },

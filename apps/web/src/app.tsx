@@ -117,11 +117,9 @@ import {
   newSessionSelectedStorageKey,
   realtimeReconnectInitialDelayMs,
   realtimeReconnectMaxDelayMs,
-  scrollThreadByWheel,
   selectedSessionStorageKey,
   setupGuideOpenStorageKey,
   sidebarPanelStorageKey,
-  shouldLetWheelTargetHandleScroll,
   startupConnectionDelayMs,
   startupDelayedConnectionStatus,
   themeStorageKey,
@@ -317,7 +315,6 @@ export function App() {
   const lastBackgroundedAt = useRef<number | null>(null);
   const wasPageHiddenRef = useRef(!isPageVisible());
   const wakeRecoveryActive = useRef(false);
-  const appShellRef = useRef<HTMLElement | null>(null);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const threadAutoFollowRef = useRef(true);
@@ -602,14 +599,6 @@ export function App() {
     selectedRepository,
     repositoryOptions,
   ]);
-
-  useEffect(() => {
-    const appShell = appShellRef.current;
-    if (!appShell) return;
-
-    appShell.addEventListener('wheel', handleAppWheel, { capture: true, passive: false });
-    return () => appShell.removeEventListener('wheel', handleAppWheel, { capture: true });
-  });
 
   useEffect(() => {
     applyThemePreference(themePreference);
@@ -1714,22 +1703,6 @@ export function App() {
     setThreadAutoFollowEnabled(isThreadNearBottom(container));
   }
 
-  function handleAppWheel(event: globalThis.WheelEvent): void {
-    if (!event.deltaY || event.defaultPrevented) return;
-    const appShell = appShellRef.current;
-    const threadScroll = threadScrollRef.current;
-    if (
-      !appShell ||
-      !threadScroll ||
-      shouldLetWheelTargetHandleScroll(event.target, appShell, threadScroll, event.deltaY)
-    )
-      return;
-
-    event.preventDefault();
-    scrollThreadByWheel(threadScroll, event.deltaY);
-    handleThreadScroll();
-  }
-
   function jumpToLatestThreadActivity() {
     setThreadAutoFollowEnabled(true);
     scrollThreadToBottom('smooth');
@@ -1916,7 +1889,7 @@ export function App() {
   }
 
   return (
-    <main ref={appShellRef} className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+    <main className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       {error ? (
         <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {error}

@@ -97,58 +97,6 @@ export function isThreadNearBottom(container: HTMLElement): boolean {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= threadAutoFollowThreshold;
 }
 
-function isScrollableElement(element: Element): element is HTMLElement {
-  if (!(element instanceof HTMLElement)) return false;
-  const overflowY = window.getComputedStyle(element).overflowY;
-  return ['auto', 'scroll', 'overlay'].includes(overflowY) && element.scrollHeight > element.clientHeight;
-}
-
-function canScrollElementByWheel(element: HTMLElement, deltaY: number): boolean {
-  if (deltaY < 0) return element.scrollTop > 0;
-  if (deltaY > 0) return element.scrollTop + element.clientHeight < element.scrollHeight;
-  return false;
-}
-
-function findScrollableAncestor(target: EventTarget | null, root: HTMLElement): HTMLElement | null {
-  if (!(target instanceof Element)) return null;
-
-  for (let element: Element | null = target; element && element !== root; element = element.parentElement) {
-    if (isScrollableElement(element)) return element;
-  }
-
-  return null;
-}
-
-export function shouldLetWheelTargetHandleScroll(
-  target: EventTarget | null,
-  root: HTMLElement,
-  threadScroll: HTMLElement,
-  deltaY: number,
-): boolean {
-  if (!(target instanceof Element)) return false;
-
-  const excludedPane = target.closest('[data-thread-scroll-exclude="true"]');
-  if (excludedPane instanceof HTMLElement) {
-    const scrollablePane =
-      findScrollableAncestor(target, excludedPane) ?? (isScrollableElement(excludedPane) ? excludedPane : null);
-    return Boolean(scrollablePane);
-  }
-
-  const scrollable = findScrollableAncestor(target, root);
-  if (!scrollable) return false;
-  if (scrollable === threadScroll) return true;
-  return canScrollElementByWheel(scrollable, deltaY);
-}
-
-export function scrollThreadByWheel(container: HTMLElement, deltaY: number): void {
-  if (typeof container.scrollBy === 'function') {
-    container.scrollBy({ top: deltaY, behavior: 'auto' });
-    return;
-  }
-
-  container.scrollTop += deltaY;
-}
-
 export function isThreadComposerFocused(): boolean {
   const activeElement = document.activeElement;
   return activeElement instanceof HTMLElement && Boolean(activeElement.closest('[data-thread-composer="true"]'));
