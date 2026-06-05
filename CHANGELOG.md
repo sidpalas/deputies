@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.4](https://github.com/sidpalas/deputies/compare/v0.6.3...v0.6.4) (2026-06-05)
+
+
+### Bug Fixes
+
+* **container:** update vulnerable image dependencies ([7ba776e](https://github.com/sidpalas/deputies/commit/7ba776e10d54de013cdad1160eb0c7f0af5136e5))
+* **web:** simplify chat scroll behavior ([da1cae8](https://github.com/sidpalas/deputies/commit/da1cae89035ddb5def9cc82a4f70f1bfd98e44f4))
+
 ## [0.6.3](https://github.com/sidpalas/deputies/compare/v0.6.2...v0.6.3) (2026-06-03)
 
 
