@@ -10,7 +10,8 @@ Initial providers may include:
 - `unsafe-local`: local development with host subprocess execution in a temp workspace. This is convenient for getting started but is not a security sandbox. Commands inherit a minimal environment and discover executables through an allowlisted `.deputies-bin` path; configure `LOCAL_SANDBOX_ALLOWED_COMMANDS` to replace the built-in development allowlist.
 - `docker`: planned Docker Engine backed sandboxes. This can use a local or remote Docker daemon depending on deployment configuration.
 - `daytona`: hosted persistent development sandboxes.
-- `kubernetes`: pods/jobs inside a cluster.
+- `opencomputer`: hosted persistent Linux VMs with native exec, filesystem, hibernation, snapshots, and bridge-based preview URLs. The OpenComputer VM is the sandbox boundary; `/workspace` is the working directory, not a security boundary.
+- `k8s-agent-sandbox`: Kubernetes Custom Resource backed agent sandboxes inside a cluster.
 - `ecs`: Fargate tasks in AWS.
 - `modal` or others later, if desired.
 
@@ -201,6 +202,7 @@ Product lifecycle policy:
 - Archive destroys active session sandboxes immediately.
 - Stopped sandboxes are still reusable when the provider supports `start()`; the lifecycle manager starts them before reconnecting.
 - The Postgres reaper uses an advisory lock so only one instance runs cleanup work at a time.
+- Worker-owned sandbox create/connect/start work is guarded by the run lease. If a worker loses the run while a provider operation is in flight, newly-created provider sandboxes are destroyed instead of being persisted as active for the session.
 
 ### Snapshot And Restore
 
@@ -548,7 +550,37 @@ Current implementation:
 - Follow-up messages reconnect to the latest active sandbox for the session/provider when health is ready. Stopped sandboxes are restarted before reconnect so filesystem state can be reused. Unhealthy or missing sandboxes are marked unhealthy and replaced.
 - `apps/control-plane/test/uat/real-daytona-flue.test.ts` provides an opt-in built-artifact UAT path for `RUNNER=flue` plus `SANDBOX_PROVIDER=daytona`; it is skipped unless `RUN_REAL_DAYTONA_FLUE_UAT=true` and required credentials are present.
 
-### Kubernetes Provider
+### OpenComputer Provider
+
+Purpose:
+
+- Hosted persistent Linux VMs for provider-native agent sandboxes.
+
+Behavior:
+
+- Creates OpenComputer sandboxes from a template or snapshot with the Deputies bridge payload.
+- Reconnects by provider sandbox ID.
+- Uses OpenComputer native exec and filesystem APIs.
+- Exposes a single OpenComputer preview hostname for the Deputies sandbox bridge, then proxies browser-facing service previews through the bridge.
+- Uses hibernate/wake for stop/start and preserves the workspace filesystem across hibernation.
+
+Current implementation:
+
+- `apps/control-plane/src/sandbox/opencomputer.ts` wraps the OpenComputer TypeScript SDK behind the product `SandboxProvider` interface.
+- `OPENCOMPUTER_SNAPSHOT` or `OPENCOMPUTER_TEMPLATE` is required. The default documented snapshot is `deputies-opencomputer-base-bridge`, which includes the bridge payload used for previews.
+- OpenComputer creation supports optional `OPENCOMPUTER_API_URL`, `OPENCOMPUTER_TEMPLATE`, `OPENCOMPUTER_SNAPSHOT`, `OPENCOMPUTER_SECRET_STORE`, `OPENCOMPUTER_CPU_COUNT`, `OPENCOMPUTER_MEMORY_MB`, and `OPENCOMPUTER_DISK_MB` configuration.
+- `deploy/sandboxes/opencomputer/` documents snapshot creation tasks through the OpenComputer SDK image builder. The default task creates the validated bridge variant. The full and slim variants are documented as experimental until OpenComputer snapshot builds complete reliably for them.
+- OpenComputer sandboxes request the smallest supported tier, 1024 MB memory, by default; set `OPENCOMPUTER_MEMORY_MB` to override.
+- With `APP_DATA_STORE=postgres`, `SANDBOX_SECRET_ENCRYPTION_KEY` is required because OpenComputer preview bridge tokens are persisted as sandbox secrets.
+- When `OPENCOMPUTER_SECRET_STORE` is set, provider commands keep OpenComputer's proxy egress path and set `GIT_SSL_CAINFO` to OpenComputer's proxy CA so Git trusts the proxy. The referenced SecretStore must allow GitHub egress for repository setup, for example `github.com` and `*.github.com`.
+- When no SecretStore is set, provider commands clear OpenComputer's injected proxy environment variables and use direct egress. This avoids the platform proxy returning `407 no session for this IP` for sandboxes without registered proxy sessions.
+- OpenComputer creation sets the provider idle timeout from `SANDBOX_IDLE_TIMEOUT_SECONDS` using second granularity. The default product timeout is 900 seconds.
+- OpenComputer readiness waits for both exec and filesystem routing before returning a handle. Health reports `starting` while OpenComputer says the VM is running but provider routes are not ready.
+- Preview URLs use OpenComputer's native preview hostname only for the fixed sandbox bridge port. Deputies still serves the user-facing preview URL and auth layer, sends bridge bearer auth to the upstream, and the bridge proxies `/preview/<port>` to `127.0.0.1:<port>` inside the VM. This avoids exposing raw OpenComputer host headers to preview applications.
+- The OpenComputer bridge is started in preview-only mode because the raw OpenComputer preview hostname is public. Raw bridge `/exec` and `/fs/*` endpoints are not available through OpenComputer previews.
+- `apps/control-plane/test/uat/real-opencomputer-provider.test.ts` provides an opt-in provider-level UAT path; it is skipped unless `RUN_REAL_OPENCOMPUTER_PROVIDER_UAT=true`, `OPENCOMPUTER_API_KEY`, and `OPENCOMPUTER_SNAPSHOT` or `OPENCOMPUTER_TEMPLATE` are present.
+
+### Kubernetes Agent Sandbox Provider
 
 Purpose:
 
@@ -556,11 +588,11 @@ Purpose:
 
 Behavior:
 
-- Creates Pod or Job per session.
-- Uses PVC for persistent workspace if needed.
-- Executes commands via Kubernetes exec API.
-- Health checks pod phase and optional exec probe.
-- Destroy deletes pod/job and optional PVC depending on retention policy.
+- Creates an Agent Sandbox custom resource per session.
+- Uses the agent-sandbox controller for workspace storage and runtime lifecycle.
+- Executes commands and filesystem operations through the Deputies sandbox bridge.
+- Health checks the Agent Sandbox resource status and bridge reachability.
+- Destroy deletes the Agent Sandbox resource and lets the controller clean up runtime resources.
 
 ### ECS Provider
 
@@ -672,7 +704,7 @@ Rules:
 
 ## MVP Recommendation
 
-Current implemented providers are `fake`, `unsafe-local`, `docker`, and `daytona`. Future provider work should add Kubernetes or ECS depending on deployment needs. Docker is named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
+Current implemented providers are `fake`, `unsafe-local`, `docker`, `daytona`, `opencomputer`, and `k8s-agent-sandbox`. Future provider work should add ECS or other deployment-specific providers as needed. Docker is named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
 
 Docker MVP order:
 

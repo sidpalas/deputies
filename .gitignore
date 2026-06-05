@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.venv/
+__pycache__/
 .astro/
 apps/www/public/static-demo/
 apps/www/public/twitter-banner.png

@@ -1,5 +1,6 @@
 packages:
   - apps/*
+  - deploy/sandboxes/opencomputer
   - packages/*
 allowBuilds:
   esbuild: true

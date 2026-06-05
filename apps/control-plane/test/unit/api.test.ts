@@ -1471,6 +1471,43 @@ describe('core API', () => {
     });
   });
 
+  it('only allows OpenComputer worker preview targets', async () => {
+    await closeServer(server);
+    const provider = new OpenComputerTargetServiceSandboxProvider(
+      'https://sb-123-p3584.workers.opencomputer.test/preview/3000',
+    );
+    server = createServer(
+      loadConfig({ API_AUTH_MODE: 'none', SERVICE_BASE_DOMAIN: 'deputies.localhost' }),
+      createServices(store, { sandboxProvider: provider }),
+    );
+    baseUrl = await listen(server);
+
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'OpenComputer service target' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    const sandbox = await provider.create({ sessionId: session.id });
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000515',
+      sessionId: session.id,
+      provider: provider.name,
+      providerSandboxId: sandbox.providerSandboxId,
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: { runtimeId: 'runtime-1' },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await expect((await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`)).json()).resolves.toMatchObject({
+      services: [{ port: 3000, url: `http://s-3000-${session.id}.deputies.localhost/` }],
+    });
+
+    provider.upstreamBaseUrl = 'https://attacker.example/preview/3000';
+    await expect((await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`)).json()).resolves.toEqual({
+      services: [],
+    });
+  });
+
   it('does not list a default service when none has been published', async () => {
     const upstream = createPreviewUpstream();
     const upstreamBaseUrl = await listen(upstream);
@@ -1568,11 +1605,17 @@ describe('core API', () => {
       });
       expect(cappedExtend.status).toBe(200);
       const cappedExtendBody = (await cappedExtend.json()) as { sandbox: { keepaliveUntil: string } };
-      expect(provider.keepaliveRefreshes).toEqual([
-        { providerSandboxId: sandbox.providerSandboxId, durationMs: 300_000 },
-        { providerSandboxId: sandbox.providerSandboxId, durationMs: 300_000 },
-        { providerSandboxId: sandbox.providerSandboxId, durationMs: 300_000 },
+      expect(provider.keepaliveRefreshes.map((refresh) => refresh.providerSandboxId)).toEqual([
+        sandbox.providerSandboxId,
+        sandbox.providerSandboxId,
+        sandbox.providerSandboxId,
       ]);
+      expect(provider.keepaliveRefreshes[0]?.durationMs).toBeGreaterThanOrEqual(299_000);
+      expect(provider.keepaliveRefreshes[0]?.durationMs).toBeLessThanOrEqual(300_000);
+      expect(provider.keepaliveRefreshes[1]?.durationMs).toBeGreaterThanOrEqual(599_000);
+      expect(provider.keepaliveRefreshes[1]?.durationMs).toBeLessThanOrEqual(600_000);
+      expect(provider.keepaliveRefreshes[2]?.durationMs).toBeGreaterThanOrEqual(599_000);
+      expect(provider.keepaliveRefreshes[2]?.durationMs).toBeLessThanOrEqual(600_000);
 
       const services = (await (await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`)).json()) as {
         services: Array<{ shutdownAt: string; keepaliveUntil: string }>;
@@ -2358,7 +2401,7 @@ class ServiceSandboxProvider extends FakeSandboxProvider {
     objectStorageArtifacts: false,
   };
 
-  constructor(private readonly upstreamBaseUrl: string) {
+  constructor(public upstreamBaseUrl: string) {
     super();
   }
 
@@ -2381,6 +2424,14 @@ class DaytonaTargetServiceSandboxProvider extends ServiceSandboxProvider {
 
 class K8sAgentSandboxTargetServiceSandboxProvider extends ServiceSandboxProvider {
   override readonly name = 'k8s-agent-sandbox' as 'fake';
+
+  constructor(upstreamBaseUrl: string) {
+    super(upstreamBaseUrl);
+  }
+}
+
+class OpenComputerTargetServiceSandboxProvider extends ServiceSandboxProvider {
+  override readonly name = 'opencomputer' as 'fake';
 
   constructor(upstreamBaseUrl: string) {
     super(upstreamBaseUrl);

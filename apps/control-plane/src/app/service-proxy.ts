@@ -374,6 +374,7 @@ async function isAllowedPreviewTarget(config: AppConfig, provider: string, value
   if (provider === 'docker') return isAllowedDockerPreviewTarget(config, target);
   if (provider === 'k8s-agent-sandbox') return isAllowedKubernetesServicePreviewTarget(target);
   if (provider === 'daytona') return target.protocol === 'https:' && (await isAllowedPublicHostname(target.hostname));
+  if (provider === 'opencomputer') return isAllowedOpenComputerPreviewTarget(target);
   return isAllowedPublicHostname(target.hostname);
 }
 
@@ -385,6 +386,15 @@ function isAllowedDockerPreviewTarget(config: AppConfig, target: URL): boolean {
 function isAllowedKubernetesServicePreviewTarget(target: URL): boolean {
   const hostname = target.hostname.toLowerCase();
   return target.protocol === 'http:' && (hostname.endsWith('.svc') || hostname.endsWith('.svc.cluster.local'));
+}
+
+function isAllowedOpenComputerPreviewTarget(target: URL): boolean {
+  const hostname = target.hostname.toLowerCase();
+  return (
+    target.protocol === 'https:' &&
+    target.pathname.startsWith('/preview/') &&
+    (hostname.endsWith('.workers.opencomputer.dev') || hostname.endsWith('.workers.opencomputer.test'))
+  );
 }
 
 function isLocalOrPrivateHostname(hostname: string): boolean {

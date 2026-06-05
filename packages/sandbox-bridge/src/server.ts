@@ -49,6 +49,7 @@ export type SandboxBridgeOptions = {
   token: string;
   maxBodyBytes?: number;
   maxOutputBytes?: number;
+  previewOnly?: boolean;
 };
 
 type ExecRequest = {
@@ -86,6 +87,7 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
       }
 
       if (request.method === 'POST' && url.pathname === '/exec') {
+        if (options.previewOnly) throw new BridgeHttpError(404, 'not_found');
         const body = parseExecRequest(await readJson(request, maxBodyBytes));
         const abort = new AbortController();
         response.on('close', () => {
@@ -97,6 +99,7 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
       }
 
       if (request.method === 'GET' && url.pathname === '/fs/read') {
+        if (options.previewOnly) throw new BridgeHttpError(404, 'not_found');
         const content = await readFile(resolveWorkspacePath(workspacePath, requirePathParam(url)));
         response.writeHead(200, { 'content-type': 'application/octet-stream' });
         response.end(content);
@@ -104,6 +107,7 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
       }
 
       if (request.method === 'PUT' && url.pathname === '/fs/write') {
+        if (options.previewOnly) throw new BridgeHttpError(404, 'not_found');
         const path = resolveWorkspacePath(workspacePath, requirePathParam(url));
         const content = await readBody(request, maxBodyBytes);
         await mkdir(dirname(path), { recursive: true });
@@ -113,6 +117,7 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
       }
 
       if (request.method === 'GET' && url.pathname === '/fs/stat') {
+        if (options.previewOnly) throw new BridgeHttpError(404, 'not_found');
         const info = await stat(resolveWorkspacePath(workspacePath, requirePathParam(url)));
         writeJson(response, 200, {
           isFile: info.isFile(),
@@ -125,6 +130,7 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
       }
 
       if (request.method === 'GET' && url.pathname === '/fs/readdir') {
+        if (options.previewOnly) throw new BridgeHttpError(404, 'not_found');
         writeJson(response, 200, {
           entries: await readdir(resolveWorkspacePath(workspacePath, requirePathParam(url))),
         });
@@ -132,6 +138,7 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
       }
 
       if (request.method === 'GET' && url.pathname === '/fs/exists') {
+        if (options.previewOnly) throw new BridgeHttpError(404, 'not_found');
         writeJson(response, 200, {
           exists: await pathExists(resolveWorkspacePath(workspacePath, requirePathParam(url))),
         });
@@ -139,6 +146,7 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
       }
 
       if (request.method === 'POST' && url.pathname === '/fs/mkdir') {
+        if (options.previewOnly) throw new BridgeHttpError(404, 'not_found');
         const body = await readJson(request, maxBodyBytes);
         await mkdir(resolveWorkspacePath(workspacePath, requireJsonPath(body)), {
           recursive: Boolean(readObject(body).recursive),
@@ -148,6 +156,7 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
       }
 
       if (request.method === 'POST' && url.pathname === '/fs/rm') {
+        if (options.previewOnly) throw new BridgeHttpError(404, 'not_found');
         const body = readObject(await readJson(request, maxBodyBytes));
         await rm(resolveWorkspacePath(workspacePath, requireJsonPath(body)), {
           recursive: Boolean(body.recursive),
@@ -663,7 +672,8 @@ async function main(): Promise<void> {
   if (!token) throw new Error('DEPUTIES_SANDBOX_TOKEN is required');
   const workspacePath = process.env.DEPUTIES_WORKSPACE ?? '/workspace';
   await mkdir(workspacePath, { recursive: true });
-  const server = createSandboxBridgeServer({ workspacePath, token });
+  const previewOnly = process.env.DEPUTIES_SANDBOX_BRIDGE_PREVIEW_ONLY === '1';
+  const server = createSandboxBridgeServer({ workspacePath, token, previewOnly });
   const host = process.env.DEPUTIES_SANDBOX_BRIDGE_HOST ?? '0.0.0.0';
   const port = Number(process.env.DEPUTIES_SANDBOX_BRIDGE_PORT ?? defaultPort);
   server.listen(port, host);

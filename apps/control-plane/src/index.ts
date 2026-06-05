@@ -11,6 +11,7 @@ import {
   requireDaytonaApiKey,
   requireDockerOrchestratorUrl,
   requireGitHubAppCredentials,
+  requireOpenComputerApiKey,
   requireRunnerModelDefault,
 } from './config/index.js';
 import { GitHubArchivedSessionNotifier } from './integrations/github/archived-session-notifier.js';
@@ -39,6 +40,7 @@ import {
   InProcessAgentSandboxOrchestrator,
 } from './sandbox/k8s-agent-sandbox.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
+import { OpenComputerSandboxProvider, type OpenComputerSandboxProviderOptions } from './sandbox/opencomputer.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
 import type { SandboxProvider } from './sandbox/types.js';
 import { MemoryStore } from './store/memory.js';
@@ -227,6 +229,21 @@ function createSandboxProvider(): SandboxProvider {
     if (config.daytonaSnapshot) Object.assign(options, { snapshot: config.daytonaSnapshot });
     Object.assign(options, { workspacePath: config.sandboxWorkspacePath });
     return new DaytonaSandboxProvider(options);
+  }
+  if (config.sandboxProvider === 'opencomputer') {
+    const options: OpenComputerSandboxProviderOptions = {
+      apiKey: requireOpenComputerApiKey(config),
+      workspacePath: config.sandboxWorkspacePath,
+      idleTimeoutMs: config.sandboxIdleTimeoutMs,
+    };
+    if (config.opencomputerApiUrl) options.apiUrl = config.opencomputerApiUrl;
+    if (config.opencomputerTemplate) options.template = config.opencomputerTemplate;
+    if (config.opencomputerSnapshot) options.snapshot = config.opencomputerSnapshot;
+    if (config.opencomputerSecretStore) options.secretStore = config.opencomputerSecretStore;
+    if (config.opencomputerCpuCount !== undefined) options.cpuCount = config.opencomputerCpuCount;
+    if (config.opencomputerMemoryMb !== undefined) options.memoryMB = config.opencomputerMemoryMb;
+    if (config.opencomputerDiskMb !== undefined) options.diskMB = config.opencomputerDiskMb;
+    return new OpenComputerSandboxProvider(options);
   }
   if (config.sandboxProvider === 'k8s-agent-sandbox') {
     const orchestrator =

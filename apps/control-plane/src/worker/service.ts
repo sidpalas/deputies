@@ -153,40 +153,50 @@ export class WorkerService {
 
   private async runWithHeartbeat(claimed: ClaimedMessageBatch): Promise<void> {
     const abort = new AbortController();
-    const pollCancellation = () => {
-      this.options.store
-        .getRun(claimed.run.id)
-        .then((run) => {
-          if (!run || run.status === 'cancelling') abort.abort();
-        })
-        .catch((error: unknown) => {
-          console.error(error instanceof Error ? error.message : error);
-        });
-    };
-    const heartbeat = setInterval(() => {
-      const heartbeatAt = new Date();
-      this.options.store
-        .renewRunLease({
-          runId: claimed.run.id,
-          leaseOwner: this.options.leaseOwner,
-          leaseExpiresAt: new Date(heartbeatAt.getTime() + this.leaseDurationMs),
-          heartbeatAt,
-        })
-        .then((run) => {
-          if (!run || run.status === 'cancelling') abort.abort();
-        })
-        .catch((error: unknown) => {
-          console.error(error instanceof Error ? error.message : error);
-        });
-    }, this.heartbeatIntervalMs);
-    const cancellationPoll = setInterval(pollCancellation, this.cancellationPollIntervalMs);
-    pollCancellation();
+    const leaseMonitor = this.maintainRunLease(claimed.run.id, abort);
+    const cancellationMonitor = this.pollRunCancellation(claimed.run.id, abort);
+    const run = this.runClaimedMessage(claimed, abort.signal);
+    run.catch(() => undefined);
 
     try {
-      await this.runClaimedMessage(claimed, abort.signal);
+      await Promise.race([run, leaseMonitor, cancellationMonitor]);
+      await run;
     } finally {
-      clearInterval(heartbeat);
-      clearInterval(cancellationPoll);
+      abort.abort();
+      await Promise.allSettled([leaseMonitor, cancellationMonitor]);
+    }
+  }
+
+  private async maintainRunLease(runId: string, abort: AbortController): Promise<void> {
+    while (!abort.signal.aborted) {
+      const heartbeatAt = new Date();
+      const run = await this.options.store.renewRunLease({
+        runId,
+        leaseOwner: this.options.leaseOwner,
+        leaseExpiresAt: new Date(heartbeatAt.getTime() + this.leaseDurationMs),
+        heartbeatAt,
+      });
+
+      if (!run) {
+        abort.abort();
+        throw new Error('Run lease could not be renewed');
+      }
+      if (run.status === 'cancelling') {
+        abort.abort();
+        return;
+      }
+      await sleep(this.heartbeatIntervalMs, abort.signal);
+    }
+  }
+
+  private async pollRunCancellation(runId: string, abort: AbortController): Promise<void> {
+    while (!abort.signal.aborted) {
+      const run = await this.options.store.getRun(runId);
+      if (!run || run.status === 'cancelling') {
+        abort.abort();
+        return;
+      }
+      await sleep(this.cancellationPollIntervalMs, abort.signal);
     }
   }
 
@@ -200,8 +210,11 @@ export class WorkerService {
       payload: { provider: this.options.sandboxProvider.name },
     });
     const lifecycle = new SandboxLifecycleService(this.options.store, this.options.sandboxProvider);
-    const { sandbox, record, created, restarted } = await lifecycle.ensure(primary.sessionId);
+    const shouldContinue = async () => !signal.aborted && (await this.isRunOwnedByThisWorker(claimed.run.id));
+    const { sandbox, record, created, restarted } = await lifecycle.ensure(primary.sessionId, { shouldContinue });
+    if (!(await shouldContinue())) return;
     await this.options.store.updateSandbox({ ...record, updatedAt: new Date() });
+    if (!(await shouldContinue())) return;
     await this.appendOwnedRunEvent({
       sessionId: primary.sessionId,
       runId: claimed.run.id,
@@ -443,6 +456,19 @@ function buildBatchContext(messages: ClaimedMessageBatch['messages']): Record<st
     {},
   );
   return context;
+}
+
+async function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return;
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timeout = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
 }
 
 export type WorkerLoopHandle = {

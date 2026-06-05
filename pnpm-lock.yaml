@@ -43,6 +43,9 @@ importers:
       '@hono/node-server':
         specifier: ^2.0.1
         version: 2.0.1(hono@4.12.17)
+      '@opencomputer/sdk':
+        specifier: ^0.5.17
+        version: 0.5.17
       hono:
         specifier: ^4.12.17
         version: 4.12.17
@@ -156,6 +159,22 @@ importers:
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
+
+  deploy/sandboxes/opencomputer:
+    dependencies:
+      '@opencomputer/sdk':
+        specifier: ^0.5.17
+        version: 0.5.17
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.10
+        version: 22.19.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
 
   packages/sandbox-bridge:
     devDependencies:
@@ -1195,6 +1214,10 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@opencomputer/sdk@0.5.17':
+    resolution: {integrity: sha512-KWw4hRoe83ETu1thB4DIHfo3eTH9m5QnQJHB33SiFs/RIfYcB5CRoEWfoDOYchuU6O7OYfJberyGiNAR7VNnWA==}
+    engines: {node: '>=18'}
 
   '@opentelemetry/api-logs@0.207.0':
     resolution: {integrity: sha512-lAb0jQRVyleQQGiuuvCOTDVspc14nx6XJjP4FspJ1sNARo3Regq4ZZbrc3rN4b1TYSuUCvgH+UXUPug4SLOqEQ==}
@@ -6506,6 +6529,8 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
+
+  '@opencomputer/sdk@0.5.17': {}
 
   '@opentelemetry/api-logs@0.207.0':
     dependencies:

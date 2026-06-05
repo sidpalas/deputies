@@ -27,7 +27,7 @@ describe('DaytonaSandboxProvider', () => {
     expect(createCalls[0]).toMatchObject({
       image: 'ubuntu:latest',
       autoStopInterval: 15,
-      labels: { app: 'flue-bg-agents', 'flue-session-id': 'session-1' },
+      labels: { app: 'flue-bg-agents', 'deputies-session-id': 'session-1' },
     });
     const envVars = (createCalls[0] as { envVars: Record<string, string> }).envVars;
     expect(envVars).toMatchObject({

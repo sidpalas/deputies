@@ -130,6 +130,14 @@ describe('loadConfig', () => {
         DAYTONA_TARGET: 'eu',
         DAYTONA_IMAGE: 'ubuntu:latest',
         DAYTONA_SNAPSHOT: 'snap-1',
+        OPENCOMPUTER_API_KEY: 'opencomputer-key',
+        OPENCOMPUTER_API_URL: 'https://opencomputer.example',
+        OPENCOMPUTER_TEMPLATE: 'base',
+        OPENCOMPUTER_SNAPSHOT: 'snapshot-1',
+        OPENCOMPUTER_SECRET_STORE: 'deputies-git-egress',
+        OPENCOMPUTER_CPU_COUNT: '2',
+        OPENCOMPUTER_MEMORY_MB: '8192',
+        OPENCOMPUTER_DISK_MB: '40960',
         SLACK_API_BASE_URL: 'https://slack.emulate.localhost/api',
         SLACK_SIGNING_SECRET: 'slack-secret',
         SLACK_BOT_TOKEN: 'xoxb-token',
@@ -217,6 +225,14 @@ describe('loadConfig', () => {
       daytonaTarget: 'eu',
       daytonaImage: 'ubuntu:latest',
       daytonaSnapshot: 'snap-1',
+      opencomputerApiKey: 'opencomputer-key',
+      opencomputerApiUrl: 'https://opencomputer.example',
+      opencomputerTemplate: 'base',
+      opencomputerSnapshot: 'snapshot-1',
+      opencomputerSecretStore: 'deputies-git-egress',
+      opencomputerCpuCount: 2,
+      opencomputerMemoryMb: 8192,
+      opencomputerDiskMb: 40960,
       slackApiBaseUrl: 'https://slack.emulate.localhost/api',
       slackSigningSecret: 'slack-secret',
       slackBotToken: 'xoxb-token',
@@ -251,7 +267,7 @@ describe('loadConfig', () => {
     });
   });
 
-  it.each(['docker', 'k8s-agent-sandbox'])(
+  it.each(['docker', 'k8s-agent-sandbox', 'opencomputer'])(
     'requires an app secret encryption key for postgres-backed %s sandboxes',
     (provider) => {
       expect(() =>
@@ -259,10 +275,20 @@ describe('loadConfig', () => {
           API_AUTH_MODE: 'none',
           APP_DATA_STORE: 'postgres',
           SANDBOX_PROVIDER: provider,
+          OPENCOMPUTER_SNAPSHOT: 'deputies-opencomputer-base-bridge',
         }),
       ).toThrow('SANDBOX_SECRET_ENCRYPTION_KEY is required');
     },
   );
+
+  it('requires an OpenComputer snapshot or template for bridge-based previews', () => {
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        SANDBOX_PROVIDER: 'opencomputer',
+      }),
+    ).toThrow('OPENCOMPUTER_SNAPSHOT or OPENCOMPUTER_TEMPLATE is required');
+  });
 
   it('requires URL and token for k8s-agent-sandbox HTTP orchestrator mode', () => {
     expect(() =>
@@ -495,7 +521,7 @@ describe('loadConfig', () => {
   it('rejects invalid enum values', () => {
     expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of combined, all, api, worker');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'local' })).toThrow(
-      'Expected one of fake, unsafe-local, docker, daytona, k8s-agent-sandbox, ecs',
+      'Expected one of fake, unsafe-local, docker, daytona, opencomputer, k8s-agent-sandbox, ecs',
     );
     expect(loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi' }).runner).toBe('pi');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_COOKIE_SAME_SITE: 'strict' })).toThrow(
@@ -522,5 +548,19 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ API_AUTH_MODE: 'none', UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS: 'yes' })).toThrow(
       'UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS must be true or false',
     );
+  });
+
+  it('parses OpenComputer as a sandbox provider', () => {
+    expect(
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        SANDBOX_PROVIDER: 'opencomputer',
+        OPENCOMPUTER_API_KEY: 'opencomputer-key',
+        OPENCOMPUTER_SNAPSHOT: 'deputies-opencomputer-base-bridge',
+      }),
+    ).toMatchObject({
+      sandboxProvider: 'opencomputer',
+      opencomputerApiKey: 'opencomputer-key',
+    });
   });
 });

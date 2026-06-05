@@ -122,10 +122,11 @@ async function sandboxStatus(
   services?: Pick<AppServices, 'sandboxProvider'>,
 ): Promise<SetupStatusItem> {
   const missingDaytona = config.sandboxProvider === 'daytona' && !config.daytonaApiKey;
+  const missingOpenComputer = config.sandboxProvider === 'opencomputer' && !config.opencomputerApiKey;
   const missingDockerOrchestrator =
     config.sandboxProvider === 'docker' && config.dockerOrchestratorMode === 'http' && !config.dockerOrchestratorUrl;
   const state =
-    missingDaytona || missingDockerOrchestrator
+    missingDaytona || missingOpenComputer || missingDockerOrchestrator
       ? 'missing'
       : config.sandboxProvider === 'fake'
         ? 'warning'

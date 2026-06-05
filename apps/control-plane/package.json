@@ -26,10 +26,11 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",
     "@daytona/sdk": "^0.171.0",
-    "@earendil-works/pi-coding-agent": "0.78.0",
     "@earendil-works/pi-ai": "0.74.0",
+    "@earendil-works/pi-coding-agent": "0.78.0",
     "@flue/runtime": "0.8.0",
     "@hono/node-server": "^2.0.1",
+    "@opencomputer/sdk": "^0.5.17",
     "hono": "^4.12.17",
     "pg": "^8.20.0"
   },

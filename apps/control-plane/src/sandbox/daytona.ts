@@ -197,7 +197,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   private createParams(input: CreateSandboxInput, bridgeToken: string): Record<string, unknown> {
     const labels = {
       ...this.options.labels,
-      'flue-session-id': input.sessionId,
+      'deputies-session-id': input.sessionId,
     };
     const params: Record<string, unknown> = { labels };
     if (this.options.idleTimeoutMs)

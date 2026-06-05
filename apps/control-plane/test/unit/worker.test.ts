@@ -742,10 +742,10 @@ describe('WorkerService', () => {
     await services.messages.enqueue({ sessionId: session.id, prompt: 'long running' });
     const runner = new BlockingRunner();
     const renewRunLease = store.renewRunLease.bind(store);
-    let recovered = false;
+    let renewals = 0;
     store.renewRunLease = async (input) => {
-      if (!recovered) {
-        recovered = true;
+      renewals += 1;
+      if (renewals === 2) {
         await store.recoverStaleRuns({ now: new Date(Date.now() + 60_000), limit: 10 });
       }
       return renewRunLease(input);
@@ -771,6 +771,51 @@ describe('WorkerService', () => {
     await expect(processing).resolves.toBe(true);
     await expect(services.messages.list(session.id)).resolves.toMatchObject([{ status: 'pending' }]);
     await expect(services.sessions.get(session.id)).resolves.toMatchObject({ status: 'queued' });
+  });
+
+  it('renews the run lease immediately and does not overlap slow renewals', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Sequential heartbeat' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'long running' });
+    const runner = new BlockingRunner();
+    const renewRunLease = store.renewRunLease.bind(store);
+    const releaseRenewals: Array<() => void> = [];
+    let renewals = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    store.renewRunLease = async (input) => {
+      renewals += 1;
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise<void>((resolve) => releaseRenewals.push(resolve));
+      inFlight -= 1;
+      return renewRunLease(input);
+    };
+
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner,
+      runnerType: 'blocking',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+      heartbeatIntervalMs: 5,
+      cancellationPollIntervalMs: 60_000,
+    });
+
+    const processing = worker.processNext();
+    await runner.waitForStart();
+    await waitFor(() => renewals === 1);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(renewals).toBe(1);
+    expect(maxInFlight).toBe(1);
+
+    runner.release();
+    releaseRenewals.splice(0).forEach((release) => release());
+    await expect(processing).resolves.toBe(true);
   });
 
   it('allows another worker to process a different session while one session is active', async () => {

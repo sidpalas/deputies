@@ -6,8 +6,10 @@ import type { SandboxCapabilities, SandboxHandle, SandboxProvider } from '../../
 import {
   defaultGroupId,
   type CreateSandboxRecord,
+  type MessageRecord,
   type SandboxRecord,
   type SandboxStore,
+  type SessionRecord,
 } from '../../src/store/types.js';
 
 const capabilities: SandboxCapabilities = {
@@ -45,6 +47,26 @@ describe('SandboxLifecycleService', () => {
     expect(provider.destroy).toHaveBeenCalledWith(handle);
   });
 
+  it('destroys a provider sandbox when the run loses ownership during creation', async () => {
+    const store = new MemoryStore();
+    const handle = createHandle('sandbox-1');
+    const provider = createProvider(handle);
+    const lifecycle = new SandboxLifecycleService(store, provider);
+    let checks = 0;
+
+    await expect(
+      lifecycle.ensure('session-1', {
+        shouldContinue: async () => {
+          checks += 1;
+          return checks < 3;
+        },
+      }),
+    ).rejects.toThrow('Run no longer owns sandbox lifecycle');
+
+    expect(provider.destroy).toHaveBeenCalledWith(handle);
+    await expect(store.getLatestSandbox('session-1', 'fake')).resolves.toBeNull();
+  });
+
   it('rotates runtime metadata when reconnecting a stopped sandbox and preserves the new runtime', async () => {
     const store = new MemoryStore();
     const now = new Date();
@@ -72,6 +94,65 @@ describe('SandboxLifecycleService', () => {
     expect(sandboxRuntimeId(result.record)).toBeDefined();
     expect(sandboxRuntimeId(result.record)).not.toBe('old-runtime');
     expect(sandboxRuntimeId({ metadata: result.sandbox.metadata })).toBe(sandboxRuntimeId(result.record));
+  });
+
+  it('replaces a stopped sandbox when provider start fails', async () => {
+    const store = new MemoryStore();
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000005',
+      sessionId: 'session-1',
+      provider: 'fake',
+      providerSandboxId: 'sandbox-1',
+      status: 'stopped',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    const replacement = createHandle('sandbox-2');
+    const provider = createProvider(replacement);
+    vi.mocked(provider.health).mockResolvedValueOnce({ status: 'stopped', checkedAt: new Date() });
+    vi.mocked(provider.start!).mockRejectedValueOnce(new Error('no active hibernation found'));
+    const lifecycle = new SandboxLifecycleService(store, provider);
+
+    const result = await lifecycle.ensure('session-1');
+
+    expect(result.created).toBe(true);
+    expect(result.sandbox.providerSandboxId).toBe('sandbox-2');
+    expect(provider.start).toHaveBeenCalledWith(expect.objectContaining({ providerSandboxId: 'sandbox-1' }));
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(result.record).toMatchObject({
+      providerSandboxId: 'sandbox-2',
+      status: 'ready',
+    });
+  });
+
+  it('reconnects an existing sandbox while provider health is starting', async () => {
+    const store = new MemoryStore();
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000006',
+      sessionId: 'session-1',
+      provider: 'fake',
+      providerSandboxId: 'sandbox-1',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    const handle = createHandle('sandbox-1');
+    const provider = createProvider(handle);
+    vi.mocked(provider.health).mockResolvedValueOnce({ status: 'starting', checkedAt: new Date() });
+    const lifecycle = new SandboxLifecycleService(store, provider);
+
+    const result = await lifecycle.ensure('session-1');
+
+    expect(result.created).toBe(false);
+    expect(result.sandbox.providerSandboxId).toBe('sandbox-1');
+    expect(provider.connect).toHaveBeenCalledWith(expect.objectContaining({ providerSandboxId: 'sandbox-1' }));
+    expect(provider.create).not.toHaveBeenCalled();
   });
 
   it('persists provider secrets and supplies them on reconnect', async () => {
@@ -196,6 +277,41 @@ describe('SandboxLifecycleService', () => {
     expect(provider.stop).not.toHaveBeenCalled();
     await expect(store.getActiveSandbox('session-1', 'fake')).resolves.toMatchObject({ status: 'ready' });
   });
+
+  it('skips stopping a sandbox if the session becomes active after cleanup selection', async () => {
+    const store = new MemoryStore();
+    const events = new EventService(store);
+    const now = new Date();
+    const oldRecord: SandboxRecord = {
+      id: '00000000-0000-4000-8000-000000000007',
+      sessionId: 'session-1',
+      provider: 'fake',
+      providerSandboxId: 'sandbox-1',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: now,
+      updatedAt: new Date(now.getTime() - 60_000),
+    };
+    await store.createSession({
+      id: 'session-1',
+      status: 'active',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await store.createSandbox(oldRecord);
+    const provider = createProvider(createHandle('sandbox-1'));
+    const cleanup = new SandboxCleanupService(new StaleIdleSandboxStore(store, oldRecord), events, provider);
+
+    const result = await cleanup.stopIdleSandboxes({ idleBefore: now, limit: 10 });
+
+    expect(result.stopped).toBe(0);
+    expect(provider.stop).not.toHaveBeenCalled();
+    await expect(store.getActiveSandbox('session-1', 'fake')).resolves.toMatchObject({ status: 'ready' });
+  });
 });
 
 class StaleIdleSandboxStore extends MemoryStore {
@@ -216,6 +332,14 @@ class StaleIdleSandboxStore extends MemoryStore {
 
   override async updateSandbox(record: SandboxRecord): Promise<SandboxRecord> {
     return this.currentStore.updateSandbox(record);
+  }
+
+  override async getSession(id: string): Promise<SessionRecord | null> {
+    return this.currentStore.getSession(id);
+  }
+
+  override async getMessages(sessionId: string): Promise<MessageRecord[]> {
+    return this.currentStore.getMessages(sessionId);
   }
 
   override async appendEventWithNextSequence(event: Parameters<MemoryStore['appendEventWithNextSequence']>[0]) {
@@ -250,6 +374,7 @@ function createProvider(handle: SandboxHandle): SandboxProvider {
     create: vi.fn(async () => handle),
     connect: vi.fn(async () => handle),
     destroy: vi.fn(async () => {}),
+    start: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     health: vi.fn(async () => ({ status: 'ready' as const, checkedAt: new Date() })),
   };

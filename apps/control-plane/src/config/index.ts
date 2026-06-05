@@ -2,7 +2,14 @@ import { getModels, type KnownProvider } from '@earendil-works/pi-ai';
 
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue' | 'pi';
-export type SandboxProviderKind = 'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'k8s-agent-sandbox' | 'ecs';
+export type SandboxProviderKind =
+  | 'fake'
+  | 'unsafe-local'
+  | 'docker'
+  | 'daytona'
+  | 'opencomputer'
+  | 'k8s-agent-sandbox'
+  | 'ecs';
 export type DockerOrchestratorMode = 'in-process' | 'http';
 export type AgentSandboxOrchestratorMode = 'in-process' | 'http';
 export type AppStoreKind = 'memory' | 'postgres';
@@ -85,6 +92,14 @@ export type AppConfig = {
   daytonaTarget?: string;
   daytonaImage?: string;
   daytonaSnapshot?: string;
+  opencomputerApiKey?: string;
+  opencomputerApiUrl?: string;
+  opencomputerTemplate?: string;
+  opencomputerSnapshot?: string;
+  opencomputerSecretStore?: string;
+  opencomputerCpuCount?: number;
+  opencomputerMemoryMb?: number;
+  opencomputerDiskMb?: number;
   slackApiBaseUrl: string;
   slackSigningSecret?: string;
   slackBotToken?: string;
@@ -143,7 +158,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'unsafe-local', 'docker', 'daytona', 'k8s-agent-sandbox', 'ecs'],
+      ['fake', 'unsafe-local', 'docker', 'daytona', 'opencomputer', 'k8s-agent-sandbox', 'ecs'],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
@@ -244,6 +259,17 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.DAYTONA_TARGET) config.daytonaTarget = env.DAYTONA_TARGET;
   if (env.DAYTONA_IMAGE) config.daytonaImage = env.DAYTONA_IMAGE;
   if (env.DAYTONA_SNAPSHOT) config.daytonaSnapshot = env.DAYTONA_SNAPSHOT;
+  if (env.OPENCOMPUTER_API_KEY) config.opencomputerApiKey = env.OPENCOMPUTER_API_KEY;
+  if (env.OPENCOMPUTER_API_URL) config.opencomputerApiUrl = env.OPENCOMPUTER_API_URL;
+  if (env.OPENCOMPUTER_TEMPLATE) config.opencomputerTemplate = env.OPENCOMPUTER_TEMPLATE;
+  if (env.OPENCOMPUTER_SNAPSHOT) config.opencomputerSnapshot = env.OPENCOMPUTER_SNAPSHOT;
+  if (env.OPENCOMPUTER_SECRET_STORE) config.opencomputerSecretStore = env.OPENCOMPUTER_SECRET_STORE;
+  if (env.OPENCOMPUTER_CPU_COUNT)
+    config.opencomputerCpuCount = parsePositiveInteger(env.OPENCOMPUTER_CPU_COUNT, 1, 'OPENCOMPUTER_CPU_COUNT');
+  if (env.OPENCOMPUTER_MEMORY_MB)
+    config.opencomputerMemoryMb = parsePositiveInteger(env.OPENCOMPUTER_MEMORY_MB, 1024, 'OPENCOMPUTER_MEMORY_MB');
+  if (env.OPENCOMPUTER_DISK_MB)
+    config.opencomputerDiskMb = parsePositiveInteger(env.OPENCOMPUTER_DISK_MB, 20480, 'OPENCOMPUTER_DISK_MB');
   if (env.SLACK_SIGNING_SECRET) config.slackSigningSecret = env.SLACK_SIGNING_SECRET;
   if (env.SLACK_BOT_TOKEN) config.slackBotToken = env.SLACK_BOT_TOKEN;
   if (env.GITHUB_APP_ID) config.githubAppId = env.GITHUB_APP_ID;
@@ -294,11 +320,17 @@ function validateAgentSandboxOrchestratorConfig(config: AppConfig): void {
 }
 
 function validateSandboxSecretConfig(config: AppConfig, env: NodeJS.ProcessEnv): void {
-  const sandboxSecretsRequired = config.sandboxProvider === 'docker' || config.sandboxProvider === 'k8s-agent-sandbox';
+  const sandboxSecretsRequired =
+    config.sandboxProvider === 'docker' ||
+    config.sandboxProvider === 'k8s-agent-sandbox' ||
+    config.sandboxProvider === 'opencomputer';
   if (config.appDataStore === 'postgres' && sandboxSecretsRequired && !config.sandboxSecretEncryptionKey) {
     throw new Error(
       `SANDBOX_SECRET_ENCRYPTION_KEY is required when APP_DATA_STORE=postgres and SANDBOX_PROVIDER=${config.sandboxProvider}`,
     );
+  }
+  if (config.sandboxProvider === 'opencomputer' && !config.opencomputerSnapshot && !config.opencomputerTemplate) {
+    throw new Error('OPENCOMPUTER_SNAPSHOT or OPENCOMPUTER_TEMPLATE is required when SANDBOX_PROVIDER=opencomputer');
   }
   if (env.NODE_ENV === 'production' && config.sandboxSecretEncryptionKey === sandboxSecretEncryptionKeyPlaceholder) {
     throw new Error('SANDBOX_SECRET_ENCRYPTION_KEY must not use the .env.example placeholder in production');
@@ -390,6 +422,14 @@ export function requireDaytonaApiKey(config: AppConfig): string {
   }
 
   return config.daytonaApiKey;
+}
+
+export function requireOpenComputerApiKey(config: AppConfig): string {
+  if (!config.opencomputerApiKey) {
+    throw new Error('OPENCOMPUTER_API_KEY is required when SANDBOX_PROVIDER=opencomputer');
+  }
+
+  return config.opencomputerApiKey;
 }
 
 export function requireDockerOrchestratorUrl(config: AppConfig): string {

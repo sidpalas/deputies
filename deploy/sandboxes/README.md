@@ -7,6 +7,7 @@ This directory contains sandbox runtime image assets. These images are not full 
 - `base/`: provider-neutral base toolchain for Deputies-compatible sandboxes.
 - `docker/`: Docker-provider image. It uses the base toolchain and starts the Deputies sandbox bridge as its command.
 - `daytona/`: Daytona-provider image. It uses the base toolchain, adds helper scripts for Daytona/no-nested-virtualization verification, and uses a long-running command.
+- `opencomputer/`: OpenComputer snapshot workflow. It installs sandbox tooling through the OpenComputer SDK image builder, with bridge, minimal, slim, and full variants.
 
 ## Custom Repository Images
 
@@ -15,6 +16,7 @@ Use the published provider images directly unless you need extra tools or unpubl
 ```sh
 DOCKER_SANDBOX_IMAGE=ghcr.io/sidpalas/deputies-docker-sandbox:<tag-or-digest>
 DAYTONA_IMAGE=ghcr.io/sidpalas/deputies-daytona-sandbox:<tag-or-digest>
+OPENCOMPUTER_SNAPSHOT=<snapshot-name>
 ```
 
 The provided images intentionally include only broadly useful dependencies. Most real repositories need additional language runtimes, system packages, CLIs, browser dependencies, database clients, or build tools.
@@ -60,6 +62,17 @@ DAYTONA_IMAGE=ghcr.io/<owner>/<repo>-deputies-daytona-sandbox:<tag>
 ```
 
 Use pinned tags or digests for repeatability. Avoid relying on nested Docker unless your sandbox provider explicitly supports it.
+
+OpenComputer snapshots are created through the SDK rather than Docker:
+
+```sh
+mise run //deploy/sandboxes/opencomputer:snapshot:create
+mise run //deploy/sandboxes/opencomputer:snapshot:create:bridge
+mise run //deploy/sandboxes/opencomputer:snapshot:create:slim
+mise run //deploy/sandboxes/opencomputer:snapshot:create:full
+```
+
+The default OpenComputer snapshot task currently creates the validated bridge variant, `deputies-opencomputer-base-bridge`.
 
 Build provider images locally only when changing these Dockerfiles. Build the base first:
 

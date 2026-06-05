@@ -1,0 +1,22 @@
+{
+  "name": "deputies-opencomputer-sandbox",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "snapshot:create": "pnpm --dir ../../../packages/sandbox-bridge build && tsx create-opencomputer-snapshot.ts --variant bridge",
+    "snapshot:create:full": "pnpm --dir ../../../packages/sandbox-bridge build && tsx create-opencomputer-snapshot.ts --variant full",
+    "snapshot:create:slim": "pnpm --dir ../../../packages/sandbox-bridge build && tsx create-opencomputer-snapshot.ts --variant slim",
+    "snapshot:create:bridge": "pnpm --dir ../../../packages/sandbox-bridge build && tsx create-opencomputer-snapshot.ts --variant bridge",
+    "snapshot:create:minimal": "tsx create-opencomputer-snapshot.ts --variant minimal",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opencomputer/sdk": "^0.5.17"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.2"
+  }
+}

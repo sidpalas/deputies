@@ -38,6 +38,23 @@ describe('sandbox bridge server', () => {
     expect(response.status).toBe(401);
   });
 
+  it('can run in preview-only mode', async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    server = createSandboxBridgeServer({ workspacePath, token, previewOnly: true });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (typeof address !== 'object' || !address) throw new Error('Expected server address');
+    baseUrl = `http://127.0.0.1:${address.port}`;
+
+    expect((await bridgeFetch('/exec', { method: 'POST', body: JSON.stringify({ command: 'true' }) })).status).toBe(
+      404,
+    );
+    expect((await bridgeFetch('/fs/read?path=file.txt')).status).toBe(404);
+  });
+
   it('reports health', async () => {
     const response = await bridgeFetch('/health');
 
