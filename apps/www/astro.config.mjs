@@ -98,22 +98,66 @@ function getTextContent(node) {
   return node.children.map(getTextContent).join('');
 }
 
-function wrapTables(node) {
+function wrapTables(node, insideTableScroll = false) {
   if (!node || typeof node !== 'object' || !Array.isArray(node.children)) return;
 
-  node.children = node.children.map((child) => {
-    if (child.type === 'element' && child.tagName === 'table') {
-      return {
-        type: 'element',
-        tagName: 'div',
-        properties: { className: ['table-scroll'] },
-        children: [child],
-      };
+  const childInsideTableScroll = insideTableScroll || hasClassName(node, 'table-scroll');
+  const children = [];
+  let pendingTableClassNames = [];
+
+  for (const child of node.children) {
+    const tableClassNames = getTableClassNamesFromComment(child);
+    if (tableClassNames) {
+      pendingTableClassNames = tableClassNames;
+      continue;
     }
 
-    wrapTables(child);
-    return child;
-  });
+    if (child.type === 'element' && child.tagName === 'table') {
+      if (childInsideTableScroll) {
+        children.push(child);
+      } else {
+        children.push({
+          type: 'element',
+          tagName: 'div',
+          properties: { className: ['table-scroll', ...pendingTableClassNames] },
+          children: [child],
+        });
+      }
+
+      pendingTableClassNames = [];
+      continue;
+    }
+
+    wrapTables(child, childInsideTableScroll);
+    children.push(child);
+
+    if (!isWhitespaceText(child)) pendingTableClassNames = [];
+  }
+
+  node.children = children;
+}
+
+function hasClassName(node, className) {
+  const classNames = node.properties?.className;
+  if (Array.isArray(classNames)) return classNames.includes(className);
+  return typeof classNames === 'string' && classNames.split(/\s+/).includes(className);
+}
+
+function getTableClassNamesFromComment(node) {
+  const value = typeof node.value === 'string' ? node.value.trim() : '';
+  if (node.type === 'mdxFlowExpression' && value === '/* table:body-width */') {
+    return ['table-scroll--body-width'];
+  }
+  if (node.type === 'comment' && value === 'table:compact-leading') return ['table-scroll--compact-leading'];
+  if (node.type === 'raw' && value === '<!-- table:compact-leading -->') return ['table-scroll--compact-leading'];
+  if (node.type === 'mdxFlowExpression' && value === '/* table:compact-leading */') {
+    return ['table-scroll--compact-leading'];
+  }
+  return undefined;
+}
+
+function isWhitespaceText(node) {
+  return node.type === 'text' && /^\s*$/.test(node.value ?? '');
 }
 
 function visitExternalLinks(node) {

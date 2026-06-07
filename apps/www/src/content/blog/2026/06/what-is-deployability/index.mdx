@@ -1,0 +1,114 @@
+---
+title: 'What is Deployability and Why does it Matter?'
+description: 'Deputies can be deployed anywhere your infrastructure runs'
+pubDate: 2026-06-07
+author: 'Sid Palas'
+draft: false
+---
+
+In my previous post [Introducing Deputies](/blog/introducing-deputies/), I mentioned that "deployability is a core feature" of Deputies. This post explains what that means.
+
+To me, deployability boils down to:
+
+> "Can this application be deployed alongside my existing infrastructure, using existing deployment patterns, with minimal operational burden?"
+
+{/* table:body-width */}
+| ✅ -- More deployable | ❌ -- Less deployable |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Runs as a standard OCI container | Relies on cloud-provider-specific abstractions or proprietary runtime APIs |
+| Uses common database technologies, like Postgres, MySQL, or Redis | Requires specialized components before it can run, like Kafka, Cassandra, or Temporal |
+| Composes standard operational primitives | Requires an all-in-one hosted runtime for compute, storage, and execution |
+| Has fewer services/components | Has more services/components |
+| Can start simple and grow over time | Requires every integration and scaling component up front |
+
+These ideas show up in Deputies' architecture: the control plane runs as a Node.js process inside of a container, persists to Postgres, stores artifacts in object storage, and delegates work to isolated agent sandboxes.
+
+The system maps to patterns teams already run, within the cloud or infrastructure provider(s) they already use.
+
+> **Note:** Cloud-specific abstractions and specialized infrastructure are not inherently bad. They are often the right choice when the problem genuinely needs them: e.g., Durable Objects for low-latency coordination near users, Kafka for durable streams, replay, and independent consumers.
+
+Eventually (hopefully!) there will be teams using Deputies at large enough scale that a dedicated component for work dispatch, retries, and backpressure is worth the operational cost. When that day comes, it should be added because scale demands it, not because a fresh install needs it on day one.
+
+## Why the Trust Boundary Matters
+
+Deployability matters more for background agents than for many other kinds of software because useful agents need context and permissions. To debug a failed deployment, investigate a flaky test, or prepare a production change, an agent may need to read private source code, inspect CI logs, fetch artifacts, query internal APIs, or reach systems that are intentionally not exposed to the public internet.
+
+Putting the agent control plane inside an existing trust boundary changes the security conversation. Instead of granting an external service broad access into production, teams can use the network boundaries, IAM roles, secrets managers, audit logs, and approval workflows they already operate.
+
+Self-hosting makes safe agent access more practical, even though it still requires care: credentials can stay in the environment where they are already governed, sandbox egress can be constrained, production access can be scoped, and every run can be logged alongside the rest of the infrastructure.
+
+For background-agent systems, there are three components to think about: the control plane, the sandboxes where agents execute, and the LLM provider. For the most security-conscious teams, compliance may require all three to stay inside the trust boundary. For example, that could mean a Kubernetes control plane, Kubernetes Agent Sandbox, and AWS Bedrock all running inside AWS GovCloud.
+
+For background agents, deployability determines whether the agent can be placed close enough to do valuable work without punching unnecessary holes through the organization's trust model.
+
+### A Spectrum of Background-Agent Deployability
+
+Each background-agent system makes different tradeoffs when it comes to deployability.
+
+Hosted SaaS products like [Devin](https://www.cognition.ai/blog/introducing-devin) or [Ona](https://www.gitpod.io/blog/gitpod-is-now-ona) optimize for getting started without operating the control plane yourself. That is valuable, but it also means the agent system usually lives outside your compute environment and outside the trust boundary where your production systems already run.
+
+Open-source systems can also be designed around a specific infrastructure stack. [Open SWE](https://github.com/langchain-ai/open-swe) closely follows the LangGraph and LangSmith ecosystem. [Open Inspect](https://github.com/ColeMurray/background-agents) is built on Durable Objects, so its control plane runs on Cloudflare. These choices enable those projects to lean on managed orchestration, observability, and execution primitives, but they influence where the system wants to run.
+
+Deputies establishes a different deployment posture by keeping the system runnable pretty much anywhere, so teams can place the control plane and agent execution path inside the infrastructure model they already use.
+
+## Operational Simplicity: Start Simple, Then Grow
+
+Operational simplicity is another aspect of deployability. A useful first deployment should have few moving pieces, and each additional component should earn its place by unlocking a capability or solving a scaling problem.
+
+Deputies follows that progression: start with the smallest useful architecture, add integrations when they are ready, and split components only when usage justifies the extra operational surface area.
+
+### Simple Mode
+
+<figure class="architecture-figure">
+  <img src="/images/simple-mode.svg" alt="Simple Mode Deputies architecture" />
+  <figcaption>
+    A monolithic control plane where the API and worker run together, without Slack, GitHub, custom webhook, or object
+    storage integrations. This gives teams the shortest path to a working background-agent system.
+  </figcaption>
+</figure>
+
+Simple Mode is for getting value quickly. I have gotten a company set up this way in under an hour: install Deputies, connect a sandbox provider, run work through the web UI, and inspect the resulting sessions without first wiring up every integration they may eventually want.
+
+### Integrated Mode
+
+<figure class="architecture-figure">
+  <img src="/images/integrated-mode.svg" alt="Integrated Mode Deputies architecture" />
+  <figcaption>
+    The control plane stays monolithic while Slack, GitHub, custom webhooks, and object storage are added around it.
+  </figcaption>
+</figure>
+
+Integrated Mode keeps the simple operating model while unlocking the full Deputies feature set. Work can enter through chat, source-control events, or custom automation, and generated artifacts can move into durable object storage.
+
+### Scale Mode
+
+<figure class="architecture-figure">
+  <img src="/images/scale-mode.svg" alt="Scale Mode Deputies architecture" />
+  <figcaption>
+    The API and worker split into separate services so each can scale independently as usage grows.
+  </figcaption>
+</figure>
+
+Scale Mode is for larger teams with heavier usage. API replicas can handle more user and integration traffic, while worker replicas can expand independently to run more background sessions.
+
+## Deputies Deployment Patterns
+
+Deputies can be deployed anywhere that runs containers.
+
+The documentation covers three deployment patterns that map to different types of users:
+
+| Deployment pattern                        | Deputies shape                                                                                                                    | User archetype                                                                                               | Why it matters                                                                                                   |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Hosted containers plus a managed database | [Railway control plane](https://railway.com/deploy/deputies-monolith) + Daytona sandboxes                                         | The team that wants the simplest possible path to a hosted deployment                                        | They can get Deputies running without first becoming experts in its infrastructure shape.                        |
+| All-in-one Docker on one machine          | [Docker Compose control plane](https://github.com/sidpalas/deputies/blob/main/deploy/docker-compose/README.md) + Docker sandboxes | The small-team CTO with a spare Mac Studio in the closet, or a beefy rented bare-metal server                | They can run the whole system on hardware they control, using familiar container tooling.                        |
+| Kubernetes in an existing cloud network   | [Kubernetes control plane](https://github.com/sidpalas/deputies/blob/main/deploy/kubernetes/README.md) + Kubernetes Agent Sandbox | The large company where everything runs on Kubernetes and sensitive data must stay inside the production VPC | They can place Deputies inside existing network boundaries, IAM patterns, observability, and approval workflows. |
+
+A background-agent control plane works best when it fits into the infrastructure, deployment habits, and trust boundaries a team already operates.
+
+## Conclusion
+
+Deployability is more than the ability to run an application somewhere. For background agents, it shapes where the control plane lives, what the agent can safely access, and whether the architecture can grow with usage.
+
+That is why deployability is a core feature of Deputies. Teams should be able to start simply, keep sensitive work within the right trust boundary, and scale the system when usage demands it.
+
+If you want to try it yourself, check out the [GitHub repo](https://github.com/sidpalas/deputies) or explore the demo at [demo.deputies.dev](https://demo.deputies.dev).

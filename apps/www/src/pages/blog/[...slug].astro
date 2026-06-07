@@ -5,13 +5,17 @@ import { formatBlogDate, getBlogPostSlug, getBlogPostUrl, getPublishedBlogPosts,
 
 export async function getStaticPaths() {
   const posts = await getPublishedBlogPosts();
-  return posts.map((post) => ({
+  return posts.map((post, index) => ({
     params: { slug: getBlogPostSlug(post) },
-    props: { post },
+    props: { post, previousPost: posts[index + 1], nextPost: posts[index - 1] },
   }));
 }
 
-const { post } = Astro.props as { post: BlogPost };
+const { post, previousPost, nextPost } = Astro.props as {
+  post: BlogPost;
+  previousPost?: BlogPost;
+  nextPost?: BlogPost;
+};
 const { Content } = await render(post);
 ---
 
@@ -44,5 +48,23 @@ const { Content } = await render(post);
     <div class="post-body">
       <Content />
     </div>
+    {
+      (previousPost || nextPost) && (
+        <nav class="post-navigation" aria-label="Blog post navigation">
+          {previousPost && (
+            <a class="post-navigation__card" href={getBlogPostUrl(previousPost)}>
+              <span class="post-navigation__label">Previous post</span>
+              <strong>{previousPost.data.title}</strong>
+            </a>
+          )}
+          {nextPost && (
+            <a class="post-navigation__card post-navigation__card--next" href={getBlogPostUrl(nextPost)}>
+              <span class="post-navigation__label">Next post</span>
+              <strong>{nextPost.data.title}</strong>
+            </a>
+          )}
+        </nav>
+      )
+    }
   </article>
 </BaseLayout>
