@@ -2,9 +2,9 @@
 
 This document compares the portable Flue background-agent design with four reference systems:
 
-- `background-agents-upstream`, also referred to as Open-Inspect in its docs.
-- `open-swe-upstream`, the LangGraph/Deep Agents implementation.
-- `junior-upstream`, an open source Slack bot agent project with plugin, skill, sandbox, eval, and telemetry patterns.
+- `background-agents`, also referred to as Open-Inspect in its docs.
+- `open-swe-`, the LangGraph/Deep Agents implementation.
+- `junior`, an open source Slack bot agent project with plugin, skill, sandbox, eval, and telemetry patterns.
 - `mistle`, an open source background-agent platform with sandbox profiles, runtime plans, control/data-plane services, credential brokering, tunnels, and triggers.
 
 The goal is not to copy any system directly. The goal is to identify durable patterns that fit a portable, provider-neutral Flue implementation.
