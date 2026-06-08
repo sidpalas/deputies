@@ -19,6 +19,9 @@ content.
 
 ## Images
 
+Generated crossposting images live in `apps/www/generated/blog-images` and are ignored by git. Add a definition to
+`apps/www/scripts/generate-blog-images.mjs`, then run `mise run //apps/www:generate:blog-images`.
+
 Images in `apps/www/public` are served from the site root. For example, `apps/www/public/images/simple-mode.svg` can be
 referenced as `/images/simple-mode.svg`:
 

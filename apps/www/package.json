@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "astro dev",
     "generate:og": "node scripts/generate-og-image.mjs",
+    "generate:blog-images": "node scripts/generate-blog-images.mjs",
     "build": "astro build",
     "preview": "astro preview --host 0.0.0.0"
   },
