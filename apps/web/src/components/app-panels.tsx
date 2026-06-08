@@ -12,6 +12,7 @@ export {
   StartupLoadingPanel,
 } from './app-panels/banners.js';
 export { BearerAuthPanel, SessionAuthPanel } from './app-panels/auth-panels.js';
+export { AutomationsPanel, AutomationsSidebar } from './app-panels/automations-panel.js';
 export { MessageComposer } from './app-panels/message-composer.js';
 export { NewThreadPanel } from './app-panels/new-thread-panel.js';
 export { SetupGuidePanel } from './app-panels/setup-guide-panel.js';

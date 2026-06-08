@@ -4,6 +4,7 @@ import { createAdaptorServer } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
+import { AutomationService, AutomationServiceError } from '../automations/service.js';
 import { ArtifactService, ArtifactServiceError } from '../artifacts/service.js';
 import type { ArtifactObjectStorage } from '../artifacts/storage.js';
 import {
@@ -71,6 +72,8 @@ import { defaultGroupId, StoreConflictError } from '../store/types.js';
 import type {
   AppStore,
   AuthRole,
+  AutomationInvocationRecord,
+  AutomationRecord,
   AuthUserRecord,
   EventRecord,
   GroupMemberRecord,
@@ -127,6 +130,7 @@ export type AppServices = {
   events: EventService;
   sessions: SessionService;
   messages: MessageService;
+  automations: AutomationService;
   artifacts: ArtifactService;
   externalResources: ExternalResourceService;
   genericWebhooks: GenericWebhookService;
@@ -154,11 +158,13 @@ export function createServices(
   const events = new EventService(store);
   const sessions = new SessionService(store, events);
   const messages = new MessageService(store, events);
+  const automations = new AutomationService(store, sessions, messages);
   const services: AppServices = {
     store,
     events,
     sessions,
     messages,
+    automations,
     artifacts: new ArtifactService(store, events, options.artifactObjectStorage),
     externalResources: new ExternalResourceService(store, events),
     genericWebhooks: new GenericWebhookService(store, sessions, messages, {
@@ -334,6 +340,8 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.use('/sessions/*', apiAuthMiddleware(config, services.store));
   app.use('/sessions', apiAuthMiddleware(config, services.store));
+  app.use('/automations/*', apiAuthMiddleware(config, services.store));
+  app.use('/automations', apiAuthMiddleware(config, services.store));
   app.use('/repositories/*', apiAuthMiddleware(config, services.store));
   app.use('/repositories', apiAuthMiddleware(config, services.store));
   app.use('/models', apiAuthMiddleware(config, services.store));
@@ -424,6 +432,173 @@ export function createApp(config: AppConfig, services = createServices()) {
     return c.json({
       sessions: await Promise.all(visible.map((session) => serializeSessionWithSandbox(config, services, session))),
     });
+  });
+
+  app.post('/automations', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    const name = optionalString(body.name);
+    const prompt = optionalString(body.prompt);
+    const scheduleCron = optionalString(body.scheduleCron);
+    if (!name) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: name');
+    if (!prompt) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: prompt');
+    if (!scheduleCron) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: scheduleCron');
+
+    const group = await resolveSessionCreateGroup(services.store, auth, body.ownerGroupId);
+    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
+    if (group.archivedAt) return writeError(c, 409, 'archived_group', 'Cannot create automations in an archived group');
+    if (!canCreateSessionInGroup(auth, group.id)) {
+      return writeError(c, 403, 'forbidden', 'Group member access is required');
+    }
+
+    const requestedVisibility = body.visibility === undefined ? undefined : parseSessionVisibility(body.visibility);
+    const requestedWritePolicy = body.writePolicy === undefined ? undefined : parseSessionWritePolicy(body.writePolicy);
+    if (body.visibility !== undefined && !requestedVisibility) {
+      return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
+    }
+    if (body.writePolicy !== undefined && !requestedWritePolicy) {
+      return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
+    }
+    const defaults = sessionCreateDefaults(config, auth, group);
+    const canOverrideAccessDefaults = canManageGroup(auth, group.id);
+    if (
+      !canOverrideAccessDefaults &&
+      ((requestedVisibility && requestedVisibility !== defaults.visibility) ||
+        (requestedWritePolicy && requestedWritePolicy !== defaults.writePolicy))
+    ) {
+      return writeError(c, 403, 'forbidden', 'Group admin access is required to override access defaults');
+    }
+
+    try {
+      const context = parseAutomationCreateContextBody(body, config, services);
+      const automation = await services.automations.createScheduled({
+        name,
+        prompt,
+        scheduleCron,
+        ownerGroupId: group.id,
+        visibility: requestedVisibility ?? defaults.visibility,
+        writePolicy: requestedWritePolicy ?? defaults.writePolicy,
+        enabled: body.enabled === undefined ? true : parseBooleanBody(body.enabled, 'enabled'),
+        ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
+        ...(Object.keys(context).length ? { context } : {}),
+      });
+      return c.json({ automation: await serializeAutomation(services, automation, auth) }, 201);
+    } catch (error) {
+      if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
+      throw error;
+    }
+  });
+
+  app.get('/automations', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const automations = (await services.automations.list()).filter((automation) => canReadAutomation(auth, automation));
+    return c.json({
+      automations: await Promise.all(automations.map((automation) => serializeAutomation(services, automation, auth))),
+    });
+  });
+
+  app.get('/automations/:automationId', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const automation = await services.automations.get(c.req.param('automationId'));
+    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
+    if (!canReadAutomation(auth, automation)) return writeError(c, 403, 'forbidden', 'Automation access is required');
+    return c.json({ automation: await serializeAutomation(services, automation, auth) });
+  });
+
+  app.patch('/automations/:automationId', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const automation = await services.automations.get(c.req.param('automationId'));
+    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
+    if (!canManageAutomation(auth, automation))
+      return writeError(c, 403, 'forbidden', 'Automation management access is required');
+
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    const accessChangeRequested =
+      body.ownerGroupId !== undefined || body.visibility !== undefined || body.writePolicy !== undefined;
+    if (accessChangeRequested && !canManageGroup(auth, automation.ownerGroupId)) {
+      return writeError(c, 403, 'forbidden', 'Group admin access is required to change automation access');
+    }
+
+    const nextOwnerGroupId = optionalString(body.ownerGroupId) ?? automation.ownerGroupId;
+    const nextGroup = await services.store.getGroup(nextOwnerGroupId);
+    if (!nextGroup) return writeError(c, 404, 'not_found', 'Group not found');
+    if (nextOwnerGroupId !== automation.ownerGroupId && !canManageGroup(auth, nextOwnerGroupId)) {
+      return writeError(c, 403, 'forbidden', 'Group admin access is required for both groups');
+    }
+    if (nextGroup.archivedAt)
+      return writeError(c, 409, 'archived_group', 'Cannot move automations to an archived group');
+
+    const visibility = body.visibility === undefined ? undefined : parseSessionVisibility(body.visibility);
+    const writePolicy = body.writePolicy === undefined ? undefined : parseSessionWritePolicy(body.writePolicy);
+    if (body.visibility !== undefined && !visibility)
+      return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
+    if (body.writePolicy !== undefined && !writePolicy)
+      return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
+
+    try {
+      const context = parseAutomationUpdateContextBody(body, config, services, automation.context);
+      const updated = await services.automations.updateScheduled({
+        id: automation.id,
+        ...(body.name !== undefined ? { name: optionalString(body.name) ?? '' } : {}),
+        ...(body.prompt !== undefined ? { prompt: optionalString(body.prompt) ?? '' } : {}),
+        ...(body.scheduleCron !== undefined ? { scheduleCron: optionalString(body.scheduleCron) ?? '' } : {}),
+        ...(body.enabled !== undefined ? { enabled: parseBooleanBody(body.enabled, 'enabled') } : {}),
+        ...(accessChangeRequested ? { ownerGroupId: nextOwnerGroupId } : {}),
+        ...(visibility ? { visibility } : {}),
+        ...(writePolicy ? { writePolicy } : {}),
+        ...(context.changed ? { context: context.value } : {}),
+      });
+      return c.json({ automation: await serializeAutomation(services, updated, auth) });
+    } catch (error) {
+      if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
+      throw error;
+    }
+  });
+
+  app.get('/automations/:automationId/invocations', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const automation = await services.automations.get(c.req.param('automationId'));
+    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
+    if (!canReadAutomation(auth, automation)) return writeError(c, 403, 'forbidden', 'Automation access is required');
+    const invocations = await services.automations.listInvocations(automation.id);
+    return c.json({ invocations: invocations.map(serializeAutomationInvocation) });
+  });
+
+  app.post('/automations/:automationId/invoke', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const automation = await services.automations.get(c.req.param('automationId'));
+    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
+    if (!canManageAutomation(auth, automation))
+      return writeError(c, 403, 'forbidden', 'Automation management access is required');
+    const body = await readJsonBody(c, config.maxJsonBodyBytes);
+
+    try {
+      const result = await services.automations.invokeManual({
+        automationId: automation.id,
+        ...(auth.bypass ? {} : { requestedByUserId: auth.user.id }),
+        allowDisabled: body.allowDisabled === undefined ? false : parseBooleanBody(body.allowDisabled, 'allowDisabled'),
+        allowOverlap: body.allowOverlap === undefined ? false : parseBooleanBody(body.allowOverlap, 'allowOverlap'),
+      });
+      const refreshed = (await services.automations.get(automation.id)) ?? automation;
+      return c.json(
+        {
+          automation: await serializeAutomation(services, refreshed, auth),
+          invocation: serializeAutomationInvocation(result.invocation),
+          ...(result.session ? { session: await serializeSessionWithSandbox(config, services, result.session) } : {}),
+          ...(result.message ? { message: result.message } : {}),
+        },
+        202,
+      );
+    } catch (error) {
+      if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
+      throw error;
+    }
   });
 
   app.get('/repositories', async (c) => {
@@ -1289,8 +1464,8 @@ function allowedCorsOrigin(config: AppConfig): (origin: string) => string | unde
   return (origin) => (allowed.has(origin) ? origin : undefined);
 }
 
-function writeError(c: Context, statusCode: number, error: string, message: string) {
-  return c.json({ error, message }, statusCode as never);
+function writeError(c: Context, statusCode: number, error: string, message: string, details?: Record<string, unknown>) {
+  return c.json({ error, message, ...(details ? { details } : {}) }, statusCode as never);
 }
 
 function writeGitHubRepositoryError(c: Context, error: unknown) {
@@ -1399,6 +1574,132 @@ async function serializeSessionWithSandbox(config: AppConfig, services: AppServi
 
   if (!sandbox) return serialized;
   return { ...serialized, sandbox: serializeSandboxSummary(sandbox) };
+}
+
+async function serializeAutomation(services: AppServices, automation: AutomationRecord, auth: RequestAuthorization) {
+  const [ownerGroup, invocations] = await Promise.all([
+    services.store.getGroup(automation.ownerGroupId),
+    services.automations.listInvocations(automation.id),
+  ]);
+  const lastInvocation = invocations[0];
+  return {
+    id: automation.id,
+    kind: automation.kind,
+    name: automation.name,
+    prompt: automation.prompt,
+    scheduleCron: automation.scheduleCron,
+    scheduleTimezone: 'UTC',
+    enabled: automation.enabled,
+    ownerGroupId: automation.ownerGroupId,
+    ...(ownerGroup ? { ownerGroupName: ownerGroup.name } : {}),
+    visibility: automation.visibility,
+    writePolicy: automation.writePolicy,
+    ...(automation.createdByUserId ? { createdByUserId: automation.createdByUserId } : {}),
+    ...(automation.context ? { context: automation.context } : {}),
+    ...(automation.nextInvocationAt ? { nextInvocationAt: automation.nextInvocationAt } : {}),
+    createdAt: automation.createdAt,
+    updatedAt: automation.updatedAt,
+    canManage: canManageAutomation(auth, automation),
+    ...(lastInvocation ? { lastInvocation: serializeAutomationInvocation(lastInvocation) } : {}),
+  };
+}
+
+function serializeAutomationInvocation(invocation: AutomationInvocationRecord) {
+  return {
+    id: invocation.id,
+    automationId: invocation.automationId,
+    trigger: invocation.trigger,
+    status: invocation.status,
+    createdAt: invocation.createdAt,
+    metadata: invocation.metadata,
+    ...(invocation.completedAt ? { completedAt: invocation.completedAt } : {}),
+    ...(invocation.scheduledAt ? { scheduledAt: invocation.scheduledAt } : {}),
+    ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}),
+    ...(invocation.messageId ? { messageId: invocation.messageId } : {}),
+    ...(invocation.requestedByUserId ? { requestedByUserId: invocation.requestedByUserId } : {}),
+    ...(invocation.reason ? { reason: invocation.reason } : {}),
+    ...(invocation.error ? { error: invocation.error } : {}),
+  };
+}
+
+function canReadAutomation(auth: RequestAuthorization, automation: AutomationRecord): boolean {
+  return canCreateSessionInGroup(auth, automation.ownerGroupId);
+}
+
+function canManageAutomation(auth: RequestAuthorization, automation: AutomationRecord): boolean {
+  if (canManageGroup(auth, automation.ownerGroupId)) return true;
+  return (
+    !auth.bypass &&
+    automation.createdByUserId === auth.user.id &&
+    canCreateSessionInGroup(auth, automation.ownerGroupId)
+  );
+}
+
+function automationServiceErrorResponse(c: Context, error: AutomationServiceError): Response {
+  if (error.code === 'not_found') return writeError(c, 404, 'not_found', error.message);
+  if (error.code === 'disabled') return writeError(c, 409, 'automation_disabled', error.message, error.details);
+  if (error.code === 'overlap') return writeError(c, 409, 'automation_overlap', error.message, error.details);
+  if (error.code === 'invalid_schedule') return writeError(c, 400, 'invalid_schedule', error.message);
+  return writeError(c, 400, 'invalid_request', error.message);
+}
+
+function parseBooleanBody(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean')
+    throw new HttpRequestError(400, 'invalid_request', `Expected boolean field: ${field}`);
+  return value;
+}
+
+function parseAutomationCreateContextBody(
+  body: Record<string, unknown>,
+  config: AppConfig,
+  services: AppServices,
+): Record<string, unknown> {
+  const repository = parseRepositoryBody(body.repository);
+  const model = parseModelBody(body.model, config);
+  const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModelDefault);
+  if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
+  const branch = repository ? parseBranchBody(body.branch) : undefined;
+  return {
+    ...(repository ? { repository } : {}),
+    ...(model ? { model } : {}),
+    ...(repository && branch ? { branch } : {}),
+  };
+}
+
+function parseAutomationUpdateContextBody(
+  body: Record<string, unknown>,
+  config: AppConfig,
+  services: AppServices,
+  currentContext: Record<string, unknown> | undefined,
+): { changed: boolean; value: Record<string, unknown> | null } {
+  const hasRepository = Object.prototype.hasOwnProperty.call(body, 'repository');
+  const hasModel = Object.prototype.hasOwnProperty.call(body, 'model');
+  const hasBranch = Object.prototype.hasOwnProperty.call(body, 'branch');
+  if (!hasRepository && !hasModel && !hasBranch) return { changed: false, value: null };
+
+  const next = { ...(currentContext ?? {}) };
+  if (hasRepository) {
+    const repository = parseRepositoryBody(body.repository);
+    if (repository) next.repository = repository;
+    else {
+      delete next.repository;
+      delete next.branch;
+    }
+  }
+  if (hasModel) {
+    const model = parseModelBody(body.model, config);
+    const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModelDefault);
+    if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
+    if (model) next.model = model;
+    else delete next.model;
+  }
+  if (hasBranch) {
+    const branch = parseBranchBody(body.branch);
+    if (branch) next.branch = branch;
+    else delete next.branch;
+  }
+
+  return { changed: true, value: Object.keys(next).length ? next : null };
 }
 
 function serializeSandboxSummary(sandbox: SandboxRecord) {

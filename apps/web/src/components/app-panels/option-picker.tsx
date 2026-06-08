@@ -110,6 +110,7 @@ export function OptionPicker(props: {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const selected = props.options.find((option) => option.value === props.value);
+  const displayLabel = selected?.label ?? (props.value && props.allowCustom ? props.value : props.emptyLabel);
   const filteredOptions = props.options.filter((option) =>
     `${option.label} ${option.value}`.toLowerCase().includes(search.trim().toLowerCase()),
   );
@@ -167,8 +168,8 @@ export function OptionPicker(props: {
         aria-label={props.label}
         onClick={toggleOpen}
       >
-        <span className="truncate" title={selected?.label ?? props.emptyLabel}>
-          {selected?.label ?? props.emptyLabel}
+        <span className="truncate" title={displayLabel}>
+          {displayLabel}
         </span>
         <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
       </button>

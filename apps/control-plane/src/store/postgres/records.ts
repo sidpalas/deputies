@@ -3,6 +3,11 @@ import type { NormalizedEventPayload, NormalizedEventType } from '../../events/t
 import { defaultGroupId } from '../types.js';
 import type {
   ArtifactRecord,
+  AutomationInvocationRecord,
+  AutomationInvocationStatus,
+  AutomationInvocationTrigger,
+  AutomationKind,
+  AutomationRecord,
   AuthSessionRecord,
   AuthUserRecord,
   CallbackDeliveryRecord,
@@ -191,6 +196,47 @@ export type CallbackDeliveryRow = QueryResultRow & {
   last_attempt_at: Date | null;
   delivered_at: Date | null;
 };
+
+export type AutomationRow = QueryResultRow & {
+  id: string;
+  kind: AutomationKind;
+  name: string;
+  prompt: string;
+  schedule_cron: string;
+  enabled: boolean;
+  owner_group_id: string;
+  visibility: SessionVisibility;
+  write_policy: SessionWritePolicy;
+  context: Record<string, unknown> | null;
+  created_by_user_id: string | null;
+  next_invocation_at: Date | null;
+  scheduler_lock_owner: string | null;
+  scheduler_locked_until: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export const automationSelectColumns =
+  'id, kind, name, prompt, schedule_cron, enabled, owner_group_id, visibility, write_policy, context, created_by_user_id, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
+
+export type AutomationInvocationRow = QueryResultRow & {
+  id: string;
+  automation_id: string;
+  trigger: AutomationInvocationTrigger;
+  status: AutomationInvocationStatus;
+  scheduled_at: Date | null;
+  session_id: string | null;
+  message_id: string | null;
+  requested_by_user_id: string | null;
+  reason: string | null;
+  error: string | null;
+  metadata: Record<string, unknown>;
+  created_at: Date;
+  completed_at: Date | null;
+};
+
+export const automationInvocationSelectColumns =
+  'id, automation_id, trigger, status, scheduled_at, session_id, message_id, requested_by_user_id, reason, error, metadata, created_at, completed_at';
 
 export type WebhookSourceRow = QueryResultRow & {
   id: string;
@@ -426,6 +472,45 @@ export function toCallbackDelivery(row: CallbackDeliveryRow): CallbackDeliveryRe
   if (row.last_attempt_at) record.lastAttemptAt = row.last_attempt_at;
   if (row.delivered_at) record.deliveredAt = row.delivered_at;
   return record;
+}
+
+export function toAutomation(row: AutomationRow): AutomationRecord {
+  return {
+    id: row.id,
+    kind: row.kind,
+    name: row.name,
+    prompt: row.prompt,
+    scheduleCron: row.schedule_cron,
+    enabled: row.enabled,
+    ownerGroupId: row.owner_group_id,
+    visibility: row.visibility,
+    writePolicy: row.write_policy,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.next_invocation_at ? { nextInvocationAt: row.next_invocation_at } : {}),
+    ...(row.created_by_user_id ? { createdByUserId: row.created_by_user_id } : {}),
+    ...(row.context ? { context: row.context } : {}),
+    ...(row.scheduler_lock_owner ? { schedulerLockOwner: row.scheduler_lock_owner } : {}),
+    ...(row.scheduler_locked_until ? { schedulerLockedUntil: row.scheduler_locked_until } : {}),
+  };
+}
+
+export function toAutomationInvocation(row: AutomationInvocationRow): AutomationInvocationRecord {
+  return {
+    id: row.id,
+    automationId: row.automation_id,
+    trigger: row.trigger,
+    status: row.status,
+    createdAt: row.created_at,
+    metadata: row.metadata,
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+    ...(row.scheduled_at ? { scheduledAt: row.scheduled_at } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.message_id ? { messageId: row.message_id } : {}),
+    ...(row.requested_by_user_id ? { requestedByUserId: row.requested_by_user_id } : {}),
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.error ? { error: row.error } : {}),
+  };
 }
 
 export function toWebhookSource(row: WebhookSourceRow): WebhookSourceRecord {

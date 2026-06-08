@@ -27,6 +27,7 @@ import {
   listBranches,
   login,
   listArtifacts,
+  listAutomations,
   listCallbacks,
   listGroupMembers,
   listGroups,
@@ -52,6 +53,7 @@ import {
   updateSessionAccess,
   updateUserRole,
   upsertGroupMember,
+  type Automation,
   type Health,
   type AuthUser,
   type BranchOption,
@@ -110,6 +112,7 @@ import {
   loadInitialGroupsPanelView,
   loadInitialIsCreatingThread,
   loadInitialSidebarPanel,
+  loadInitialSelectedAutomationId,
   loadInitialSetupGuideOpen,
   loadInitialSelectedSessionId,
   loadStoredToken,
@@ -117,6 +120,7 @@ import {
   newSessionSelectedStorageKey,
   realtimeReconnectInitialDelayMs,
   realtimeReconnectMaxDelayMs,
+  selectedAutomationStorageKey,
   selectedSessionStorageKey,
   setupGuideOpenStorageKey,
   sidebarPanelStorageKey,
@@ -132,6 +136,8 @@ import {
 import {
   ArchivedSessionNotice,
   AppNoticesBanner,
+  AutomationsPanel,
+  AutomationsSidebar,
   BearerAuthPanel,
   ConnectionStatusBanner,
   LocalSandboxWarning,
@@ -160,7 +166,7 @@ type AsyncState<T> = {
 
 type StateUpdate<T> = T | ((current: T) => T);
 
-type SidebarPanel = 'sessions' | 'groups';
+type SidebarPanel = 'sessions' | 'groups' | 'automations';
 type GroupsPanelView = 'group' | 'super_admins';
 
 type NavigationState = {
@@ -171,6 +177,7 @@ type NavigationState = {
   groupsPanelOpen: boolean;
   groupsPanelView: GroupsPanelView;
   selectedGroupId: string;
+  selectedAutomationId: string;
 };
 
 const activeProgressBatchDelayMs = 100;
@@ -242,6 +249,7 @@ function loadInitialNavigationState(): NavigationState {
     groupsPanelOpen: loadInitialGroupsPanelOpen(),
     groupsPanelView: loadInitialGroupsPanelView(),
     selectedGroupId: loadInitialGroupsPanelSelectedGroupId(),
+    selectedAutomationId: loadInitialSelectedAutomationId(),
   };
 }
 
@@ -252,6 +260,7 @@ export function App() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [groupMembers, setGroupMembers] = useState<GroupMember[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [automations, setAutomations] = useState<Automation[]>([]);
   const [navigation, setNavigation] = useState<NavigationState>(loadInitialNavigationState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -291,6 +300,8 @@ export function App() {
   const [themePreference, setThemePreference] = useState<ThemePreference>(loadThemePreference);
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [automationsLoading, setAutomationsLoading] = useState(false);
+  const [automationsLoaded, setAutomationsLoaded] = useState(false);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [detailLoadedSessionId, setDetailLoadedSessionId] = useState('');
   const [healthChecked, setHealthChecked] = useState(false);
@@ -307,6 +318,7 @@ export function App() {
     groupsPanelOpen,
     groupsPanelView,
     selectedGroupId,
+    selectedAutomationId,
   } = navigation;
   const { messages, events, activeProgress, artifacts, services, externalResources, callbacks } = sessionDetail;
   const { groupForm, memberSearch, superAdminSearch, roleManagementUsers } = accessGroupsState;
@@ -364,11 +376,16 @@ export function App() {
     () => sessions.find((session) => session.id === selectedSessionId) ?? null,
     [sessions, selectedSessionId],
   );
+  const selectedAutomation = useMemo(
+    () => automations.find((automation) => automation.id === selectedAutomationId) ?? null,
+    [automations, selectedAutomationId],
+  );
   const canCreateThread =
     canCallApi &&
     (!sessionAuthRequired ||
       (currentUser?.role === 'super_admin' && activeGroups.length > 0) ||
       creatableGroups.length > 0);
+  const canViewAutomations = canCreateThread;
   const canWriteSelectedSession = selectedSession ? userCanWriteSession(selectedSession) : canCreateThread;
   const canManageSelectedSessionAccess = Boolean(
     selectedSession &&
@@ -422,6 +439,13 @@ export function App() {
     setNavigation((current) => ({
       ...current,
       selectedGroupId: resolveStateUpdate(next, current.selectedGroupId),
+    }));
+  }
+
+  function setSelectedAutomationId(next: StateUpdate<string>) {
+    setNavigation((current) => ({
+      ...current,
+      selectedAutomationId: resolveStateUpdate(next, current.selectedAutomationId),
     }));
   }
 
@@ -729,6 +753,11 @@ export function App() {
     if (!canCallApi) return;
     refreshGroups().catch(() => undefined);
   }, [canCallApi, token]);
+
+  useEffect(() => {
+    if (!canViewAutomations || sidebarPanel !== 'automations') return;
+    refreshAutomations().catch(() => undefined);
+  }, [canViewAutomations, sidebarPanel, token]);
 
   useEffect(() => {
     const group = groupsPanelView === 'group' ? groups.find((candidate) => candidate.id === selectedGroupId) : null;
@@ -1049,10 +1078,35 @@ export function App() {
             : (nextGroups.find((group) => group.canManage)?.id ?? nextGroups[0]?.id ?? '');
         if (nextGroupId) sessionStorage.setItem(groupsPanelSelectedGroupStorageKey, nextGroupId);
         else sessionStorage.removeItem(groupsPanelSelectedGroupStorageKey);
+        if (groupsPanelOpen || sidebarPanel === 'groups') {
+          if (nextGroupId) setGroupSearchParam(nextGroupId);
+          else clearResourceSearchParams();
+        }
         return nextGroupId;
       });
     } catch (err) {
       handleApiError(err);
+    }
+  }
+
+  async function refreshAutomations() {
+    if (!canViewAutomations) return;
+    setAutomationsLoading(true);
+    setError('');
+    try {
+      const nextAutomations = await listAutomations(token);
+      setAutomations(nextAutomations);
+      setSelectedAutomationId((current) => {
+        if (!current || nextAutomations.some((automation) => automation.id === current)) return current;
+        sessionStorage.removeItem(selectedAutomationStorageKey);
+        clearResourceSearchParams();
+        return '';
+      });
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setAutomationsLoaded(true);
+      setAutomationsLoading(false);
     }
   }
 
@@ -1381,14 +1435,19 @@ export function App() {
     sessionStorage.removeItem(sidebarPanelStorageKey);
     sessionStorage.removeItem(groupsPanelViewStorageKey);
     sessionStorage.removeItem(groupsPanelSelectedGroupStorageKey);
+    sessionStorage.removeItem(selectedAutomationStorageKey);
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     setSessions([]);
+    setAutomations([]);
+    setAutomationsLoaded(false);
     setGroups([]);
     setGroupMembers([]);
     setAccessGroupsState(emptyAccessGroupsState());
     setSessionsLoaded(false);
     updateNavigation({
       selectedSessionId: '',
+      selectedAutomationId: '',
+      sidebarPanel: 'sessions',
       isCreatingThread: false,
       setupGuideOpen: false,
       groupsPanelOpen: false,
@@ -1410,6 +1469,7 @@ export function App() {
     sessionStorage.setItem(newSessionSelectedStorageKey, 'true');
     updateNavigation({
       selectedSessionId: '',
+      sidebarPanel: 'sessions',
       isCreatingThread: true,
       setupGuideOpen: false,
       groupsPanelOpen: false,
@@ -1427,10 +1487,12 @@ export function App() {
     autoScrolledSessionId.current = '';
     selectedSessionIdRef.current = sessionId;
     sessionStorage.setItem(selectedSessionStorageKey, sessionId);
+    sessionStorage.setItem(sidebarPanelStorageKey, 'sessions');
     setSessionSearchParam(sessionId);
     sessionStorage.removeItem(newSessionSelectedStorageKey);
     updateNavigation({
       selectedSessionId: sessionId,
+      sidebarPanel: 'sessions',
       isCreatingThread: false,
       setupGuideOpen: false,
       groupsPanelOpen: false,
@@ -1454,15 +1516,88 @@ export function App() {
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.setItem(groupsPanelOpenStorageKey, 'true');
     sessionStorage.setItem(sidebarPanelStorageKey, 'groups');
+    if (selectedGroupId) setGroupSearchParam(selectedGroupId);
+    else clearResourceSearchParams();
     updateNavigation({ setupGuideOpen: false, groupsPanelOpen: true, sidebarPanel: 'groups' });
     setSidebarCollapsed(false);
     setSidebarOpen(!desktop);
+  }
+
+  function openAutomationsPanel() {
+    if (!canViewAutomations) return;
+    const desktop = isDesktopViewport();
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
+    sessionStorage.removeItem(groupsPanelOpenStorageKey);
+    sessionStorage.setItem(sidebarPanelStorageKey, 'automations');
+    if (selectedAutomationId) setAutomationSearchParam(selectedAutomationId);
+    else clearResourceSearchParams();
+    updateNavigation({
+      setupGuideOpen: false,
+      groupsPanelOpen: false,
+      sidebarPanel: 'automations',
+      isCreatingThread: false,
+    });
+    setSidebarCollapsed(false);
+    setSidebarOpen(!desktop);
+  }
+
+  function startNewAutomation() {
+    if (!canViewAutomations) return;
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
+    sessionStorage.removeItem(groupsPanelOpenStorageKey);
+    sessionStorage.removeItem(selectedAutomationStorageKey);
+    clearResourceSearchParams();
+    sessionStorage.setItem(sidebarPanelStorageKey, 'automations');
+    updateNavigation({
+      setupGuideOpen: false,
+      groupsPanelOpen: false,
+      sidebarPanel: 'automations',
+      isCreatingThread: false,
+      selectedAutomationId: '',
+    });
+    if (!isDesktopViewport()) setSidebarOpen(false);
+  }
+
+  function selectAutomationPanel(automationId: string) {
+    if (!canViewAutomations) return;
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
+    sessionStorage.removeItem(groupsPanelOpenStorageKey);
+    sessionStorage.setItem(sidebarPanelStorageKey, 'automations');
+    sessionStorage.setItem(selectedAutomationStorageKey, automationId);
+    setAutomationSearchParam(automationId);
+    updateNavigation({
+      setupGuideOpen: false,
+      groupsPanelOpen: false,
+      sidebarPanel: 'automations',
+      isCreatingThread: false,
+      selectedAutomationId: automationId,
+    });
+    if (!isDesktopViewport()) setSidebarOpen(false);
+  }
+
+  function handleAutomationChanged(automation: Automation) {
+    setAutomations((current) => [automation, ...current.filter((candidate) => candidate.id !== automation.id)]);
+  }
+
+  function handleAutomationSaved(automation: Automation) {
+    handleAutomationChanged(automation);
+    sessionStorage.setItem(selectedAutomationStorageKey, automation.id);
+    setAutomationSearchParam(automation.id);
+    updateNavigation({
+      setupGuideOpen: false,
+      groupsPanelOpen: false,
+      sidebarPanel: 'automations',
+      isCreatingThread: false,
+      selectedAutomationId: automation.id,
+    });
   }
 
   function showSessionsSidebar() {
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'sessions');
+    if (selectedSessionId) setSessionSearchParam(selectedSessionId);
+    else clearResourceSearchParams();
     updateNavigation({ setupGuideOpen: false, groupsPanelOpen: false, sidebarPanel: 'sessions' });
     setSidebarCollapsed(false);
     setSidebarOpen(true);
@@ -1472,6 +1607,8 @@ export function App() {
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'sessions');
+    if (selectedSessionId) setSessionSearchParam(selectedSessionId);
+    else clearResourceSearchParams();
     updateNavigation({ setupGuideOpen: false, groupsPanelOpen: false, sidebarPanel: 'sessions' });
     setSidebarCollapsed(false);
     setSidebarOpen(true);
@@ -1491,6 +1628,7 @@ export function App() {
       await refreshGroups();
       sessionStorage.setItem(groupsPanelViewStorageKey, 'group');
       sessionStorage.setItem(groupsPanelSelectedGroupStorageKey, group.id);
+      setGroupSearchParam(group.id);
       updateNavigation({ groupsPanelView: 'group', selectedGroupId: group.id });
     } catch (err) {
       handleApiError(err);
@@ -1640,6 +1778,7 @@ export function App() {
     sessionStorage.setItem(sidebarPanelStorageKey, 'groups');
     sessionStorage.setItem(groupsPanelViewStorageKey, 'group');
     sessionStorage.setItem(groupsPanelSelectedGroupStorageKey, groupId);
+    setGroupSearchParam(groupId);
     updateNavigation({
       setupGuideOpen: false,
       groupsPanelOpen: true,
@@ -1656,6 +1795,7 @@ export function App() {
     sessionStorage.setItem(groupsPanelOpenStorageKey, 'true');
     sessionStorage.setItem(sidebarPanelStorageKey, 'groups');
     sessionStorage.setItem(groupsPanelViewStorageKey, 'super_admins');
+    clearResourceSearchParams();
     updateNavigation({
       setupGuideOpen: false,
       groupsPanelOpen: true,
@@ -1925,8 +2065,20 @@ export function App() {
                   variant="ghost"
                   size="icon"
                   onClick={expandSidebar}
-                  aria-label={sidebarPanel === 'groups' ? 'Expand access' : 'Expand sessions'}
-                  title={sidebarPanel === 'groups' ? 'Expand access' : 'Expand sessions'}
+                  aria-label={
+                    sidebarPanel === 'groups'
+                      ? 'Expand access'
+                      : sidebarPanel === 'automations'
+                        ? 'Expand automations'
+                        : 'Expand sessions'
+                  }
+                  title={
+                    sidebarPanel === 'groups'
+                      ? 'Expand access'
+                      : sidebarPanel === 'automations'
+                        ? 'Expand automations'
+                        : 'Expand sessions'
+                  }
                 >
                   <PanelLeftOpen className="h-4 w-4" />
                 </Button>
@@ -1943,6 +2095,7 @@ export function App() {
                     authRequired={bearerAuthRequired || sessionAuthRequired}
                     canCreateGroups={canManageAllGroups}
                     canViewGroups={canViewGroups}
+                    canViewAutomations={canViewAutomations}
                     canViewSetup={canViewSetup}
                     connectionStatus={connectionStatus}
                     currentUser={currentUser}
@@ -1957,11 +2110,38 @@ export function App() {
                     onBackToSessions={backToSessionsSidebar}
                     onCollapse={collapseSidebar}
                     onCreateGroup={handleCreateGroup}
+                    onOpenAutomations={openAutomationsPanel}
                     onOpenGroups={openGroupsPanel}
                     onOpenSessions={showSessionsSidebar}
                     onOpenSetup={openSetupGuide}
                     onSelectGroup={selectGroupPanel}
                     onSelectSuperAdmins={selectSuperAdminsPanel}
+                    onSignOut={signOut}
+                    onThemeChange={setThemePreference}
+                  />
+                ) : sidebarPanel === 'automations' && canViewAutomations ? (
+                  <AutomationsSidebar
+                    authRequired={bearerAuthRequired || sessionAuthRequired}
+                    automations={automations}
+                    canCallApi={canViewAutomations}
+                    canViewGroups={canViewGroups}
+                    canViewAutomations={canViewAutomations}
+                    canViewSetup={canViewSetup}
+                    connectionStatus={connectionStatus}
+                    health={health}
+                    loading={automationsLoading}
+                    navPage={showingSetupGuide ? 'setup' : 'automations'}
+                    selectedAutomationId={selectedAutomationId}
+                    themePreference={themePreference}
+                    token={token}
+                    onBackToSessions={backToSessionsSidebar}
+                    onCollapse={collapseSidebar}
+                    onCreateAutomation={startNewAutomation}
+                    onOpenAutomations={openAutomationsPanel}
+                    onOpenGroups={openGroupsPanel}
+                    onOpenSessions={showSessionsSidebar}
+                    onOpenSetup={openSetupGuide}
+                    onSelectAutomation={selectAutomationPanel}
                     onSignOut={signOut}
                     onThemeChange={setThemePreference}
                   />
@@ -1971,13 +2151,14 @@ export function App() {
                     authRequired={bearerAuthRequired || sessionAuthRequired}
                     canCallApi={canCallApi}
                     canViewGroups={canViewGroups}
+                    canViewAutomations={canViewAutomations}
                     canStartNewThread={canCreateThread}
                     canViewSetup={canViewSetup}
                     canWriteSession={userCanWriteSession}
                     health={health}
                     connectionStatus={connectionStatus}
                     loading={loading}
-                    navPage={showingSetupGuide ? 'setup' : 'sessions'}
+                    navPage={showingSetupGuide ? 'setup' : sidebarPanel === 'automations' ? 'automations' : 'sessions'}
                     sessions={sortedSessions}
                     selectedSessionId={selectedSessionId}
                     token={token}
@@ -1985,6 +2166,7 @@ export function App() {
                     onArchivedSessionsOpenChange={setArchivedSessionsOpen}
                     onCollapse={collapseSidebar}
                     onNewThread={startNewThread}
+                    onOpenAutomations={openAutomationsPanel}
                     onOpenGroups={openGroupsPanel}
                     onOpenSessions={showSessionsSidebar}
                     onOpenSetup={openSetupGuide}
@@ -2045,11 +2227,38 @@ export function App() {
                     setupStatus={setupStatus}
                     setupError={setupStatusError}
                     showOpenSidebar={!sidebarOpen}
-                    openSidebarLabel={sidebarPanel === 'groups' && canViewGroups ? 'Open access' : 'Open sessions'}
+                    openSidebarLabel={
+                      sidebarPanel === 'groups' && canViewGroups
+                        ? 'Open access'
+                        : sidebarPanel === 'automations' && canViewAutomations
+                          ? 'Open automations'
+                          : 'Open sessions'
+                    }
                     onOpenSidebar={expandSidebar}
                     onRefresh={refreshSetupStatus}
                     onStartNewThread={startNewThread}
                     canStartNewThread={canCreateThread}
+                  />
+                ) : sidebarPanel === 'automations' && canViewAutomations ? (
+                  <AutomationsPanel
+                    automation={selectedAutomation}
+                    automationsLoaded={automationsLoaded}
+                    automationsLoading={automationsLoading}
+                    canCallApi={canViewAutomations}
+                    groups={creatableGroups}
+                    token={token}
+                    repositoryOptions={repositoryOptions}
+                    repositoryOptionsLoading={repositoryOptionsLoading}
+                    repositoryOptionsError={repositoryOptionsError}
+                    modelChoices={modelChoices}
+                    selectedAutomationId={selectedAutomationId}
+                    showOpenSidebar={!sidebarOpen}
+                    openSidebarLabel="Open automations"
+                    onAutomationChanged={handleAutomationChanged}
+                    onAutomationSaved={handleAutomationSaved}
+                    onOpenSidebar={expandSidebar}
+                    onSelectSession={selectSession}
+                    onError={handleApiError}
                   />
                 ) : isCreatingThread || !selectedSession ? (
                   <NewThreadPanel
@@ -2071,7 +2280,13 @@ export function App() {
                     modelChoices={modelChoices}
                     modelUnavailableReason={newThreadModelUnavailableReason}
                     showOpenSidebar={!sidebarOpen}
-                    openSidebarLabel={sidebarPanel === 'groups' && canViewGroups ? 'Open access' : 'Open sessions'}
+                    openSidebarLabel={
+                      sidebarPanel === 'groups' && canViewGroups
+                        ? 'Open access'
+                        : sidebarPanel === 'automations' && canViewAutomations
+                          ? 'Open automations'
+                          : 'Open sessions'
+                    }
                     onOpenSidebar={expandSidebar}
                     onGroupChange={setNewThreadGroupId}
                     onPromptChange={setNewThreadPrompt}
@@ -2086,7 +2301,13 @@ export function App() {
                       selectedSession={selectedSession}
                       canWriteSession={canWriteSelectedSession}
                       showOpenSidebar={!sidebarOpen}
-                      openSidebarLabel={sidebarPanel === 'groups' && canViewGroups ? 'Open access' : 'Open sessions'}
+                      openSidebarLabel={
+                        sidebarPanel === 'groups' && canViewGroups
+                          ? 'Open access'
+                          : sidebarPanel === 'automations' && canViewAutomations
+                            ? 'Open automations'
+                            : 'Open sessions'
+                      }
                       onArchive={handleArchiveSession}
                       onOpenSidebar={expandSidebar}
                       onUpdateTitle={handleUpdateTitle}
@@ -2245,14 +2466,35 @@ function ThreadDetailLoadingPanel() {
 }
 
 function setSessionSearchParam(sessionId: string) {
+  setResourceSearchParam('session', sessionId);
+}
+
+function setGroupSearchParam(groupId: string) {
+  setResourceSearchParam('group', groupId);
+}
+
+function setAutomationSearchParam(automationId: string) {
+  setResourceSearchParam('automation', automationId);
+}
+
+function setResourceSearchParam(param: 'session' | 'group' | 'automation', value: string) {
   const url = new URL(window.location.href);
-  url.searchParams.set('session', sessionId);
+  url.searchParams.delete('session');
+  url.searchParams.delete('group');
+  url.searchParams.delete('automation');
+  url.searchParams.set(param, value);
   window.history.replaceState({}, '', url);
 }
 
 function clearSessionSearchParam() {
+  clearResourceSearchParams();
+}
+
+function clearResourceSearchParams() {
   const url = new URL(window.location.href);
   url.searchParams.delete('session');
+  url.searchParams.delete('group');
+  url.searchParams.delete('automation');
   window.history.replaceState({}, '', url);
 }
 

@@ -43,12 +43,13 @@ export function GroupsSidebar(props: {
   authRequired: boolean;
   canCreateGroups: boolean;
   canViewGroups: boolean;
+  canViewAutomations: boolean;
   canViewSetup: boolean;
   connectionStatus: ConnectionStatus;
   currentUser: AuthUser | null;
   groups: Group[];
   health: Health | null;
-  navPage: 'sessions' | 'setup' | 'groups';
+  navPage: 'sessions' | 'setup' | 'groups' | 'automations';
   selectedGroupId: string;
   selectedView: 'group' | 'super_admins';
   superAdminUsers: AuthUser[];
@@ -58,6 +59,7 @@ export function GroupsSidebar(props: {
   onCollapse: () => void;
   onCreateGroup: () => void;
   onOpenGroups: () => void;
+  onOpenAutomations: () => void;
   onOpenSessions: () => void;
   onOpenSetup: () => void;
   onSelectGroup: (groupId: string) => void;
@@ -216,12 +218,13 @@ export function GroupsSidebar(props: {
       <ApiStatusFooter
         authRequired={props.authRequired}
         canViewGroups={props.canViewGroups}
+        canViewAutomations={props.canViewAutomations}
         canViewSetup={props.canViewSetup}
-        connectionStatus={props.connectionStatus}
         health={props.health}
         navPage={props.navPage}
         token={props.token}
         onOpenGroups={props.onOpenGroups}
+        onOpenAutomations={props.onOpenAutomations}
         onOpenSessions={props.onOpenSessions}
         onOpenSetup={props.onOpenSetup}
         onSignOut={props.onSignOut}

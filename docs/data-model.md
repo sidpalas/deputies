@@ -18,6 +18,8 @@ Postgres is the required durable store for the MVP.
 
 ```txt
 sessions
+automations
+automation_invocations
 auth_users
 auth_accounts
 auth_sessions
@@ -46,6 +48,8 @@ The data model below is both the product target and the current implementation r
 Current implemented tables:
 
 - `sessions`
+- `automations`
+- `automation_invocations`
 - `auth_users`
 - `auth_accounts`
 - `auth_sessions`
@@ -211,6 +215,68 @@ Indexes:
 (status, created_at)
 unique(source, dedupe_key) where dedupe_key is not null
 ```
+
+## Automations
+
+Represents group-owned rules that create agent work without a user manually starting a session at that moment.
+
+Current columns:
+
+```txt
+id uuid primary key
+kind text not null
+name text not null
+prompt text not null
+schedule_cron text not null
+enabled boolean not null
+owner_group_id uuid not null references groups(id)
+visibility text not null
+write_policy text not null
+context jsonb
+created_by_user_id uuid references auth_users(id)
+next_invocation_at timestamptz
+scheduler_lock_owner text
+scheduler_locked_until timestamptz
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Rules:
+
+- Automations are owned by access groups, not by bot users.
+- `created_by_user_id` is audit and creator-management metadata; group ownership is the durable authority.
+- Scheduled automations use 5-field UTC cron expressions and store the next absolute invocation timestamp.
+- Disabled automations are not invoked automatically.
+- Automation context may contain durable prompt context such as repository, model, or branch.
+
+## Automation Invocations
+
+Represents one durable activation of an automation that creates or attempts to create a session.
+
+Current columns:
+
+```txt
+id uuid primary key
+automation_id uuid not null references automations(id)
+trigger text not null
+status text not null
+scheduled_at timestamptz
+session_id uuid references sessions(id)
+message_id uuid references messages(id)
+requested_by_user_id uuid references auth_users(id)
+reason text
+error text
+metadata jsonb not null default '{}'
+created_at timestamptz not null
+completed_at timestamptz
+```
+
+Rules:
+
+- Invocations are separate from agent runs.
+- Scheduled invocations are unique per automation and scheduled timestamp.
+- Skipped invocations are recorded when domain rules prevent session creation, such as missed schedule time or an active previous automation session.
+- Failed invocations are terminal records; the next scheduled time or a manual invocation creates a separate invocation.
 
 ## Runs
 

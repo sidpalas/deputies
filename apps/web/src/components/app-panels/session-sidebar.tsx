@@ -1,19 +1,12 @@
 import { useMemo, useState } from 'react';
 import type { SyntheticEvent } from 'react';
 import { Archive, ChevronDown, Monitor, Moon, PanelLeftClose, Plus, RefreshCw, RotateCcw, Sun, X } from 'lucide-react';
-import { getApiBaseUrl, type Health, type Session } from '../../api.js';
+import { type Health, type Session } from '../../api.js';
 import { archivedSessionsOpenStorageKey } from '../../app-helpers.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
-import {
-  connectionStatusLabel,
-  filterSessions,
-  formatDate,
-  sessionDisplayStatus,
-  sessionDisplayTooltip,
-  statusTextClass,
-} from './shared.js';
+import { filterSessions, formatDate, sessionDisplayStatus, sessionDisplayTooltip, statusTextClass } from './shared.js';
 import type { ConnectionStatus, ThemePreference } from './types.js';
 
 export function ThreadSidebar(props: {
@@ -21,12 +14,13 @@ export function ThreadSidebar(props: {
   authRequired: boolean;
   canCallApi: boolean;
   canViewGroups: boolean;
+  canViewAutomations: boolean;
   canStartNewThread: boolean;
   canViewSetup: boolean;
   canWriteSession: (session: Session) => boolean;
   connectionStatus: ConnectionStatus;
   health: Health | null;
-  navPage: 'sessions' | 'setup';
+  navPage: 'sessions' | 'setup' | 'automations';
   loading: boolean;
   sessions: Session[];
   selectedSessionId: string;
@@ -37,6 +31,7 @@ export function ThreadSidebar(props: {
   onCollapse: () => void;
   onNewThread: () => void;
   onOpenGroups: () => void;
+  onOpenAutomations: () => void;
   onOpenSessions: () => void;
   onOpenSetup: () => void;
   onRefresh: () => void;
@@ -161,12 +156,13 @@ export function ThreadSidebar(props: {
       <ApiStatusFooter
         authRequired={props.authRequired}
         canViewGroups={props.canViewGroups}
+        canViewAutomations={props.canViewAutomations}
         canViewSetup={props.canViewSetup}
-        connectionStatus={props.connectionStatus}
         health={props.health}
         navPage={props.navPage}
         token={props.token}
         onOpenGroups={props.onOpenGroups}
+        onOpenAutomations={props.onOpenAutomations}
         onOpenSessions={props.onOpenSessions}
         onOpenSetup={props.onOpenSetup}
         onSignOut={props.onSignOut}
@@ -214,37 +210,20 @@ export function ThemeToggle(props: { preference: ThemePreference; onChange: (val
 export function ApiStatusFooter(props: {
   authRequired: boolean;
   canViewGroups: boolean;
+  canViewAutomations: boolean;
   canViewSetup: boolean;
-  connectionStatus: ConnectionStatus;
   health: Health | null;
-  navPage: 'sessions' | 'setup' | 'groups';
+  navPage: 'sessions' | 'setup' | 'groups' | 'automations';
   token: string;
   onOpenGroups: () => void;
+  onOpenAutomations: () => void;
   onOpenSessions: () => void;
   onOpenSetup: () => void;
   onSignOut: () => void;
 }) {
-  const connected = props.health?.status === 'ok' && props.connectionStatus.state === 'ok';
   return (
     <div className="mt-3 shrink-0 border-t border-border pt-3 text-left text-xs text-muted-foreground">
-      <div className="flex items-center gap-2">
-        <span className={cn('h-2 w-2 rounded-full', connected ? 'bg-success' : 'bg-warning')} />
-        <strong className="text-foreground">{props.health ? `API ${props.health.status}` : 'Checking API'}</strong>
-        <span>{connectionStatusLabel(props.connectionStatus)}</span>
-      </div>
-      <p className="mt-1 truncate">{getApiBaseUrl()}</p>
-      <div className="mt-2 flex flex-nowrap gap-1">
-        {props.canViewSetup ? (
-          <Button
-            className="h-7 px-2 text-xs"
-            variant={props.navPage === 'setup' ? 'default' : 'secondary'}
-            size="sm"
-            aria-current={props.navPage === 'setup' ? 'page' : undefined}
-            onClick={props.onOpenSetup}
-          >
-            Setup
-          </Button>
-        ) : null}
+      <div className="flex flex-wrap gap-1">
         <Button
           className="h-7 px-2 text-xs"
           variant={props.navPage === 'sessions' ? 'default' : 'secondary'}
@@ -254,6 +233,17 @@ export function ApiStatusFooter(props: {
         >
           Sessions
         </Button>
+        {props.canViewAutomations ? (
+          <Button
+            className="h-7 px-2 text-xs"
+            variant={props.navPage === 'automations' ? 'default' : 'secondary'}
+            size="sm"
+            aria-current={props.navPage === 'automations' ? 'page' : undefined}
+            onClick={props.onOpenAutomations}
+          >
+            Automations
+          </Button>
+        ) : null}
         {props.canViewGroups ? (
           <Button
             className="h-7 px-2 text-xs"
@@ -263,6 +253,17 @@ export function ApiStatusFooter(props: {
             onClick={props.onOpenGroups}
           >
             Access
+          </Button>
+        ) : null}
+        {props.canViewSetup ? (
+          <Button
+            className="h-7 px-2 text-xs"
+            variant={props.navPage === 'setup' ? 'default' : 'secondary'}
+            size="sm"
+            aria-current={props.navPage === 'setup' ? 'page' : undefined}
+            onClick={props.onOpenSetup}
+          >
+            Setup
           </Button>
         ) : null}
         {props.authRequired && (props.token || props.health?.apiAuthMode === 'session') ? (

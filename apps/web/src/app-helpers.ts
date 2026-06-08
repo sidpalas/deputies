@@ -6,6 +6,7 @@ export const groupsPanelOpenStorageKey = 'deputies-groups-panel-open';
 export const sidebarPanelStorageKey = 'deputies-sidebar-panel';
 export const groupsPanelViewStorageKey = 'deputies-groups-panel-view';
 export const groupsPanelSelectedGroupStorageKey = 'deputies-groups-panel-selected-group-id';
+export const selectedAutomationStorageKey = 'deputies-selected-automation-id';
 export const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
 export const themeStorageKey = 'deputies-theme';
 
@@ -49,6 +50,8 @@ export function loadInitialSelectedSessionId(): string {
 export function loadInitialIsCreatingThread(): boolean {
   return (
     !new URLSearchParams(window.location.search).get('session') &&
+    !new URLSearchParams(window.location.search).get('group') &&
+    !new URLSearchParams(window.location.search).get('automation') &&
     sessionStorage.getItem(newSessionSelectedStorageKey) === 'true'
   );
 }
@@ -58,12 +61,17 @@ export function loadInitialSetupGuideOpen(): boolean {
 }
 
 export function loadInitialGroupsPanelOpen(): boolean {
+  if (new URLSearchParams(window.location.search).get('group')) return true;
   return sessionStorage.getItem(groupsPanelOpenStorageKey) === 'true';
 }
 
-export function loadInitialSidebarPanel(): 'sessions' | 'groups' {
+export function loadInitialSidebarPanel(): 'sessions' | 'groups' | 'automations' {
+  const query = new URLSearchParams(window.location.search);
+  if (query.get('session')) return 'sessions';
+  if (query.get('automation')) return 'automations';
+  if (query.get('group')) return 'groups';
   const stored = sessionStorage.getItem(sidebarPanelStorageKey);
-  if (stored === 'sessions' || stored === 'groups') return stored;
+  if (stored === 'sessions' || stored === 'groups' || stored === 'automations') return stored;
   return loadInitialGroupsPanelOpen() ? 'groups' : 'sessions';
 }
 
@@ -72,7 +80,15 @@ export function loadInitialGroupsPanelView(): 'group' | 'super_admins' {
 }
 
 export function loadInitialGroupsPanelSelectedGroupId(): string {
+  const groupId = new URLSearchParams(window.location.search).get('group');
+  if (groupId) return groupId;
   return sessionStorage.getItem(groupsPanelSelectedGroupStorageKey) ?? '';
+}
+
+export function loadInitialSelectedAutomationId(): string {
+  const automationId = new URLSearchParams(window.location.search).get('automation');
+  if (automationId) return automationId;
+  return sessionStorage.getItem(selectedAutomationStorageKey) ?? '';
 }
 
 export function loadThemePreference(): ThemePreference {

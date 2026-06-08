@@ -88,17 +88,19 @@ USER daytona
 
 `RUN_MODE` controls process responsibilities:
 
-| Mode       | Behavior                                                         |
-| ---------- | ---------------------------------------------------------------- |
-| `combined` | API and worker loops in one process. Good for small deployments. |
-| `api`      | API only. Use with separate worker replicas.                     |
-| `worker`   | Worker only. Also exposes `/health` on `PORT`.                   |
+| Mode       | Behavior                                                                                |
+| ---------- | --------------------------------------------------------------------------------------- |
+| `combined` | API, worker, and automation scheduler loops in one process. Good for small deployments. |
+| `api`      | API only. Use with separate worker replicas.                                            |
+| `worker`   | Worker and automation scheduler only. Also exposes `/health` on `PORT`.                 |
 
 Recommended topologies:
 
 - Simple mode: one or more `RUN_MODE=combined` instances with Postgres.
 - Integrated mode: one or more `RUN_MODE=api` instances plus one or more `RUN_MODE=worker` instances.
 - Scale mode: API/worker processes call separate infrastructure such as a Docker orchestrator over HTTP.
+
+Scheduled automations are claimed by worker-capable processes. API-only deployments can create and edit automations, but automatic scheduled invocation requires at least one `combined` or `worker` process.
 
 ## Base Environment
 

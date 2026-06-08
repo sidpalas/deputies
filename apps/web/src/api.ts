@@ -43,6 +43,43 @@ export type Session = {
   };
 };
 
+export type Automation = {
+  id: string;
+  kind: 'scheduled';
+  name: string;
+  prompt: string;
+  scheduleCron: string;
+  scheduleTimezone: 'UTC';
+  enabled: boolean;
+  ownerGroupId: string;
+  ownerGroupName?: string;
+  visibility: SessionVisibility;
+  writePolicy: SessionWritePolicy;
+  createdByUserId?: string;
+  context?: Record<string, unknown>;
+  nextInvocationAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  canManage?: boolean;
+  lastInvocation?: AutomationInvocation;
+};
+
+export type AutomationInvocation = {
+  id: string;
+  automationId: string;
+  trigger: 'scheduled' | 'manual';
+  status: 'creating' | 'created' | 'skipped' | 'failed';
+  createdAt: string;
+  metadata: Record<string, unknown>;
+  completedAt?: string;
+  scheduledAt?: string;
+  sessionId?: string;
+  messageId?: string;
+  requestedByUserId?: string;
+  reason?: string;
+  error?: string;
+};
+
 export type GroupRole = 'viewer' | 'member' | 'admin';
 export type SessionVisibility = 'group' | 'organization';
 export type SessionWritePolicy = 'group_members' | 'creator_only';
@@ -287,9 +324,105 @@ export async function listSessions(token: string): Promise<Session[]> {
   return body.sessions;
 }
 
+export async function listAutomations(token: string): Promise<Automation[]> {
+  const body = await request<{ automations: Automation[] }>('/automations', { token });
+  return body.automations;
+}
+
+export async function createAutomation(input: {
+  name: string;
+  prompt: string;
+  scheduleCron: string;
+  token: string;
+  ownerGroupId?: string;
+  enabled?: boolean;
+  repository?: string | RepositoryInput;
+  model?: string;
+  branch?: string;
+}): Promise<Automation> {
+  const body = await request<{ automation: Automation }>('/automations', {
+    method: 'POST',
+    token: input.token,
+    body: automationRequestBody(input),
+  });
+  return body.automation;
+}
+
+export async function updateAutomation(input: {
+  automationId: string;
+  token: string;
+  name?: string;
+  prompt?: string;
+  scheduleCron?: string;
+  enabled?: boolean;
+  ownerGroupId?: string;
+  repository?: string | RepositoryInput;
+  model?: string;
+  branch?: string;
+}): Promise<Automation> {
+  const body = await request<{ automation: Automation }>(`/automations/${input.automationId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: automationRequestBody(input),
+  });
+  return body.automation;
+}
+
+export async function invokeAutomation(input: {
+  automationId: string;
+  token: string;
+  allowDisabled?: boolean;
+  allowOverlap?: boolean;
+}): Promise<{ automation: Automation; invocation: AutomationInvocation; session?: Session; message?: Message }> {
+  return request<{ automation: Automation; invocation: AutomationInvocation; session?: Session; message?: Message }>(
+    `/automations/${input.automationId}/invoke`,
+    {
+      method: 'POST',
+      token: input.token,
+      body: {
+        ...(input.allowDisabled ? { allowDisabled: true } : {}),
+        ...(input.allowOverlap ? { allowOverlap: true } : {}),
+      },
+    },
+  );
+}
+
+export async function listAutomationInvocations(input: {
+  automationId: string;
+  token: string;
+}): Promise<AutomationInvocation[]> {
+  const body = await request<{ invocations: AutomationInvocation[] }>(
+    `/automations/${input.automationId}/invocations`,
+    { token: input.token },
+  );
+  return body.invocations;
+}
+
 export async function listRepositoryOptions(token: string): Promise<RepositoryOption[]> {
   const body = await request<{ repositories: RepositoryOption[] }>('/repositories', { token });
   return body.repositories;
+}
+
+function automationRequestBody(input: {
+  name?: string;
+  prompt?: string;
+  scheduleCron?: string;
+  ownerGroupId?: string;
+  enabled?: boolean;
+  repository?: string | RepositoryInput;
+  model?: string;
+  branch?: string;
+}): Record<string, unknown> {
+  return {
+    ...(input.name !== undefined ? { name: input.name } : {}),
+    ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+    ...(input.scheduleCron !== undefined ? { scheduleCron: input.scheduleCron } : {}),
+    ...(input.ownerGroupId ? { ownerGroupId: input.ownerGroupId } : {}),
+    ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+    ...(input.repository !== undefined ? { repository: input.repository } : {}),
+    ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(input.branch !== undefined ? { branch: input.branch } : {}),
+  };
 }
 
 export async function listBranches(input: { repository: string; token: string }): Promise<BranchOption[]> {

@@ -102,6 +102,7 @@ export function StaticDemoApp() {
               authRequired={false}
               canCallApi={false}
               canViewGroups={false}
+              canViewAutomations={false}
               canStartNewThread={false}
               canViewSetup={false}
               canWriteSession={() => false}
@@ -120,6 +121,7 @@ export function StaticDemoApp() {
                 if (window.matchMedia('(min-width: 768px)').matches) setSidebarCollapsed(true);
               }}
               onNewThread={() => undefined}
+              onOpenAutomations={() => undefined}
               onOpenGroups={() => undefined}
               onOpenSessions={() => undefined}
               onOpenSetup={() => undefined}

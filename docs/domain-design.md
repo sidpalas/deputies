@@ -12,6 +12,7 @@ The system has real domain concepts that need protection from infrastructure det
 - events
 - sandboxes
 - artifacts
+- automations
 - integrations
 - callbacks
 - credentials
@@ -159,6 +160,29 @@ apps/control-plane/src/integrations/prompt-bounds.ts
 apps/control-plane/src/integrations/slack/prompts.ts
 ```
 
+### Automation Context
+
+Owns user-defined rules that create sessions without a user manually starting that session at the moment work is created.
+
+Concepts:
+
+- `Automation`
+- `ScheduledAutomation`
+- `AutomationInvocation`
+
+Invariants:
+
+- Automations are owned by access groups.
+- Automation invocations are distinct from agent runs.
+- Scheduled automations do not overlap automatically by default.
+- Skipped and failed invocations are recorded durably.
+
+Modules:
+
+```txt
+apps/control-plane/src/automations
+```
+
 ### Persistence Context
 
 Owns durable storage implementations.
@@ -244,6 +268,7 @@ The current code already follows this direction:
 ```txt
 apps/control-plane/src/sessions/service.ts     # session domain operations
 apps/control-plane/src/messages/service.ts     # message queue operations
+apps/control-plane/src/automations/service.ts # automation scheduling and invocation operations
 apps/control-plane/src/events/service.ts       # append/replay events
 apps/control-plane/src/store/types.ts          # persistence port
 apps/control-plane/src/store/memory.ts         # deterministic test/local adapter

@@ -22,6 +22,9 @@ export type RunStatus =
 export type IntegrationDeliveryStatus = 'received' | 'processed' | 'failed';
 export type SandboxStatus = 'ready' | 'stopped' | 'unhealthy' | 'destroyed' | 'failed';
 export type CallbackDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed';
+export type AutomationKind = 'scheduled';
+export type AutomationInvocationTrigger = 'scheduled' | 'manual';
+export type AutomationInvocationStatus = 'creating' | 'created' | 'skipped' | 'failed';
 
 export const defaultGroupId = '00000000-0000-4000-8000-000000000001';
 
@@ -265,6 +268,41 @@ export type CallbackDeliveryRecord = {
   deliveredAt?: Date;
 };
 
+export type AutomationRecord = {
+  id: string;
+  kind: AutomationKind;
+  name: string;
+  prompt: string;
+  scheduleCron: string;
+  enabled: boolean;
+  ownerGroupId: string;
+  visibility: SessionVisibility;
+  writePolicy: SessionWritePolicy;
+  createdAt: Date;
+  updatedAt: Date;
+  nextInvocationAt?: Date;
+  createdByUserId?: string;
+  context?: Record<string, unknown>;
+  schedulerLockOwner?: string;
+  schedulerLockedUntil?: Date;
+};
+
+export type AutomationInvocationRecord = {
+  id: string;
+  automationId: string;
+  trigger: AutomationInvocationTrigger;
+  status: AutomationInvocationStatus;
+  createdAt: Date;
+  completedAt?: Date;
+  scheduledAt?: Date;
+  sessionId?: string;
+  messageId?: string;
+  requestedByUserId?: string;
+  reason?: string;
+  error?: string;
+  metadata: Record<string, unknown>;
+};
+
 export type CreateSessionRecord = {
   id: string;
   status: SessionStatus;
@@ -353,6 +391,39 @@ export type CreateCallbackDeliveryRecord = {
   maxAttempts?: number;
   runId?: string;
   messageId?: string;
+};
+
+export type CreateAutomationRecord = {
+  id: string;
+  kind: AutomationKind;
+  name: string;
+  prompt: string;
+  scheduleCron: string;
+  enabled: boolean;
+  ownerGroupId: string;
+  visibility: SessionVisibility;
+  writePolicy: SessionWritePolicy;
+  createdAt: Date;
+  updatedAt: Date;
+  nextInvocationAt?: Date;
+  createdByUserId?: string;
+  context?: Record<string, unknown>;
+};
+
+export type CreateAutomationInvocationRecord = {
+  id: string;
+  automationId: string;
+  trigger: AutomationInvocationTrigger;
+  status: AutomationInvocationStatus;
+  createdAt: Date;
+  metadata: Record<string, unknown>;
+  completedAt?: Date;
+  scheduledAt?: Date;
+  sessionId?: string;
+  messageId?: string;
+  requestedByUserId?: string;
+  reason?: string;
+  error?: string;
 };
 
 export interface SessionStore {
@@ -474,6 +545,27 @@ export interface CallbackStore {
   }): Promise<CallbackDeliveryRecord | null>;
 }
 
+export interface AutomationStore {
+  createAutomation(record: CreateAutomationRecord): Promise<AutomationRecord>;
+  getAutomation(id: string): Promise<AutomationRecord | null>;
+  listAutomations(): Promise<AutomationRecord[]>;
+  updateAutomation(record: AutomationRecord): Promise<AutomationRecord>;
+  claimNextDueScheduledAutomation(input: {
+    now: Date;
+    lockOwner: string;
+    lockedUntil: Date;
+  }): Promise<AutomationRecord | null>;
+  completeScheduledAutomationClaim(input: {
+    automationId: string;
+    lockOwner: string;
+    nextInvocationAt: Date;
+    updatedAt: Date;
+  }): Promise<AutomationRecord | null>;
+  createAutomationInvocation(record: CreateAutomationInvocationRecord): Promise<AutomationInvocationRecord>;
+  updateAutomationInvocation(record: AutomationInvocationRecord): Promise<AutomationInvocationRecord>;
+  listAutomationInvocations(automationId: string): Promise<AutomationInvocationRecord[]>;
+}
+
 export interface EventStore {
   nextEventSequence(sessionId: string): Promise<number>;
   appendEvent(event: NormalizedEvent & { sequence: number }): Promise<EventRecord>;
@@ -488,7 +580,8 @@ export interface EventStore {
 
 export type EventRecord = NormalizedEvent & { id: number; sequence: number };
 
-export interface AppStore extends SessionStore, MessageStore, RunStore, SandboxStore, CallbackStore, EventStore {
+export interface AppStore
+  extends SessionStore, MessageStore, RunStore, SandboxStore, CallbackStore, AutomationStore, EventStore {
   upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord>;
   createAuthSession(record: AuthSessionRecord): Promise<AuthSessionRecord>;
   getAuthUserBySession(input: { sessionId: string; now: Date }): Promise<AuthUserRecord | null>;

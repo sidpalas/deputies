@@ -24,6 +24,7 @@ const statusTextClasses: Record<string, string> = {
   queued: 'text-warning',
   ready: 'text-success',
   running: 'text-info',
+  skipped: 'text-warning',
   starting: 'text-info',
   stopped: 'text-warning',
   unhealthy: 'text-destructive',

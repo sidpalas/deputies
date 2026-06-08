@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
 import { AppLifecycle, installProcessShutdownHandlers, type CloseableResource } from './app/lifecycle.js';
 import { configuredModels } from './app/model-availability.js';
 import { createServer, createServices, createWorkerHealthServer } from './app/server.js';
@@ -72,6 +74,8 @@ const resources: CloseableResource[] = [];
 let server: ReturnType<typeof createServer> | undefined;
 let workerLoop: WorkerLoopHandle | undefined;
 let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
+const processInstanceId = `${hostname()}-${process.pid}-${randomUUID()}`;
+const automationSchedulerLockOwner = `automation-scheduler-${processInstanceId}`;
 
 if ('close' in store && typeof store.close === 'function') resources.push(store as CloseableResource);
 if (
@@ -97,6 +101,12 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
   const runner = await createRunner();
   const callbackSenders = createCallbackSenders();
   const progressNotifiers = createProgressNotifiers();
+  const automationSchedulerLoop = startWorkerLoop(
+    {
+      processNext: () => services.automations.processNextScheduled({ lockOwner: automationSchedulerLockOwner }),
+    },
+    config.workerPollIntervalMs,
+  );
   const workerLoops = Array.from({ length: config.workerConcurrency }, (_, index) => {
     const worker = new WorkerService({
       store,
@@ -105,7 +115,7 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
       runner,
       runnerType: config.runner,
       sandboxProvider,
-      leaseOwner: `worker-${process.pid}-${index + 1}`,
+      leaseOwner: `worker-${processInstanceId}-${index + 1}`,
       cancellationPollIntervalMs: config.runCancellationPollIntervalMs,
       callbackSenders,
       progressNotifiers,
@@ -114,10 +124,11 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
   });
   workerLoop = {
     wake(): void {
+      automationSchedulerLoop.wake();
       for (const loop of workerLoops) loop.wake();
     },
     async stop(): Promise<void> {
-      await Promise.all(workerLoops.map((loop) => loop.stop()));
+      await Promise.all([automationSchedulerLoop.stop(), ...workerLoops.map((loop) => loop.stop())]);
     },
   };
   const unsubscribeWorkerWake = services.events.subscribeAllEvents((event) => {
