@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/sidpalas/deputies/compare/v0.6.4...v0.7.0) (2026-06-08)
+
+
+### Features
+
+* **control-plane:** add web search tool ([a4553ef](https://github.com/sidpalas/deputies/commit/a4553efd434259b5f16ae4ba71cdf89ac93a161b))
+* **www:** add blog image generator ([664c6d6](https://github.com/sidpalas/deputies/commit/664c6d659af5c187a889d712bfabf3e80be0e614))
+
+
+### Chores
+
+* fix formatting ([e4415b5](https://github.com/sidpalas/deputies/commit/e4415b5d94a0f2c8488fc9869f722a67f2c8af2d))
+* upgrade pnpm to 11.5.2 ([e309e15](https://github.com/sidpalas/deputies/commit/e309e15d6cf441119b4a4e3e26538bede11314ec))
+
 ## [0.6.4](https://github.com/sidpalas/deputies/compare/v0.6.3...v0.6.4) (2026-06-05)
 
 
