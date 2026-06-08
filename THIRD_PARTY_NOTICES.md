@@ -8,18 +8,6 @@ This file is a compliance checkpoint for contributors and coding agents. It is n
 
 ## Referenced Prior Art
 
-## Excluded Source-Available Material
-
-The following source-available material must not be used as open source prior art for Deputies implementation work:
-
-### OpenHands Enterprise
-
-- Upstream repository: https://github.com/OpenHands/OpenHands
-- License observed: PolyForm Free Trial License 1.0.0
-- Copyright notice observed: `Copyright (c) 2026 All Hands AI`
-
-Do not copy code, schemas, prompts, tests, configuration, architecture details, or implementation patterns from `enterprise/` into Deputies unless a separate commercial/legal review explicitly approves that use. OpenHands may be mentioned only as a non-open-source hosted-agent product reference in `docs/prior-art.md`.
-
 ### Junior
 
 - Upstream repository: https://github.com/getsentry/junior
@@ -60,6 +48,31 @@ If copying material from Open SWE:
 - Preserve the MIT copyright notice and permission notice.
 - Include the MIT License text with redistributed copied material.
 - Do not imply upstream endorsement.
+
+### Mistle
+
+- Upstream repository: https://github.com/mistlehq/mistle
+- License: MIT License
+- Copyright notice observed: `Copyright (c) 2026 Ajourney Technologies Pte. Ltd.`
+- Current use in this repository: design comparison and summarized patterns in `docs/prior-art.md`
+
+If copying material from Mistle:
+
+- Preserve the MIT copyright notice and permission notice.
+- Include the MIT License text with redistributed copied material.
+- Do not imply upstream endorsement.
+
+## Excluded Source-Available Material
+
+The following source-available material must not be used as open source prior art for Deputies implementation work:
+
+### OpenHands Enterprise
+
+- Upstream repository: https://github.com/OpenHands/OpenHands
+- License observed: PolyForm Free Trial License 1.0.0
+- Copyright notice observed: `Copyright (c) 2026 All Hands AI`
+
+Do not copy code, schemas, prompts, tests, configuration, architecture details, or implementation patterns from `enterprise/` into Deputies unless a separate commercial/legal review explicitly approves that use. OpenHands may be mentioned only as a non-open-source hosted-agent product reference in `docs/prior-art.md`.
 
 ## Contributor Guidance
 

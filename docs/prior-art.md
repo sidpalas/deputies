@@ -1,10 +1,11 @@
-# Prior Art: Open-Inspect, Open SWE, And Junior
+# Prior Art: Open-Inspect, Open SWE, Junior, And Mistle
 
-This document compares the portable Flue background-agent design with three reference systems:
+This document compares the portable Flue background-agent design with four reference systems:
 
 - `background-agents-upstream`, also referred to as Open-Inspect in its docs.
 - `open-swe-upstream`, the LangGraph/Deep Agents implementation.
 - `junior-upstream`, an open source Slack bot agent project with plugin, skill, sandbox, eval, and telemetry patterns.
+- `mistle`, an open source background-agent platform with sandbox profiles, runtime plans, control/data-plane services, credential brokering, tunnels, and triggers.
 
 The goal is not to copy any system directly. The goal is to identify durable patterns that fit a portable, provider-neutral Flue implementation.
 
@@ -12,18 +13,18 @@ See [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) before copying impl
 
 ## Summary Comparison
 
-| Area                | This Design                                          | Open-Inspect / background-agents                    | Open SWE                                          | Junior                                           |
-| ------------------- | ---------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------ |
-| Harness             | Flue behind runner adapter                           | OpenCode in sandbox runtime                         | Deep Agents / LangGraph                           | Pi agent core behind Slack runtime               |
-| Control plane       | Portable Node service + Postgres                     | Cloudflare Workers + Durable Objects + D1/KV        | LangGraph server/webapp + thread metadata/store   | Hono/Nitro request runtime + Redis/memory state  |
-| Deployment target   | Railway, ECS, Kubernetes, local                      | Cloudflare + Modal/Daytona                          | LangSmith/LangGraph oriented, pluggable sandboxes | Vercel/serverless-oriented app shell             |
-| Session state       | Postgres tables                                      | Durable Object SQLite per session + D1 shared state | LangGraph thread state and metadata               | Conversation state adapter + turn checkpoints    |
-| Queueing            | Postgres messages + leases                           | DO-local message queue                              | LangGraph store queue for busy threads            | Thread locks, timeout resume, pending auth state |
-| Events              | Append-only Postgres event log + SSE                 | DO event table + WebSocket fanout                   | Agent/tool stream plus source replies             | Slack-visible replies/status + structured evals  |
-| Sandbox abstraction | Provider interface + capabilities                    | Provider lifecycle manager for Modal/Daytona        | Sandbox backend protocol selected by env          | Sandbox executor + dependency snapshot profiles  |
-| Runtime bridge      | Optional, provider-dependent                         | Required sandbox bridge/supervisor                  | Provider-specific backend wrappers                | Tool wrapper + sandbox executor facade           |
-| Integrations        | Thin adapters with source-specific normalized inputs | Slack/GitHub/Linear bots call control plane         | Webhooks normalize into LangGraph thread IDs      | Rich Slack routing, outbound, OAuth contracts    |
-| Testing             | Agent-first layered tests + emulate                  | Strong production code, infra-specific tests/docs   | Python tests around utility/webhook behavior      | MSW Slack tests + rubric evals                   |
+| Area                | This Design                                          | Open-Inspect / background-agents                    | Open SWE                                          | Junior                                           | Mistle                                                      |
+| ------------------- | ---------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
+| Harness             | Flue behind runner adapter                           | OpenCode in sandbox runtime                         | Deep Agents / LangGraph                           | Pi agent core behind Slack runtime               | Codex/OpenCode/Pi behind `sandboxd` runtime adapters        |
+| Control plane       | Portable Node service + Postgres                     | Cloudflare Workers + Durable Objects + D1/KV        | LangGraph server/webapp + thread metadata/store   | Hono/Nitro request runtime + Redis/memory state  | Dashboard + control-plane and data-plane services           |
+| Deployment target   | Railway, ECS, Kubernetes, local                      | Cloudflare + Modal/Daytona                          | LangSmith/LangGraph oriented, pluggable sandboxes | Vercel/serverless-oriented app shell             | Local Docker Compose, Docker/E2B, self-hosting roadmap      |
+| Session state       | Postgres tables                                      | Durable Object SQLite per session + D1 shared state | LangGraph thread state and metadata               | Conversation state adapter + turn checkpoints    | Control/data-plane DB records + active runtime plan         |
+| Queueing            | Postgres messages + leases                           | DO-local message queue                              | LangGraph store queue for busy threads            | Thread locks, timeout resume, pending auth state | OpenWorkflow durable workflows + idempotency keys           |
+| Events              | Append-only Postgres event log + SSE                 | DO event table + WebSocket fanout                   | Agent/tool stream plus source replies             | Slack-visible replies/status + structured evals  | Lifecycle telemetry + tunnel/runtime stream routing         |
+| Sandbox abstraction | Provider interface + capabilities                    | Provider lifecycle manager for Modal/Daytona        | Sandbox backend protocol selected by env          | Sandbox executor + dependency snapshot profiles  | Sandbox profile + compiled runtime plan + provider adapters |
+| Runtime bridge      | Optional, provider-dependent                         | Required sandbox bridge/supervisor                  | Provider-specific backend wrappers                | Tool wrapper + sandbox executor facade           | `sandboxd`, gateway tunnel, and runtime-specific proxies    |
+| Integrations        | Thin adapters with source-specific normalized inputs | Slack/GitHub/Linear bots call control plane         | Webhooks normalize into LangGraph thread IDs      | Rich Slack routing, outbound, OAuth contracts    | Definition registry, bindings, managed egress, triggers     |
+| Testing             | Agent-first layered tests + emulate                  | Strong production code, infra-specific tests/docs   | Python tests around utility/webhook behavior      | MSW Slack tests + rubric evals                   | Strict schema validation, CI, system/test harness packages  |
 
 ## Non-Open-Source References
 
@@ -500,11 +501,145 @@ Junior's package discovery and allowlist are strong safeguards for a package-bas
 
 Junior's `respond.ts` style is practical for a compact Slack bot. Deputies should preserve separate boundaries for integrations, queueing, runner adapters, sandbox lifecycle, callback delivery, artifacts, and event persistence.
 
-## Additional Pattern To Adopt From All Three
+## What We Should Adopt From Mistle
+
+Mistle is the closest open source system-level reference for a hosted background coding-agent platform. Its `docs/architecture.md` splits the product into dashboard/control-plane API/control-plane worker services, data-plane API/data-plane worker/data-plane gateway services, and sandbox runtimes. Use it as implementation inspiration for sandbox profiles, runtime plans, credential brokering, and lifecycle workflows, not as a reason to replace Deputies' Flue runner boundary.
+
+The repository appears early but substantial. Its `README.md` describes Mistle as an open source platform for background coding agents in sandboxes with brokered credentials, reusable snapshots, sessions, and triggers, while also warning that the project and CLI are early. `VERSION` currently reports `0.31.0`, and `docs/roadmap.md` lists self-hosted deployment, triggers, CLI, and sandbox provider expansion as ongoing work.
+
+### 1. Runtime Plan As The Cross-Boundary Contract
+
+Mistle compiles sandbox profile versions into a strict runtime plan before starting a sandbox. The control-plane start path in `apps/control-plane-api/src/sandbox-profiles/services/start-profile-instance.ts` resolves the launch image, compiles the profile version, resolves repository/git identity context, and passes the effective `runtimePlan` to the data plane. The core compiler and schema live in `packages/integrations-core/src/compiler/index.ts`, `packages/integrations-core/src/runtime-plan/schema.ts`, and `packages/integrations-core/src/validation/index.ts`.
+
+Adopt:
+
+- Treat Deputies' sandbox/run launch plan as the immutable contract between API, worker, provider adapter, runner adapter, and optional bridge.
+- Validate conflicts before sandbox start for workspace paths, setup files, artifacts, runtime clients, egress routes, and credentials.
+- Persist a plan id, hash, or compact summary on sandbox/run records so lifecycle events and diagnostics can be correlated back to the launch input.
+- Put setup artifacts, workspace sources, skills, runtime files, and egress policy into typed plan fields rather than prompt prose.
+
+### 2. Credentialless Sandbox And Managed Egress Policy
+
+Mistle's `docs/architecture.md` says sandboxes are credentialless by default. Managed HTTP requests go through the data-plane gateway, which loads the active runtime plan, matches egress routes, resolves credentials through control-plane internal APIs, and injects auth at request time. The concrete gateway implementation uses `/_mistle/egress/http`, `/_mistle/egress/ws`, and `x-mistle-egress-token` in `apps/data-plane-gateway/src/egress/direct-egress-proxy-service.ts`, short-lived five-minute egress tokens in `apps/data-plane-gateway/src/egress/sandbox-egress-token-service.ts`, and route-specific auth injection in `apps/data-plane-gateway/src/egress/managed-egress-request.ts`.
+
+Adopt selectively:
+
+- Keep raw long-lived credentials out of prompts, events, artifacts, command text, and sandbox environment by default.
+- Prefer route-scoped credential resolvers or host-side controlled tools when agents need broad external API access.
+- Use short-lived scoped tokens for any sandbox-to-control-plane or sandbox-to-gateway authority.
+- Log route ids, resolver kinds, and failure codes, but never log resolved credential values.
+
+### 3. Durable Sandbox Startup Workflow
+
+Mistle's data-plane API creates an idempotent workflow run and pending `sbi` sandbox instance record in `apps/data-plane-api/src/internal/sandbox-instances/services/start-sandbox-instance.ts`. The data-plane worker then resolves provider runtime credentials, prepares the image, marks status transitions, starts the provider sandbox, persists provisioning metadata, activates the runtime, waits for tunnel/bootstrap readiness, and records failures/cleanup in `apps/data-plane-worker/openworkflow/start-sandbox-instance/workflow.ts`.
+
+Adopt:
+
+- Use idempotency keys for sandbox start requests and trigger-driven starts.
+- Persist sandbox records before provider creation and keep explicit status transitions for pending, starting, initializing, running, failed, and stopped states.
+- Emit user-visible lifecycle events for image preparation, provider start, runtime activation, tunnel attachment, readiness, and failure cleanup.
+- Treat startup diagnostics as product behavior, not only logs.
+
+### 4. Optional Sandbox Daemon For Providers That Need It
+
+Mistle's in-sandbox `sandboxd` accepts strict activation input in `packages/sandboxd/src/protocol/activation.rs`: operation kind, bootstrap token, tunnel-exchange token, gateway WebSocket URL, runtime plan, acting user, git identity, and transparent proxy configuration. It applies runtime-plan artifacts, workspace sources, skills, and runtime files in `packages/sandboxd/src/runtime/mod.rs`, then coordinates tunnel connectivity, egress proxying, runtime adapters, readiness projection, and cleanup through its lifecycle modules.
+
+Adopt only where provider APIs are insufficient:
+
+- Use a daemon or bridge for Docker, ECS, Kubernetes, and other providers with weak native exec/filesystem/stream APIs.
+- Keep the daemon activation protocol strict, versioned, and limited to bootstrap authority plus the launch plan.
+- Let providers with strong native APIs remain direct-provider implementations.
+- Do not make a bridge mandatory for every sandbox provider.
+
+### 5. Runtime-Specific Adapter And Proxy Layer
+
+Mistle registers Codex, OpenCode, and Pi as first-class agent runtimes in `packages/integrations-definitions/src/registry/agent-runtimes.ts` and `packages/integrations-definitions/src/registry/agent-runtimes.server.ts`. `packages/sandboxd/src/runtime/adapters.rs` maps compiled runtime entries to concrete Codex/OpenCode/Pi proxy adapters because each runtime exposes different readiness, stream, and keepalive behavior.
+
+Adopt:
+
+- Keep Flue behind `runner-flue` as the primary runtime boundary, but preserve a clean adapter seam for any future direct CLI/runtime support.
+- Normalize runtime readiness, stream URLs, terminal access, and lifecycle signals at the product boundary instead of assuming every agent runtime behaves the same.
+- Put runtime-specific quirks in adapters, not in session orchestration, integration callbacks, or UI components.
+
+### 6. Trigger Delivery As Durable Conversation Routing
+
+Mistle handles trigger runs through durable control-plane workflows. `apps/control-plane-worker/openworkflow/handle-trigger-run/workflow.ts` transitions trigger runs to running, prepares the trigger, queues a delivery task, and schedules conversation delivery idempotently. `apps/control-plane-worker/openworkflow/handle-trigger-conversation-delivery/workflow.ts` ensures or recovers a sandbox-backed delivery route, creates or resumes provider conversations, submits payloads, and persists provider delivery results. `apps/control-plane-worker/openworkflow/handle-trigger-conversation-delivery/execute-conversation-provider-delivery.ts` sends `mistle/setDeliveryContext` with active W3C trace context before provider delivery.
+
+Adopt:
+
+- Model external triggers as durable delivery tasks that can recover, resume, and dedupe independently from inbound webhook receipt.
+- Keep route creation/recovery separate from provider conversation creation and payload submission.
+- Carry correlation and trace context into runtime-facing delivery context when practical.
+- Persist provider conversation/execution ids as product state, not only as agent-visible text.
+
+### 7. Reconnectable Runtime Surfaces
+
+Mistle's dashboard terminal code in `apps/dashboard/src/features/pages/session-terminal-workspace.tsx` treats PTY panels as reconnectable runtime surfaces with stable panel/session ids, reset observation, auto-reopen, and lifecycle-derived recovery state.
+
+Adopt:
+
+- Make terminal and dev-server UI panes recover from transport resets through stable pane/session identifiers.
+- Drive recovery from sandbox lifecycle and stream state, not from a single WebSocket's current status.
+- Keep UI transport recovery separate from durable run/session state.
+
+## What We Should Avoid From Mistle
+
+### 1. Full Service Split As The Starting Architecture
+
+Mistle's dashboard, control-plane API, control-plane worker, data-plane API, data-plane worker, and gateway split is a strong reference for boundaries, but Deputies should not require that deployment shape on day one.
+
+Avoid:
+
+- Splitting services before the single modular Node service and Postgres model are operationally insufficient.
+- Creating a separate gateway just to mirror Mistle if host-side tools or provider APIs solve the immediate credential/runtime problem.
+- Letting data-plane abstractions obscure the simpler provider interface Deputies already uses.
+
+Preserve the boundary names in code and docs so API/worker/data-plane extraction remains possible later.
+
+### 2. Treating Credentialless Sandboxes As Absolute Security
+
+Mistle's architecture doc explicitly notes that operators can still put secrets directly into sandbox environments. Deputies should treat credential brokering as one layer, not a complete guarantee.
+
+Avoid:
+
+- Claiming sandboxes are credentialless unless tests and runtime policy prevent secret env vars, dotenv files, prompts, logs, and artifacts from carrying credentials.
+- Moving all credential safety into an egress proxy without redaction, audit, replay, cache-expiry, and route-matching tests.
+- Letting an agent bypass managed egress with unreviewed injected credentials.
+
+### 3. Gateway And Tunnel Complexity Without Matching Tests
+
+Mistle's gateway handles tunnel admission, bootstrap ownership, stream routing, managed egress, direct egress, WebSocket health, token exchange, and runtime state. This is powerful but security-sensitive.
+
+Avoid until needed:
+
+- A large custom gateway/tunnel subsystem without dedicated tests for token replay, route ambiguity, route authorization, credential cache expiry, WebSocket lifecycle, and failure cleanup.
+- Making long-lived bidirectional tunnels the only way a sandbox can run when provider APIs are enough.
+
+### 4. Provider And Runtime Breadth Before Depth
+
+Mistle's sandbox package has adapter factories for Docker, E2B, Freestyle, and Tensorlake in `packages/sandbox/src/factory.ts` and provider enum values in `packages/sandbox/src/types.ts`. Provider breadth is useful, but Deputies should not present providers as equal until conformance and lifecycle behavior are tested.
+
+Avoid:
+
+- Adding provider names without capability flags, health checks, startup/reuse policy, and conformance coverage.
+- Pinning direct upstream CLI/runtime versions as operationally critical dependencies without upgrade and protocol regression tests.
+- Treating snapshots as correctness requirements rather than startup optimizations.
+
+### 5. Replacing Flue With A Bespoke Runtime Platform
+
+Mistle's runtime plan, sandbox daemon, and runtime proxies are instructive, but Deputies' core design is Flue behind a runner adapter.
+
+Avoid:
+
+- Reimplementing Flue conversation mechanics, tools, skills, task delegation, live events, and sandbox connector shape in product code.
+- Building runtime-client and agent-runtime registries unless multiple non-Flue runtimes become a real product requirement.
+- Making Mistle's runtime architecture the product state model.
+
+## Additional Pattern To Adopt From All Four
 
 ### Normalize Early, Specialize Late
 
-All three systems work best where external inputs are normalized before hitting the agent.
+All four systems work best where external inputs are normalized before hitting the agent.
 
 Adopt:
 
@@ -516,7 +651,7 @@ This keeps integrations simple and makes tests easier.
 
 ### Design For Resumption
 
-All three systems assume agent work may outlive the request that started it.
+All four systems assume agent work may outlive the request that started it.
 
 Adopt:
 
@@ -529,7 +664,7 @@ Adopt:
 
 ### Make Sandbox State Observable
 
-All three systems benefit from visible sandbox lifecycle state, even when the exact delivery mechanism differs.
+All four systems benefit from visible sandbox lifecycle state, even when the exact delivery mechanism differs.
 
 Adopt event types for:
 
@@ -548,6 +683,8 @@ Open SWE remains a useful reference model for invocation normalization, determin
 
 Junior remains a useful reference model for Slack-specific product contracts: explicit routing policy, one outbound boundary, assistant-thread status semantics, OAuth pause/resume, strict Slack HTTP tests, rubric evals, plugin manifests, and agent-readable telemetry docs. Deputies should adopt these selectively around its durable callback dispatcher and emulator-backed test strategy.
 
+Mistle is the strongest open source reference for a full hosted-agent platform: compiled runtime plans, credential brokering through managed egress, optional sandbox daemons, provider adapters, durable data-plane startup workflows, trigger delivery routes, and reconnectable runtime surfaces. Deputies should adopt these as boundary and lifecycle patterns while staying smaller, portable, and Flue-centered.
+
 Use Flue as the agent runtime boundary, not as the entire product state model. Flue should own conversation mechanics, tools, skills, roles, tasks/subagents, live runtime events, and sandbox connector shape. The product should own durable background-work semantics, integrations, replayable product events, artifacts, queueing, leases, and operational state.
 
 The resulting design is:
@@ -556,6 +693,7 @@ The resulting design is:
 Open-Inspect-style durable sessions/events/artifacts
 + Open SWE-style source normalization/follow-up/token handling
 + Junior-style Slack contracts/plugin manifest/eval/telemetry ideas
++ Mistle-style runtime plans/credential brokering/lifecycle workflows
 + Flue runner adapter
 + portable Postgres/Node deployment model
 + provider-neutral sandbox interface
