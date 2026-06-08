@@ -290,6 +290,22 @@ OPENAI_CODEX_AUTH_BASE64=<base64-auth-json>
 
 Prefer a mounted secret file or `OPENAI_CODEX_AUTH_BASE64` for hosted deployments.
 
+## Web Search Tool
+
+The `web_search` agent tool runs in the control-plane worker, not in the sandbox. This keeps search credentials off sandbox filesystems and lets Deputies enforce URL safety checks centrally.
+
+Default provider selection:
+
+```sh
+WEB_SEARCH_PROVIDER=auto
+WEB_SEARCH_BRAVE_API_KEY=<optional>
+WEB_SEARCH_MAX_RESULTS=10
+WEB_SEARCH_CONTENT_MAX_CHARS=5000
+WEB_SEARCH_TIMEOUT_MS=10000
+```
+
+`WEB_SEARCH_PROVIDER=auto` uses Brave Search when `WEB_SEARCH_BRAVE_API_KEY` or `BRAVE_API_KEY` is set. Without a Brave key, it falls back to DuckDuckGo HTML search, which does not require an API key. Set `WEB_SEARCH_PROVIDER=disabled` to remove the tool, or `WEB_SEARCH_PROVIDER=brave` to fail closed unless a Brave key is configured.
+
 ## Sandbox Providers
 
 ### Fake

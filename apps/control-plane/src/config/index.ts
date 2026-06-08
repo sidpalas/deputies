@@ -11,6 +11,7 @@ export type AuthProviderKind = 'static' | 'github';
 export type AuthCookieSameSite = 'lax' | 'none';
 export type ArtifactStorageKind = 'disabled' | 'filesystem' | 's3';
 export type AuthGithubDefaultGroupRole = 'viewer' | 'member' | 'admin';
+export type WebSearchProviderKind = 'disabled' | 'auto' | 'brave' | 'duckduckgo';
 
 const MODEL_PROVIDER_AUTH: Array<{ provider: KnownProvider; env: string[] }> = [
   { provider: 'anthropic', env: ['ANTHROPIC_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'] },
@@ -79,6 +80,11 @@ export type AppConfig = {
   runnerModelChoices: string[];
   openaiCodexAuthFile?: string;
   openaiCodexAuthBase64?: string;
+  webSearchProvider: WebSearchProviderKind;
+  webSearchBraveApiKey?: string;
+  webSearchMaxResults: number;
+  webSearchContentMaxChars: number;
+  webSearchTimeoutMs: number;
   fakeRunnerArtifact?: Record<string, unknown>;
   daytonaApiKey?: string;
   daytonaApiUrl?: string;
@@ -168,6 +174,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     unsafeAuthGithubAllowAll: parseBoolean(env.UNSAFE_AUTH_GITHUB_ALLOW_ALL, false, 'UNSAFE_AUTH_GITHUB_ALLOW_ALL'),
     runnerStateStore: parseEnum(env.RUNNER_STATE_STORE, ['postgres', 'memory'], 'postgres'),
     runnerModelChoices: parseStringList(env.RUNNER_MODEL_CHOICES),
+    webSearchProvider: parseEnum(env.WEB_SEARCH_PROVIDER, ['disabled', 'auto', 'brave', 'duckduckgo'], 'auto'),
+    webSearchMaxResults: Math.min(parsePositiveInteger(env.WEB_SEARCH_MAX_RESULTS, 10, 'WEB_SEARCH_MAX_RESULTS'), 20),
+    webSearchContentMaxChars: parsePositiveInteger(
+      env.WEB_SEARCH_CONTENT_MAX_CHARS,
+      5_000,
+      'WEB_SEARCH_CONTENT_MAX_CHARS',
+    ),
+    webSearchTimeoutMs: parsePositiveInteger(env.WEB_SEARCH_TIMEOUT_MS, 10_000, 'WEB_SEARCH_TIMEOUT_MS'),
     slackApiBaseUrl: env.SLACK_API_BASE_URL ?? 'https://slack.com/api',
     unsafeSlackWebhookAllowAllIds: parseBoolean(
       env.UNSAFE_SLACK_WEBHOOK_ALLOW_ALL_IDS,
@@ -226,6 +240,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.RUNNER_MODEL_DEFAULT) config.runnerModelDefault = env.RUNNER_MODEL_DEFAULT;
   if (env.OPENAI_CODEX_AUTH_FILE) config.openaiCodexAuthFile = env.OPENAI_CODEX_AUTH_FILE;
   if (env.OPENAI_CODEX_AUTH_BASE64) config.openaiCodexAuthBase64 = env.OPENAI_CODEX_AUTH_BASE64;
+  const webSearchBraveApiKey = env.WEB_SEARCH_BRAVE_API_KEY ?? env.BRAVE_API_KEY;
+  if (webSearchBraveApiKey) config.webSearchBraveApiKey = webSearchBraveApiKey;
   if (env.FAKE_RUNNER_ARTIFACT_JSON) {
     config.fakeRunnerArtifact = parseJsonRecord(env.FAKE_RUNNER_ARTIFACT_JSON, 'FAKE_RUNNER_ARTIFACT_JSON');
   }
@@ -261,6 +277,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
 
   validateProductAuthConfig(config);
   validateArtifactStorageConfig(config);
+  validateWebSearchConfig(config);
   validateSandboxSecretConfig(config, env);
   validateAgentSandboxOrchestratorConfig(config);
 
@@ -318,6 +335,12 @@ function validateArtifactStorageConfig(config: AppConfig): void {
     throw new Error(
       'ARTIFACT_STORAGE_S3_ACCESS_KEY_ID and ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY are required when ARTIFACT_STORAGE_PROVIDER=s3',
     );
+  }
+}
+
+function validateWebSearchConfig(config: AppConfig): void {
+  if (config.webSearchProvider === 'brave' && !config.webSearchBraveApiKey) {
+    throw new Error('WEB_SEARCH_BRAVE_API_KEY or BRAVE_API_KEY is required when WEB_SEARCH_PROVIDER=brave');
   }
 }
 

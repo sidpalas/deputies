@@ -15,6 +15,7 @@ import { createGitHubCliTool } from './github-cli-tool.js';
 import { createServiceTool } from './service-tool.js';
 import { createRepositoryTool, type RepositoryToolServices, type RepositoryToolState } from './repository-tool.js';
 import type { FlueAgentFactory, FluePromptResponse, FlueSessionPort } from './types.js';
+import { createWebSearchTool, type WebSearchToolServices } from './web-search-tool.js';
 
 export type FlueRunnerOptions = {
   repositoryAccess?: {
@@ -25,6 +26,7 @@ export type FlueRunnerOptions = {
   artifactToolMaxBytes?: number;
   sandboxKeepalive?: SandboxKeepaliveService;
   sandboxKeepaliveMaxExtensionMs?: number;
+  webSearch?: WebSearchToolServices;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
 };
 
@@ -109,6 +111,7 @@ export class FlueRunner implements Runner {
         }),
       );
     }
+    if (this.options.webSearch) tools.push(createWebSearchTool(this.options.webSearch));
 
     const agent = await this.agentFactory.create({
       agentId: input.sessionId,
@@ -151,7 +154,12 @@ export class FlueRunner implements Runner {
       try {
         if (input.signal?.aborted) throw new Error('Operation aborted');
         response = await session.prompt(
-          withToolGuidance(input.prompt, Boolean(this.options.artifacts), Boolean(repositoryServices)),
+          withToolGuidance(
+            input.prompt,
+            Boolean(this.options.artifacts),
+            Boolean(repositoryServices),
+            Boolean(this.options.webSearch),
+          ),
           input.signal ? { signal: input.signal } : undefined,
         );
         await Promise.all(pendingEvents);
@@ -245,7 +253,12 @@ function promptResponseMetadata(response: FluePromptResponse) {
   return metadata;
 }
 
-function withToolGuidance(prompt: string, includeArtifacts: boolean, includeRepository: boolean): string {
+function withToolGuidance(
+  prompt: string,
+  includeArtifacts: boolean,
+  includeRepository: boolean,
+  includeWebSearch: boolean,
+): string {
   const lines = [
     'Service tool guidance:',
     '- If you start or identify a web server, app preview, code-server instance, API docs, notebook, dashboard, or other HTTP service the user should open, call service({ action: "publish", port, label, path, ttlSeconds }) after confirming the service is running. Use ttlSeconds of at least 300 for interactive services so the sandbox stays alive long enough for the user to open it. Multiple services may be visible at the same time.',
@@ -273,6 +286,15 @@ function withToolGuidance(prompt: string, includeArtifacts: boolean, includeRepo
       '- If the repo is unclear, use repository({ action: "list" }) and ask the user to choose instead of guessing.',
       '- Use repository({ action: "prepare" }) before reading or editing files in the repo.',
       '- Use normal file and shell tools for local code changes and commits, git for authenticated remote git operations, and gh for GitHub issues, comments, and pull requests.',
+      '',
+    );
+  }
+  if (includeWebSearch) {
+    lines.push(
+      'Web search tool guidance:',
+      '- Use web_search({ action: "search", query }) for current documentation, facts, APIs, package versions, and other public web lookups.',
+      '- Use web_search({ action: "fetch", url }) to read a specific public page found in search results or provided by the user.',
+      '- Prefer authoritative sources and include source URLs in your reasoning or final answer when web results affect the answer.',
       '',
     );
   }

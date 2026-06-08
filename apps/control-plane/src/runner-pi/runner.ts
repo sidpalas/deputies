@@ -31,6 +31,8 @@ import { createPiGitHubCliToolDefinition } from './github-cli-tool.js';
 import { createPiRepositoryToolDefinition } from './repository-tool.js';
 import { createSandboxPiToolDefinitions } from './sandbox-tools.js';
 import { createPiServiceToolDefinition } from './service-tool.js';
+import { createPiWebSearchToolDefinition } from './web-search-tool.js';
+import type { WebSearchToolServices } from '../web-search/tool.js';
 import {
   createPiSubagentToolDefinition,
   piSubagentSystemPrompt,
@@ -63,6 +65,7 @@ export type PiRunnerOptions = {
   artifactToolMaxBytes?: number;
   sandboxKeepalive?: SandboxKeepaliveService;
   sandboxKeepaliveMaxExtensionMs?: number;
+  webSearch?: WebSearchToolServices;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
 };
 
@@ -343,6 +346,8 @@ function createPiToolSet(
       }),
     );
   }
+
+  if (options.webSearch) customTools.push(createPiWebSearchToolDefinition(options.webSearch));
 
   if (context.subagentDepth < PI_SUBAGENT_MAX_DEPTH) {
     if (!context.runSubagent) throw new Error('Pi subagent runner is not configured');

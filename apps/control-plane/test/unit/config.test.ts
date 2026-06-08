@@ -42,6 +42,10 @@ describe('loadConfig', () => {
       unsafeAuthGithubAllowAll: false,
       runnerStateStore: 'postgres',
       runnerModelChoices: [],
+      webSearchProvider: 'auto',
+      webSearchMaxResults: 10,
+      webSearchContentMaxChars: 5000,
+      webSearchTimeoutMs: 10000,
       slackApiBaseUrl: 'https://slack.com/api',
       unsafeSlackWebhookAllowAllIds: false,
       slackAllowedTeamIds: [],
@@ -125,6 +129,11 @@ describe('loadConfig', () => {
         OPENAI_CODEX_AUTH_FILE: '/tmp/pi-auth.json',
         OPENAI_CODEX_AUTH_BASE64: 'eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19',
         RUNNER_STATE_STORE: 'memory',
+        WEB_SEARCH_PROVIDER: 'brave',
+        BRAVE_API_KEY: 'brave-key',
+        WEB_SEARCH_MAX_RESULTS: '7',
+        WEB_SEARCH_CONTENT_MAX_CHARS: '8000',
+        WEB_SEARCH_TIMEOUT_MS: '12000',
         DAYTONA_API_KEY: 'daytona-key',
         DAYTONA_API_URL: 'https://daytona.example',
         DAYTONA_TARGET: 'eu',
@@ -212,6 +221,11 @@ describe('loadConfig', () => {
       openaiCodexAuthFile: '/tmp/pi-auth.json',
       openaiCodexAuthBase64: 'eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19',
       runnerStateStore: 'memory',
+      webSearchProvider: 'brave',
+      webSearchBraveApiKey: 'brave-key',
+      webSearchMaxResults: 7,
+      webSearchContentMaxChars: 8000,
+      webSearchTimeoutMs: 12000,
       daytonaApiKey: 'daytona-key',
       daytonaApiUrl: 'https://daytona.example',
       daytonaTarget: 'eu',
@@ -318,6 +332,26 @@ describe('loadConfig', () => {
         ARTIFACT_STORAGE_S3_BUCKET: 'artifacts',
       }),
     ).toThrow('ARTIFACT_STORAGE_S3_ACCESS_KEY_ID and ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY are required');
+  });
+
+  it('configures web search provider settings', () => {
+    expect(loadConfig({ API_AUTH_MODE: 'none', WEB_SEARCH_PROVIDER: 'disabled' })).toMatchObject({
+      webSearchProvider: 'disabled',
+    });
+    expect(loadConfig({ API_AUTH_MODE: 'none', BRAVE_API_KEY: 'brave-key' })).toMatchObject({
+      webSearchProvider: 'auto',
+      webSearchBraveApiKey: 'brave-key',
+    });
+    expect(
+      loadConfig({ API_AUTH_MODE: 'none', WEB_SEARCH_PROVIDER: 'brave', WEB_SEARCH_BRAVE_API_KEY: 'web-search-key' }),
+    ).toMatchObject({
+      webSearchProvider: 'brave',
+      webSearchBraveApiKey: 'web-search-key',
+    });
+    expect(loadConfig({ API_AUTH_MODE: 'none', WEB_SEARCH_MAX_RESULTS: '50' }).webSearchMaxResults).toBe(20);
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', WEB_SEARCH_PROVIDER: 'brave' })).toThrow(
+      'WEB_SEARCH_BRAVE_API_KEY or BRAVE_API_KEY is required',
+    );
   });
 
   it('requires Slack allowlists unless unsafe allow-all is explicit', () => {
@@ -503,6 +537,9 @@ describe('loadConfig', () => {
     );
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_GITHUB_DEFAULT_GROUP_ROLE: 'owner' })).toThrow(
       'Expected one of viewer, member, admin',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', WEB_SEARCH_PROVIDER: 'bing' })).toThrow(
+      'Expected one of disabled, auto, brave, duckduckgo',
     );
   });
 

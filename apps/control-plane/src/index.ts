@@ -43,6 +43,7 @@ import { startSandboxReaper } from './sandbox/reaper.js';
 import type { SandboxProvider } from './sandbox/types.js';
 import { MemoryStore } from './store/memory.js';
 import { PostgresStore } from './store/postgres.js';
+import type { WebSearchToolServices } from './web-search/tool.js';
 import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from './worker/service.js';
 
 const config = loadConfig(process.env);
@@ -57,6 +58,7 @@ const services = createServices(store, {
   unsafeAllowLocalHttpCallbacks: config.unsafeAllowLocalHttpCallbacks,
   ...(artifactObjectStorage ? { artifactObjectStorage } : {}),
 });
+const webSearch = createWebSearchServices();
 const githubClient =
   config.githubAppId || config.githubAppPrivateKey ? new GitHubClient({ apiBaseUrl: config.githubApiBaseUrl }) : null;
 const githubRepositoryAccess = githubClient ? createGitHubRepositoryAccess(githubClient) : null;
@@ -280,6 +282,7 @@ async function createRunner(): Promise<Runner> {
       piOptions.artifacts = services.artifacts;
       piOptions.artifactToolMaxBytes = config.artifactCreateMaxBytes;
     }
+    if (webSearch) piOptions.webSearch = webSearch;
     piOptions.repositoryAccess = createRepositoryAccess();
     piOptions.externalResources = services.externalResources;
     if (services.sandboxKeepalive) piOptions.sandboxKeepalive = services.sandboxKeepalive;
@@ -322,6 +325,7 @@ async function createRunner(): Promise<Runner> {
   return new FlueRunner(new RealFlueAgentFactory(options), {
     repositoryAccess: createRepositoryAccess(),
     ...(artifactObjectStorage ? { artifacts: services.artifacts } : {}),
+    ...(webSearch ? { webSearch } : {}),
     externalResources: services.externalResources,
     artifactToolMaxBytes: config.artifactCreateMaxBytes,
     ...(services.sandboxKeepalive ? { sandboxKeepalive: services.sandboxKeepalive } : {}),
@@ -329,4 +333,17 @@ async function createRunner(): Promise<Runner> {
     modelUnavailableReason: (inputModel) =>
       services.modelAvailability.unavailableFor(inputModel || config.runnerModelDefault)?.reason,
   });
+}
+
+function createWebSearchServices(): WebSearchToolServices | undefined {
+  if (config.webSearchProvider === 'disabled') return undefined;
+
+  const services: WebSearchToolServices = {
+    provider: config.webSearchProvider,
+    maxResults: config.webSearchMaxResults,
+    contentMaxChars: config.webSearchContentMaxChars,
+    timeoutMs: config.webSearchTimeoutMs,
+  };
+  if (config.webSearchBraveApiKey) services.braveApiKey = config.webSearchBraveApiKey;
+  return services;
 }

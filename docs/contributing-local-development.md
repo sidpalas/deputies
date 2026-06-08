@@ -71,6 +71,9 @@ RUNNER=flue
 RUNNER_MODEL_DEFAULT=anthropic/claude-haiku-4-5
 ANTHROPIC_API_KEY=<secret>
 
+# Optional: use Brave for the agent web_search tool. Without this, web_search uses no-key DuckDuckGo HTML search.
+WEB_SEARCH_BRAVE_API_KEY=
+
 SANDBOX_PROVIDER=docker
 DOCKER_SANDBOX_IMAGE=ghcr.io/sidpalas/deputies-docker-sandbox:latest
 DOCKER_SANDBOX_BRIDGE_HOST=127.0.0.1
