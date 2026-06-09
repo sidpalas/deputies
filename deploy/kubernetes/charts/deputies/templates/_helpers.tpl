@@ -186,6 +186,42 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end -}}
 
+{{- define "deputies.migrationEnv" -}}
+{{- $root := . -}}
+{{- if $root.Values.postgres.existingSecret }}
+- name: POSTGRES_USER
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "deputies.postgresSecretName" $root }}
+      key: {{ $root.Values.postgres.secretKeys.username }}
+- name: POSTGRES_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "deputies.postgresSecretName" $root }}
+      key: {{ $root.Values.postgres.secretKeys.password }}
+- name: POSTGRES_DATABASE
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "deputies.postgresSecretName" $root }}
+      key: {{ $root.Values.postgres.secretKeys.database }}
+- name: POSTGRES_HOST
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "deputies.postgresSecretName" $root }}
+      key: {{ $root.Values.postgres.secretKeys.host }}
+- name: POSTGRES_PORT
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "deputies.postgresSecretName" $root }}
+      key: {{ $root.Values.postgres.secretKeys.port }}
+- name: DATABASE_URL
+  value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DATABASE){{ ternary (printf "?sslmode=%s" $root.Values.postgres.sslMode) "" (ne $root.Values.postgres.sslMode "") }}
+{{- else }}
+- name: DATABASE_URL
+  value: postgres://{{ $root.Values.postgres.username }}:{{ $root.Values.postgres.password }}@{{ $root.Values.postgres.host }}:{{ $root.Values.postgres.port }}/{{ $root.Values.postgres.database }}{{ ternary (printf "?sslmode=%s" $root.Values.postgres.sslMode) "" (ne $root.Values.postgres.sslMode "") }}
+{{- end }}
+{{- end -}}
+
 {{- define "deputies.apiServiceName" -}}
 {{- printf "%s-api" (include "deputies.fullname" .) -}}
 {{- end -}}

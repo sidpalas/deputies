@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
 import { AppLifecycle, installProcessShutdownHandlers, type CloseableResource } from './app/lifecycle.js';
 import { configuredModels } from './app/model-availability.js';
 import { createServer, createServices, createWorkerHealthServer } from './app/server.js';
@@ -47,10 +49,9 @@ import type { WebSearchToolServices } from './web-search/tool.js';
 import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from './worker/service.js';
 
 const config = loadConfig(process.env);
+const databaseUrl = config.appDataStore === 'postgres' ? requireDatabaseUrl(config) : '';
 const store =
-  config.appDataStore === 'postgres'
-    ? new PostgresStore(requireDatabaseUrl(config), postgresStoreOptions())
-    : new MemoryStore();
+  config.appDataStore === 'postgres' ? new PostgresStore(databaseUrl, postgresStoreOptions()) : new MemoryStore();
 const sandboxProvider = createSandboxProvider();
 const artifactObjectStorage = config.artifactStorage === 'disabled' ? undefined : createArtifactObjectStorage(config);
 const services = createServices(store, {
@@ -72,6 +73,8 @@ const resources: CloseableResource[] = [];
 let server: ReturnType<typeof createServer> | undefined;
 let workerLoop: WorkerLoopHandle | undefined;
 let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
+const processInstanceId = `${hostname()}-${process.pid}-${randomUUID()}`;
+const automationSchedulerLockOwner = `automation-scheduler-${processInstanceId}`;
 
 if ('close' in store && typeof store.close === 'function') resources.push(store as CloseableResource);
 if (
@@ -97,6 +100,12 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
   const runner = await createRunner();
   const callbackSenders = createCallbackSenders();
   const progressNotifiers = createProgressNotifiers();
+  const automationSchedulerLoop = startWorkerLoop(
+    {
+      processNext: () => services.automations.processNextScheduled({ lockOwner: automationSchedulerLockOwner }),
+    },
+    config.workerPollIntervalMs,
+  );
   const workerLoops = Array.from({ length: config.workerConcurrency }, (_, index) => {
     const worker = new WorkerService({
       store,
@@ -105,7 +114,7 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
       runner,
       runnerType: config.runner,
       sandboxProvider,
-      leaseOwner: `worker-${process.pid}-${index + 1}`,
+      leaseOwner: `worker-${processInstanceId}-${index + 1}`,
       cancellationPollIntervalMs: config.runCancellationPollIntervalMs,
       callbackSenders,
       progressNotifiers,
@@ -114,10 +123,11 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
   });
   workerLoop = {
     wake(): void {
+      automationSchedulerLoop.wake();
       for (const loop of workerLoops) loop.wake();
     },
     async stop(): Promise<void> {
-      await Promise.all(workerLoops.map((loop) => loop.stop()));
+      await Promise.all([automationSchedulerLoop.stop(), ...workerLoops.map((loop) => loop.stop())]);
     },
   };
   const unsubscribeWorkerWake = services.events.subscribeAllEvents((event) => {

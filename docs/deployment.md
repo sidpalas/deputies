@@ -88,17 +88,19 @@ USER daytona
 
 `RUN_MODE` controls process responsibilities:
 
-| Mode       | Behavior                                                         |
-| ---------- | ---------------------------------------------------------------- |
-| `combined` | API and worker loops in one process. Good for small deployments. |
-| `api`      | API only. Use with separate worker replicas.                     |
-| `worker`   | Worker only. Also exposes `/health` on `PORT`.                   |
+| Mode       | Behavior                                                                                |
+| ---------- | --------------------------------------------------------------------------------------- |
+| `combined` | API, worker, and automation scheduler loops in one process. Good for small deployments. |
+| `api`      | API only. Use with separate worker replicas.                                            |
+| `worker`   | Worker and automation scheduler only. Also exposes `/health` on `PORT`.                 |
 
 Recommended topologies:
 
 - Simple mode: one or more `RUN_MODE=combined` instances with Postgres.
 - Integrated mode: one or more `RUN_MODE=api` instances plus one or more `RUN_MODE=worker` instances.
 - Scale mode: API/worker processes call separate infrastructure such as a Docker orchestrator over HTTP.
+
+Scheduled automations are claimed by worker-capable processes. API-only deployments can create and edit automations, but automatic scheduled invocation requires at least one `combined` or `worker` process.
 
 ## Base Environment
 
@@ -133,7 +135,7 @@ DATABASE_URL=postgres://user:password@host:5432/db
 RUNNER_STATE_STORE=postgres
 ```
 
-Run migrations before serving traffic:
+Run migrations before starting Postgres-backed API, worker, or scheduler processes. The migration runner uses a Postgres advisory lock, so a dedicated migration job is safe even if retried, but application processes do not run migrations at startup:
 
 ```sh
 DATABASE_URL=postgres://... mise run //apps/control-plane:db:migrate
@@ -197,11 +199,14 @@ The web entrypoint should proxy these paths to the control-plane API:
 ```txt
 /health
 /auth*
+/automations*
 /sessions*
 /events*
+/groups*
 /repositories*
 /models*
 /setup*
+/users*
 /webhooks*
 ```
 
@@ -605,7 +610,7 @@ Use a secrets manager where possible. Avoid `UNSAFE_*` flags in production.
 
 - Choose topology: `all` or split `api`/`worker`.
 - Use `API_AUTH_MODE=session` for browser deployments. Reserve `bearer` or `none` for development tooling, tests, or programmatic/internal API access.
-- Provision Postgres and run migrations.
+- Provision Postgres and run migrations before starting API or worker processes.
 - Provision object storage if artifacts are needed.
 - Configure DNS/TLS for app host and wildcard service preview hosts.
 - Prepare model credentials.

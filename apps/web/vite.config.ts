@@ -47,6 +47,7 @@ export default defineConfig({
     proxy: {
       '/health': apiProxy,
       '/auth': apiProxy,
+      '/automations': apiProxy,
       '/sessions': apiProxy,
       '/events': apiProxy,
       '/groups': apiProxy,

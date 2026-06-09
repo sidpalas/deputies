@@ -3,6 +3,7 @@ import type { EventService } from '../events/service.js';
 import type { MessageRecord, MessageStore } from '../store/types.js';
 
 export type EnqueueMessageInput = {
+  id?: string;
   sessionId: string;
   prompt: string;
   authorUserId?: string;
@@ -47,7 +48,7 @@ export class MessageService {
 
     const sequence = await this.store.nextMessageSequence(input.sessionId);
     const record: MessageRecord = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       sessionId: input.sessionId,
       sequence,
       status: 'pending',

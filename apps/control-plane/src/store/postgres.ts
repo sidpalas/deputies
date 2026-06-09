@@ -4,9 +4,13 @@ import { StoreConflictError } from './types.js';
 import type {
   AppStore,
   ArtifactRecord,
+  AutomationInvocationRecord,
+  AutomationRecord,
   AuthSessionRecord,
   AuthUserRecord,
   CallbackDeliveryRecord,
+  CreateAutomationInvocationRecord,
+  CreateAutomationRecord,
   CreateArtifactRecord,
   CreateCallbackDeliveryRecord,
   CreateExternalResourceRecord,
@@ -23,20 +27,27 @@ import type {
   GroupMemberWithUserRecord,
   GroupRecord,
   IntegrationDeliveryRecord,
+  ListAutomationInvocationsOptions,
   MessageRecord,
   RecoveredRun,
   RunRecord,
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
 import { SecretCipher } from './encrypted-secrets.js';
 import {
+  automationInvocationSelectColumns,
+  automationSelectColumns,
   getRunMessageIds,
+  groupSelectColumns,
   sessionSelectColumns,
   toArtifact,
+  toAutomation,
+  toAutomationInvocation,
   toAuthSession,
   toAuthUser,
   toCallbackDelivery,
@@ -52,6 +63,8 @@ import {
   toSandbox,
   toSession,
   toWebhookSource,
+  type AutomationInvocationRow,
+  type AutomationRow,
   type ArtifactRow,
   type AuthSessionRow,
   type AuthUserRow,
@@ -73,6 +86,10 @@ import {
 
 const staleCallbackSendingMs = 15 * 60_000;
 const eventNotificationChannel = 'app_events';
+const joinedSessionSelectColumns = sessionSelectColumns
+  .split(', ')
+  .map((column) => `sessions.${column}`)
+  .join(', ');
 
 export type PostgresEventListener = {
   close(): Promise<void>;
@@ -261,14 +278,15 @@ export class PostgresStore implements AppStore {
   async createGroup(record: GroupRecord): Promise<GroupRecord> {
     try {
       const result = await this.pool.query<GroupRow>(
-        `INSERT INTO groups (id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at`,
+        `INSERT INTO groups (id, name, default_visibility, default_write_policy, automation_create_required_role, archived_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING ${groupSelectColumns}`,
         [
           record.id,
           record.name.trim(),
           record.defaultVisibility,
           record.defaultWritePolicy,
+          record.automationCreateRequiredRole,
           record.archivedAt ?? null,
           record.createdAt,
           record.updatedAt,
@@ -285,7 +303,7 @@ export class PostgresStore implements AppStore {
 
   async getGroup(id: string): Promise<GroupRecord | null> {
     const result = await this.pool.query<GroupRow>(
-      `SELECT id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at
+      `SELECT ${groupSelectColumns}
        FROM groups
        WHERE id = $1`,
       [id],
@@ -295,7 +313,7 @@ export class PostgresStore implements AppStore {
 
   async listGroups(): Promise<GroupRecord[]> {
     const result = await this.pool.query<GroupRow>(
-      `SELECT id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at
+      `SELECT ${groupSelectColumns}
        FROM groups
        ORDER BY archived_at ASC NULLS FIRST, name ASC`,
     );
@@ -307,17 +325,19 @@ export class PostgresStore implements AppStore {
       const result = await this.pool.query<GroupRow>(
         `UPDATE groups
          SET name = $2,
-             default_visibility = $3,
-             default_write_policy = $4,
-             archived_at = $5,
-             updated_at = $6
-         WHERE id = $1
-         RETURNING id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at`,
+              default_visibility = $3,
+              default_write_policy = $4,
+              automation_create_required_role = $5,
+              archived_at = $6,
+              updated_at = $7
+          WHERE id = $1
+          RETURNING ${groupSelectColumns}`,
         [
           record.id,
           record.name.trim(),
           record.defaultVisibility,
           record.defaultWritePolicy,
+          record.automationCreateRequiredRole,
           record.archivedAt ?? null,
           record.updatedAt,
         ],
@@ -575,6 +595,340 @@ export class PostgresStore implements AppStore {
     );
     if (!result.rows[0]) throw new Error(`Session does not exist: ${input.sessionId}`);
     return toSession(result.rows[0]);
+  }
+
+  async createAutomation(record: CreateAutomationRecord): Promise<AutomationRecord> {
+    const result = await this.pool.query<AutomationRow>(
+      `INSERT INTO automations (
+         id,
+         kind,
+         name,
+         prompt,
+         schedule_cron,
+         enabled,
+         owner_group_id,
+         visibility,
+         write_policy,
+         context,
+         created_by_user_id,
+         next_invocation_at,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       RETURNING ${automationSelectColumns}`,
+      [
+        record.id,
+        record.kind,
+        record.name,
+        record.prompt,
+        record.scheduleCron,
+        record.enabled,
+        record.ownerGroupId,
+        record.visibility,
+        record.writePolicy,
+        record.context ?? null,
+        record.createdByUserId ?? null,
+        record.nextInvocationAt ?? null,
+        record.createdAt,
+        record.updatedAt,
+      ],
+    );
+    return toAutomation(result.rows[0]!);
+  }
+
+  async getAutomation(id: string): Promise<AutomationRecord | null> {
+    const result = await this.pool.query<AutomationRow>(
+      `SELECT ${automationSelectColumns} FROM automations WHERE id = $1`,
+      [id],
+    );
+    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+  }
+
+  async listAutomations(): Promise<AutomationRecord[]> {
+    const result = await this.pool.query<AutomationRow>(
+      `SELECT ${automationSelectColumns} FROM automations ORDER BY updated_at DESC, created_at DESC`,
+    );
+    return result.rows.map(toAutomation);
+  }
+
+  async updateAutomation(input: UpdateAutomationRecord): Promise<AutomationRecord> {
+    const updates = ['updated_at = $2'];
+    const values: unknown[] = [input.id, input.updatedAt];
+
+    function addUpdate(column: string, value: unknown): void {
+      values.push(value);
+      updates.push(`${column} = $${values.length}`);
+    }
+
+    if (input.name !== undefined) addUpdate('name', input.name);
+    if (input.prompt !== undefined) addUpdate('prompt', input.prompt);
+    if (input.scheduleCron !== undefined) addUpdate('schedule_cron', input.scheduleCron);
+    if (input.enabled !== undefined) addUpdate('enabled', input.enabled);
+    if (input.ownerGroupId !== undefined) addUpdate('owner_group_id', input.ownerGroupId);
+    if (input.visibility !== undefined) addUpdate('visibility', input.visibility);
+    if (input.writePolicy !== undefined) addUpdate('write_policy', input.writePolicy);
+    if (input.context !== undefined) addUpdate('context', input.context);
+    if (input.nextInvocationAt !== undefined) addUpdate('next_invocation_at', input.nextInvocationAt);
+
+    const result = await this.pool.query<AutomationRow>(
+      `UPDATE automations
+        SET ${updates.join(', ')}
+        WHERE id = $1
+        RETURNING ${automationSelectColumns}`,
+      values,
+    );
+    if (!result.rows[0]) throw new Error(`Automation does not exist: ${input.id}`);
+    return toAutomation(result.rows[0]);
+  }
+
+  async archiveAutomation(input: { automationId: string; archivedAt: Date }): Promise<AutomationRecord | null> {
+    const result = await this.pool.query<AutomationRow>(
+      `UPDATE automations
+       SET archived_at = COALESCE(archived_at, $2),
+           enabled = false,
+           scheduler_lock_owner = NULL,
+           scheduler_locked_until = NULL,
+           updated_at = $2
+       WHERE id = $1
+       RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.archivedAt],
+    );
+    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+  }
+
+  async unarchiveAutomation(input: { automationId: string; updatedAt: Date }): Promise<AutomationRecord | null> {
+    const result = await this.pool.query<AutomationRow>(
+      `UPDATE automations
+       SET archived_at = NULL,
+           enabled = false,
+           scheduler_lock_owner = NULL,
+           scheduler_locked_until = NULL,
+           updated_at = $2
+       WHERE id = $1
+       RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.updatedAt],
+    );
+    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+  }
+
+  async claimAutomation(input: {
+    automationId: string;
+    now: Date;
+    lockOwner: string;
+    lockedUntil: Date;
+  }): Promise<AutomationRecord | null> {
+    const result = await this.pool.query<AutomationRow>(
+      `UPDATE automations
+       SET scheduler_lock_owner = $2,
+           scheduler_locked_until = $3
+        WHERE id = $1
+           AND archived_at IS NULL
+           AND (scheduler_locked_until IS NULL OR scheduler_locked_until <= $4)
+         RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.lockOwner, input.lockedUntil, input.now],
+    );
+    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+  }
+
+  async releaseAutomationClaim(input: { automationId: string; lockOwner: string }): Promise<AutomationRecord | null> {
+    const result = await this.pool.query<AutomationRow>(
+      `UPDATE automations
+       SET scheduler_lock_owner = NULL,
+           scheduler_locked_until = NULL
+        WHERE id = $1 AND scheduler_lock_owner = $2
+        RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.lockOwner],
+    );
+    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+  }
+
+  async claimNextDueScheduledAutomation(input: {
+    now: Date;
+    lockOwner: string;
+    lockedUntil: Date;
+  }): Promise<AutomationRecord | null> {
+    return this.transaction(async (client) => {
+      const candidate = await client.query<{ id: string }>(
+        `SELECT id
+         FROM automations
+          WHERE kind = 'scheduled'
+            AND enabled = true
+            AND archived_at IS NULL
+            AND next_invocation_at IS NOT NULL
+            AND next_invocation_at <= $1
+           AND (scheduler_locked_until IS NULL OR scheduler_locked_until <= $1)
+         ORDER BY next_invocation_at ASC, created_at ASC
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1`,
+        [input.now],
+      );
+      const automationId = candidate.rows[0]?.id;
+      if (!automationId) return null;
+
+      const result = await client.query<AutomationRow>(
+        `UPDATE automations
+          SET scheduler_lock_owner = $2,
+              scheduler_locked_until = $3
+          WHERE id = $1
+          RETURNING ${automationSelectColumns}`,
+        [automationId, input.lockOwner, input.lockedUntil],
+      );
+      return result.rows[0] ? toAutomation(result.rows[0]) : null;
+    });
+  }
+
+  async completeScheduledAutomationClaim(input: {
+    automationId: string;
+    lockOwner: string;
+    claimedScheduleCron: string;
+    nextInvocationAt: Date;
+  }): Promise<AutomationRecord | null> {
+    const result = await this.pool.query<AutomationRow>(
+      `UPDATE automations
+       SET next_invocation_at = $3,
+           scheduler_lock_owner = NULL,
+           scheduler_locked_until = NULL
+         WHERE id = $1 AND scheduler_lock_owner = $2 AND schedule_cron = $4
+         RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.lockOwner, input.nextInvocationAt, input.claimedScheduleCron],
+    );
+    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+  }
+
+  async createAutomationInvocation(record: CreateAutomationInvocationRecord): Promise<AutomationInvocationRecord> {
+    const result = await this.pool.query<AutomationInvocationRow>(
+      `INSERT INTO automation_invocations (
+         id,
+         automation_id,
+         trigger,
+         status,
+         scheduled_at,
+         session_id,
+         message_id,
+         reserved_session_id,
+         reserved_message_id,
+         requested_by_user_id,
+         reason,
+         error,
+         metadata,
+         created_at,
+         completed_at
+       )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        RETURNING ${automationInvocationSelectColumns}`,
+      [
+        record.id,
+        record.automationId,
+        record.trigger,
+        record.status,
+        record.scheduledAt ?? null,
+        record.sessionId ?? null,
+        record.messageId ?? null,
+        record.reservedSessionId ?? null,
+        record.reservedMessageId ?? null,
+        record.requestedByUserId ?? null,
+        record.reason ?? null,
+        record.error ?? null,
+        record.metadata,
+        record.createdAt,
+        record.completedAt ?? null,
+      ],
+    );
+    return toAutomationInvocation(result.rows[0]!);
+  }
+
+  async updateAutomationInvocation(record: AutomationInvocationRecord): Promise<AutomationInvocationRecord> {
+    const result = await this.pool.query<AutomationInvocationRow>(
+      `UPDATE automation_invocations
+       SET status = $2,
+            scheduled_at = $3,
+            session_id = $4,
+            message_id = $5,
+            reserved_session_id = $6,
+            reserved_message_id = $7,
+            requested_by_user_id = $8,
+            reason = $9,
+            error = $10,
+            metadata = $11,
+            created_at = $12,
+            completed_at = $13
+        WHERE id = $1
+        RETURNING ${automationInvocationSelectColumns}`,
+      [
+        record.id,
+        record.status,
+        record.scheduledAt ?? null,
+        record.sessionId ?? null,
+        record.messageId ?? null,
+        record.reservedSessionId ?? null,
+        record.reservedMessageId ?? null,
+        record.requestedByUserId ?? null,
+        record.reason ?? null,
+        record.error ?? null,
+        record.metadata,
+        record.createdAt,
+        record.completedAt ?? null,
+      ],
+    );
+    if (!result.rows[0]) throw new Error(`Automation invocation does not exist: ${record.id}`);
+    return toAutomationInvocation(result.rows[0]);
+  }
+
+  async getAutomationInvocationBySchedule(input: {
+    automationId: string;
+    scheduledAt: Date;
+  }): Promise<AutomationInvocationRecord | null> {
+    const result = await this.pool.query<AutomationInvocationRow>(
+      `SELECT ${automationInvocationSelectColumns}
+       FROM automation_invocations
+       WHERE automation_id = $1 AND trigger = 'scheduled' AND scheduled_at = $2
+       LIMIT 1`,
+      [input.automationId, input.scheduledAt],
+    );
+    return result.rows[0] ? toAutomationInvocation(result.rows[0]) : null;
+  }
+
+  async getBlockingAutomationSession(automationId: string): Promise<SessionRecord | null> {
+    const result = await this.pool.query<SessionRow>(
+      `SELECT ${joinedSessionSelectColumns}
+       FROM automation_invocations
+       JOIN sessions ON sessions.id = automation_invocations.session_id
+       WHERE automation_invocations.automation_id = $1
+         AND automation_invocations.status = 'created'
+         AND sessions.status IN ('queued', 'active')
+       ORDER BY automation_invocations.created_at DESC, automation_invocations.id DESC
+       LIMIT 1`,
+      [automationId],
+    );
+    return result.rows[0] ? toSession(result.rows[0]) : null;
+  }
+
+  async listAutomationInvocations(
+    automationId: string,
+    options: ListAutomationInvocationsOptions = {},
+  ): Promise<AutomationInvocationRecord[]> {
+    const params: unknown[] = [automationId];
+    let cursorClause = '';
+    if (options.before) {
+      params.push(options.before.createdAt, options.before.id);
+      cursorClause = `AND (created_at < $2 OR (created_at = $2 AND id < $3))`;
+    }
+    let limitClause = '';
+    if (options.limit !== undefined) {
+      params.push(options.limit);
+      limitClause = `LIMIT $${params.length}`;
+    }
+    const result = await this.pool.query<AutomationInvocationRow>(
+      `SELECT ${automationInvocationSelectColumns}
+       FROM automation_invocations
+       WHERE automation_id = $1
+       ${cursorClause}
+        ORDER BY created_at DESC, id DESC
+        ${limitClause}`,
+      params,
+    );
+    return result.rows.map(toAutomationInvocation);
   }
 
   async nextMessageSequence(sessionId: string): Promise<number> {

@@ -46,6 +46,22 @@ export const publicApiResponseSchemas = {
     description: 'Session list envelope.',
     fields: { sessions: 'array' },
   },
+  automation: {
+    description: 'Single automation envelope.',
+    fields: { automation: 'object' },
+  },
+  automations: {
+    description: 'Automation list envelope.',
+    fields: { automations: 'array' },
+  },
+  automationInvocations: {
+    description: 'Automation invocation list envelope.',
+    fields: { invocations: 'array', nextCursor: 'optional:string' },
+  },
+  automationInvocation: {
+    description: 'Manual automation invocation result envelope.',
+    fields: { automation: 'object', invocation: 'object', session: 'optional:object', message: 'optional:object' },
+  },
   group: {
     description: 'Single group envelope.',
     fields: { group: 'object' },

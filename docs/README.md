@@ -8,7 +8,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 
 - [Architecture](./architecture.md): system shape, deployable units, module boundaries, and dependency rules.
 - [Domain Design](./domain-design.md): lightweight domain-driven design boundaries, aggregates, and anti-corruption layers.
-- [Data Model](./data-model.md): Postgres-backed sessions, messages, events, runs, sandboxes, integrations, and artifacts.
+- [Data Model](./data-model.md): Postgres-backed sessions, messages, automations, events, runs, sandboxes, integrations, and artifacts.
 - [Sandbox Providers](./sandbox-providers.md): provider contract, lifecycle APIs, capabilities, and conformance expectations.
 - [Flue Persistence](./flue-persistence.md): Postgres-backed Flue session store and how it relates to product session state.
 - [Integrations](./integrations.md): generic webhook, GitHub, Slack, Linear, callbacks, auth, and external thread mapping.
@@ -98,6 +98,7 @@ The current scaffold has implemented the portable control-plane foundation:
 - Flue live event normalization for text deltas, tools, commands, and tasks.
 - Artifact persistence, optional filesystem/S3-compatible blob storage, session artifact list/download/preview APIs, and generic HTTP completion callbacks.
 - Separate Vite React operator UI scaffold.
+- Scheduled automations with UTC cron schedules, durable invocation records, manual invocation, and minimal operator UI.
 - Opt-in real local Flue and real Daytona/Flue UAT paths with credentials.
 - Slack and GitHub webhook integrations with external thread reuse, callback delivery, and archived-session recovery.
 - GitHub App repository access with guarded `repository`, `gh`, and authenticated `git` tools.

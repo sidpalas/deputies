@@ -18,6 +18,8 @@ Postgres is the required durable store for the MVP.
 
 ```txt
 sessions
+automations
+automation_invocations
 auth_users
 auth_accounts
 auth_sessions
@@ -46,6 +48,8 @@ The data model below is both the product target and the current implementation r
 Current implemented tables:
 
 - `sessions`
+- `automations`
+- `automation_invocations`
 - `auth_users`
 - `auth_accounts`
 - `auth_sessions`
@@ -106,6 +110,31 @@ auth_sessions
 ```
 
 Provider accounts let `AUTH_PROVIDER=static` and `AUTH_PROVIDER=github` share the same session machinery. GitHub login uses the GitHub App user-authorization client ID and client secret; repository runtime access still mints separate short-lived installation tokens and does not persist those tokens in auth tables.
+
+## Access Groups
+
+Access groups own sessions and automations.
+
+Current relevant columns:
+
+```txt
+groups
+  id uuid primary key
+  name text not null
+  default_visibility text not null
+  default_write_policy text not null
+  automation_create_required_role text not null
+  archived_at timestamptz
+  created_at timestamptz not null
+  updated_at timestamptz not null
+```
+
+Rules:
+
+- `automation_create_required_role` is `member` by default.
+- `member` lets group members and admins create new scheduled automations in the group.
+- `admin` limits new scheduled automation creation to group admins and super admins.
+- The setting controls creation only; existing automation management still follows automation ownership and creator-management rules.
 
 ## Sessions
 
@@ -211,6 +240,76 @@ Indexes:
 (status, created_at)
 unique(source, dedupe_key) where dedupe_key is not null
 ```
+
+## Automations
+
+Represents group-owned rules that create agent work without a user manually starting a session at that moment.
+
+Current columns:
+
+```txt
+id uuid primary key
+kind text not null
+name text not null
+prompt text not null
+schedule_cron text not null
+enabled boolean not null
+owner_group_id uuid not null references groups(id)
+visibility text not null
+write_policy text not null
+context jsonb
+created_by_user_id uuid references auth_users(id)
+archived_at timestamptz
+next_invocation_at timestamptz
+scheduler_lock_owner text
+scheduler_locked_until timestamptz
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Rules:
+
+- Automations are owned by access groups, not by bot users.
+- `created_by_user_id` is audit and creator-management metadata; group ownership is the durable authority.
+- Scheduled automations use 5-field UTC cron expressions and store the next absolute invocation timestamp.
+- Disabled automations are not invoked automatically.
+- Archived automations are disabled, are not invoked automatically or manually, and cannot be enabled until restored.
+- Restored automations remain disabled until explicitly enabled.
+- Archiving an automation's owner access group suspends automatic and manual invocations without mutating the automation's `enabled` state.
+- A scheduled fire while the owner group is archived records a skipped invocation with reason `owner_group_archived`.
+- Automation context may contain durable prompt context such as repository, model, or branch.
+
+## Automation Invocations
+
+Represents one durable activation of an automation that creates or attempts to create a session.
+
+Current columns:
+
+```txt
+id uuid primary key
+automation_id uuid not null references automations(id)
+trigger text not null
+status text not null
+scheduled_at timestamptz
+session_id uuid references sessions(id)
+message_id uuid references messages(id)
+reserved_session_id uuid
+reserved_message_id uuid
+requested_by_user_id uuid references auth_users(id)
+reason text
+error text
+metadata jsonb not null default '{}'
+created_at timestamptz not null
+completed_at timestamptz
+```
+
+Rules:
+
+- Invocations are separate from agent runs.
+- Scheduled invocations are unique per automation and scheduled timestamp.
+- Skipped invocations are recorded when domain rules prevent session creation, such as missed schedule time or an active previous automation session.
+- Failed invocations are terminal records; the next scheduled time or a manual invocation creates a separate invocation.
+- Reserved session/message ids are private idempotency fields and are not exposed as public invocation metadata.
 
 ## Runs
 

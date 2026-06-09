@@ -141,7 +141,8 @@ secrets:
 migrations:
   enabled: true
   hook: true
-  hookEvents: post-install,post-upgrade
+  hookEvents: pre-install,pre-upgrade
+  serviceAccountName: ''
   backoffLimit: 3
   ttlSecondsAfterFinished: 300
   resources: {}

@@ -67,14 +67,14 @@ export function NewThreadPanel(props: {
           {props.groups.length > 1 ? (
             <div>
               <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="new-thread-group">
-                Group
+                Access group
               </label>
               <OptionPicker
                 id="new-thread-group"
-                label="Group"
+                label="Access group"
                 value={props.groupId}
                 options={props.groups.map((group) => ({ value: group.id, label: group.name }))}
-                emptyLabel="Select group..."
+                emptyLabel="Select access group..."
                 onChange={props.onGroupChange}
                 disabled={!props.canCallApi}
               />

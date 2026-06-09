@@ -6,7 +6,9 @@ export const groupsPanelOpenStorageKey = 'deputies-groups-panel-open';
 export const sidebarPanelStorageKey = 'deputies-sidebar-panel';
 export const groupsPanelViewStorageKey = 'deputies-groups-panel-view';
 export const groupsPanelSelectedGroupStorageKey = 'deputies-groups-panel-selected-group-id';
+export const selectedAutomationStorageKey = 'deputies-selected-automation-id';
 export const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
+export const archivedAutomationsOpenStorageKey = 'deputies-archived-automations-open';
 export const themeStorageKey = 'deputies-theme';
 
 export const startupConnectionDelayMs = 3_000;
@@ -39,40 +41,58 @@ export function loadStoredToken(): string {
 }
 
 export function loadInitialSelectedSessionId(): string {
-  return (
-    new URLSearchParams(window.location.search).get('session') ??
-    sessionStorage.getItem(selectedSessionStorageKey) ??
-    ''
-  );
+  const query = new URLSearchParams(window.location.search);
+  if (query.get('group') || query.get('automation')) return '';
+  return query.get('session') ?? sessionStorage.getItem(selectedSessionStorageKey) ?? '';
 }
 
 export function loadInitialIsCreatingThread(): boolean {
   return (
     !new URLSearchParams(window.location.search).get('session') &&
+    !new URLSearchParams(window.location.search).get('group') &&
+    !new URLSearchParams(window.location.search).get('automation') &&
     sessionStorage.getItem(newSessionSelectedStorageKey) === 'true'
   );
 }
 
 export function loadInitialSetupGuideOpen(): boolean {
+  const query = new URLSearchParams(window.location.search);
+  if (query.get('session') || query.get('group') || query.get('automation')) return false;
   return sessionStorage.getItem(setupGuideOpenStorageKey) === 'true';
 }
 
 export function loadInitialGroupsPanelOpen(): boolean {
+  const query = new URLSearchParams(window.location.search);
+  if (query.get('session') || query.get('automation')) return false;
+  if (query.get('group')) return true;
   return sessionStorage.getItem(groupsPanelOpenStorageKey) === 'true';
 }
 
-export function loadInitialSidebarPanel(): 'sessions' | 'groups' {
+export function loadInitialSidebarPanel(): 'sessions' | 'groups' | 'automations' {
+  const query = new URLSearchParams(window.location.search);
+  if (query.get('session')) return 'sessions';
+  if (query.get('automation')) return 'automations';
+  if (query.get('group')) return 'groups';
   const stored = sessionStorage.getItem(sidebarPanelStorageKey);
-  if (stored === 'sessions' || stored === 'groups') return stored;
+  if (stored === 'sessions' || stored === 'groups' || stored === 'automations') return stored;
   return loadInitialGroupsPanelOpen() ? 'groups' : 'sessions';
 }
 
 export function loadInitialGroupsPanelView(): 'group' | 'super_admins' {
+  if (new URLSearchParams(window.location.search).get('group')) return 'group';
   return sessionStorage.getItem(groupsPanelViewStorageKey) === 'super_admins' ? 'super_admins' : 'group';
 }
 
 export function loadInitialGroupsPanelSelectedGroupId(): string {
+  const groupId = new URLSearchParams(window.location.search).get('group');
+  if (groupId) return groupId;
   return sessionStorage.getItem(groupsPanelSelectedGroupStorageKey) ?? '';
+}
+
+export function loadInitialSelectedAutomationId(): string {
+  const automationId = new URLSearchParams(window.location.search).get('automation');
+  if (automationId) return automationId;
+  return sessionStorage.getItem(selectedAutomationStorageKey) ?? '';
 }
 
 export function loadThemePreference(): ThemePreference {

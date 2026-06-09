@@ -43,7 +43,55 @@ export type Session = {
   };
 };
 
+export type Automation = {
+  id: string;
+  kind: 'scheduled';
+  name: string;
+  prompt: string;
+  scheduleCron: string;
+  scheduleTimezone: 'UTC';
+  enabled: boolean;
+  ownerGroupId: string;
+  ownerGroupName?: string;
+  ownerGroupArchivedAt?: string;
+  visibility: SessionVisibility;
+  writePolicy: SessionWritePolicy;
+  createdByUserId?: string;
+  context?: Record<string, unknown>;
+  nextInvocationAt?: string;
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  canManage?: boolean;
+  lastInvocation?: AutomationInvocation;
+};
+
+export type AutomationInvocation = {
+  id: string;
+  automationId: string;
+  trigger: 'scheduled' | 'manual';
+  status: 'creating' | 'created' | 'skipped' | 'failed';
+  createdAt: string;
+  metadata: Record<string, unknown>;
+  completedAt?: string;
+  scheduledAt?: string;
+  sessionId?: string;
+  sessionStatus?: Session['status'];
+  sessionTitle?: string;
+  messageId?: string;
+  messageStatus?: Message['status'];
+  requestedByUserId?: string;
+  reason?: string;
+  error?: string;
+};
+
+export type AutomationInvocationPage = {
+  invocations: AutomationInvocation[];
+  nextCursor?: string;
+};
+
 export type GroupRole = 'viewer' | 'member' | 'admin';
+export type AutomationCreateRequiredRole = 'member' | 'admin';
 export type SessionVisibility = 'group' | 'organization';
 export type SessionWritePolicy = 'group_members' | 'creator_only';
 
@@ -52,12 +100,14 @@ export type Group = {
   name: string;
   defaultVisibility: SessionVisibility;
   defaultWritePolicy: SessionWritePolicy;
+  automationCreateRequiredRole: AutomationCreateRequiredRole;
   archivedAt?: string;
   createdAt: string;
   updatedAt: string;
   membershipRole?: GroupRole | null;
-  canCreateSessions?: boolean;
-  canManage?: boolean;
+  canCreateSessions: boolean;
+  canCreateAutomations: boolean;
+  canManage: boolean;
 };
 
 export type GroupMember = {
@@ -287,9 +337,127 @@ export async function listSessions(token: string): Promise<Session[]> {
   return body.sessions;
 }
 
+export async function listAutomations(token: string): Promise<Automation[]> {
+  const body = await request<{ automations: Automation[] }>('/automations', { token });
+  return body.automations;
+}
+
+export async function createAutomation(input: {
+  name: string;
+  prompt: string;
+  scheduleCron: string;
+  token: string;
+  ownerGroupId?: string;
+  enabled?: boolean;
+  repository?: string | RepositoryInput;
+  model?: string;
+  branch?: string;
+}): Promise<Automation> {
+  const body = await request<{ automation: Automation }>('/automations', {
+    method: 'POST',
+    token: input.token,
+    body: automationRequestBody(input),
+  });
+  return body.automation;
+}
+
+export async function updateAutomation(input: {
+  automationId: string;
+  token: string;
+  name?: string;
+  prompt?: string;
+  scheduleCron?: string;
+  enabled?: boolean;
+  ownerGroupId?: string;
+  repository?: string | RepositoryInput;
+  model?: string;
+  branch?: string;
+}): Promise<Automation> {
+  const body = await request<{ automation: Automation }>(`/automations/${input.automationId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: automationRequestBody(input),
+  });
+  return body.automation;
+}
+
+export async function archiveAutomation(input: { automationId: string; token: string }): Promise<Automation> {
+  const body = await request<{ automation: Automation }>(`/automations/${input.automationId}/archive`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.automation;
+}
+
+export async function unarchiveAutomation(input: { automationId: string; token: string }): Promise<Automation> {
+  const body = await request<{ automation: Automation }>(`/automations/${input.automationId}/unarchive`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.automation;
+}
+
+export async function invokeAutomation(input: {
+  automationId: string;
+  token: string;
+  allowDisabled?: boolean;
+  allowOverlap?: boolean;
+}): Promise<{ automation: Automation; invocation: AutomationInvocation; session?: Session; message?: Message }> {
+  return request<{ automation: Automation; invocation: AutomationInvocation; session?: Session; message?: Message }>(
+    `/automations/${input.automationId}/invoke`,
+    {
+      method: 'POST',
+      token: input.token,
+      body: {
+        ...(input.allowDisabled ? { allowDisabled: true } : {}),
+        ...(input.allowOverlap ? { allowOverlap: true } : {}),
+      },
+    },
+  );
+}
+
+export async function listAutomationInvocations(input: {
+  automationId: string;
+  token: string;
+  limit?: number;
+  cursor?: string;
+}): Promise<AutomationInvocationPage> {
+  const query = new URLSearchParams();
+  if (input.limit !== undefined) query.set('limit', String(input.limit));
+  if (input.cursor) query.set('cursor', input.cursor);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return request<AutomationInvocationPage>(`/automations/${input.automationId}/invocations${suffix}`, {
+    token: input.token,
+  });
+}
+
 export async function listRepositoryOptions(token: string): Promise<RepositoryOption[]> {
   const body = await request<{ repositories: RepositoryOption[] }>('/repositories', { token });
   return body.repositories;
+}
+
+function automationRequestBody(input: {
+  name?: string;
+  prompt?: string;
+  scheduleCron?: string;
+  ownerGroupId?: string;
+  enabled?: boolean;
+  repository?: string | RepositoryInput;
+  model?: string;
+  branch?: string;
+}): Record<string, unknown> {
+  return {
+    ...(input.name !== undefined ? { name: input.name } : {}),
+    ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+    ...(input.scheduleCron !== undefined ? { scheduleCron: input.scheduleCron } : {}),
+    ...(input.ownerGroupId ? { ownerGroupId: input.ownerGroupId } : {}),
+    ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+    ...(input.repository !== undefined ? { repository: input.repository } : {}),
+    ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(input.branch !== undefined ? { branch: input.branch } : {}),
+  };
 }
 
 export async function listBranches(input: { repository: string; token: string }): Promise<BranchOption[]> {
@@ -319,6 +487,7 @@ export async function createGroup(input: {
   name: string;
   defaultVisibility: SessionVisibility;
   defaultWritePolicy: SessionWritePolicy;
+  automationCreateRequiredRole: AutomationCreateRequiredRole;
   token: string;
 }): Promise<Group> {
   const body = await request<{ group: Group }>('/groups', {
@@ -328,6 +497,7 @@ export async function createGroup(input: {
       name: input.name,
       defaultVisibility: input.defaultVisibility,
       defaultWritePolicy: input.defaultWritePolicy,
+      automationCreateRequiredRole: input.automationCreateRequiredRole,
     },
   });
   return body.group;
@@ -338,6 +508,7 @@ export async function updateGroup(input: {
   name: string;
   defaultVisibility: SessionVisibility;
   defaultWritePolicy: SessionWritePolicy;
+  automationCreateRequiredRole: AutomationCreateRequiredRole;
   archived?: boolean;
   token: string;
 }): Promise<Group> {
@@ -348,6 +519,7 @@ export async function updateGroup(input: {
       name: input.name,
       defaultVisibility: input.defaultVisibility,
       defaultWritePolicy: input.defaultWritePolicy,
+      automationCreateRequiredRole: input.automationCreateRequiredRole,
       ...(input.archived === undefined ? {} : { archived: input.archived }),
     },
   });

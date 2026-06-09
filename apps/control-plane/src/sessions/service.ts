@@ -4,6 +4,7 @@ import { defaultGroupId } from '../store/types.js';
 import type { SessionRecord, SessionStore, SessionVisibility, SessionWritePolicy } from '../store/types.js';
 
 export type CreateSessionInput = {
+  id?: string;
   title?: string;
   ownerGroupId?: string;
   visibility?: SessionVisibility;
@@ -34,7 +35,7 @@ export class SessionService {
   async create(input: CreateSessionInput = {}): Promise<SessionRecord> {
     const now = new Date();
     const record: SessionRecord = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       status: 'created',
       ownerGroupId: input.ownerGroupId ?? defaultGroupId,
       visibility: input.visibility ?? 'organization',

@@ -3,10 +3,14 @@ import { defaultGroupId, StoreConflictError } from './types.js';
 import type {
   AppStore,
   ArtifactRecord,
+  AutomationInvocationRecord,
+  AutomationRecord,
   AuthAccountRecord,
   AuthSessionRecord,
   AuthUserRecord,
   CallbackDeliveryRecord,
+  CreateAutomationInvocationRecord,
+  CreateAutomationRecord,
   CreateArtifactRecord,
   CreateCallbackDeliveryRecord,
   CreateExternalResourceRecord,
@@ -23,12 +27,14 @@ import type {
   CreateSessionRecord,
   ClaimedMessage,
   ClaimedMessageBatch,
+  ListAutomationInvocationsOptions,
   MessageRecord,
   RecoveredRun,
   RunRecord,
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -48,6 +54,7 @@ export class MemoryStore implements AppStore {
         name: 'Default',
         defaultVisibility: 'organization',
         defaultWritePolicy: 'group_members',
+        automationCreateRequiredRole: 'member',
         createdAt: defaultGroupCreatedAt,
         updatedAt: defaultGroupCreatedAt,
       },
@@ -64,6 +71,8 @@ export class MemoryStore implements AppStore {
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly externalResources = new Map<string, ExternalResourceRecord>();
   private readonly callbacks = new Map<string, CallbackDeliveryRecord>();
+  private readonly automations = new Map<string, AutomationRecord>();
+  private readonly automationInvocations = new Map<string, AutomationInvocationRecord>();
   private readonly webhookSources = new Map<string, WebhookSourceRecord>();
   private readonly externalThreads = new Map<string, ExternalThreadRecord>();
   private readonly integrationDeliveries = new Map<string, IntegrationDeliveryRecord>();
@@ -280,6 +289,216 @@ export class MemoryStore implements AppStore {
     const { queuePausedAt: _queuePausedAt, ...updated } = { ...existing, updatedAt: new Date() };
     this.sessions.set(input.sessionId, updated);
     return updated;
+  }
+
+  async createAutomation(record: CreateAutomationRecord): Promise<AutomationRecord> {
+    if (this.automations.has(record.id)) throw new Error(`Automation already exists: ${record.id}`);
+    this.automations.set(record.id, record);
+    return record;
+  }
+
+  async getAutomation(id: string): Promise<AutomationRecord | null> {
+    return this.automations.get(id) ?? null;
+  }
+
+  async listAutomations(): Promise<AutomationRecord[]> {
+    return [...this.automations.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+
+  async updateAutomation(input: UpdateAutomationRecord): Promise<AutomationRecord> {
+    const existing = this.automations.get(input.id);
+    if (!existing) throw new Error(`Automation does not exist: ${input.id}`);
+    const updated: AutomationRecord = {
+      ...existing,
+      updatedAt: input.updatedAt,
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+      ...(input.scheduleCron !== undefined ? { scheduleCron: input.scheduleCron } : {}),
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.ownerGroupId !== undefined ? { ownerGroupId: input.ownerGroupId } : {}),
+      ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+      ...(input.writePolicy !== undefined ? { writePolicy: input.writePolicy } : {}),
+    };
+    if (input.context !== undefined) {
+      if (input.context) updated.context = input.context;
+      else delete updated.context;
+    }
+    if (input.nextInvocationAt !== undefined && input.nextInvocationAt !== null)
+      updated.nextInvocationAt = input.nextInvocationAt;
+    else if (input.nextInvocationAt === null) delete updated.nextInvocationAt;
+    this.automations.set(input.id, updated);
+    return updated;
+  }
+
+  async archiveAutomation(input: { automationId: string; archivedAt: Date }): Promise<AutomationRecord | null> {
+    const automation = this.automations.get(input.automationId);
+    if (!automation) return null;
+    const { schedulerLockOwner: _lockOwner, schedulerLockedUntil: _lockedUntil, ...withoutLock } = automation;
+    const archived = {
+      ...withoutLock,
+      enabled: false,
+      archivedAt: automation.archivedAt ?? input.archivedAt,
+      updatedAt: input.archivedAt,
+    };
+    this.automations.set(input.automationId, archived);
+    return archived;
+  }
+
+  async unarchiveAutomation(input: { automationId: string; updatedAt: Date }): Promise<AutomationRecord | null> {
+    const automation = this.automations.get(input.automationId);
+    if (!automation) return null;
+    const {
+      archivedAt: _archivedAt,
+      schedulerLockOwner: _lockOwner,
+      schedulerLockedUntil: _lockedUntil,
+      ...withoutArchiveAndLock
+    } = automation;
+    const unarchived = {
+      ...withoutArchiveAndLock,
+      enabled: false,
+      updatedAt: input.updatedAt,
+    };
+    this.automations.set(input.automationId, unarchived);
+    return unarchived;
+  }
+
+  async claimAutomation(input: {
+    automationId: string;
+    now: Date;
+    lockOwner: string;
+    lockedUntil: Date;
+  }): Promise<AutomationRecord | null> {
+    const automation = this.automations.get(input.automationId);
+    if (!automation) return null;
+    if (automation.archivedAt) return null;
+    if (automation.schedulerLockedUntil && automation.schedulerLockedUntil > input.now) return null;
+    const locked: AutomationRecord = {
+      ...automation,
+      schedulerLockOwner: input.lockOwner,
+      schedulerLockedUntil: input.lockedUntil,
+    };
+    this.automations.set(automation.id, locked);
+    return locked;
+  }
+
+  async releaseAutomationClaim(input: { automationId: string; lockOwner: string }): Promise<AutomationRecord | null> {
+    const automation = this.automations.get(input.automationId);
+    if (!automation || automation.schedulerLockOwner !== input.lockOwner) return null;
+    const { schedulerLockOwner: _lockOwner, schedulerLockedUntil: _lockedUntil, ...withoutLock } = automation;
+    const updated = { ...withoutLock };
+    this.automations.set(input.automationId, updated);
+    return updated;
+  }
+
+  async claimNextDueScheduledAutomation(input: {
+    now: Date;
+    lockOwner: string;
+    lockedUntil: Date;
+  }): Promise<AutomationRecord | null> {
+    const automation = [...this.automations.values()]
+      .filter((candidate) => candidate.kind === 'scheduled')
+      .filter((candidate) => candidate.enabled)
+      .filter((candidate) => !candidate.archivedAt)
+      .filter((candidate) => candidate.nextInvocationAt && candidate.nextInvocationAt <= input.now)
+      .filter((candidate) => !candidate.schedulerLockedUntil || candidate.schedulerLockedUntil <= input.now)
+      .sort(
+        (a, b) =>
+          (a.nextInvocationAt?.getTime() ?? 0) - (b.nextInvocationAt?.getTime() ?? 0) ||
+          a.createdAt.getTime() - b.createdAt.getTime(),
+      )[0];
+    if (!automation) return null;
+
+    const locked: AutomationRecord = {
+      ...automation,
+      schedulerLockOwner: input.lockOwner,
+      schedulerLockedUntil: input.lockedUntil,
+    };
+    this.automations.set(automation.id, locked);
+    return locked;
+  }
+
+  async completeScheduledAutomationClaim(input: {
+    automationId: string;
+    lockOwner: string;
+    claimedScheduleCron: string;
+    nextInvocationAt: Date;
+  }): Promise<AutomationRecord | null> {
+    const automation = this.automations.get(input.automationId);
+    if (
+      !automation ||
+      automation.schedulerLockOwner !== input.lockOwner ||
+      automation.scheduleCron !== input.claimedScheduleCron
+    ) {
+      return null;
+    }
+    const { schedulerLockOwner: _lockOwner, schedulerLockedUntil: _lockedUntil, ...withoutLock } = automation;
+    const updated: AutomationRecord = {
+      ...withoutLock,
+      nextInvocationAt: input.nextInvocationAt,
+    };
+    this.automations.set(input.automationId, updated);
+    return updated;
+  }
+
+  async createAutomationInvocation(record: CreateAutomationInvocationRecord): Promise<AutomationInvocationRecord> {
+    if (this.automationInvocations.has(record.id)) {
+      throw new Error(`Automation invocation already exists: ${record.id}`);
+    }
+    const duplicateScheduled = [...this.automationInvocations.values()].some(
+      (candidate) =>
+        candidate.automationId === record.automationId &&
+        candidate.trigger === 'scheduled' &&
+        record.trigger === 'scheduled' &&
+        candidate.scheduledAt?.getTime() === record.scheduledAt?.getTime(),
+    );
+    if (duplicateScheduled) throw new Error(`Scheduled automation invocation already exists: ${record.automationId}`);
+    this.automationInvocations.set(record.id, record);
+    return record;
+  }
+
+  async updateAutomationInvocation(record: AutomationInvocationRecord): Promise<AutomationInvocationRecord> {
+    if (!this.automationInvocations.has(record.id)) {
+      throw new Error(`Automation invocation does not exist: ${record.id}`);
+    }
+    this.automationInvocations.set(record.id, record);
+    return record;
+  }
+
+  async getAutomationInvocationBySchedule(input: {
+    automationId: string;
+    scheduledAt: Date;
+  }): Promise<AutomationInvocationRecord | null> {
+    return (
+      [...this.automationInvocations.values()].find(
+        (invocation) =>
+          invocation.automationId === input.automationId &&
+          invocation.trigger === 'scheduled' &&
+          invocation.scheduledAt?.getTime() === input.scheduledAt.getTime(),
+      ) ?? null
+    );
+  }
+
+  async getBlockingAutomationSession(automationId: string): Promise<SessionRecord | null> {
+    const invocation = [...this.automationInvocations.values()]
+      .filter((candidate) => candidate.automationId === automationId)
+      .filter((candidate) => candidate.status === 'created' && candidate.sessionId)
+      .sort(compareAutomationInvocationsNewestFirst)
+      .find((candidate) => {
+        const session = this.sessions.get(candidate.sessionId!);
+        return session?.status === 'queued' || session?.status === 'active';
+      });
+    return invocation?.sessionId ? (this.sessions.get(invocation.sessionId) ?? null) : null;
+  }
+
+  async listAutomationInvocations(
+    automationId: string,
+    options: ListAutomationInvocationsOptions = {},
+  ): Promise<AutomationInvocationRecord[]> {
+    const invocations = [...this.automationInvocations.values()]
+      .filter((invocation) => invocation.automationId === automationId)
+      .filter((invocation) => !options.before || isBeforeAutomationInvocationCursor(invocation, options.before))
+      .sort(compareAutomationInvocationsNewestFirst);
+    return options.limit === undefined ? invocations : invocations.slice(0, options.limit);
   }
 
   async nextMessageSequence(sessionId: string): Promise<number> {
@@ -989,6 +1208,21 @@ function isActiveSandbox(sandbox: SandboxRecord): boolean {
     !sandbox.destroyedAt &&
     (sandbox.status === 'ready' || sandbox.status === 'stopped' || sandbox.status === 'unhealthy')
   );
+}
+
+function compareAutomationInvocationsNewestFirst(a: AutomationInvocationRecord, b: AutomationInvocationRecord): number {
+  const time = b.createdAt.getTime() - a.createdAt.getTime();
+  if (time !== 0) return time;
+  return b.id.localeCompare(a.id);
+}
+
+function isBeforeAutomationInvocationCursor(
+  invocation: AutomationInvocationRecord,
+  cursor: { createdAt: Date; id: string },
+): boolean {
+  const time = invocation.createdAt.getTime() - cursor.createdAt.getTime();
+  if (time !== 0) return time < 0;
+  return invocation.id < cursor.id;
 }
 
 function isSessionBusy(status: string | undefined): boolean {

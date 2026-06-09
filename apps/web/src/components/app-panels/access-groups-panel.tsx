@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { SelectHTMLAttributes, SyntheticEvent } from 'react';
-import { ChevronDown, CornerUpLeft, PanelLeftClose, PanelLeftOpen, Plus, X } from 'lucide-react';
+import { Archive, ChevronDown, CornerUpLeft, PanelLeftClose, PanelLeftOpen, Plus, Save, X } from 'lucide-react';
 import type {
   AuthUser,
+  AutomationCreateRequiredRole,
   Group,
   GroupMember,
   GroupRole,
@@ -25,6 +26,7 @@ export type AccessGroupFormState = {
   name: string;
   visibility: SessionVisibility;
   writePolicy: SessionWritePolicy;
+  automationCreateRequiredRole: AutomationCreateRequiredRole;
   serverError: string;
 };
 
@@ -43,12 +45,13 @@ export function GroupsSidebar(props: {
   authRequired: boolean;
   canCreateGroups: boolean;
   canViewGroups: boolean;
+  canViewAutomations: boolean;
   canViewSetup: boolean;
   connectionStatus: ConnectionStatus;
   currentUser: AuthUser | null;
   groups: Group[];
   health: Health | null;
-  navPage: 'sessions' | 'setup' | 'groups';
+  navPage: 'sessions' | 'setup' | 'groups' | 'automations';
   selectedGroupId: string;
   selectedView: 'group' | 'super_admins';
   superAdminUsers: AuthUser[];
@@ -58,6 +61,7 @@ export function GroupsSidebar(props: {
   onCollapse: () => void;
   onCreateGroup: () => void;
   onOpenGroups: () => void;
+  onOpenAutomations: () => void;
   onOpenSessions: () => void;
   onOpenSetup: () => void;
   onSelectGroup: (groupId: string) => void;
@@ -216,12 +220,13 @@ export function GroupsSidebar(props: {
       <ApiStatusFooter
         authRequired={props.authRequired}
         canViewGroups={props.canViewGroups}
+        canViewAutomations={props.canViewAutomations}
         canViewSetup={props.canViewSetup}
-        connectionStatus={props.connectionStatus}
         health={props.health}
         navPage={props.navPage}
         token={props.token}
         onOpenGroups={props.onOpenGroups}
+        onOpenAutomations={props.onOpenAutomations}
         onOpenSessions={props.onOpenSessions}
         onOpenSetup={props.onOpenSetup}
         onSignOut={props.onSignOut}
@@ -273,6 +278,7 @@ export function GroupsPanel(props: {
   onAddMember: () => void;
   onArchiveGroup: (groupId: string, archived: boolean) => void;
   onCreateGroup: () => void;
+  onGroupFormAutomationCreateRequiredRoleChange: (value: AutomationCreateRequiredRole) => void;
   onGroupFormNameChange: (value: string) => void;
   onGroupFormVisibilityChange: (value: SessionVisibility) => void;
   onGroupFormWritePolicyChange: (value: SessionWritePolicy) => void;
@@ -347,6 +353,7 @@ export function GroupsPanel(props: {
                 selectedMemberUser={selectedMemberUser}
                 onAddMember={props.onAddMember}
                 onArchiveGroup={props.onArchiveGroup}
+                onGroupFormAutomationCreateRequiredRoleChange={props.onGroupFormAutomationCreateRequiredRoleChange}
                 onGroupFormNameChange={props.onGroupFormNameChange}
                 onGroupFormVisibilityChange={props.onGroupFormVisibilityChange}
                 onGroupFormWritePolicyChange={props.onGroupFormWritePolicyChange}
@@ -460,6 +467,7 @@ function ManagedGroupPanel(props: {
   selectedMemberUser: AuthUser | undefined;
   onAddMember: () => void;
   onArchiveGroup: (groupId: string, archived: boolean) => void;
+  onGroupFormAutomationCreateRequiredRoleChange: (value: AutomationCreateRequiredRole) => void;
   onGroupFormNameChange: (value: string) => void;
   onGroupFormVisibilityChange: (value: SessionVisibility) => void;
   onGroupFormWritePolicyChange: (value: SessionWritePolicy) => void;
@@ -520,13 +528,35 @@ function ManagedGroupPanel(props: {
               <option value="creator_only">Creator only</option>
             </SelectWithCaret>
           </label>
+          <label className="grid gap-1 text-sm sm:col-span-3">
+            <span className="text-xs font-medium text-muted-foreground">Automation creation</span>
+            <SelectWithCaret
+              value={props.groupForm.automationCreateRequiredRole}
+              onChange={(event) =>
+                props.onGroupFormAutomationCreateRequiredRoleChange(event.target.value as AutomationCreateRequiredRole)
+              }
+            >
+              <option value="member">Members and admins</option>
+              <option value="admin">Admins only</option>
+            </SelectWithCaret>
+            <span className="text-xs text-muted-foreground">
+              Controls who can create new scheduled automations in this group.
+            </span>
+          </label>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button onClick={props.onSaveGroup} disabled={!props.groupForm.name.trim() || Boolean(props.groupFormError)}>
-            Save group
+            <Save className="h-4 w-4" /> Save group
           </Button>
-          <Button variant="secondary" onClick={() => props.onArchiveGroup(props.group.id, !props.group.archivedAt)}>
-            {props.group.archivedAt ? 'Unarchive group' : 'Archive group'}
+          <Button
+            className={cn(
+              !props.group.archivedAt &&
+                'border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10',
+            )}
+            variant="secondary"
+            onClick={() => props.onArchiveGroup(props.group.id, !props.group.archivedAt)}
+          >
+            <Archive className="h-4 w-4" /> {props.group.archivedAt ? 'Unarchive group' : 'Archive group'}
           </Button>
         </div>
       </Card>
@@ -638,6 +668,10 @@ function ReadOnlyGroupPanel(props: { currentUser: AuthUser | null; group: Group 
           <strong className="block text-foreground">Default writes</strong>
           <span>{sessionWritePolicyLabel(props.group.defaultWritePolicy)}</span>
         </div>
+        <div className="rounded-md border border-border p-3 sm:col-span-2">
+          <strong className="block text-foreground">Automation creation</strong>
+          <span>{automationCreateRequiredRoleLabel(props.group.automationCreateRequiredRole)}</span>
+        </div>
       </div>
     </Card>
   );
@@ -652,7 +686,9 @@ export function SessionAccessPanel(props: {
   const [ownerGroupId, setOwnerGroupId] = useState(props.session.ownerGroupId);
   const [saving, setSaving] = useState(false);
   const ownerGroup = props.groups.find((group) => group.id === props.session.ownerGroupId);
-  const ownerGroupName = ownerGroup?.name ?? props.session.ownerGroupName ?? 'Unknown access group';
+  const ownerGroupName = ownerGroup
+    ? groupDisplayName(ownerGroup)
+    : (props.session.ownerGroupName ?? 'Unknown access group');
   const editableGroups = props.groups.filter(
     (group) => group.id === props.session.ownerGroupId || (group.canManage && !group.archivedAt),
   );
@@ -690,8 +726,8 @@ export function SessionAccessPanel(props: {
               disabled={saving}
             >
               {editableGroups.map((group) => (
-                <option key={group.id} value={group.id} disabled={!group.canManage}>
-                  {group.name}
+                <option key={group.id} value={group.id} disabled={!group.canManage || Boolean(group.archivedAt)}>
+                  {groupDisplayName(group)}
                 </option>
               ))}
             </SelectWithCaret>
@@ -705,6 +741,10 @@ export function SessionAccessPanel(props: {
       </div>
     </div>
   );
+}
+
+function groupDisplayName(group: Group): string {
+  return group.archivedAt ? `${group.name} (archived)` : group.name;
 }
 
 function UserOptions(props: { showRoles?: boolean; users: AuthUser[]; onSelectUser: (userId: string) => void }) {
@@ -780,6 +820,10 @@ function sessionVisibilityLabel(visibility: SessionVisibility): string {
 
 function sessionWritePolicyLabel(policy: SessionWritePolicy): string {
   return policy === 'group_members' ? 'Group members' : 'Creator only';
+}
+
+function automationCreateRequiredRoleLabel(role: AutomationCreateRequiredRole): string {
+  return role === 'admin' ? 'Admins only' : 'Members and admins';
 }
 
 function authRoleLabel(role: AuthUser['role']): string {

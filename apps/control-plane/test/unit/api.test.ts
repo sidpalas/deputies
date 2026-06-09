@@ -634,6 +634,7 @@ describe('core API', () => {
       name: 'Client access',
       defaultVisibility: 'organization',
       defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
       createdAt: now,
       updatedAt: now,
     });
@@ -675,6 +676,7 @@ describe('core API', () => {
       name: 'Archived group',
       defaultVisibility: 'group',
       defaultWritePolicy: 'creator_only',
+      automationCreateRequiredRole: 'member',
       archivedAt: now,
       createdAt: now,
       updatedAt: now,

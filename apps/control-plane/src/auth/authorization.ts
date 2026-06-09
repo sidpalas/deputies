@@ -1,6 +1,14 @@
 import type { Context } from 'hono';
 import type { AppConfig } from '../config/index.js';
-import type { AppStore, AuthUserRecord, GroupMemberRecord, GroupRole, SessionRecord } from '../store/types.js';
+import type {
+  AppStore,
+  AuthUserRecord,
+  AutomationRecord,
+  GroupMemberRecord,
+  GroupRecord,
+  GroupRole,
+  SessionRecord,
+} from '../store/types.js';
 import { readSessionId } from './session.js';
 
 export type RequestAuthorization =
@@ -43,6 +51,27 @@ export function canCreateSessionInGroup(auth: RequestAuthorization, groupId: str
   if (auth.bypass || isSuperAdmin(auth)) return true;
   const role = groupRole(auth, groupId);
   return role === 'member' || role === 'admin';
+}
+
+export function canCreateAutomationInGroup(
+  auth: RequestAuthorization,
+  group: Pick<GroupRecord, 'id' | 'automationCreateRequiredRole'>,
+): boolean {
+  if (group.automationCreateRequiredRole === 'admin') return canManageGroup(auth, group.id);
+  return canCreateSessionInGroup(auth, group.id);
+}
+
+export function canReadAutomation(auth: RequestAuthorization, automation: AutomationRecord): boolean {
+  return canCreateSessionInGroup(auth, automation.ownerGroupId);
+}
+
+export function canManageAutomation(auth: RequestAuthorization, automation: AutomationRecord): boolean {
+  if (canManageGroup(auth, automation.ownerGroupId)) return true;
+  return (
+    !auth.bypass &&
+    automation.createdByUserId === auth.user.id &&
+    canCreateSessionInGroup(auth, automation.ownerGroupId)
+  );
 }
 
 export function canManageGroup(auth: RequestAuthorization, groupId: string): boolean {
