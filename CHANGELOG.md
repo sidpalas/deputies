@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/sidpalas/deputies/compare/v0.7.0...v0.8.0) (2026-06-09)
+
+
+### Features
+
+* add scheduled automations ([#55](https://github.com/sidpalas/deputies/issues/55)) ([d64296e](https://github.com/sidpalas/deputies/commit/d64296e0b5658c8b3a5f4a70c03ef4fb4bb7b6f0))
+* **web:** align access group creation flow ([00a40f0](https://github.com/sidpalas/deputies/commit/00a40f045c2ed2755396a61251d92374935f1461))
+
+
+### Bug Fixes
+
+* **web:** prevent mobile sidebar trigger overlap ([c8f7fa7](https://github.com/sidpalas/deputies/commit/c8f7fa72115750c539f8759e3b479d2ad676b504))
+
 ## [0.7.0](https://github.com/sidpalas/deputies/compare/v0.6.4...v0.7.0) (2026-06-08)
 
 
