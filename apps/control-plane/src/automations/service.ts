@@ -239,12 +239,12 @@ export class AutomationService {
         automation: locked,
         trigger: 'manual',
         allowDisabled: input.allowDisabled === true,
-        metadata: {
-          ...(input.allowDisabled && !locked.enabled ? { disabledOverride: true } : {}),
-          ...(input.allowOverlap && blockingSession
-            ? { overlapOverride: true, blockingSessionId: blockingSession.id }
-            : {}),
-        },
+        metadata: manualInvocationMetadata({
+          allowDisabled: input.allowDisabled === true,
+          allowOverlap: input.allowOverlap === true,
+          automationEnabled: locked.enabled,
+          blockingSession,
+        }),
         ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
       });
     } finally {
@@ -388,10 +388,11 @@ export class AutomationService {
       });
       return { invocation: completed, session, message };
     } catch (error) {
+      const existingSession = await this.store.getSession(sessionId);
       const failed = await this.store.updateAutomationInvocation({
         ...invocation,
         status: 'failed',
-        ...((await this.store.getSession(sessionId)) ? { sessionId } : {}),
+        ...(existingSession ? { sessionId } : {}),
         error: error instanceof Error ? error.message : 'Unknown automation invocation error',
         completedAt: new Date(),
       });
@@ -559,6 +560,21 @@ function currentUtcMinute(date: Date): Date {
 
 function automationSessionTitle(automation: AutomationRecord, invocationTime: Date): string {
   return `${automation.name} - ${formatUtcMinute(invocationTime)}`;
+}
+
+function manualInvocationMetadata(input: {
+  allowDisabled: boolean;
+  allowOverlap: boolean;
+  automationEnabled: boolean;
+  blockingSession: SessionRecord | null;
+}): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {};
+  if (input.allowDisabled && !input.automationEnabled) metadata.disabledOverride = true;
+  if (input.allowOverlap && input.blockingSession) {
+    metadata.overlapOverride = true;
+    metadata.blockingSessionId = input.blockingSession.id;
+  }
+  return metadata;
 }
 
 function reserveInvocationIds(

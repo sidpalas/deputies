@@ -106,6 +106,7 @@ export function AutomationsSidebar(props: {
   const archivedAutomations = filteredAutomations.filter((automation) => automation.archivedAt);
   const searching = Boolean(normalizedSearch);
   const archivedOpen = searching || props.archivedAutomationsOpen;
+  const emptyActiveAutomationsMessage = activeAutomationsEmptyMessage(props.loading, search);
 
   function handleArchivedToggle(event: SyntheticEvent<HTMLDetailsElement>) {
     if (searching) return;
@@ -184,13 +185,7 @@ export function AutomationsSidebar(props: {
             />
           ))}
           {!activeAutomations.length ? (
-            <p className="px-2 py-3 text-sm text-muted-foreground">
-              {props.loading
-                ? 'Loading automations...'
-                : search
-                  ? 'No matching active automations.'
-                  : 'No active scheduled automations.'}
-            </p>
+            <p className="px-2 py-3 text-sm text-muted-foreground">{emptyActiveAutomationsMessage}</p>
           ) : null}
         </div>
 
@@ -247,13 +242,7 @@ function AutomationSidebarButton(props: {
   onSelect: (automationId: string) => void;
   onUnarchive?: (automationId: string) => void;
 }) {
-  const statusLine = props.automation.archivedAt
-    ? `Archived · ${formatDate(props.automation.archivedAt)}`
-    : props.ownerGroupArchived
-      ? `${props.automation.enabled ? 'Enabled' : 'Disabled'} · Suspended: access group archived`
-      : `${props.automation.enabled ? 'Enabled' : 'Disabled'} · Next ${
-          props.automation.nextInvocationAt ? formatDate(props.automation.nextInvocationAt) : 'not scheduled'
-        }`;
+  const statusLine = automationSidebarStatusLine(props.automation, props.ownerGroupArchived);
 
   return (
     <div
@@ -301,10 +290,63 @@ function AutomationSidebarButton(props: {
   );
 }
 
+function activeAutomationsEmptyMessage(loading: boolean, search: string): string {
+  if (loading) return 'Loading automations...';
+  if (search) return 'No matching active automations.';
+  return 'No active scheduled automations.';
+}
+
+function automationSidebarStatusLine(automation: Automation, ownerGroupArchived: boolean): string {
+  if (automation.archivedAt) return `Archived · ${formatDate(automation.archivedAt)}`;
+
+  const enabledLabel = automation.enabled ? 'Enabled' : 'Disabled';
+  if (ownerGroupArchived) return `${enabledLabel} · Suspended: access group archived`;
+
+  const nextInvocation = automation.nextInvocationAt ? formatDate(automation.nextInvocationAt) : 'not scheduled';
+  return `${enabledLabel} · Next ${nextInvocation}`;
+}
+
 function automationOwnerGroupArchived(automation: Automation, groups: Group[]): boolean {
   return Boolean(
     groups.find((group) => group.id === automation.ownerGroupId)?.archivedAt ?? automation.ownerGroupArchivedAt,
   );
+}
+
+function automationGroupOptions(input: {
+  formGroupId: string;
+  selectableGroups: Group[];
+  selected: Automation | null;
+  selectedGroup: Group | undefined;
+  selectedGroupSelectable: boolean;
+}): OptionPickerOption[] {
+  const options = input.selectableGroups.map((group) => ({ value: group.id, label: group.name }));
+  if (!input.formGroupId || input.selectedGroupSelectable) return options;
+
+  options.unshift(unavailableAutomationGroupOption(input.formGroupId, input.selectedGroup, input.selected));
+  return options;
+}
+
+function unavailableAutomationGroupOption(
+  groupId: string,
+  group: Group | undefined,
+  automation: Automation | null,
+): OptionPickerOption {
+  if (group?.archivedAt) {
+    return {
+      value: groupId,
+      label: `${group.name} (archived)`,
+      available: false,
+      unavailableReason: 'Archived group.',
+      action: 'New sessions are suspended until this group is unarchived.',
+    };
+  }
+
+  return {
+    value: groupId,
+    label: `${group?.name ?? automation?.ownerGroupName ?? groupId} (current)`,
+    available: false,
+    unavailableReason: 'Unavailable group.',
+  };
 }
 
 export function AutomationsPanel(props: {
@@ -354,18 +396,13 @@ export function AutomationsPanel(props: {
     selected && form.groupId === selected.ownerGroupId && (selectedGroup?.archivedAt || selected.ownerGroupArchivedAt),
   );
   const selectedGroupSelectable = selectableGroups.some((group) => group.id === form.groupId);
-  const groupOptions: OptionPickerOption[] = selectableGroups.map((group) => ({ value: group.id, label: group.name }));
-  if (form.groupId && !selectedGroupSelectable) {
-    groupOptions.unshift({
-      value: form.groupId,
-      label: selectedGroup?.archivedAt
-        ? `${selectedGroup.name} (archived)`
-        : `${selectedGroup?.name ?? selected?.ownerGroupName ?? form.groupId} (current)`,
-      available: false,
-      unavailableReason: selectedGroup?.archivedAt ? 'Archived group.' : 'Unavailable group.',
-      ...(selectedGroup?.archivedAt ? { action: 'New sessions are suspended until this group is unarchived.' } : {}),
-    });
-  }
+  const groupOptions = automationGroupOptions({
+    formGroupId: form.groupId,
+    selectableGroups,
+    selected,
+    selectedGroup,
+    selectedGroupSelectable,
+  });
   const branchOptions = branchOptionsState.data;
   const branchOptionsLoading = branchOptionsState.loading;
   const branchOptionsError = branchOptionsState.error;
@@ -460,9 +497,12 @@ export function AutomationsPanel(props: {
     setSaving(true);
     try {
       const input = automationFormInput(form, props.token);
-      const saved = form.id
-        ? await updateAutomation({ ...input, automationId: form.id })
-        : await createAutomation(input);
+      let saved: Automation;
+      if (form.id) {
+        saved = await updateAutomation({ ...input, automationId: form.id });
+      } else {
+        saved = await createAutomation(input);
+      }
       props.onAutomationSaved(saved);
       setForm(formFromAutomation(saved));
     } catch (error) {
@@ -499,8 +539,9 @@ export function AutomationsPanel(props: {
       allowDisabled &&
       !options.disabledConfirmed &&
       !window.confirm('This automation is disabled. Invoke it once anyway?')
-    )
+    ) {
       return;
+    }
     setSaving(true);
     try {
       const result = await invokeAutomation({
@@ -746,26 +787,12 @@ export function AutomationsPanel(props: {
                     <Save className="h-4 w-4" /> {form.id ? 'Save automation' : 'Create automation'}
                   </Button>
                   {selected ? (
-                    selected.archivedAt ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => props.onUnarchiveAutomation(selected.id)}
-                        disabled={saving || !selected.canManage}
-                      >
-                        <RotateCcw className="h-4 w-4" /> Restore automation
-                      </Button>
-                    ) : (
-                      <Button
-                        type="button"
-                        className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10"
-                        variant="secondary"
-                        onClick={() => props.onArchiveAutomation(selected.id)}
-                        disabled={saving || !selected.canManage}
-                      >
-                        <Archive className="h-4 w-4" /> Archive automation
-                      </Button>
-                    )
+                    <AutomationArchiveAction
+                      automation={selected}
+                      saving={saving}
+                      onArchiveAutomation={props.onArchiveAutomation}
+                      onUnarchiveAutomation={props.onUnarchiveAutomation}
+                    />
                   ) : null}
                 </div>
               </form>
@@ -827,6 +854,38 @@ function Field(props: { label: string; htmlFor: string; hint?: string; children:
       {props.children}
       {props.hint ? <p className="mt-1 text-xs text-muted-foreground">{props.hint}</p> : null}
     </div>
+  );
+}
+
+function AutomationArchiveAction(props: {
+  automation: Automation;
+  saving: boolean;
+  onArchiveAutomation: (automationId: string) => void;
+  onUnarchiveAutomation: (automationId: string) => void;
+}) {
+  if (props.automation.archivedAt) {
+    return (
+      <Button
+        type="button"
+        variant="secondary"
+        onClick={() => props.onUnarchiveAutomation(props.automation.id)}
+        disabled={props.saving || !props.automation.canManage}
+      >
+        <RotateCcw className="h-4 w-4" /> Restore automation
+      </Button>
+    );
+  }
+
+  return (
+    <Button
+      type="button"
+      className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10"
+      variant="secondary"
+      onClick={() => props.onArchiveAutomation(props.automation.id)}
+      disabled={props.saving || !props.automation.canManage}
+    >
+      <Archive className="h-4 w-4" /> Archive automation
+    </Button>
   );
 }
 
