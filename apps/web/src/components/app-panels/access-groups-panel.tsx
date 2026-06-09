@@ -321,7 +321,7 @@ export function GroupsPanel(props: {
                 <PanelLeftOpen className="h-4 w-4" />
               </Button>
             ) : null}
-            <div>
+            <div className="min-w-0">
               <p className="text-sm font-medium text-muted-foreground">Access control</p>
               <h1 className="mt-1 text-2xl font-semibold tracking-tight">Access groups</h1>
               <p className="mt-1 text-sm text-muted-foreground">Manage access groups and user roles.</p>

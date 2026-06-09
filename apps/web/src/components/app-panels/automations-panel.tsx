@@ -327,27 +327,29 @@ export function AutomationsPanel(props: {
   }
 
   return (
-    <section className="relative h-full min-h-0 overflow-auto px-4 py-6 md:px-8 xl:px-14">
-      {props.showOpenSidebar ? (
-        <Button
-          className="absolute left-4 top-4 h-8 w-8 p-0 md:hidden"
-          variant="ghost"
-          size="icon"
-          onClick={props.onOpenSidebar}
-          aria-label={props.openSidebarLabel ?? 'Open sessions'}
-          title={props.openSidebarLabel ?? 'Open sessions'}
-        >
-          <PanelLeftOpen className="h-4 w-4" />
-        </Button>
-      ) : null}
+    <section className="h-full min-h-0 overflow-auto px-4 py-6 md:px-8 xl:px-14">
       <div className="mx-auto grid max-w-4xl gap-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-primary">Automations</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Scheduled automations</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Create recurring sessions from 5-field cron expressions. Cron is always evaluated in UTC.
-            </p>
+          <div className="flex min-w-0 items-start gap-2">
+            {props.showOpenSidebar ? (
+              <Button
+                className="mt-1 h-8 w-8 shrink-0 p-0 md:hidden"
+                variant="ghost"
+                size="icon"
+                onClick={props.onOpenSidebar}
+                aria-label={props.openSidebarLabel ?? 'Open sessions'}
+                title={props.openSidebarLabel ?? 'Open sessions'}
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </Button>
+            ) : null}
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-widest text-primary">Automations</p>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Scheduled automations</h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Create recurring sessions from 5-field cron expressions. Cron is always evaluated in UTC.
+              </p>
+            </div>
           </div>
         </div>
 

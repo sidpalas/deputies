@@ -36,21 +36,23 @@ export function NewThreadPanel(props: {
   onSubmit: (event: FormEvent) => void;
 }) {
   return (
-    <section className="relative grid min-h-screen place-items-center px-4">
-      {props.showOpenSidebar ? (
-        <Button
-          className="absolute left-4 top-4 h-8 w-8 p-0 md:hidden"
-          variant="ghost"
-          size="icon"
-          onClick={props.onOpenSidebar}
-          aria-label={props.openSidebarLabel ?? 'Open sessions'}
-          title={props.openSidebarLabel ?? 'Open sessions'}
-        >
-          <PanelLeftOpen className="h-4 w-4" />
-        </Button>
-      ) : null}
+    <section className="grid min-h-screen place-items-center px-4">
       <Card className="w-full max-w-2xl p-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
+        <div className="flex min-w-0 items-center gap-2">
+          {props.showOpenSidebar ? (
+            <Button
+              className="h-8 w-8 shrink-0 p-0 md:hidden"
+              variant="ghost"
+              size="icon"
+              onClick={props.onOpenSidebar}
+              aria-label={props.openSidebarLabel ?? 'Open sessions'}
+              title={props.openSidebarLabel ?? 'Open sessions'}
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </Button>
+          ) : null}
+          <p className="text-xs font-semibold uppercase tracking-widest text-primary">Deputies</p>
+        </div>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">
           Engineering agents for delegated work.
         </h1>
