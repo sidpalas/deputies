@@ -515,6 +515,8 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
     if (!canManageAutomation(auth, automation))
       return writeError(c, 403, 'forbidden', 'Automation management access is required');
+    if (automation.archivedAt)
+      return writeError(c, 409, 'automation_archived', 'Restore this automation before editing it');
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const accessChangeRequested =
@@ -529,8 +531,9 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (nextOwnerGroupId !== automation.ownerGroupId && !canManageGroup(auth, nextOwnerGroupId)) {
       return writeError(c, 403, 'forbidden', 'Group admin access is required for both groups');
     }
-    if (nextGroup.archivedAt)
+    if (nextOwnerGroupId !== automation.ownerGroupId && nextGroup.archivedAt) {
       return writeError(c, 409, 'archived_group', 'Cannot move automations to an archived group');
+    }
 
     const visibility = body.visibility === undefined ? undefined : parseSessionVisibility(body.visibility);
     const writePolicy = body.writePolicy === undefined ? undefined : parseSessionWritePolicy(body.writePolicy);
@@ -559,14 +562,55 @@ export function createApp(config: AppConfig, services = createServices()) {
     }
   });
 
+  app.post('/automations/:automationId/archive', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const automation = await services.automations.get(c.req.param('automationId'));
+    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
+    if (!canManageAutomation(auth, automation))
+      return writeError(c, 403, 'forbidden', 'Automation management access is required');
+    try {
+      const archived = await services.automations.archive(automation.id);
+      return c.json({ automation: await serializeAutomation(services, archived, auth) });
+    } catch (error) {
+      if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
+      throw error;
+    }
+  });
+
+  app.post('/automations/:automationId/unarchive', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const automation = await services.automations.get(c.req.param('automationId'));
+    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
+    if (!canManageAutomation(auth, automation))
+      return writeError(c, 403, 'forbidden', 'Automation management access is required');
+    try {
+      const unarchived = await services.automations.unarchive(automation.id);
+      return c.json({ automation: await serializeAutomation(services, unarchived, auth) });
+    } catch (error) {
+      if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
+      throw error;
+    }
+  });
+
   app.get('/automations/:automationId/invocations', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const automation = await services.automations.get(c.req.param('automationId'));
     if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
     if (!canReadAutomation(auth, automation)) return writeError(c, 403, 'forbidden', 'Automation access is required');
-    const invocations = await services.automations.listInvocations(automation.id);
-    return c.json({ invocations: invocations.map(serializeAutomationInvocation) });
+    const page = await services.automations.listInvocationPage({
+      automationId: automation.id,
+      limit: parseAutomationInvocationLimit(c.req.query('limit')),
+      ...(c.req.query('cursor') ? { before: parseAutomationInvocationCursor(c.req.query('cursor')) } : {}),
+    });
+    return c.json({
+      invocations: await Promise.all(
+        page.invocations.map((invocation) => serializeAutomationInvocation(services, invocation)),
+      ),
+      ...(page.nextCursor ? { nextCursor: encodeAutomationInvocationCursor(page.nextCursor) } : {}),
+    });
   });
 
   app.post('/automations/:automationId/invoke', async (c) => {
@@ -589,7 +633,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       return c.json(
         {
           automation: await serializeAutomation(services, refreshed, auth),
-          invocation: serializeAutomationInvocation(result.invocation),
+          invocation: await serializeAutomationInvocation(services, result.invocation),
           ...(result.session ? { session: await serializeSessionWithSandbox(config, services, result.session) } : {}),
           ...(result.message ? { message: result.message } : {}),
         },
@@ -1439,6 +1483,10 @@ const inlineArtifactContentTypes = new Set([
   'image/avif',
 ]);
 
+const defaultAutomationInvocationLimit = 20;
+const maxAutomationInvocationLimit = 200;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function artifactDownloadDisposition(
   contentType: string,
   requestedDisposition: string | undefined,
@@ -1577,11 +1625,11 @@ async function serializeSessionWithSandbox(config: AppConfig, services: AppServi
 }
 
 async function serializeAutomation(services: AppServices, automation: AutomationRecord, auth: RequestAuthorization) {
-  const [ownerGroup, invocations] = await Promise.all([
+  const [ownerGroup, invocationPage] = await Promise.all([
     services.store.getGroup(automation.ownerGroupId),
-    services.automations.listInvocations(automation.id),
+    services.automations.listInvocationPage({ automationId: automation.id, limit: 1 }),
   ]);
-  const lastInvocation = invocations[0];
+  const lastInvocation = invocationPage.invocations[0];
   return {
     id: automation.id,
     kind: automation.kind,
@@ -1592,19 +1640,28 @@ async function serializeAutomation(services: AppServices, automation: Automation
     enabled: automation.enabled,
     ownerGroupId: automation.ownerGroupId,
     ...(ownerGroup ? { ownerGroupName: ownerGroup.name } : {}),
+    ...(ownerGroup?.archivedAt ? { ownerGroupArchivedAt: ownerGroup.archivedAt } : {}),
     visibility: automation.visibility,
     writePolicy: automation.writePolicy,
     ...(automation.createdByUserId ? { createdByUserId: automation.createdByUserId } : {}),
     ...(automation.context ? { context: automation.context } : {}),
+    ...(automation.archivedAt ? { archivedAt: automation.archivedAt } : {}),
     ...(automation.nextInvocationAt ? { nextInvocationAt: automation.nextInvocationAt } : {}),
     createdAt: automation.createdAt,
     updatedAt: automation.updatedAt,
     canManage: canManageAutomation(auth, automation),
-    ...(lastInvocation ? { lastInvocation: serializeAutomationInvocation(lastInvocation) } : {}),
+    ...(lastInvocation ? { lastInvocation: await serializeAutomationInvocation(services, lastInvocation) } : {}),
   };
 }
 
-function serializeAutomationInvocation(invocation: AutomationInvocationRecord) {
+async function serializeAutomationInvocation(services: AppServices, invocation: AutomationInvocationRecord) {
+  const [session, messages] = await Promise.all([
+    invocation.sessionId ? services.store.getSession(invocation.sessionId) : Promise.resolve(null),
+    invocation.sessionId && invocation.messageId
+      ? services.store.getMessages(invocation.sessionId)
+      : Promise.resolve([]),
+  ]);
+  const message = invocation.messageId ? messages.find((candidate) => candidate.id === invocation.messageId) : null;
   return {
     id: invocation.id,
     automationId: invocation.automationId,
@@ -1614,8 +1671,11 @@ function serializeAutomationInvocation(invocation: AutomationInvocationRecord) {
     metadata: invocation.metadata,
     ...(invocation.completedAt ? { completedAt: invocation.completedAt } : {}),
     ...(invocation.scheduledAt ? { scheduledAt: invocation.scheduledAt } : {}),
-    ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}),
-    ...(invocation.messageId ? { messageId: invocation.messageId } : {}),
+    ...(session ? { sessionId: session.id } : {}),
+    ...(session ? { sessionStatus: session.status } : {}),
+    ...(session?.title ? { sessionTitle: session.title } : {}),
+    ...(message ? { messageId: message.id } : {}),
+    ...(message ? { messageStatus: message.status } : {}),
     ...(invocation.requestedByUserId ? { requestedByUserId: invocation.requestedByUserId } : {}),
     ...(invocation.reason ? { reason: invocation.reason } : {}),
     ...(invocation.error ? { error: invocation.error } : {}),
@@ -1638,9 +1698,33 @@ function canManageAutomation(auth: RequestAuthorization, automation: AutomationR
 function automationServiceErrorResponse(c: Context, error: AutomationServiceError): Response {
   if (error.code === 'not_found') return writeError(c, 404, 'not_found', error.message);
   if (error.code === 'disabled') return writeError(c, 409, 'automation_disabled', error.message, error.details);
+  if (error.code === 'archived') return writeError(c, 409, 'automation_archived', error.message, error.details);
+  if (error.code === 'archived_group') return writeError(c, 409, 'archived_group', error.message, error.details);
   if (error.code === 'overlap') return writeError(c, 409, 'automation_overlap', error.message, error.details);
   if (error.code === 'invalid_schedule') return writeError(c, 400, 'invalid_schedule', error.message);
   return writeError(c, 400, 'invalid_request', error.message);
+}
+
+function parseAutomationInvocationLimit(value: string | undefined): number {
+  if (!value) return defaultAutomationInvocationLimit;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new HttpRequestError(400, 'invalid_request', 'Expected positive integer invocation limit');
+  }
+  return Math.min(limit, maxAutomationInvocationLimit);
+}
+
+function parseAutomationInvocationCursor(value: string | undefined): { createdAt: Date; id: string } {
+  const [createdAtValue, id, extra] = (value ?? '').split('|');
+  const createdAt = createdAtValue ? new Date(createdAtValue) : null;
+  if (!createdAt || Number.isNaN(createdAt.getTime()) || !id || extra !== undefined || !uuidPattern.test(id)) {
+    throw new HttpRequestError(400, 'invalid_request', 'Invalid automation invocation cursor');
+  }
+  return { createdAt, id };
+}
+
+function encodeAutomationInvocationCursor(cursor: { createdAt: Date; id: string }): string {
+  return `${cursor.createdAt.toISOString()}|${cursor.id}`;
 }
 
 function parseBooleanBody(value: unknown, field: string): boolean {

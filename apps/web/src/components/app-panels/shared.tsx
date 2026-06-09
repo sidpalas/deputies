@@ -12,7 +12,7 @@ const statusTextClasses: Record<string, string> = {
   cancelled: 'text-destructive',
   cancelling: 'text-info',
   completed: 'text-success',
-  created: 'text-warning',
+  created: 'text-success',
   destroyed: 'text-destructive',
   expired: 'text-destructive',
   failed: 'text-destructive',

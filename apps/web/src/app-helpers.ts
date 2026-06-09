@@ -8,6 +8,7 @@ export const groupsPanelViewStorageKey = 'deputies-groups-panel-view';
 export const groupsPanelSelectedGroupStorageKey = 'deputies-groups-panel-selected-group-id';
 export const selectedAutomationStorageKey = 'deputies-selected-automation-id';
 export const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
+export const archivedAutomationsOpenStorageKey = 'deputies-archived-automations-open';
 export const themeStorageKey = 'deputies-theme';
 
 export const startupConnectionDelayMs = 3_000;
@@ -40,11 +41,9 @@ export function loadStoredToken(): string {
 }
 
 export function loadInitialSelectedSessionId(): string {
-  return (
-    new URLSearchParams(window.location.search).get('session') ??
-    sessionStorage.getItem(selectedSessionStorageKey) ??
-    ''
-  );
+  const query = new URLSearchParams(window.location.search);
+  if (query.get('group') || query.get('automation')) return '';
+  return query.get('session') ?? sessionStorage.getItem(selectedSessionStorageKey) ?? '';
 }
 
 export function loadInitialIsCreatingThread(): boolean {
@@ -57,11 +56,15 @@ export function loadInitialIsCreatingThread(): boolean {
 }
 
 export function loadInitialSetupGuideOpen(): boolean {
+  const query = new URLSearchParams(window.location.search);
+  if (query.get('session') || query.get('group') || query.get('automation')) return false;
   return sessionStorage.getItem(setupGuideOpenStorageKey) === 'true';
 }
 
 export function loadInitialGroupsPanelOpen(): boolean {
-  if (new URLSearchParams(window.location.search).get('group')) return true;
+  const query = new URLSearchParams(window.location.search);
+  if (query.get('session') || query.get('automation')) return false;
+  if (query.get('group')) return true;
   return sessionStorage.getItem(groupsPanelOpenStorageKey) === 'true';
 }
 
@@ -76,6 +79,7 @@ export function loadInitialSidebarPanel(): 'sessions' | 'groups' | 'automations'
 }
 
 export function loadInitialGroupsPanelView(): 'group' | 'super_admins' {
+  if (new URLSearchParams(window.location.search).get('group')) return 'group';
   return sessionStorage.getItem(groupsPanelViewStorageKey) === 'super_admins' ? 'super_admins' : 'group';
 }
 

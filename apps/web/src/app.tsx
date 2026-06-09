@@ -4,6 +4,7 @@ import {
   ApiError,
   AgentEvent,
   Artifact,
+  archiveAutomation,
   CallbackDelivery,
   ExternalResource,
   Message,
@@ -46,6 +47,7 @@ import {
   resumeQueue,
   retryMessage,
   streamGlobalEvents,
+  unarchiveAutomation,
   unarchiveSession,
   updateMessage,
   updateGroup,
@@ -96,6 +98,7 @@ import {
 import { Button } from './components/ui/button.js';
 import {
   archivedSessionsOpenStorageKey,
+  archivedAutomationsOpenStorageKey,
   applyThemePreference,
   connectionDelayedMessage,
   groupsPanelOpenStorageKey,
@@ -297,6 +300,9 @@ export function App() {
   const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(
     () => sessionStorage.getItem(archivedSessionsOpenStorageKey) === 'true',
   );
+  const [archivedAutomationsOpen, setArchivedAutomationsOpen] = useState(
+    () => sessionStorage.getItem(archivedAutomationsOpenStorageKey) === 'true',
+  );
   const [themePreference, setThemePreference] = useState<ThemePreference>(loadThemePreference);
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -345,6 +351,8 @@ export function App() {
   const defaultSetupGuideOpenedRef = useRef(false);
   const activeProgressTimerRef = useRef<number | null>(null);
   const queuedActiveProgressRef = useRef<AgentEvent[]>([]);
+  const initialResourceDeepLinkRef = useRef(hasResourceSearchParam());
+  const initialAutomationDeepLinkRef = useRef(new URLSearchParams(window.location.search).has('automation'));
 
   const repositoryOptions = repositoryOptionsState.data;
   const repositoryOptionsLoading = repositoryOptionsState.loading;
@@ -396,7 +404,11 @@ export function App() {
   );
   const canViewSetup = canCallApi;
   const defaultSetupGuidePending = Boolean(
-    canViewSetup && health && !health.hideSetupPage && !defaultSetupGuideOpenedRef.current,
+    canViewSetup &&
+    health &&
+    !health.hideSetupPage &&
+    !defaultSetupGuideOpenedRef.current &&
+    !initialResourceDeepLinkRef.current,
   );
   const showingSetupGuide = setupGuideOpen || defaultSetupGuidePending;
   const startupLoading = waitingForAuth || (canCallApi && !sessionsLoaded);
@@ -414,6 +426,7 @@ export function App() {
   const selectedSessionBranch =
     typeof selectedSession?.context?.branch === 'string' ? selectedSession.context.branch : '';
   const selectedSessionArchived = selectedSession?.status === 'archived';
+  const selectedAutomationArchived = Boolean(selectedAutomation?.archivedAt);
   const selectedSessionHasMessages = messages.some((message) => message.sessionId === selectedSessionId);
   const selectedSessionDetailLoading = Boolean(
     selectedSessionId && detailLoadedSessionId !== selectedSessionId && !selectedSessionHasMessages,
@@ -567,7 +580,14 @@ export function App() {
   }, [canCallApi, token]);
 
   useEffect(() => {
-    if (!canViewSetup || !health || health.hideSetupPage || defaultSetupGuideOpenedRef.current) return;
+    if (
+      !canViewSetup ||
+      !health ||
+      health.hideSetupPage ||
+      defaultSetupGuideOpenedRef.current ||
+      initialResourceDeepLinkRef.current
+    )
+      return;
     defaultSetupGuideOpenedRef.current = true;
     setSetupGuideOpen(true);
   }, [canViewSetup, health]);
@@ -1098,6 +1118,7 @@ export function App() {
       setAutomations(nextAutomations);
       setSelectedAutomationId((current) => {
         if (!current || nextAutomations.some((automation) => automation.id === current)) return current;
+        if (initialAutomationDeepLinkRef.current) return current;
         sessionStorage.removeItem(selectedAutomationStorageKey);
         clearResourceSearchParams();
         return '';
@@ -1436,6 +1457,7 @@ export function App() {
     sessionStorage.removeItem(groupsPanelViewStorageKey);
     sessionStorage.removeItem(groupsPanelSelectedGroupStorageKey);
     sessionStorage.removeItem(selectedAutomationStorageKey);
+    sessionStorage.removeItem(archivedAutomationsOpenStorageKey);
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     setSessions([]);
     setAutomations([]);
@@ -1579,6 +1601,28 @@ export function App() {
     setAutomations((current) => [automation, ...current.filter((candidate) => candidate.id !== automation.id)]);
   }
 
+  async function handleArchiveAutomation(automationId: string) {
+    const automation = automations.find((candidate) => candidate.id === automationId);
+    if (!automation?.canManage || automation.archivedAt) return;
+    setError('');
+    try {
+      handleAutomationChanged(await archiveAutomation({ automationId, token }));
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  async function handleUnarchiveAutomation(automationId: string) {
+    const automation = automations.find((candidate) => candidate.id === automationId);
+    if (!automation?.canManage || !automation.archivedAt) return;
+    setError('');
+    try {
+      handleAutomationChanged(await unarchiveAutomation({ automationId, token }));
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
   function handleAutomationSaved(automation: Automation) {
     handleAutomationChanged(automation);
     sessionStorage.setItem(selectedAutomationStorageKey, automation.id);
@@ -1590,6 +1634,11 @@ export function App() {
       isCreatingThread: false,
       selectedAutomationId: automation.id,
     });
+  }
+
+  function handleAutomationSessionCreated(session: Session) {
+    setSessions((current) => [session, ...current.filter((candidate) => candidate.id !== session.id)]);
+    selectSession(session.id);
   }
 
   function showSessionsSidebar() {
@@ -2121,6 +2170,7 @@ export function App() {
                   />
                 ) : sidebarPanel === 'automations' && canViewAutomations ? (
                   <AutomationsSidebar
+                    archivedAutomationsOpen={archivedAutomationsOpen || selectedAutomationArchived}
                     authRequired={bearerAuthRequired || sessionAuthRequired}
                     automations={automations}
                     canCallApi={canViewAutomations}
@@ -2128,6 +2178,7 @@ export function App() {
                     canViewAutomations={canViewAutomations}
                     canViewSetup={canViewSetup}
                     connectionStatus={connectionStatus}
+                    groups={groups}
                     health={health}
                     loading={automationsLoading}
                     navPage={showingSetupGuide ? 'setup' : 'automations'}
@@ -2135,6 +2186,8 @@ export function App() {
                     themePreference={themePreference}
                     token={token}
                     onBackToSessions={backToSessionsSidebar}
+                    onArchiveAutomation={handleArchiveAutomation}
+                    onArchivedAutomationsOpenChange={setArchivedAutomationsOpen}
                     onCollapse={collapseSidebar}
                     onCreateAutomation={startNewAutomation}
                     onOpenAutomations={openAutomationsPanel}
@@ -2144,6 +2197,7 @@ export function App() {
                     onSelectAutomation={selectAutomationPanel}
                     onSignOut={signOut}
                     onThemeChange={setThemePreference}
+                    onUnarchiveAutomation={handleUnarchiveAutomation}
                   />
                 ) : (
                   <ThreadSidebar
@@ -2245,7 +2299,7 @@ export function App() {
                     automationsLoaded={automationsLoaded}
                     automationsLoading={automationsLoading}
                     canCallApi={canViewAutomations}
-                    groups={creatableGroups}
+                    groups={groups}
                     token={token}
                     repositoryOptions={repositoryOptions}
                     repositoryOptionsLoading={repositoryOptionsLoading}
@@ -2255,9 +2309,12 @@ export function App() {
                     showOpenSidebar={!sidebarOpen}
                     openSidebarLabel="Open automations"
                     onAutomationChanged={handleAutomationChanged}
+                    onArchiveAutomation={handleArchiveAutomation}
                     onAutomationSaved={handleAutomationSaved}
                     onOpenSidebar={expandSidebar}
+                    onSessionCreated={handleAutomationSessionCreated}
                     onSelectSession={selectSession}
+                    onUnarchiveAutomation={handleUnarchiveAutomation}
                     onError={handleApiError}
                   />
                 ) : isCreatingThread || !selectedSession ? (
@@ -2496,6 +2553,11 @@ function clearResourceSearchParams() {
   url.searchParams.delete('group');
   url.searchParams.delete('automation');
   window.history.replaceState({}, '', url);
+}
+
+function hasResourceSearchParam(): boolean {
+  const searchParams = new URLSearchParams(window.location.search);
+  return searchParams.has('session') || searchParams.has('group') || searchParams.has('automation');
 }
 
 function isDesktopViewport(): boolean {

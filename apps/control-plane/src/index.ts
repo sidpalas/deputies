@@ -49,10 +49,9 @@ import type { WebSearchToolServices } from './web-search/tool.js';
 import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from './worker/service.js';
 
 const config = loadConfig(process.env);
+const databaseUrl = config.appDataStore === 'postgres' ? requireDatabaseUrl(config) : '';
 const store =
-  config.appDataStore === 'postgres'
-    ? new PostgresStore(requireDatabaseUrl(config), postgresStoreOptions())
-    : new MemoryStore();
+  config.appDataStore === 'postgres' ? new PostgresStore(databaseUrl, postgresStoreOptions()) : new MemoryStore();
 const sandboxProvider = createSandboxProvider();
 const artifactObjectStorage = config.artifactStorage === 'disabled' ? undefined : createArtifactObjectStorage(config);
 const services = createServices(store, {

@@ -53,11 +53,13 @@ export type Automation = {
   enabled: boolean;
   ownerGroupId: string;
   ownerGroupName?: string;
+  ownerGroupArchivedAt?: string;
   visibility: SessionVisibility;
   writePolicy: SessionWritePolicy;
   createdByUserId?: string;
   context?: Record<string, unknown>;
   nextInvocationAt?: string;
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
   canManage?: boolean;
@@ -74,10 +76,18 @@ export type AutomationInvocation = {
   completedAt?: string;
   scheduledAt?: string;
   sessionId?: string;
+  sessionStatus?: Session['status'];
+  sessionTitle?: string;
   messageId?: string;
+  messageStatus?: Message['status'];
   requestedByUserId?: string;
   reason?: string;
   error?: string;
+};
+
+export type AutomationInvocationPage = {
+  invocations: AutomationInvocation[];
+  nextCursor?: string;
 };
 
 export type GroupRole = 'viewer' | 'member' | 'admin';
@@ -368,6 +378,24 @@ export async function updateAutomation(input: {
   return body.automation;
 }
 
+export async function archiveAutomation(input: { automationId: string; token: string }): Promise<Automation> {
+  const body = await request<{ automation: Automation }>(`/automations/${input.automationId}/archive`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.automation;
+}
+
+export async function unarchiveAutomation(input: { automationId: string; token: string }): Promise<Automation> {
+  const body = await request<{ automation: Automation }>(`/automations/${input.automationId}/unarchive`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.automation;
+}
+
 export async function invokeAutomation(input: {
   automationId: string;
   token: string;
@@ -390,12 +418,16 @@ export async function invokeAutomation(input: {
 export async function listAutomationInvocations(input: {
   automationId: string;
   token: string;
-}): Promise<AutomationInvocation[]> {
-  const body = await request<{ invocations: AutomationInvocation[] }>(
-    `/automations/${input.automationId}/invocations`,
-    { token: input.token },
-  );
-  return body.invocations;
+  limit?: number;
+  cursor?: string;
+}): Promise<AutomationInvocationPage> {
+  const query = new URLSearchParams();
+  if (input.limit !== undefined) query.set('limit', String(input.limit));
+  if (input.cursor) query.set('cursor', input.cursor);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return request<AutomationInvocationPage>(`/automations/${input.automationId}/invocations${suffix}`, {
+    token: input.token,
+  });
 }
 
 export async function listRepositoryOptions(token: string): Promise<RepositoryOption[]> {

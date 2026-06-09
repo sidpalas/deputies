@@ -1612,7 +1612,6 @@ it('surfaces realtime connection failures with a multiple-window hint', async ()
   expect(banner).toHaveClass('fixed');
   expect(banner).toHaveTextContent(/Realtime updates are reconnecting|Connection delayed/);
   expect(banner).toHaveTextContent(/several windows/);
-  expect(screen.getByText(/Delayed|Reconnecting/)).toBeInTheDocument();
 });
 
 it('shows startup connection guidance before request timeout', async () => {

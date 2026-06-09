@@ -27,12 +27,14 @@ import type {
   GroupMemberWithUserRecord,
   GroupRecord,
   IntegrationDeliveryRecord,
+  ListAutomationInvocationsOptions,
   MessageRecord,
   RecoveredRun,
   RunRecord,
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -642,45 +644,106 @@ export class PostgresStore implements AppStore {
     return result.rows.map(toAutomation);
   }
 
-  async updateAutomation(record: AutomationRecord): Promise<AutomationRecord> {
+  async updateAutomation(
+    input: UpdateAutomationRecord & { updateNextInvocationAt?: boolean },
+  ): Promise<AutomationRecord> {
+    const nextInvocationSet = input.updateNextInvocationAt ? ', next_invocation_at = $11' : '';
     const result = await this.pool.query<AutomationRow>(
       `UPDATE automations
-       SET name = $2,
-           prompt = $3,
-           schedule_cron = $4,
-           enabled = $5,
-           owner_group_id = $6,
-           visibility = $7,
-           write_policy = $8,
-           context = $9,
-           created_by_user_id = $10,
-           next_invocation_at = $11,
-           scheduler_lock_owner = $12,
-           scheduler_locked_until = $13,
-           created_at = $14,
-           updated_at = $15
-       WHERE id = $1
-       RETURNING ${automationSelectColumns}`,
+        SET name = $2,
+            prompt = $3,
+            schedule_cron = $4,
+            enabled = $5,
+            owner_group_id = $6,
+            visibility = $7,
+            write_policy = $8,
+            context = $9,
+            updated_at = $10${nextInvocationSet}
+        WHERE id = $1
+        RETURNING ${automationSelectColumns}`,
       [
-        record.id,
-        record.name,
-        record.prompt,
-        record.scheduleCron,
-        record.enabled,
-        record.ownerGroupId,
-        record.visibility,
-        record.writePolicy,
-        record.context ?? null,
-        record.createdByUserId ?? null,
-        record.nextInvocationAt ?? null,
-        record.schedulerLockOwner ?? null,
-        record.schedulerLockedUntil ?? null,
-        record.createdAt,
-        record.updatedAt,
+        input.id,
+        input.name,
+        input.prompt,
+        input.scheduleCron,
+        input.enabled,
+        input.ownerGroupId,
+        input.visibility,
+        input.writePolicy,
+        input.context ?? null,
+        input.updatedAt,
+        ...(input.updateNextInvocationAt ? [input.nextInvocationAt ?? null] : []),
       ],
     );
-    if (!result.rows[0]) throw new Error(`Automation does not exist: ${record.id}`);
+    if (!result.rows[0]) throw new Error(`Automation does not exist: ${input.id}`);
     return toAutomation(result.rows[0]);
+  }
+
+  async archiveAutomation(input: { automationId: string; archivedAt: Date }): Promise<AutomationRecord | null> {
+    const result = await this.pool.query<AutomationRow>(
+      `UPDATE automations
+       SET archived_at = COALESCE(archived_at, $2),
+           enabled = false,
+           scheduler_lock_owner = NULL,
+           scheduler_locked_until = NULL,
+           updated_at = $2
+       WHERE id = $1
+       RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.archivedAt],
+    );
+    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+  }
+
+  async unarchiveAutomation(input: { automationId: string; updatedAt: Date }): Promise<AutomationRecord | null> {
+    const result = await this.pool.query<AutomationRow>(
+      `UPDATE automations
+       SET archived_at = NULL,
+           enabled = false,
+           scheduler_lock_owner = NULL,
+           scheduler_locked_until = NULL,
+           updated_at = $2
+       WHERE id = $1
+       RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.updatedAt],
+    );
+    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+  }
+
+  async claimAutomation(input: {
+    automationId: string;
+    now: Date;
+    lockOwner: string;
+    lockedUntil: Date;
+  }): Promise<AutomationRecord | null> {
+    const result = await this.pool.query<AutomationRow>(
+      `UPDATE automations
+       SET scheduler_lock_owner = $2,
+           scheduler_locked_until = $3,
+           updated_at = $4
+       WHERE id = $1
+          AND archived_at IS NULL
+          AND (scheduler_locked_until IS NULL OR scheduler_locked_until <= $4)
+        RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.lockOwner, input.lockedUntil, input.now],
+    );
+    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+  }
+
+  async releaseAutomationClaim(input: {
+    automationId: string;
+    lockOwner: string;
+    updatedAt: Date;
+  }): Promise<AutomationRecord | null> {
+    const result = await this.pool.query<AutomationRow>(
+      `UPDATE automations
+       SET scheduler_lock_owner = NULL,
+           scheduler_locked_until = NULL,
+           updated_at = $3
+       WHERE id = $1 AND scheduler_lock_owner = $2
+       RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.lockOwner, input.updatedAt],
+    );
+    return result.rows[0] ? toAutomation(result.rows[0]) : null;
   }
 
   async claimNextDueScheduledAutomation(input: {
@@ -692,10 +755,11 @@ export class PostgresStore implements AppStore {
       const candidate = await client.query<{ id: string }>(
         `SELECT id
          FROM automations
-         WHERE kind = 'scheduled'
-           AND enabled = true
-           AND next_invocation_at IS NOT NULL
-           AND next_invocation_at <= $1
+          WHERE kind = 'scheduled'
+            AND enabled = true
+            AND archived_at IS NULL
+            AND next_invocation_at IS NOT NULL
+            AND next_invocation_at <= $1
            AND (scheduler_locked_until IS NULL OR scheduler_locked_until <= $1)
          ORDER BY next_invocation_at ASC, created_at ASC
          FOR UPDATE SKIP LOCKED
@@ -721,6 +785,7 @@ export class PostgresStore implements AppStore {
   async completeScheduledAutomationClaim(input: {
     automationId: string;
     lockOwner: string;
+    claimedScheduleCron: string;
     nextInvocationAt: Date;
     updatedAt: Date;
   }): Promise<AutomationRecord | null> {
@@ -730,9 +795,9 @@ export class PostgresStore implements AppStore {
            scheduler_lock_owner = NULL,
            scheduler_locked_until = NULL,
            updated_at = $4
-       WHERE id = $1 AND scheduler_lock_owner = $2
-       RETURNING ${automationSelectColumns}`,
-      [input.automationId, input.lockOwner, input.nextInvocationAt, input.updatedAt],
+        WHERE id = $1 AND scheduler_lock_owner = $2 AND schedule_cron = $5
+        RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.lockOwner, input.nextInvocationAt, input.updatedAt, input.claimedScheduleCron],
     );
     return result.rows[0] ? toAutomation(result.rows[0]) : null;
   }
@@ -808,13 +873,29 @@ export class PostgresStore implements AppStore {
     return toAutomationInvocation(result.rows[0]);
   }
 
-  async listAutomationInvocations(automationId: string): Promise<AutomationInvocationRecord[]> {
+  async listAutomationInvocations(
+    automationId: string,
+    options: ListAutomationInvocationsOptions = {},
+  ): Promise<AutomationInvocationRecord[]> {
+    const params: unknown[] = [automationId];
+    let cursorClause = '';
+    if (options.before) {
+      params.push(options.before.createdAt, options.before.id);
+      cursorClause = `AND (created_at < $2 OR (created_at = $2 AND id < $3))`;
+    }
+    let limitClause = '';
+    if (options.limit !== undefined) {
+      params.push(options.limit);
+      limitClause = `LIMIT $${params.length}`;
+    }
     const result = await this.pool.query<AutomationInvocationRow>(
       `SELECT ${automationInvocationSelectColumns}
        FROM automation_invocations
        WHERE automation_id = $1
-       ORDER BY created_at DESC`,
-      [automationId],
+       ${cursorClause}
+        ORDER BY created_at DESC, id DESC
+        ${limitClause}`,
+      params,
     );
     return result.rows.map(toAutomationInvocation);
   }

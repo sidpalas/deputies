@@ -3,6 +3,7 @@ import type { MessageService } from '../messages/service.js';
 import type { SessionService } from '../sessions/service.js';
 import type {
   AppStore,
+  AutomationInvocationCursor,
   AutomationInvocationRecord,
   AutomationInvocationTrigger,
   AutomationRecord,
@@ -50,9 +51,26 @@ export type AutomationInvocationResult = {
   message?: MessageRecord;
 };
 
+export type AutomationInvocationPage = {
+  invocations: AutomationInvocationRecord[];
+  nextCursor?: AutomationInvocationCursor;
+};
+
+type InvocationReservation = {
+  sessionId: string;
+  messageId: string;
+};
+
 export class AutomationServiceError extends Error {
   constructor(
-    readonly code: 'not_found' | 'invalid_schedule' | 'invalid_request' | 'disabled' | 'overlap',
+    readonly code:
+      | 'not_found'
+      | 'invalid_schedule'
+      | 'invalid_request'
+      | 'disabled'
+      | 'archived'
+      | 'archived_group'
+      | 'overlap',
     message: string,
     readonly details: Record<string, unknown> = {},
   ) {
@@ -102,6 +120,7 @@ export class AutomationService {
   async updateScheduled(input: UpdateScheduledAutomationInput): Promise<AutomationRecord> {
     const existing = await this.store.getAutomation(input.id);
     if (!existing) throw new AutomationServiceError('not_found', 'Automation not found');
+    if (existing.archivedAt) throw new AutomationServiceError('archived', 'Restore this automation before editing it');
 
     const now = new Date();
     const scheduleCron =
@@ -130,39 +149,107 @@ export class AutomationService {
       else delete updated.context;
     }
 
-    return this.store.updateAutomation(updated);
+    return this.store.updateAutomation({ ...updated, updateNextInvocationAt: shouldRecalculateNextInvocation });
+  }
+
+  async archive(id: string): Promise<AutomationRecord> {
+    const existing = await this.store.getAutomation(id);
+    if (!existing) throw new AutomationServiceError('not_found', 'Automation not found');
+    const archived = await this.store.archiveAutomation({ automationId: id, archivedAt: new Date() });
+    if (!archived) throw new AutomationServiceError('not_found', 'Automation not found');
+    return archived;
+  }
+
+  async unarchive(id: string): Promise<AutomationRecord> {
+    const existing = await this.store.getAutomation(id);
+    if (!existing) throw new AutomationServiceError('not_found', 'Automation not found');
+    const unarchived = await this.store.unarchiveAutomation({ automationId: id, updatedAt: new Date() });
+    if (!unarchived) throw new AutomationServiceError('not_found', 'Automation not found');
+    return unarchived;
   }
 
   async listInvocations(automationId: string): Promise<AutomationInvocationRecord[]> {
     return this.store.listAutomationInvocations(automationId);
   }
 
+  async listInvocationPage(input: {
+    automationId: string;
+    limit: number;
+    before?: AutomationInvocationCursor;
+  }): Promise<AutomationInvocationPage> {
+    const records = await this.store.listAutomationInvocations(input.automationId, {
+      ...(input.before ? { before: input.before } : {}),
+      limit: input.limit + 1,
+    });
+    const invocations = records.slice(0, input.limit);
+    const last = invocations.at(-1);
+    return {
+      invocations,
+      ...(records.length > input.limit && last ? { nextCursor: { createdAt: last.createdAt, id: last.id } } : {}),
+    };
+  }
+
   async invokeManual(input: ManualAutomationInvocationInput): Promise<AutomationInvocationResult> {
     const automation = await this.store.getAutomation(input.automationId);
     if (!automation) throw new AutomationServiceError('not_found', 'Automation not found');
+    if (automation.archivedAt) {
+      throw new AutomationServiceError('archived', 'Restore this automation before invoking it');
+    }
+    await this.assertAutomationOwnerGroupActive(automation);
     if (!automation.enabled && !input.allowDisabled) {
       throw new AutomationServiceError('disabled', 'Automation is disabled', { requiresAllowDisabled: true });
     }
 
-    const blockingSession = await this.activeAutomationSession(automation);
-    if (blockingSession && !input.allowOverlap) {
-      throw new AutomationServiceError('overlap', 'Automation already has a queued or active session', {
-        blockingSessionId: blockingSession.id,
+    const lockOwner = `automation-manual-${randomUUID()}`;
+    const locked = await this.store.claimAutomation({
+      automationId: automation.id,
+      now: new Date(),
+      lockOwner,
+      lockedUntil: new Date(Date.now() + 60_000),
+    });
+    if (!locked) {
+      const current = await this.store.getAutomation(automation.id);
+      if (current?.archivedAt)
+        throw new AutomationServiceError('archived', 'Restore this automation before invoking it');
+      if (current) await this.assertAutomationOwnerGroupActive(current);
+      if (current && !current.enabled && !input.allowDisabled) {
+        throw new AutomationServiceError('disabled', 'Automation is disabled', { requiresAllowDisabled: true });
+      }
+      throw new AutomationServiceError('overlap', 'Automation is already being invoked', {
         requiresAllowOverlap: true,
       });
     }
 
-    return this.createSessionInvocation({
-      automation,
-      trigger: 'manual',
-      metadata: {
-        ...(input.allowDisabled && !automation.enabled ? { disabledOverride: true } : {}),
-        ...(input.allowOverlap && blockingSession
-          ? { overlapOverride: true, blockingSessionId: blockingSession.id }
-          : {}),
-      },
-      ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
-    });
+    try {
+      if (locked.archivedAt) throw new AutomationServiceError('archived', 'Restore this automation before invoking it');
+      await this.assertAutomationOwnerGroupActive(locked);
+      if (!locked.enabled && !input.allowDisabled) {
+        throw new AutomationServiceError('disabled', 'Automation is disabled', { requiresAllowDisabled: true });
+      }
+
+      const blockingSession = await this.activeAutomationSession(locked);
+      if (blockingSession && !input.allowOverlap) {
+        throw new AutomationServiceError('overlap', 'Automation already has a queued or active session', {
+          blockingSessionId: blockingSession.id,
+          requiresAllowOverlap: true,
+        });
+      }
+
+      return await this.createSessionInvocation({
+        automation: locked,
+        trigger: 'manual',
+        allowDisabled: input.allowDisabled === true,
+        metadata: {
+          ...(input.allowDisabled && !locked.enabled ? { disabledOverride: true } : {}),
+          ...(input.allowOverlap && blockingSession
+            ? { overlapOverride: true, blockingSessionId: blockingSession.id }
+            : {}),
+        },
+        ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
+      });
+    } finally {
+      await this.store.releaseAutomationClaim({ automationId: locked.id, lockOwner, updatedAt: new Date() });
+    }
   }
 
   async processNextScheduled(input: { now?: Date; lockOwner: string; lockDurationMs?: number }): Promise<boolean> {
@@ -177,8 +264,25 @@ export class AutomationService {
     const scheduledAt = automation.nextInvocationAt ?? now;
     const nextInvocationAt = nextUtcCronInvocation(automation.scheduleCron, now);
     try {
-      if (await this.hasScheduledInvocation(automation.id, scheduledAt)) {
+      const existingInvocation = await this.scheduledInvocation(automation.id, scheduledAt);
+      const ownerGroup = await this.store.getGroup(automation.ownerGroupId);
+      if (existingInvocation && existingInvocation.status !== 'creating') {
         // A prior scheduler attempt may have created the invocation but crashed before advancing the schedule.
+      } else if (ownerGroup?.archivedAt) {
+        await this.recordOrUpdateSkippedInvocation({
+          automation,
+          scheduledAt,
+          reason: 'owner_group_archived',
+          metadata: { ownerGroupId: ownerGroup.id, archivedAt: ownerGroup.archivedAt.toISOString() },
+          ...(existingInvocation ? { invocation: existingInvocation } : {}),
+        });
+      } else if (existingInvocation?.status === 'creating') {
+        await this.createSessionInvocation({
+          automation,
+          trigger: 'scheduled',
+          scheduledAt,
+          invocation: existingInvocation,
+        });
       } else if (isMissedScheduledTime(scheduledAt, now)) {
         await this.recordTerminalInvocation({
           automation,
@@ -215,6 +319,7 @@ export class AutomationService {
       await this.store.completeScheduledAutomationClaim({
         automationId: automation.id,
         lockOwner: input.lockOwner,
+        claimedScheduleCron: automation.scheduleCron,
         nextInvocationAt,
         updatedAt: new Date(),
       });
@@ -229,34 +334,50 @@ export class AutomationService {
     scheduledAt?: Date;
     requestedByUserId?: string;
     metadata?: Record<string, unknown>;
+    invocation?: AutomationInvocationRecord;
+    allowDisabled?: boolean;
   }): Promise<AutomationInvocationResult> {
     const now = new Date();
-    const invocation = await this.store.createAutomationInvocation({
-      id: randomUUID(),
-      automationId: input.automation.id,
-      trigger: input.trigger,
-      status: 'creating',
-      createdAt: now,
-      metadata: input.metadata ?? {},
-      ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
-      ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
-    });
+    const initialInvocation =
+      input.invocation ??
+      (await this.store.createAutomationInvocation({
+        id: randomUUID(),
+        automationId: input.automation.id,
+        trigger: input.trigger,
+        status: 'creating',
+        createdAt: now,
+        metadata: reserveInvocationIds(input.metadata ?? {}),
+        ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
+        ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
+      }));
+    const { invocation, reservation } = await this.ensureInvocationReservation(initialInvocation);
+    const { sessionId, messageId } = reservation;
 
     try {
-      await this.assertAutomationGroupIsActive(input.automation);
-      const createdSession = await this.sessions.create({
-        title: automationSessionTitle(input.automation, input.scheduledAt ?? now),
-        ownerGroupId: input.automation.ownerGroupId,
-        visibility: input.automation.visibility,
-        writePolicy: input.automation.writePolicy,
-      });
-      const message = await this.messages.enqueue({
-        sessionId: createdSession.id,
-        prompt: input.automation.prompt,
-        source: 'automation',
-        authorName: `Automation: ${input.automation.name}`,
-        ...(input.automation.context ? { context: input.automation.context } : {}),
-      });
+      await this.assertAutomationCanCreateSession(input.automation, { allowDisabled: input.allowDisabled === true });
+      const existingSession = await this.store.getSession(sessionId);
+      const createdSession =
+        existingSession ??
+        (await this.sessions.create({
+          id: sessionId,
+          title: automationSessionTitle(input.automation, input.scheduledAt ?? now),
+          ownerGroupId: input.automation.ownerGroupId,
+          visibility: input.automation.visibility,
+          writePolicy: input.automation.writePolicy,
+        }));
+      const existingMessage = (await this.store.getMessages(createdSession.id)).find(
+        (message) => message.id === messageId,
+      );
+      const message =
+        existingMessage ??
+        (await this.messages.enqueue({
+          id: messageId,
+          sessionId: createdSession.id,
+          prompt: input.automation.prompt,
+          source: 'automation',
+          authorName: `Automation: ${input.automation.name}`,
+          ...(input.automation.context ? { context: input.automation.context } : {}),
+        }));
       const session = (await this.store.getSession(createdSession.id)) ?? createdSession;
       const completed = await this.store.updateAutomationInvocation({
         ...invocation,
@@ -270,11 +391,31 @@ export class AutomationService {
       const failed = await this.store.updateAutomationInvocation({
         ...invocation,
         status: 'failed',
+        ...((await this.store.getSession(sessionId)) ? { sessionId } : {}),
         error: error instanceof Error ? error.message : 'Unknown automation invocation error',
         completedAt: new Date(),
       });
       return { invocation: failed };
     }
+  }
+
+  private async ensureInvocationReservation(invocation: AutomationInvocationRecord): Promise<{
+    invocation: AutomationInvocationRecord;
+    reservation: InvocationReservation;
+  }> {
+    const existing = readInvocationReservation(invocation.metadata);
+    const reservation = {
+      sessionId: existing.sessionId ?? invocation.sessionId ?? randomUUID(),
+      messageId: existing.messageId ?? invocation.messageId ?? randomUUID(),
+    };
+    if (existing.sessionId && existing.messageId) return { invocation, reservation };
+    return {
+      invocation: await this.store.updateAutomationInvocation({
+        ...invocation,
+        metadata: reserveInvocationIds(invocation.metadata, reservation),
+      }),
+      reservation,
+    };
   }
 
   private async recordTerminalInvocation(input: {
@@ -301,6 +442,33 @@ export class AutomationService {
     });
   }
 
+  private async recordOrUpdateSkippedInvocation(input: {
+    automation: AutomationRecord;
+    invocation?: AutomationInvocationRecord;
+    scheduledAt: Date;
+    reason: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<AutomationInvocationRecord> {
+    const now = new Date();
+    if (input.invocation) {
+      return this.store.updateAutomationInvocation({
+        ...input.invocation,
+        status: 'skipped',
+        reason: input.reason,
+        metadata: { ...input.invocation.metadata, ...(input.metadata ?? {}) },
+        completedAt: now,
+      });
+    }
+    return this.recordTerminalInvocation({
+      automation: input.automation,
+      trigger: 'scheduled',
+      status: 'skipped',
+      scheduledAt: input.scheduledAt,
+      reason: input.reason,
+      ...(input.metadata ? { metadata: input.metadata } : {}),
+    });
+  }
+
   private async activeAutomationSession(automation: AutomationRecord): Promise<SessionRecord | null> {
     const invocations = await this.store.listAutomationInvocations(automation.id);
     for (const invocation of invocations) {
@@ -311,17 +479,41 @@ export class AutomationService {
     return null;
   }
 
-  private async hasScheduledInvocation(automationId: string, scheduledAt: Date): Promise<boolean> {
+  private async scheduledInvocation(
+    automationId: string,
+    scheduledAt: Date,
+  ): Promise<AutomationInvocationRecord | null> {
     const invocations = await this.store.listAutomationInvocations(automationId);
-    return invocations.some(
-      (invocation) => invocation.trigger === 'scheduled' && invocation.scheduledAt?.getTime() === scheduledAt.getTime(),
+    return (
+      invocations.find(
+        (invocation) =>
+          invocation.trigger === 'scheduled' && invocation.scheduledAt?.getTime() === scheduledAt.getTime(),
+      ) ?? null
     );
   }
 
-  private async assertAutomationGroupIsActive(automation: AutomationRecord): Promise<void> {
-    const group = await this.store.getGroup(automation.ownerGroupId);
+  private async assertAutomationCanCreateSession(
+    automation: AutomationRecord,
+    options: { allowDisabled?: boolean } = {},
+  ): Promise<void> {
+    const current = await this.store.getAutomation(automation.id);
+    if (!current) throw new Error(`Automation not found: ${automation.id}`);
+    if (current.archivedAt) throw new Error('Cannot invoke an archived automation');
+    if (!current.enabled && !options.allowDisabled)
+      throw new Error('Cannot automatically invoke a disabled automation');
+    const group = await this.store.getGroup(current.ownerGroupId);
     if (!group) throw new Error(`Group not found: ${automation.ownerGroupId}`);
     if (group.archivedAt) throw new Error('Cannot invoke automation owned by an archived group');
+  }
+
+  private async assertAutomationOwnerGroupActive(automation: AutomationRecord): Promise<void> {
+    const group = await this.store.getGroup(automation.ownerGroupId);
+    if (!group) throw new AutomationServiceError('not_found', `Group not found: ${automation.ownerGroupId}`);
+    if (group.archivedAt) {
+      throw new AutomationServiceError('archived_group', 'Cannot invoke automation owned by an archived group', {
+        ownerGroupId: group.id,
+      });
+    }
   }
 }
 
@@ -367,6 +559,24 @@ function currentUtcMinute(date: Date): Date {
 
 function automationSessionTitle(automation: AutomationRecord, invocationTime: Date): string {
   return `${automation.name} - ${formatUtcMinute(invocationTime)}`;
+}
+
+function reserveInvocationIds(
+  metadata: Record<string, unknown>,
+  reservation: InvocationReservation = { sessionId: randomUUID(), messageId: randomUUID() },
+): Record<string, unknown> {
+  return {
+    ...metadata,
+    reservedSessionId: reservation.sessionId,
+    reservedMessageId: reservation.messageId,
+  };
+}
+
+function readInvocationReservation(metadata: Record<string, unknown>): Partial<InvocationReservation> {
+  return {
+    ...(typeof metadata.reservedSessionId === 'string' ? { sessionId: metadata.reservedSessionId } : {}),
+    ...(typeof metadata.reservedMessageId === 'string' ? { messageId: metadata.reservedMessageId } : {}),
+  };
 }
 
 function formatUtcMinute(date: Date): string {

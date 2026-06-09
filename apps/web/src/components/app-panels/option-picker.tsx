@@ -159,7 +159,7 @@ export function OptionPicker(props: {
         id={props.id}
         type="button"
         className={cn(
-          'relative flex h-10 w-full items-center rounded-md border border-input bg-background/80 py-0 pl-3 pr-12 text-left text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:opacity-50',
+          'relative flex h-10 w-full items-center rounded-md border border-input bg-background/80 py-0 pl-3 pr-12 text-left text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:border-border disabled:bg-muted/60 disabled:text-muted-foreground disabled:opacity-80',
           props.triggerClassName,
         )}
         disabled={disabled}

@@ -6,7 +6,7 @@ Topologies:
 
 - `topology.mode=combined`: API and worker run in one control-plane deployment
 - `topology.mode=split`: separate API and worker deployments
-- `migrate`: one-shot database migration job, run as a Helm post-install/post-upgrade hook by default
+- `migrate`: one-shot database migration job, run as a Helm pre-install/pre-upgrade hook by default
 - `web`: static web UI served by Caddy, proxying API routes to the stable API service
 
 The chart supports `SANDBOX_PROVIDER=daytona` and `SANDBOX_PROVIDER=k8s-agent-sandbox`; it does not mount the Docker socket.
@@ -83,6 +83,8 @@ Use `serviceAccount.annotations` for identity bindings such as AWS IRSA, EKS Pod
 When `controlPlane.agentSandboxOrchestrator.enabled=true`, the chart creates a separate orchestrator service account by default and binds Agent Sandbox RBAC to that service account instead of the control-plane service account. Override it with `controlPlane.agentSandboxOrchestrator.serviceAccount.*` when using a platform-managed identity for the orchestrator. In in-process mode, Agent Sandbox RBAC stays bound to the main `serviceAccount.*` account because the control-plane creates sandbox resources directly.
 
 Use per-workload pod metadata for identity systems that require labels or annotations on pods. The chart exposes `controlPlane.all.podLabels`, `controlPlane.all.podAnnotations`, `controlPlane.api.podLabels`, `controlPlane.api.podAnnotations`, `controlPlane.worker.podLabels`, `controlPlane.worker.podAnnotations`, `migrations.podLabels`, and `migrations.podAnnotations`. For example, Azure Workload Identity commonly requires `azure.workload.identity/use: "true"` on pods.
+
+Helm creates `pre-install` hooks before normal chart resources, so a first-install migration job cannot rely on a ServiceAccount created by the same chart. On first install, the migration job omits `serviceAccountName` and uses the namespace default ServiceAccount unless `migrations.serviceAccountName` is set. On upgrade, the chart-created ServiceAccount already exists, so the migration job uses it by default. For first-install workload identity on migrations, set `migrations.serviceAccountName` to a pre-provisioned ServiceAccount used only by the migration job, or set `serviceAccount.create=false` and point `serviceAccount.name` at an externally managed ServiceAccount.
 
 Current app-side limitations:
 

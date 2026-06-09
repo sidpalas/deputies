@@ -280,6 +280,7 @@ export type AutomationRecord = {
   writePolicy: SessionWritePolicy;
   createdAt: Date;
   updatedAt: Date;
+  archivedAt?: Date;
   nextInvocationAt?: Date;
   createdByUserId?: string;
   context?: Record<string, unknown>;
@@ -301,6 +302,16 @@ export type AutomationInvocationRecord = {
   reason?: string;
   error?: string;
   metadata: Record<string, unknown>;
+};
+
+export type AutomationInvocationCursor = {
+  createdAt: Date;
+  id: string;
+};
+
+export type ListAutomationInvocationsOptions = {
+  before?: AutomationInvocationCursor;
+  limit?: number;
 };
 
 export type CreateSessionRecord = {
@@ -426,6 +437,20 @@ export type CreateAutomationInvocationRecord = {
   error?: string;
 };
 
+export type UpdateAutomationRecord = {
+  id: string;
+  name: string;
+  prompt: string;
+  scheduleCron: string;
+  enabled: boolean;
+  ownerGroupId: string;
+  visibility: SessionVisibility;
+  writePolicy: SessionWritePolicy;
+  updatedAt: Date;
+  context?: Record<string, unknown>;
+  nextInvocationAt?: Date;
+};
+
 export interface SessionStore {
   createSession(record: CreateSessionRecord): Promise<SessionRecord>;
   getSession(id: string): Promise<SessionRecord | null>;
@@ -549,7 +574,20 @@ export interface AutomationStore {
   createAutomation(record: CreateAutomationRecord): Promise<AutomationRecord>;
   getAutomation(id: string): Promise<AutomationRecord | null>;
   listAutomations(): Promise<AutomationRecord[]>;
-  updateAutomation(record: AutomationRecord): Promise<AutomationRecord>;
+  updateAutomation(input: UpdateAutomationRecord & { updateNextInvocationAt?: boolean }): Promise<AutomationRecord>;
+  archiveAutomation(input: { automationId: string; archivedAt: Date }): Promise<AutomationRecord | null>;
+  unarchiveAutomation(input: { automationId: string; updatedAt: Date }): Promise<AutomationRecord | null>;
+  claimAutomation(input: {
+    automationId: string;
+    now: Date;
+    lockOwner: string;
+    lockedUntil: Date;
+  }): Promise<AutomationRecord | null>;
+  releaseAutomationClaim(input: {
+    automationId: string;
+    lockOwner: string;
+    updatedAt: Date;
+  }): Promise<AutomationRecord | null>;
   claimNextDueScheduledAutomation(input: {
     now: Date;
     lockOwner: string;
@@ -558,12 +596,16 @@ export interface AutomationStore {
   completeScheduledAutomationClaim(input: {
     automationId: string;
     lockOwner: string;
+    claimedScheduleCron: string;
     nextInvocationAt: Date;
     updatedAt: Date;
   }): Promise<AutomationRecord | null>;
   createAutomationInvocation(record: CreateAutomationInvocationRecord): Promise<AutomationInvocationRecord>;
   updateAutomationInvocation(record: AutomationInvocationRecord): Promise<AutomationInvocationRecord>;
-  listAutomationInvocations(automationId: string): Promise<AutomationInvocationRecord[]>;
+  listAutomationInvocations(
+    automationId: string,
+    options?: ListAutomationInvocationsOptions,
+  ): Promise<AutomationInvocationRecord[]>;
 }
 
 export interface EventStore {

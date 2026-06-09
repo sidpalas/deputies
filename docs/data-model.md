@@ -234,6 +234,7 @@ visibility text not null
 write_policy text not null
 context jsonb
 created_by_user_id uuid references auth_users(id)
+archived_at timestamptz
 next_invocation_at timestamptz
 scheduler_lock_owner text
 scheduler_locked_until timestamptz
@@ -247,6 +248,10 @@ Rules:
 - `created_by_user_id` is audit and creator-management metadata; group ownership is the durable authority.
 - Scheduled automations use 5-field UTC cron expressions and store the next absolute invocation timestamp.
 - Disabled automations are not invoked automatically.
+- Archived automations are disabled, are not invoked automatically or manually, and cannot be enabled until restored.
+- Restored automations remain disabled until explicitly enabled.
+- Archiving an automation's owner access group suspends automatic and manual invocations without mutating the automation's `enabled` state.
+- A scheduled fire while the owner group is archived records a skipped invocation with reason `owner_group_archived`.
 - Automation context may contain durable prompt context such as repository, model, or branch.
 
 ## Automation Invocations

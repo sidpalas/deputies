@@ -27,12 +27,14 @@ import type {
   CreateSessionRecord,
   ClaimedMessage,
   ClaimedMessageBatch,
+  ListAutomationInvocationsOptions,
   MessageRecord,
   RecoveredRun,
   RunRecord,
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -302,10 +304,95 @@ export class MemoryStore implements AppStore {
     return [...this.automations.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }
 
-  async updateAutomation(record: AutomationRecord): Promise<AutomationRecord> {
-    if (!this.automations.has(record.id)) throw new Error(`Automation does not exist: ${record.id}`);
-    this.automations.set(record.id, record);
-    return record;
+  async updateAutomation(
+    input: UpdateAutomationRecord & { updateNextInvocationAt?: boolean },
+  ): Promise<AutomationRecord> {
+    const existing = this.automations.get(input.id);
+    if (!existing) throw new Error(`Automation does not exist: ${input.id}`);
+    const updated: AutomationRecord = {
+      ...existing,
+      name: input.name,
+      prompt: input.prompt,
+      scheduleCron: input.scheduleCron,
+      enabled: input.enabled,
+      ownerGroupId: input.ownerGroupId,
+      visibility: input.visibility,
+      writePolicy: input.writePolicy,
+      updatedAt: input.updatedAt,
+    };
+    if (input.context) updated.context = input.context;
+    else delete updated.context;
+    if (input.updateNextInvocationAt) {
+      if (input.nextInvocationAt) updated.nextInvocationAt = input.nextInvocationAt;
+      else delete updated.nextInvocationAt;
+    }
+    this.automations.set(input.id, updated);
+    return updated;
+  }
+
+  async archiveAutomation(input: { automationId: string; archivedAt: Date }): Promise<AutomationRecord | null> {
+    const automation = this.automations.get(input.automationId);
+    if (!automation) return null;
+    const { schedulerLockOwner: _lockOwner, schedulerLockedUntil: _lockedUntil, ...withoutLock } = automation;
+    const archived = {
+      ...withoutLock,
+      enabled: false,
+      archivedAt: automation.archivedAt ?? input.archivedAt,
+      updatedAt: input.archivedAt,
+    };
+    this.automations.set(input.automationId, archived);
+    return archived;
+  }
+
+  async unarchiveAutomation(input: { automationId: string; updatedAt: Date }): Promise<AutomationRecord | null> {
+    const automation = this.automations.get(input.automationId);
+    if (!automation) return null;
+    const {
+      archivedAt: _archivedAt,
+      schedulerLockOwner: _lockOwner,
+      schedulerLockedUntil: _lockedUntil,
+      ...withoutArchiveAndLock
+    } = automation;
+    const unarchived = {
+      ...withoutArchiveAndLock,
+      enabled: false,
+      updatedAt: input.updatedAt,
+    };
+    this.automations.set(input.automationId, unarchived);
+    return unarchived;
+  }
+
+  async claimAutomation(input: {
+    automationId: string;
+    now: Date;
+    lockOwner: string;
+    lockedUntil: Date;
+  }): Promise<AutomationRecord | null> {
+    const automation = this.automations.get(input.automationId);
+    if (!automation) return null;
+    if (automation.archivedAt) return null;
+    if (automation.schedulerLockedUntil && automation.schedulerLockedUntil > input.now) return null;
+    const locked: AutomationRecord = {
+      ...automation,
+      schedulerLockOwner: input.lockOwner,
+      schedulerLockedUntil: input.lockedUntil,
+      updatedAt: input.now,
+    };
+    this.automations.set(automation.id, locked);
+    return locked;
+  }
+
+  async releaseAutomationClaim(input: {
+    automationId: string;
+    lockOwner: string;
+    updatedAt: Date;
+  }): Promise<AutomationRecord | null> {
+    const automation = this.automations.get(input.automationId);
+    if (!automation || automation.schedulerLockOwner !== input.lockOwner) return null;
+    const { schedulerLockOwner: _lockOwner, schedulerLockedUntil: _lockedUntil, ...withoutLock } = automation;
+    const updated = { ...withoutLock, updatedAt: input.updatedAt };
+    this.automations.set(input.automationId, updated);
+    return updated;
   }
 
   async claimNextDueScheduledAutomation(input: {
@@ -316,6 +403,7 @@ export class MemoryStore implements AppStore {
     const automation = [...this.automations.values()]
       .filter((candidate) => candidate.kind === 'scheduled')
       .filter((candidate) => candidate.enabled)
+      .filter((candidate) => !candidate.archivedAt)
       .filter((candidate) => candidate.nextInvocationAt && candidate.nextInvocationAt <= input.now)
       .filter((candidate) => !candidate.schedulerLockedUntil || candidate.schedulerLockedUntil <= input.now)
       .sort(
@@ -338,11 +426,18 @@ export class MemoryStore implements AppStore {
   async completeScheduledAutomationClaim(input: {
     automationId: string;
     lockOwner: string;
+    claimedScheduleCron: string;
     nextInvocationAt: Date;
     updatedAt: Date;
   }): Promise<AutomationRecord | null> {
     const automation = this.automations.get(input.automationId);
-    if (!automation || automation.schedulerLockOwner !== input.lockOwner) return null;
+    if (
+      !automation ||
+      automation.schedulerLockOwner !== input.lockOwner ||
+      automation.scheduleCron !== input.claimedScheduleCron
+    ) {
+      return null;
+    }
     const { schedulerLockOwner: _lockOwner, schedulerLockedUntil: _lockedUntil, ...withoutLock } = automation;
     const updated: AutomationRecord = {
       ...withoutLock,
@@ -377,10 +472,15 @@ export class MemoryStore implements AppStore {
     return record;
   }
 
-  async listAutomationInvocations(automationId: string): Promise<AutomationInvocationRecord[]> {
-    return [...this.automationInvocations.values()]
+  async listAutomationInvocations(
+    automationId: string,
+    options: ListAutomationInvocationsOptions = {},
+  ): Promise<AutomationInvocationRecord[]> {
+    const invocations = [...this.automationInvocations.values()]
       .filter((invocation) => invocation.automationId === automationId)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      .filter((invocation) => !options.before || isBeforeAutomationInvocationCursor(invocation, options.before))
+      .sort(compareAutomationInvocationsNewestFirst);
+    return options.limit === undefined ? invocations : invocations.slice(0, options.limit);
   }
 
   async nextMessageSequence(sessionId: string): Promise<number> {
@@ -1090,6 +1190,21 @@ function isActiveSandbox(sandbox: SandboxRecord): boolean {
     !sandbox.destroyedAt &&
     (sandbox.status === 'ready' || sandbox.status === 'stopped' || sandbox.status === 'unhealthy')
   );
+}
+
+function compareAutomationInvocationsNewestFirst(a: AutomationInvocationRecord, b: AutomationInvocationRecord): number {
+  const time = b.createdAt.getTime() - a.createdAt.getTime();
+  if (time !== 0) return time;
+  return b.id.localeCompare(a.id);
+}
+
+function isBeforeAutomationInvocationCursor(
+  invocation: AutomationInvocationRecord,
+  cursor: { createdAt: Date; id: string },
+): boolean {
+  const time = invocation.createdAt.getTime() - cursor.createdAt.getTime();
+  if (time !== 0) return time < 0;
+  return invocation.id < cursor.id;
 }
 
 function isSessionBusy(status: string | undefined): boolean {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { SelectHTMLAttributes, SyntheticEvent } from 'react';
-import { ChevronDown, CornerUpLeft, PanelLeftClose, PanelLeftOpen, Plus, X } from 'lucide-react';
+import { Archive, ChevronDown, CornerUpLeft, PanelLeftClose, PanelLeftOpen, Plus, Save, X } from 'lucide-react';
 import type {
   AuthUser,
   Group,
@@ -526,10 +526,17 @@ function ManagedGroupPanel(props: {
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button onClick={props.onSaveGroup} disabled={!props.groupForm.name.trim() || Boolean(props.groupFormError)}>
-            Save group
+            <Save className="h-4 w-4" /> Save group
           </Button>
-          <Button variant="secondary" onClick={() => props.onArchiveGroup(props.group.id, !props.group.archivedAt)}>
-            {props.group.archivedAt ? 'Unarchive group' : 'Archive group'}
+          <Button
+            className={cn(
+              !props.group.archivedAt &&
+                'border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10',
+            )}
+            variant="secondary"
+            onClick={() => props.onArchiveGroup(props.group.id, !props.group.archivedAt)}
+          >
+            <Archive className="h-4 w-4" /> {props.group.archivedAt ? 'Unarchive group' : 'Archive group'}
           </Button>
         </div>
       </Card>
@@ -655,7 +662,9 @@ export function SessionAccessPanel(props: {
   const [ownerGroupId, setOwnerGroupId] = useState(props.session.ownerGroupId);
   const [saving, setSaving] = useState(false);
   const ownerGroup = props.groups.find((group) => group.id === props.session.ownerGroupId);
-  const ownerGroupName = ownerGroup?.name ?? props.session.ownerGroupName ?? 'Unknown access group';
+  const ownerGroupName = ownerGroup
+    ? groupDisplayName(ownerGroup)
+    : (props.session.ownerGroupName ?? 'Unknown access group');
   const editableGroups = props.groups.filter(
     (group) => group.id === props.session.ownerGroupId || (group.canManage && !group.archivedAt),
   );
@@ -693,8 +702,8 @@ export function SessionAccessPanel(props: {
               disabled={saving}
             >
               {editableGroups.map((group) => (
-                <option key={group.id} value={group.id} disabled={!group.canManage}>
-                  {group.name}
+                <option key={group.id} value={group.id} disabled={!group.canManage || Boolean(group.archivedAt)}>
+                  {groupDisplayName(group)}
                 </option>
               ))}
             </SelectWithCaret>
@@ -708,6 +717,10 @@ export function SessionAccessPanel(props: {
       </div>
     </div>
   );
+}
+
+function groupDisplayName(group: Group): string {
+  return group.archivedAt ? `${group.name} (archived)` : group.name;
 }
 
 function UserOptions(props: { showRoles?: boolean; users: AuthUser[]; onSelectUser: (userId: string) => void }) {

@@ -131,10 +131,11 @@ Archiving a group:
 - Hides it from the active groups list.
 - Prevents new sessions from being created in that group.
 - Prevents sessions from being moved into that group.
+- Suspends owned automation invocations without changing automation enabled state.
 - Does not archive, delete, or move existing sessions.
 - Does not remove existing group memberships.
 
-Existing sessions owned by an archived group keep their access behavior. Unarchiving the group makes it available for new sessions and moves again.
+Existing sessions owned by an archived group keep their access behavior. Unarchiving the group makes it available for new sessions, moves, and owned automation invocations again.
 
 ## Names And Uniqueness
 

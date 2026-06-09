@@ -56,7 +56,7 @@ export const publicApiResponseSchemas = {
   },
   automationInvocations: {
     description: 'Automation invocation list envelope.',
-    fields: { invocations: 'array' },
+    fields: { invocations: 'array', nextCursor: 'optional:string' },
   },
   automationInvocation: {
     description: 'Manual automation invocation result envelope.',

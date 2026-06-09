@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS automations (
   write_policy text NOT NULL CHECK (write_policy IN ('group_members', 'creator_only')),
   context jsonb,
   created_by_user_id uuid REFERENCES auth_users(id) ON DELETE SET NULL,
+  archived_at timestamptz,
   next_invocation_at timestamptz,
   scheduler_lock_owner text,
   scheduler_locked_until timestamptz,
@@ -22,7 +23,7 @@ CREATE INDEX IF NOT EXISTS automations_owner_group_updated_idx
 
 CREATE INDEX IF NOT EXISTS automations_due_scheduled_idx
   ON automations(next_invocation_at ASC)
-  WHERE kind = 'scheduled' AND enabled = true;
+  WHERE kind = 'scheduled' AND enabled = true AND archived_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS automation_invocations (
   id uuid PRIMARY KEY,

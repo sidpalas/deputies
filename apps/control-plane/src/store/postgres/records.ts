@@ -209,6 +209,7 @@ export type AutomationRow = QueryResultRow & {
   write_policy: SessionWritePolicy;
   context: Record<string, unknown> | null;
   created_by_user_id: string | null;
+  archived_at: Date | null;
   next_invocation_at: Date | null;
   scheduler_lock_owner: string | null;
   scheduler_locked_until: Date | null;
@@ -217,7 +218,7 @@ export type AutomationRow = QueryResultRow & {
 };
 
 export const automationSelectColumns =
-  'id, kind, name, prompt, schedule_cron, enabled, owner_group_id, visibility, write_policy, context, created_by_user_id, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
+  'id, kind, name, prompt, schedule_cron, enabled, owner_group_id, visibility, write_policy, context, created_by_user_id, archived_at, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
 
 export type AutomationInvocationRow = QueryResultRow & {
   id: string;
@@ -487,6 +488,7 @@ export function toAutomation(row: AutomationRow): AutomationRecord {
     writePolicy: row.write_policy,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
     ...(row.next_invocation_at ? { nextInvocationAt: row.next_invocation_at } : {}),
     ...(row.created_by_user_id ? { createdByUserId: row.created_by_user_id } : {}),
     ...(row.context ? { context: row.context } : {}),

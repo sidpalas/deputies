@@ -1,5 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { CalendarClock, CornerUpLeft, PanelLeftClose, PanelLeftOpen, Play, Plus, Save, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
+import {
+  Archive,
+  CalendarClock,
+  ChevronDown,
+  CornerUpLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Play,
+  Plus,
+  RotateCcw,
+  Save,
+  X,
+} from 'lucide-react';
 import {
   ApiError,
   createAutomation,
@@ -14,13 +26,15 @@ import {
   type Health,
   type ModelChoice,
   type RepositoryOption,
+  type Session,
 } from '../../api.js';
+import { archivedAutomationsOpenStorageKey } from '../../app-helpers.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Input } from '../ui/input.js';
 import { Textarea } from '../ui/textarea.js';
-import { BranchPicker, OptionPicker, RepositoryPicker } from './option-picker.js';
+import { BranchPicker, OptionPicker, RepositoryPicker, type OptionPickerOption } from './option-picker.js';
 import { formatDate, statusTextClass } from './shared.js';
 import { ApiStatusFooter, ThemeToggle } from './session-sidebar.js';
 import type { ConnectionStatus, ThemePreference } from './types.js';
@@ -43,7 +57,10 @@ type AsyncState<T> = {
   error: string;
 };
 
+const invocationHistoryPageSize = 20;
+
 export function AutomationsSidebar(props: {
+  archivedAutomationsOpen: boolean;
   authRequired: boolean;
   automations: Automation[];
   canCallApi: boolean;
@@ -51,12 +68,15 @@ export function AutomationsSidebar(props: {
   canViewAutomations: boolean;
   canViewSetup: boolean;
   connectionStatus: ConnectionStatus;
+  groups: Group[];
   health: Health | null;
   loading: boolean;
   navPage: 'sessions' | 'setup' | 'groups' | 'automations';
   selectedAutomationId: string;
   themePreference: ThemePreference;
   token: string;
+  onArchiveAutomation: (automationId: string) => void;
+  onArchivedAutomationsOpenChange: (open: boolean) => void;
   onBackToSessions: () => void;
   onCollapse: () => void;
   onCreateAutomation: () => void;
@@ -67,6 +87,7 @@ export function AutomationsSidebar(props: {
   onSelectAutomation: (automationId: string) => void;
   onSignOut: () => void;
   onThemeChange: (value: ThemePreference) => void;
+  onUnarchiveAutomation: (automationId: string) => void;
 }) {
   const [search, setSearch] = useState('');
   const normalizedSearch = search.trim().toLowerCase();
@@ -81,6 +102,17 @@ export function AutomationsSidebar(props: {
           automation.scheduleCron.toLowerCase().includes(normalizedSearch),
       )
     : sortedAutomations;
+  const activeAutomations = filteredAutomations.filter((automation) => !automation.archivedAt);
+  const archivedAutomations = filteredAutomations.filter((automation) => automation.archivedAt);
+  const searching = Boolean(normalizedSearch);
+  const archivedOpen = searching || props.archivedAutomationsOpen;
+
+  function handleArchivedToggle(event: SyntheticEvent<HTMLDetailsElement>) {
+    if (searching) return;
+    const open = event.currentTarget.open;
+    sessionStorage.setItem(archivedAutomationsOpenStorageKey, String(open));
+    props.onArchivedAutomationsOpenChange(open);
+  }
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
@@ -140,26 +172,52 @@ export function AutomationsSidebar(props: {
       </div>
 
       <div className="min-h-0 min-w-0 flex-1 overflow-auto">
-        {filteredAutomations.length ? (
-          <div className="grid min-w-0 gap-1">
-            {filteredAutomations.map((automation) => (
-              <AutomationSidebarButton
-                key={automation.id}
-                automation={automation}
-                selected={automation.id === props.selectedAutomationId}
-                onSelect={props.onSelectAutomation}
-              />
-            ))}
-          </div>
-        ) : (
-          <p className="px-2 py-3 text-sm text-muted-foreground">
-            {props.loading
-              ? 'Loading automations...'
-              : search
-                ? 'No matching automations.'
-                : 'No scheduled automations yet.'}
-          </p>
-        )}
+        <div className="grid min-w-0 gap-1">
+          {activeAutomations.map((automation) => (
+            <AutomationSidebarButton
+              key={automation.id}
+              automation={automation}
+              ownerGroupArchived={automationOwnerGroupArchived(automation, props.groups)}
+              selected={automation.id === props.selectedAutomationId}
+              onArchive={props.onArchiveAutomation}
+              onSelect={props.onSelectAutomation}
+            />
+          ))}
+          {!activeAutomations.length ? (
+            <p className="px-2 py-3 text-sm text-muted-foreground">
+              {props.loading
+                ? 'Loading automations...'
+                : search
+                  ? 'No matching active automations.'
+                  : 'No active scheduled automations.'}
+            </p>
+          ) : null}
+        </div>
+
+        {archivedAutomations.length || searching ? (
+          <details className="mt-4 border-t border-border pt-3" open={archivedOpen} onToggle={handleArchivedToggle}>
+            <summary className="flex cursor-pointer items-center gap-1 text-sm font-medium text-muted-foreground">
+              <ChevronDown className={cn('h-4 w-4 -rotate-90 transition-transform', archivedOpen && 'rotate-0')} />
+              Archived · {archivedAutomations.length}
+            </summary>
+            {archivedAutomations.length ? (
+              <div className="mt-2 grid min-w-0 gap-1 opacity-80">
+                {archivedAutomations.map((automation) => (
+                  <AutomationSidebarButton
+                    key={automation.id}
+                    automation={automation}
+                    ownerGroupArchived={automationOwnerGroupArchived(automation, props.groups)}
+                    selected={automation.id === props.selectedAutomationId}
+                    onSelect={props.onSelectAutomation}
+                    onUnarchive={props.onUnarchiveAutomation}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="px-2 py-3 text-sm text-muted-foreground">No matching archived automations.</p>
+            )}
+          </details>
+        ) : null}
       </div>
 
       <ThemeToggle preference={props.themePreference} onChange={props.onThemeChange} />
@@ -183,29 +241,69 @@ export function AutomationsSidebar(props: {
 
 function AutomationSidebarButton(props: {
   automation: Automation;
+  ownerGroupArchived: boolean;
   selected: boolean;
+  onArchive?: (automationId: string) => void;
   onSelect: (automationId: string) => void;
+  onUnarchive?: (automationId: string) => void;
 }) {
+  const statusLine = props.automation.archivedAt
+    ? `Archived · ${formatDate(props.automation.archivedAt)}`
+    : props.ownerGroupArchived
+      ? `${props.automation.enabled ? 'Enabled' : 'Disabled'} · Suspended: access group archived`
+      : `${props.automation.enabled ? 'Enabled' : 'Disabled'} · Next ${
+          props.automation.nextInvocationAt ? formatDate(props.automation.nextInvocationAt) : 'not scheduled'
+        }`;
+
   return (
-    <button
-      type="button"
+    <div
       className={cn(
         'group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-transparent p-2 text-left hover:bg-accent',
         props.selected && 'border-primary bg-primary/15',
       )}
-      onClick={() => props.onSelect(props.automation.id)}
     >
-      <span className="block min-w-0 flex-1 overflow-hidden">
+      <button
+        type="button"
+        className="block min-w-0 flex-1 overflow-hidden bg-transparent p-0 text-left"
+        onClick={() => props.onSelect(props.automation.id)}
+      >
         <strong className="block w-full truncate text-sm font-medium text-foreground">{props.automation.name}</strong>
         <span className="block w-full truncate font-mono text-xs text-muted-foreground">
           {props.automation.scheduleCron} UTC
         </span>
-        <span className="block w-full truncate text-xs text-muted-foreground">
-          {props.automation.enabled ? 'Enabled' : 'Disabled'} · Next{' '}
-          {props.automation.nextInvocationAt ? formatDate(props.automation.nextInvocationAt) : 'not scheduled'}
-        </span>
-      </span>
-    </button>
+        <span className="block w-full truncate text-xs text-muted-foreground">{statusLine}</span>
+      </button>
+      {props.automation.canManage && !props.automation.archivedAt && props.onArchive ? (
+        <Button
+          className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+          variant="ghost"
+          size="sm"
+          onClick={() => props.onArchive?.(props.automation.id)}
+          aria-label="Archive automation"
+          title="Archive automation"
+        >
+          <Archive className="h-3.5 w-3.5" />
+        </Button>
+      ) : null}
+      {props.automation.canManage && props.automation.archivedAt && props.onUnarchive ? (
+        <Button
+          className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+          variant="ghost"
+          size="sm"
+          onClick={() => props.onUnarchive?.(props.automation.id)}
+          aria-label="Restore automation"
+          title="Restore automation"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function automationOwnerGroupArchived(automation: Automation, groups: Group[]): boolean {
+  return Boolean(
+    groups.find((group) => group.id === automation.ownerGroupId)?.archivedAt ?? automation.ownerGroupArchivedAt,
   );
 }
 
@@ -224,12 +322,18 @@ export function AutomationsPanel(props: {
   showOpenSidebar: boolean;
   openSidebarLabel?: string;
   onAutomationChanged: (automation: Automation) => void;
+  onArchiveAutomation: (automationId: string) => void;
   onAutomationSaved: (automation: Automation) => void;
   onOpenSidebar: () => void;
+  onSessionCreated: (session: Session) => void;
   onSelectSession: (sessionId: string) => void;
+  onUnarchiveAutomation: (automationId: string) => void;
   onError: (error: unknown) => void;
 }) {
   const [invocations, setInvocations] = useState<AutomationInvocation[]>([]);
+  const [invocationsNextCursor, setInvocationsNextCursor] = useState('');
+  const [invocationsLoading, setInvocationsLoading] = useState(false);
+  const [olderInvocationsLoading, setOlderInvocationsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<AutomationForm>(() => emptyForm(props.groups));
   const [branchOptionsState, setBranchOptionsState] = useState<AsyncState<BranchOption[]>>({
@@ -239,32 +343,80 @@ export function AutomationsPanel(props: {
   });
   const branchOptionsRepositoryRef = useRef('');
   const selected = props.automation;
-  const activeGroups = props.groups.filter((group) => !group.archivedAt);
+  const selectedArchived = Boolean(selected?.archivedAt);
+  const selectedAutomationIdRef = useRef(selected?.id ?? '');
+  const selectableGroups = props.groups.filter((group) => {
+    if (group.archivedAt) return false;
+    return selected ? (group.canManage ?? true) : (group.canCreateSessions ?? true);
+  });
+  const selectedGroup = props.groups.find((group) => group.id === form.groupId);
+  const selectedOwnerGroupArchived = Boolean(
+    selected && form.groupId === selected.ownerGroupId && (selectedGroup?.archivedAt || selected.ownerGroupArchivedAt),
+  );
+  const selectedGroupSelectable = selectableGroups.some((group) => group.id === form.groupId);
+  const groupOptions: OptionPickerOption[] = selectableGroups.map((group) => ({ value: group.id, label: group.name }));
+  if (form.groupId && !selectedGroupSelectable) {
+    groupOptions.unshift({
+      value: form.groupId,
+      label: selectedGroup?.archivedAt
+        ? `${selectedGroup.name} (archived)`
+        : `${selectedGroup?.name ?? selected?.ownerGroupName ?? form.groupId} (current)`,
+      available: false,
+      unavailableReason: selectedGroup?.archivedAt ? 'Archived group.' : 'Unavailable group.',
+      ...(selectedGroup?.archivedAt ? { action: 'New sessions are suspended until this group is unarchived.' } : {}),
+    });
+  }
   const branchOptions = branchOptionsState.data;
   const branchOptionsLoading = branchOptionsState.loading;
   const branchOptionsError = branchOptionsState.error;
   const modelOptions = props.modelChoices.length
     ? props.modelChoices
     : [{ value: '', label: 'Default model', available: true }];
+  const displayedModelOptions =
+    form.model && !modelOptions.some((option) => option.value === form.model)
+      ? [{ value: form.model, label: `${form.model} (saved)`, available: true }, ...modelOptions]
+      : modelOptions;
+  const canEdit = props.canCallApi && (selected ? Boolean(selected.canManage) && !selectedArchived : true);
+  const canEditDefinition = canEdit;
+  const canChangeGroup =
+    canEdit &&
+    (selected ? (props.groups.find((group) => group.id === selected.ownerGroupId)?.canManage ?? true) : true);
+  const formComplete = Boolean(form.groupId && form.name.trim() && form.scheduleCron.trim() && form.prompt.trim());
+  const saveDisabled = !canEdit || saving || !formComplete;
 
   useEffect(() => {
-    setForm((current) => (current.groupId ? current : { ...current, groupId: props.groups[0]?.id ?? '' }));
+    selectedAutomationIdRef.current = selected?.id ?? '';
+  }, [selected?.id]);
+
+  useEffect(() => {
+    setForm((current) => (current.groupId ? current : { ...current, groupId: defaultAutomationGroupId(props.groups) }));
   }, [props.groups]);
 
   useEffect(() => {
     if (!selected) {
       setInvocations([]);
+      setInvocationsNextCursor('');
+      setInvocationsLoading(false);
+      setOlderInvocationsLoading(false);
       if (!props.selectedAutomationId) setForm(emptyForm(props.groups));
       return;
     }
     let cancelled = false;
     setForm(formFromAutomation(selected));
-    listAutomationInvocations({ automationId: selected.id, token: props.token })
-      .then((nextInvocations) => {
-        if (!cancelled) setInvocations(nextInvocations);
+    setInvocationsLoading(true);
+    setOlderInvocationsLoading(false);
+    setInvocationsNextCursor('');
+    listAutomationInvocations({ automationId: selected.id, token: props.token, limit: invocationHistoryPageSize })
+      .then((page) => {
+        if (cancelled) return;
+        setInvocations(page.invocations);
+        setInvocationsNextCursor(page.nextCursor ?? '');
       })
       .catch((error) => {
         if (!cancelled) props.onError(error);
+      })
+      .finally(() => {
+        if (!cancelled) setInvocationsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -304,7 +456,7 @@ export function AutomationsPanel(props: {
   }, [form.repository, props.canCallApi, props.repositoryOptions, props.token]);
 
   async function saveAutomation() {
-    if (!props.canCallApi || saving || !form.name.trim() || !form.prompt.trim() || !form.scheduleCron.trim()) return;
+    if (saveDisabled) return;
     setSaving(true);
     try {
       const input = automationFormInput(form, props.token);
@@ -321,7 +473,7 @@ export function AutomationsPanel(props: {
   }
 
   async function toggleEnabled(automation: Automation) {
-    if (!automation.canManage) return;
+    if (!automation.canManage || automation.archivedAt) return;
     setSaving(true);
     try {
       const updated = await updateAutomation({
@@ -338,10 +490,17 @@ export function AutomationsPanel(props: {
     }
   }
 
-  async function invokeSelected(allowOverlap = false) {
-    if (!selected?.canManage) return;
+  async function invokeSelected(options: { allowOverlap?: boolean; disabledConfirmed?: boolean } = {}) {
+    if (!selected?.canManage || selected.archivedAt) return;
+    if (selectedOwnerGroupArchived) return;
     const allowDisabled = !selected.enabled;
-    if (allowDisabled && !window.confirm('This automation is disabled. Invoke it once anyway?')) return;
+    const allowOverlap = options.allowOverlap === true;
+    if (
+      allowDisabled &&
+      !options.disabledConfirmed &&
+      !window.confirm('This automation is disabled. Invoke it once anyway?')
+    )
+      return;
     setSaving(true);
     try {
       const result = await invokeAutomation({
@@ -355,18 +514,42 @@ export function AutomationsPanel(props: {
         result.invocation,
         ...current.filter((invocation) => invocation.id !== result.invocation.id),
       ]);
-      if (result.session) props.onSelectSession(result.session.id);
+      if (result.session) props.onSessionCreated(result.session);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && !allowOverlap) {
         const confirmed = window.confirm(
           'This automation already has a queued or active session. Invoke another session anyway?',
         );
-        if (confirmed) await invokeSelected(true);
+        if (confirmed) await invokeSelected({ allowOverlap: true, disabledConfirmed: allowDisabled });
       } else {
         props.onError(error);
       }
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function loadOlderInvocations() {
+    if (!selected || !invocationsNextCursor || olderInvocationsLoading) return;
+    const automationId = selected.id;
+    setOlderInvocationsLoading(true);
+    try {
+      const page = await listAutomationInvocations({
+        automationId,
+        token: props.token,
+        limit: invocationHistoryPageSize,
+        cursor: invocationsNextCursor,
+      });
+      if (selectedAutomationIdRef.current !== automationId) return;
+      setInvocations((current) => [
+        ...current,
+        ...page.invocations.filter((invocation) => !current.some((existing) => existing.id === invocation.id)),
+      ]);
+      setInvocationsNextCursor(page.nextCursor ?? '');
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setOlderInvocationsLoading(false);
     }
   }
 
@@ -410,8 +593,8 @@ export function AutomationsPanel(props: {
           <div className="grid gap-5">
             <Card className="p-5">
               {/* Keep this panel kind-aware when non-scheduled automation types are added. */}
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
+              <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+                <div className="min-w-0 flex-1 basis-64">
                   <h2 className="text-lg font-semibold text-foreground">
                     {form.id ? 'Edit automation' : 'New automation'}
                   </h2>
@@ -419,8 +602,8 @@ export function AutomationsPanel(props: {
                     Generated sessions use this automation&apos;s group and prompt context.
                   </p>
                 </div>
-                {selected ? (
-                  <div className="flex gap-2">
+                {selected && !selected.archivedAt ? (
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
                     <Button
                       variant="secondary"
                       onClick={() => void toggleEnabled(selected)}
@@ -428,12 +611,22 @@ export function AutomationsPanel(props: {
                     >
                       {selected.enabled ? 'Disable' : 'Enable'}
                     </Button>
-                    <Button onClick={() => void invokeSelected()} disabled={saving || !selected.canManage}>
+                    <Button
+                      onClick={() => void invokeSelected()}
+                      disabled={saving || !selected.canManage || selectedOwnerGroupArchived}
+                    >
                       <Play className="h-4 w-4" /> Invoke now
                     </Button>
                   </div>
                 ) : null}
               </div>
+
+              {selectedArchived ? (
+                <div className="mt-4 rounded-md border border-border bg-muted/60 p-3 text-sm text-muted-foreground">
+                  This automation is archived. Restore it before editing or invoking it. Restored automations stay
+                  disabled until you enable them.
+                </div>
+              ) : null}
 
               <form
                 className="mt-5 grid gap-4"
@@ -449,20 +642,18 @@ export function AutomationsPanel(props: {
                       value={form.name}
                       onChange={(event) => setForm({ ...form, name: event.target.value })}
                       placeholder="Nightly dependency check"
-                      disabled={!props.canCallApi || (selected ? !selected.canManage : false)}
+                      disabled={!canEditDefinition}
                     />
                   </Field>
-                  <Field label="Group" htmlFor="automation-group">
+                  <Field label="Access group" htmlFor="automation-group">
                     <OptionPicker
                       id="automation-group"
-                      label="Group"
+                      label="Access group"
                       value={form.groupId}
-                      options={activeGroups.map((group) => ({ value: group.id, label: group.name }))}
-                      emptyLabel="Select group..."
+                      options={groupOptions}
+                      emptyLabel="Select access group..."
                       onChange={(value) => setForm({ ...form, groupId: value })}
-                      disabled={
-                        !props.canCallApi || activeGroups.length <= 1 || (selected ? !selected.canManage : false)
-                      }
+                      disabled={!canChangeGroup || (selectableGroups.length <= 1 && selectedGroupSelectable)}
                     />
                   </Field>
                 </div>
@@ -475,15 +666,16 @@ export function AutomationsPanel(props: {
                       value={form.scheduleCron}
                       onChange={(event) => setForm({ ...form, scheduleCron: event.target.value })}
                       placeholder="0 9 * * 1-5"
-                      disabled={!props.canCallApi || (selected ? !selected.canManage : false)}
+                      disabled={!canEditDefinition}
                     />
                   </Field>
                   <label className="mt-5 flex h-10 items-center gap-2 text-sm text-muted-foreground">
                     <input
+                      className="disabled:cursor-not-allowed disabled:opacity-50"
                       type="checkbox"
                       checked={form.enabled}
                       onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
-                      disabled={!props.canCallApi || (selected ? !selected.canManage : false)}
+                      disabled={!canEditDefinition}
                     />
                     Enabled for automatic scheduled invocations
                   </label>
@@ -499,7 +691,7 @@ export function AutomationsPanel(props: {
                       error={props.repositoryOptionsError}
                       onChange={(value) => setForm({ ...form, repository: value, branch: '' })}
                       placeholder="GitHub repository, e.g. owner/repo"
-                      disabled={!props.canCallApi || (selected ? !selected.canManage : false)}
+                      disabled={!canEditDefinition}
                     />
                   </Field>
                   <Field label="Branch" htmlFor="automation-branch">
@@ -511,7 +703,7 @@ export function AutomationsPanel(props: {
                       error={branchOptionsError}
                       onChange={(value) => setForm({ ...form, branch: value })}
                       placeholder="Default"
-                      disabled={!props.canCallApi || !form.repository || (selected ? !selected.canManage : false)}
+                      disabled={!canEditDefinition || !form.repository}
                     />
                   </Field>
                   <Field label="Model" htmlFor="automation-model">
@@ -519,13 +711,11 @@ export function AutomationsPanel(props: {
                       id="automation-model"
                       label="Model"
                       value={form.model}
-                      options={modelOptions}
+                      options={displayedModelOptions}
                       emptyLabel="Default model"
                       allowEmpty={Boolean(form.model)}
                       onChange={(value) => setForm({ ...form, model: value })}
-                      disabled={
-                        !props.canCallApi || props.modelChoices.length <= 1 || (selected ? !selected.canManage : false)
-                      }
+                      disabled={!canEditDefinition || props.modelChoices.length <= 1}
                     />
                   </Field>
                 </div>
@@ -537,17 +727,47 @@ export function AutomationsPanel(props: {
                     value={form.prompt}
                     onChange={(event) => setForm({ ...form, prompt: event.target.value })}
                     placeholder="Ask Deputies to run this recurring check..."
-                    disabled={!props.canCallApi || (selected ? !selected.canManage : false)}
+                    disabled={!canEditDefinition}
                   />
                 </Field>
 
-                <Button
-                  className="justify-self-end"
-                  type="submit"
-                  disabled={!props.canCallApi || saving || (selected ? !selected.canManage : false)}
-                >
-                  <Save className="h-4 w-4" /> {form.id ? 'Save automation' : 'Create automation'}
-                </Button>
+                {!formComplete ? (
+                  <p className="text-sm text-muted-foreground">Name, group, UTC cron, and prompt are required.</p>
+                ) : null}
+                {selectedOwnerGroupArchived ? (
+                  <div className="rounded-md border border-border bg-muted/60 p-3 text-sm text-muted-foreground">
+                    This automation is {selected?.enabled ? 'enabled' : 'disabled'}, but scheduled and manual
+                    invocations are suspended while its access group is archived. Unarchive the group or move the
+                    automation to an active access group to resume creating sessions.
+                  </div>
+                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit" disabled={saveDisabled}>
+                    <Save className="h-4 w-4" /> {form.id ? 'Save automation' : 'Create automation'}
+                  </Button>
+                  {selected ? (
+                    selected.archivedAt ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => props.onUnarchiveAutomation(selected.id)}
+                        disabled={saving || !selected.canManage}
+                      >
+                        <RotateCcw className="h-4 w-4" /> Restore automation
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10"
+                        variant="secondary"
+                        onClick={() => props.onArchiveAutomation(selected.id)}
+                        disabled={saving || !selected.canManage}
+                      >
+                        <Archive className="h-4 w-4" /> Archive automation
+                      </Button>
+                    )
+                  ) : null}
+                </div>
               </form>
             </Card>
 
@@ -558,15 +778,31 @@ export function AutomationsPanel(props: {
               </div>
               {selected ? (
                 <div className="mt-4 grid gap-2">
-                  {invocations.map((invocation) => (
-                    <InvocationRow
-                      key={invocation.id}
-                      invocation={invocation}
-                      onSelectSession={props.onSelectSession}
-                    />
-                  ))}
-                  {!invocations.length ? (
+                  {invocationsLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading invocation history...</p>
+                  ) : null}
+                  {!invocationsLoading
+                    ? invocations.map((invocation) => (
+                        <InvocationRow
+                          key={invocation.id}
+                          invocation={invocation}
+                          onSelectSession={props.onSelectSession}
+                        />
+                      ))
+                    : null}
+                  {!invocationsLoading && !invocations.length ? (
                     <p className="text-sm text-muted-foreground">No invocations recorded yet.</p>
+                  ) : null}
+                  {!invocationsLoading && invocationsNextCursor ? (
+                    <Button
+                      className="justify-self-start"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void loadOlderInvocations()}
+                      disabled={olderInvocationsLoading}
+                    >
+                      {olderInvocationsLoading ? 'Loading older...' : 'Load older'}
+                    </Button>
                   ) : null}
                 </div>
               ) : (
@@ -595,29 +831,56 @@ function Field(props: { label: string; htmlFor: string; hint?: string; children:
 }
 
 function InvocationRow(props: { invocation: AutomationInvocation; onSelectSession: (sessionId: string) => void }) {
+  const statusParts = [
+    props.invocation.sessionStatus ? (
+      <span key="session">
+        Session{' '}
+        <span className={statusTextClass(props.invocation.sessionStatus)}>{props.invocation.sessionStatus}</span>
+      </span>
+    ) : null,
+    props.invocation.messageStatus ? (
+      <span key="message">
+        Message{' '}
+        <span className={statusTextClass(props.invocation.messageStatus)}>{props.invocation.messageStatus}</span>
+      </span>
+    ) : null,
+  ].filter(Boolean);
+
   return (
     <div className="rounded-md border border-border bg-background/70 px-3 py-2 text-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-medium text-foreground">
-          <span className={statusTextClass(props.invocation.status)}>{props.invocation.status}</span> ·{' '}
-          {props.invocation.trigger}
-        </span>
-        <span className="text-xs text-muted-foreground">{formatDate(props.invocation.createdAt)}</span>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={cn('font-semibold', statusTextClass(props.invocation.status))}>
+            {props.invocation.status}
+          </span>
+          <span className="text-xs text-muted-foreground">{props.invocation.trigger}</span>
+          <span className="text-xs text-muted-foreground">{formatDate(props.invocation.createdAt)}</span>
+        </div>
+        {props.invocation.sessionId ? (
+          <Button
+            className="h-7 px-2 text-xs"
+            variant="secondary"
+            size="sm"
+            onClick={() => props.onSelectSession(props.invocation.sessionId!)}
+          >
+            Open session
+          </Button>
+        ) : null}
       </div>
+      {statusParts.length ? (
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {statusParts.map((part, index) => (
+            <span key={index}>
+              {index > 0 ? <span className="mr-3 text-muted-foreground">|</span> : null}
+              {part}
+            </span>
+          ))}
+        </div>
+      ) : null}
       {props.invocation.reason ? (
         <p className="mt-1 text-xs text-muted-foreground">Reason: {props.invocation.reason}</p>
       ) : null}
       {props.invocation.error ? <p className="mt-1 text-xs text-destructive">{props.invocation.error}</p> : null}
-      {props.invocation.sessionId ? (
-        <Button
-          className="mt-2 h-7 px-2 text-xs"
-          variant="secondary"
-          size="sm"
-          onClick={() => props.onSelectSession(props.invocation.sessionId!)}
-        >
-          Open created session
-        </Button>
-      ) : null}
     </div>
   );
 }
@@ -625,7 +888,7 @@ function InvocationRow(props: { invocation: AutomationInvocation; onSelectSessio
 function emptyForm(groups: Group[]): AutomationForm {
   return {
     id: '',
-    groupId: groups[0]?.id ?? '',
+    groupId: defaultAutomationGroupId(groups),
     name: '',
     scheduleCron: '0 9 * * 1-5',
     repository: '',
@@ -634,6 +897,10 @@ function emptyForm(groups: Group[]): AutomationForm {
     prompt: '',
     enabled: true,
   };
+}
+
+function defaultAutomationGroupId(groups: Group[]): string {
+  return groups.find((group) => !group.archivedAt && (group.canCreateSessions ?? true))?.id ?? '';
 }
 
 function formFromAutomation(automation: Automation): AutomationForm {
