@@ -171,7 +171,7 @@ type AsyncState<T> = {
 type StateUpdate<T> = T | ((current: T) => T);
 
 type SidebarPanel = 'sessions' | 'groups' | 'automations';
-type GroupsPanelView = 'group' | 'super_admins';
+type GroupsPanelView = 'group' | 'super_admins' | 'new_group';
 
 type NavigationState = {
   selectedSessionId: string;
@@ -383,7 +383,11 @@ export function App() {
   const canManageAllGroups = canCallApi && (!sessionAuthRequired || currentUser?.role === 'super_admin');
   const canManageGroups = canManageAllGroups || (canCallApi && manageableGroups.length > 0);
   const canViewGroups = canManageGroups || (canCallApi && sessionAuthRequired && groups.length > 0);
-  const groupFormValidationError = groupNameValidationError(groups, selectedGroupId, groupForm.name);
+  const groupFormValidationError = groupNameValidationError(
+    groups,
+    groupsPanelView === 'group' ? selectedGroupId : '',
+    groupForm.name,
+  );
   const groupFormError = groupFormValidationError || groupForm.serverError;
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) ?? null,
@@ -1110,7 +1114,7 @@ export function App() {
         if (nextGroupId) sessionStorage.setItem(groupsPanelSelectedGroupStorageKey, nextGroupId);
         else sessionStorage.removeItem(groupsPanelSelectedGroupStorageKey);
         if (groupsPanelOpen || sidebarPanel === 'groups') {
-          if (nextGroupId) setGroupSearchParam(nextGroupId);
+          if (groupsPanelView === 'group' && nextGroupId) setGroupSearchParam(nextGroupId);
           else clearResourceSearchParams();
         }
         return nextGroupId;
@@ -1674,16 +1678,46 @@ export function App() {
     setSidebarOpen(true);
   }
 
+  function startNewGroup() {
+    if (!canManageAllGroups) return;
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
+    sessionStorage.setItem(groupsPanelOpenStorageKey, 'true');
+    sessionStorage.setItem(sidebarPanelStorageKey, 'groups');
+    sessionStorage.removeItem(groupsPanelViewStorageKey);
+    clearResourceSearchParams();
+    updateGroupForm({
+      name: nextAccessGroupName(groups),
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      serverError: '',
+    });
+    setGroupMembers([]);
+    updateNavigation({
+      setupGuideOpen: false,
+      groupsPanelOpen: true,
+      sidebarPanel: 'groups',
+      groupsPanelView: 'new_group',
+    });
+    setSidebarCollapsed(false);
+    if (!isDesktopViewport()) setSidebarOpen(false);
+  }
+
   async function handleCreateGroup() {
     if (!canManageAllGroups) return;
-    const name = nextAccessGroupName(groups);
+    const validationError = groupNameValidationError(groups, '', groupForm.name);
+    if (!groupForm.name.trim() || validationError) {
+      updateGroupForm({ serverError: validationError });
+      return;
+    }
     setError('');
+    updateGroupForm({ serverError: '' });
     try {
       const group = await createGroup({
-        name,
-        defaultVisibility: 'organization',
-        defaultWritePolicy: 'group_members',
-        automationCreateRequiredRole: 'member',
+        name: groupForm.name.trim(),
+        defaultVisibility: groupForm.visibility,
+        defaultWritePolicy: groupForm.writePolicy,
+        automationCreateRequiredRole: groupForm.automationCreateRequiredRole,
         token,
       });
       await refreshGroups();
@@ -1692,6 +1726,10 @@ export function App() {
       setGroupSearchParam(group.id);
       updateNavigation({ groupsPanelView: 'group', selectedGroupId: group.id });
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        updateGroupForm({ serverError: 'An access group with this name already exists.' });
+        return;
+      }
       handleApiError(err);
     }
   }
@@ -2171,7 +2209,8 @@ export function App() {
                     navPage={showingSetupGuide ? 'setup' : groupsPanelOpen ? 'groups' : 'sessions'}
                     onBackToSessions={backToSessionsSidebar}
                     onCollapse={collapseSidebar}
-                    onCreateGroup={handleCreateGroup}
+                    onArchiveGroup={handleArchiveGroup}
+                    onCreateGroup={startNewGroup}
                     onOpenAutomations={openAutomationsPanel}
                     onOpenGroups={openGroupsPanel}
                     onOpenSessions={showSessionsSidebar}

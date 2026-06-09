@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
 import type { SelectHTMLAttributes, SyntheticEvent } from 'react';
-import { Archive, ChevronDown, CornerUpLeft, PanelLeftClose, PanelLeftOpen, Plus, Save, X } from 'lucide-react';
+import {
+  Archive,
+  ChevronDown,
+  CornerUpLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  RotateCcw,
+  Save,
+  X,
+} from 'lucide-react';
 import type {
   AuthUser,
   AutomationCreateRequiredRole,
@@ -53,12 +63,13 @@ export function GroupsSidebar(props: {
   health: Health | null;
   navPage: 'sessions' | 'setup' | 'groups' | 'automations';
   selectedGroupId: string;
-  selectedView: 'group' | 'super_admins';
+  selectedView: 'group' | 'super_admins' | 'new_group';
   superAdminUsers: AuthUser[];
   themePreference: ThemePreference;
   token: string;
   onBackToSessions: () => void;
   onCollapse: () => void;
+  onArchiveGroup: (groupId: string, archived: boolean) => void;
   onCreateGroup: () => void;
   onOpenGroups: () => void;
   onOpenAutomations: () => void;
@@ -81,7 +92,10 @@ export function GroupsSidebar(props: {
   const archivedGroups = props.groups.filter(
     (group) => group.archivedAt && (!searchingGroups || group.name.toLowerCase().includes(normalizedGroupSearch)),
   );
-  const archivedOpen = searchingGroups || archivedGroupsOpen;
+  const selectedGroupArchived = props.groups.some(
+    (group) => group.id === props.selectedGroupId && Boolean(group.archivedAt),
+  );
+  const archivedOpen = searchingGroups || archivedGroupsOpen || selectedGroupArchived;
   const hasMatchingGroups = activeGroups.length > 0 || archivedGroups.length > 0;
   const currentUserIsSuperAdmin = props.currentUser?.role === 'super_admin';
 
@@ -180,6 +194,7 @@ export function GroupsSidebar(props: {
                 currentUser={props.currentUser}
                 group={group}
                 selected={props.selectedView === 'group' && group.id === props.selectedGroupId}
+                onArchiveGroup={props.onArchiveGroup}
                 onSelect={props.onSelectGroup}
               />
             ))}
@@ -204,10 +219,10 @@ export function GroupsSidebar(props: {
               {archivedGroups.map((group) => (
                 <GroupSidebarButton
                   key={group.id}
-                  archived
                   currentUser={props.currentUser}
                   group={group}
                   selected={props.selectedView === 'group' && group.id === props.selectedGroupId}
+                  onArchiveGroup={props.onArchiveGroup}
                   onSelect={props.onSelectGroup}
                 />
               ))}
@@ -236,29 +251,45 @@ export function GroupsSidebar(props: {
 }
 
 function GroupSidebarButton(props: {
-  archived?: boolean;
   currentUser: AuthUser | null;
   group: Group;
   selected: boolean;
+  onArchiveGroup: (groupId: string, archived: boolean) => void;
   onSelect: (groupId: string) => void;
 }) {
+  const archived = Boolean(props.group.archivedAt);
+
   return (
-    <button
-      type="button"
+    <div
       className={cn(
         'group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-transparent p-2 text-left hover:bg-accent',
         props.selected && 'border-primary bg-primary/15',
       )}
-      onClick={() => props.onSelect(props.group.id)}
     >
-      <span className="block min-w-0 flex-1 overflow-hidden">
+      <button
+        type="button"
+        className="block min-w-0 flex-1 overflow-hidden bg-transparent p-0 text-left"
+        onClick={() => props.onSelect(props.group.id)}
+      >
         <strong className="block w-full truncate text-sm font-medium text-foreground">{props.group.name}</strong>
         <span className="block w-full truncate text-xs text-muted-foreground">
-          {props.archived ? 'Archived · ' : ''}
+          {archived ? 'Archived · ' : ''}
           {groupAccessLabel(props.group, props.currentUser)}
         </span>
-      </span>
-    </button>
+      </button>
+      {props.group.canManage ? (
+        <Button
+          className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+          variant="ghost"
+          size="sm"
+          onClick={() => props.onArchiveGroup(props.group.id, !archived)}
+          aria-label={archived ? 'Restore group' : 'Archive group'}
+          title={archived ? 'Restore group' : 'Archive group'}
+        >
+          {archived ? <RotateCcw className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
@@ -271,7 +302,7 @@ export function GroupsPanel(props: {
   groupFormError: string;
   memberSearch: AccessGroupMemberSearchState;
   selectedGroupId: string;
-  selectedView: 'group' | 'super_admins';
+  selectedView: 'group' | 'super_admins' | 'new_group';
   superAdminSearch: AccessGroupUserSearchState;
   superAdminUsers: AuthUser[];
   showOpenSidebar: boolean;
@@ -329,7 +360,17 @@ export function GroupsPanel(props: {
           </div>
         </div>
         <div className="grid content-start gap-4">
-          {props.selectedView === 'super_admins' && props.canCreateGroups ? (
+          {props.selectedView === 'new_group' && props.canCreateGroups ? (
+            <NewGroupPanel
+              groupForm={props.groupForm}
+              groupFormError={props.groupFormError}
+              onCreateGroup={props.onCreateGroup}
+              onGroupFormAutomationCreateRequiredRoleChange={props.onGroupFormAutomationCreateRequiredRoleChange}
+              onGroupFormNameChange={props.onGroupFormNameChange}
+              onGroupFormVisibilityChange={props.onGroupFormVisibilityChange}
+              onGroupFormWritePolicyChange={props.onGroupFormWritePolicyChange}
+            />
+          ) : props.selectedView === 'super_admins' && props.canCreateGroups ? (
             <SuperAdminsPanel
               currentUser={props.currentUser}
               search={props.superAdminSearch}
@@ -457,6 +498,100 @@ function SuperAdminsPanel(props: {
   );
 }
 
+function NewGroupPanel(props: {
+  groupForm: AccessGroupFormState;
+  groupFormError: string;
+  onCreateGroup: () => void;
+  onGroupFormAutomationCreateRequiredRoleChange: (value: AutomationCreateRequiredRole) => void;
+  onGroupFormNameChange: (value: string) => void;
+  onGroupFormVisibilityChange: (value: SessionVisibility) => void;
+  onGroupFormWritePolicyChange: (value: SessionWritePolicy) => void;
+}) {
+  return (
+    <Card className="p-4">
+      <h2 className="text-lg font-semibold">New access group</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Configure the group defaults before creating it. Members can be added after the group exists.
+      </p>
+      <AccessGroupSettingsFields
+        groupForm={props.groupForm}
+        groupFormError={props.groupFormError}
+        onGroupFormAutomationCreateRequiredRoleChange={props.onGroupFormAutomationCreateRequiredRoleChange}
+        onGroupFormNameChange={props.onGroupFormNameChange}
+        onGroupFormVisibilityChange={props.onGroupFormVisibilityChange}
+        onGroupFormWritePolicyChange={props.onGroupFormWritePolicyChange}
+      />
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button onClick={props.onCreateGroup} disabled={!props.groupForm.name.trim() || Boolean(props.groupFormError)}>
+          <Plus className="h-4 w-4" /> Create group
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function AccessGroupSettingsFields(props: {
+  groupForm: AccessGroupFormState;
+  groupFormError: string;
+  onGroupFormAutomationCreateRequiredRoleChange: (value: AutomationCreateRequiredRole) => void;
+  onGroupFormNameChange: (value: string) => void;
+  onGroupFormVisibilityChange: (value: SessionVisibility) => void;
+  onGroupFormWritePolicyChange: (value: SessionWritePolicy) => void;
+}) {
+  return (
+    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <label className="grid gap-1 text-sm sm:col-span-3">
+        <span className="text-xs font-medium text-muted-foreground">Name</span>
+        <Input
+          value={props.groupForm.name}
+          onChange={(event) => props.onGroupFormNameChange(event.target.value)}
+          aria-invalid={Boolean(props.groupFormError)}
+        />
+        {props.groupFormError ? (
+          <span className="text-xs text-destructive" role="alert">
+            {props.groupFormError}
+          </span>
+        ) : null}
+      </label>
+      <label className="grid gap-1 text-sm">
+        <span className="text-xs font-medium text-muted-foreground">Default visibility</span>
+        <SelectWithCaret
+          value={props.groupForm.visibility}
+          onChange={(event) => props.onGroupFormVisibilityChange(event.target.value as SessionVisibility)}
+        >
+          <option value="organization">Organization</option>
+          <option value="group">Group only</option>
+        </SelectWithCaret>
+      </label>
+      <label className="grid gap-1 text-sm sm:col-span-2">
+        <span className="text-xs font-medium text-muted-foreground">Default write policy</span>
+        <SelectWithCaret
+          value={props.groupForm.writePolicy}
+          onChange={(event) => props.onGroupFormWritePolicyChange(event.target.value as SessionWritePolicy)}
+        >
+          <option value="group_members">Group members</option>
+          <option value="creator_only">Creator only</option>
+        </SelectWithCaret>
+      </label>
+      <label className="grid gap-1 text-sm sm:col-span-3">
+        <span className="text-xs font-medium text-muted-foreground">Automation creation</span>
+        <SelectWithCaret
+          value={props.groupForm.automationCreateRequiredRole}
+          onChange={(event) =>
+            props.onGroupFormAutomationCreateRequiredRoleChange(event.target.value as AutomationCreateRequiredRole)
+          }
+        >
+          <option value="member">Members and admins</option>
+          <option value="admin">Admins only</option>
+        </SelectWithCaret>
+        <span className="text-xs text-muted-foreground">
+          Controls who can create new scheduled automations in this group.
+        </span>
+      </label>
+    </div>
+  );
+}
+
 function ManagedGroupPanel(props: {
   currentUser: AuthUser | null;
   group: Group;
@@ -494,56 +629,14 @@ function ManagedGroupPanel(props: {
             <Badge>{groupAccessLabel(props.group, props.currentUser)}</Badge>
           </div>
         </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <label className="grid gap-1 text-sm sm:col-span-3">
-            <span className="text-xs font-medium text-muted-foreground">Name</span>
-            <Input
-              value={props.groupForm.name}
-              onChange={(event) => props.onGroupFormNameChange(event.target.value)}
-              aria-invalid={Boolean(props.groupFormError)}
-            />
-            {props.groupFormError ? (
-              <span className="text-xs text-destructive" role="alert">
-                {props.groupFormError}
-              </span>
-            ) : null}
-          </label>
-          <label className="grid gap-1 text-sm">
-            <span className="text-xs font-medium text-muted-foreground">Default visibility</span>
-            <SelectWithCaret
-              value={props.groupForm.visibility}
-              onChange={(event) => props.onGroupFormVisibilityChange(event.target.value as SessionVisibility)}
-            >
-              <option value="organization">Organization</option>
-              <option value="group">Group only</option>
-            </SelectWithCaret>
-          </label>
-          <label className="grid gap-1 text-sm sm:col-span-2">
-            <span className="text-xs font-medium text-muted-foreground">Default write policy</span>
-            <SelectWithCaret
-              value={props.groupForm.writePolicy}
-              onChange={(event) => props.onGroupFormWritePolicyChange(event.target.value as SessionWritePolicy)}
-            >
-              <option value="group_members">Group members</option>
-              <option value="creator_only">Creator only</option>
-            </SelectWithCaret>
-          </label>
-          <label className="grid gap-1 text-sm sm:col-span-3">
-            <span className="text-xs font-medium text-muted-foreground">Automation creation</span>
-            <SelectWithCaret
-              value={props.groupForm.automationCreateRequiredRole}
-              onChange={(event) =>
-                props.onGroupFormAutomationCreateRequiredRoleChange(event.target.value as AutomationCreateRequiredRole)
-              }
-            >
-              <option value="member">Members and admins</option>
-              <option value="admin">Admins only</option>
-            </SelectWithCaret>
-            <span className="text-xs text-muted-foreground">
-              Controls who can create new scheduled automations in this group.
-            </span>
-          </label>
-        </div>
+        <AccessGroupSettingsFields
+          groupForm={props.groupForm}
+          groupFormError={props.groupFormError}
+          onGroupFormAutomationCreateRequiredRoleChange={props.onGroupFormAutomationCreateRequiredRoleChange}
+          onGroupFormNameChange={props.onGroupFormNameChange}
+          onGroupFormVisibilityChange={props.onGroupFormVisibilityChange}
+          onGroupFormWritePolicyChange={props.onGroupFormWritePolicyChange}
+        />
         <div className="mt-4 flex flex-wrap gap-2">
           <Button onClick={props.onSaveGroup} disabled={!props.groupForm.name.trim() || Boolean(props.groupFormError)}>
             <Save className="h-4 w-4" /> Save group

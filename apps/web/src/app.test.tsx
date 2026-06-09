@@ -539,7 +539,7 @@ it('moves archived groups below the archived groups toggle', async () => {
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Archive group' }));
+  fireEvent.click(screen.getByText('Archive group').closest('button')!);
 
   const archivedSummary = await screen.findByText('Archived groups · 1');
   const archivedDetails = archivedSummary.closest('details')!;
@@ -608,8 +608,27 @@ it('uses the next available default name when creating access groups', async () 
   expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'New group' }));
 
+  expect(createdGroups).toHaveLength(0);
+  expect(await screen.findByRole('heading', { name: 'New access group' })).toBeInTheDocument();
+  expect(screen.getByLabelText('Name')).toHaveValue('New access group 3');
+  fireEvent.click(screen.getByRole('button', { name: 'Create group' }));
+
   await waitFor(() => expect(createdGroups).toHaveLength(1));
   expect(createdGroups[0]).toMatchObject({ name: 'New access group 3' });
+});
+
+it('archives access groups from the sidebar', async () => {
+  const groupUpdates: unknown[] = [];
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user, groupUpdates });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  const sidebar = screen.getByPlaceholderText('Search groups...').closest('aside')!;
+  fireEvent.click(within(sidebar).getByRole('button', { name: 'Archive group' }));
+
+  await waitFor(() => expect(groupUpdates).toHaveLength(1));
+  expect(groupUpdates[0]).toMatchObject({ archived: true });
 });
 
 it('shows an inline error for duplicate access group names before saving', async () => {
