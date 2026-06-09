@@ -111,6 +111,31 @@ auth_sessions
 
 Provider accounts let `AUTH_PROVIDER=static` and `AUTH_PROVIDER=github` share the same session machinery. GitHub login uses the GitHub App user-authorization client ID and client secret; repository runtime access still mints separate short-lived installation tokens and does not persist those tokens in auth tables.
 
+## Access Groups
+
+Access groups own sessions and automations.
+
+Current relevant columns:
+
+```txt
+groups
+  id uuid primary key
+  name text not null
+  default_visibility text not null
+  default_write_policy text not null
+  automation_create_required_role text not null
+  archived_at timestamptz
+  created_at timestamptz not null
+  updated_at timestamptz not null
+```
+
+Rules:
+
+- `automation_create_required_role` is `member` by default.
+- `member` lets group members and admins create new scheduled automations in the group.
+- `admin` limits new scheduled automation creation to group admins and super admins.
+- The setting controls creation only; existing automation management still follows automation ownership and creator-management rules.
+
 ## Sessions
 
 Represents a durable background task workspace.
@@ -268,6 +293,8 @@ status text not null
 scheduled_at timestamptz
 session_id uuid references sessions(id)
 message_id uuid references messages(id)
+reserved_session_id uuid
+reserved_message_id uuid
 requested_by_user_id uuid references auth_users(id)
 reason text
 error text
@@ -282,6 +309,7 @@ Rules:
 - Scheduled invocations are unique per automation and scheduled timestamp.
 - Skipped invocations are recorded when domain rules prevent session creation, such as missed schedule time or an active previous automation session.
 - Failed invocations are terminal records; the next scheduled time or a manual invocation creates a separate invocation.
+- Reserved session/message ids are private idempotency fields and are not exposed as public invocation metadata.
 
 ## Runs
 

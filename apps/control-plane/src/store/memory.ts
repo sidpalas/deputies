@@ -54,6 +54,7 @@ export class MemoryStore implements AppStore {
         name: 'Default',
         defaultVisibility: 'organization',
         defaultWritePolicy: 'group_members',
+        automationCreateRequiredRole: 'member',
         createdAt: defaultGroupCreatedAt,
         updatedAt: defaultGroupCreatedAt,
       },
@@ -304,28 +305,27 @@ export class MemoryStore implements AppStore {
     return [...this.automations.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }
 
-  async updateAutomation(
-    input: UpdateAutomationRecord & { updateNextInvocationAt?: boolean },
-  ): Promise<AutomationRecord> {
+  async updateAutomation(input: UpdateAutomationRecord): Promise<AutomationRecord> {
     const existing = this.automations.get(input.id);
     if (!existing) throw new Error(`Automation does not exist: ${input.id}`);
     const updated: AutomationRecord = {
       ...existing,
-      name: input.name,
-      prompt: input.prompt,
-      scheduleCron: input.scheduleCron,
-      enabled: input.enabled,
-      ownerGroupId: input.ownerGroupId,
-      visibility: input.visibility,
-      writePolicy: input.writePolicy,
       updatedAt: input.updatedAt,
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+      ...(input.scheduleCron !== undefined ? { scheduleCron: input.scheduleCron } : {}),
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.ownerGroupId !== undefined ? { ownerGroupId: input.ownerGroupId } : {}),
+      ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+      ...(input.writePolicy !== undefined ? { writePolicy: input.writePolicy } : {}),
     };
-    if (input.context) updated.context = input.context;
-    else delete updated.context;
-    if (input.updateNextInvocationAt) {
-      if (input.nextInvocationAt) updated.nextInvocationAt = input.nextInvocationAt;
-      else delete updated.nextInvocationAt;
+    if (input.context !== undefined) {
+      if (input.context) updated.context = input.context;
+      else delete updated.context;
     }
+    if (input.nextInvocationAt !== undefined && input.nextInvocationAt !== null)
+      updated.nextInvocationAt = input.nextInvocationAt;
+    else if (input.nextInvocationAt === null) delete updated.nextInvocationAt;
     this.automations.set(input.id, updated);
     return updated;
   }
@@ -376,21 +376,16 @@ export class MemoryStore implements AppStore {
       ...automation,
       schedulerLockOwner: input.lockOwner,
       schedulerLockedUntil: input.lockedUntil,
-      updatedAt: input.now,
     };
     this.automations.set(automation.id, locked);
     return locked;
   }
 
-  async releaseAutomationClaim(input: {
-    automationId: string;
-    lockOwner: string;
-    updatedAt: Date;
-  }): Promise<AutomationRecord | null> {
+  async releaseAutomationClaim(input: { automationId: string; lockOwner: string }): Promise<AutomationRecord | null> {
     const automation = this.automations.get(input.automationId);
     if (!automation || automation.schedulerLockOwner !== input.lockOwner) return null;
     const { schedulerLockOwner: _lockOwner, schedulerLockedUntil: _lockedUntil, ...withoutLock } = automation;
-    const updated = { ...withoutLock, updatedAt: input.updatedAt };
+    const updated = { ...withoutLock };
     this.automations.set(input.automationId, updated);
     return updated;
   }
@@ -417,7 +412,6 @@ export class MemoryStore implements AppStore {
       ...automation,
       schedulerLockOwner: input.lockOwner,
       schedulerLockedUntil: input.lockedUntil,
-      updatedAt: input.now,
     };
     this.automations.set(automation.id, locked);
     return locked;
@@ -428,7 +422,6 @@ export class MemoryStore implements AppStore {
     lockOwner: string;
     claimedScheduleCron: string;
     nextInvocationAt: Date;
-    updatedAt: Date;
   }): Promise<AutomationRecord | null> {
     const automation = this.automations.get(input.automationId);
     if (
@@ -442,7 +435,6 @@ export class MemoryStore implements AppStore {
     const updated: AutomationRecord = {
       ...withoutLock,
       nextInvocationAt: input.nextInvocationAt,
-      updatedAt: input.updatedAt,
     };
     this.automations.set(input.automationId, updated);
     return updated;
@@ -470,6 +462,32 @@ export class MemoryStore implements AppStore {
     }
     this.automationInvocations.set(record.id, record);
     return record;
+  }
+
+  async getAutomationInvocationBySchedule(input: {
+    automationId: string;
+    scheduledAt: Date;
+  }): Promise<AutomationInvocationRecord | null> {
+    return (
+      [...this.automationInvocations.values()].find(
+        (invocation) =>
+          invocation.automationId === input.automationId &&
+          invocation.trigger === 'scheduled' &&
+          invocation.scheduledAt?.getTime() === input.scheduledAt.getTime(),
+      ) ?? null
+    );
+  }
+
+  async getBlockingAutomationSession(automationId: string): Promise<SessionRecord | null> {
+    const invocation = [...this.automationInvocations.values()]
+      .filter((candidate) => candidate.automationId === automationId)
+      .filter((candidate) => candidate.status === 'created' && candidate.sessionId)
+      .sort(compareAutomationInvocationsNewestFirst)
+      .find((candidate) => {
+        const session = this.sessions.get(candidate.sessionId!);
+        return session?.status === 'queued' || session?.status === 'active';
+      });
+    return invocation?.sessionId ? (this.sessions.get(invocation.sessionId) ?? null) : null;
   }
 
   async listAutomationInvocations(

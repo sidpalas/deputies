@@ -56,6 +56,7 @@ import {
   updateUserRole,
   upsertGroupMember,
   type Automation,
+  type AutomationCreateRequiredRole,
   type Health,
   type AuthUser,
   type BranchOption,
@@ -224,6 +225,7 @@ function emptyAccessGroupsState(): AccessGroupsState {
       name: '',
       visibility: 'organization',
       writePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
       serverError: '',
     },
     memberSearch: {
@@ -368,6 +370,9 @@ export function App() {
     Boolean(health) && (!bearerAuthRequired || Boolean(token)) && (!sessionAuthRequired || Boolean(currentUser));
   const activeGroups = groups.filter((group) => !group.archivedAt);
   const creatableGroups = sessionAuthRequired ? activeGroups.filter((group) => group.canCreateSessions) : activeGroups;
+  const automationCreatableGroups = sessionAuthRequired
+    ? activeGroups.filter((group) => group.canCreateAutomations)
+    : activeGroups;
   const manageableGroups = groups.filter((group) => group.canManage);
   const currentSuperAdminUsers = useMemo(() => {
     const superAdmins = roleManagementUsers.filter((user) => user.role === 'super_admin');
@@ -394,6 +399,7 @@ export function App() {
       (currentUser?.role === 'super_admin' && activeGroups.length > 0) ||
       creatableGroups.length > 0);
   const canViewAutomations = canCreateThread;
+  const canCreateAutomations = canCallApi && (!sessionAuthRequired || automationCreatableGroups.length > 0);
   const canWriteSelectedSession = selectedSession ? userCanWriteSession(selectedSession) : canCreateThread;
   const canManageSelectedSessionAccess = Boolean(
     selectedSession &&
@@ -483,6 +489,10 @@ export function App() {
 
   function setGroupFormWritePolicy(writePolicy: SessionWritePolicy) {
     updateGroupForm({ writePolicy });
+  }
+
+  function setGroupFormAutomationCreateRequiredRole(automationCreateRequiredRole: AutomationCreateRequiredRole) {
+    updateGroupForm({ automationCreateRequiredRole });
   }
 
   function setMemberSearchQuery(query: string) {
@@ -789,6 +799,7 @@ export function App() {
       name: group.name,
       visibility: group.defaultVisibility,
       writePolicy: group.defaultWritePolicy,
+      automationCreateRequiredRole: group.automationCreateRequiredRole,
       serverError: '',
     });
     if (!groupsPanelOpen || !group.canManage) return;
@@ -1564,7 +1575,7 @@ export function App() {
   }
 
   function startNewAutomation() {
-    if (!canViewAutomations) return;
+    if (!canCreateAutomations) return;
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.removeItem(selectedAutomationStorageKey);
@@ -1672,6 +1683,7 @@ export function App() {
         name,
         defaultVisibility: 'organization',
         defaultWritePolicy: 'group_members',
+        automationCreateRequiredRole: 'member',
         token,
       });
       await refreshGroups();
@@ -1704,6 +1716,7 @@ export function App() {
         name: groupForm.name.trim(),
         defaultVisibility: groupForm.visibility,
         defaultWritePolicy: groupForm.writePolicy,
+        automationCreateRequiredRole: groupForm.automationCreateRequiredRole,
         token,
       });
       setGroups((current) => current.map((candidate) => (candidate.id === updated.id ? updated : candidate)));
@@ -2174,6 +2187,7 @@ export function App() {
                     authRequired={bearerAuthRequired || sessionAuthRequired}
                     automations={automations}
                     canCallApi={canViewAutomations}
+                    canCreateAutomations={canCreateAutomations}
                     canViewGroups={canViewGroups}
                     canViewAutomations={canViewAutomations}
                     canViewSetup={canViewSetup}
@@ -2256,6 +2270,7 @@ export function App() {
                     onAddMember={handleAddGroupMember}
                     onArchiveGroup={handleArchiveGroup}
                     onCreateGroup={handleCreateGroup}
+                    onGroupFormAutomationCreateRequiredRoleChange={setGroupFormAutomationCreateRequiredRole}
                     onGroupFormNameChange={handleGroupFormNameChange}
                     onGroupFormVisibilityChange={setGroupFormVisibility}
                     onGroupFormWritePolicyChange={setGroupFormWritePolicy}
@@ -2299,6 +2314,7 @@ export function App() {
                     automationsLoaded={automationsLoaded}
                     automationsLoading={automationsLoading}
                     canCallApi={canViewAutomations}
+                    canCreateAutomations={canCreateAutomations}
                     groups={groups}
                     token={token}
                     repositoryOptions={repositoryOptions}

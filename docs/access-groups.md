@@ -18,12 +18,12 @@ In `API_AUTH_MODE=session`, the API enforces these rules server-side for session
 
 ## Roles
 
-| Role          | Scope  | Can read                                                            | Can create sessions      | Can send follow-ups                                    | Can manage group    | Can manage all groups |
-| ------------- | ------ | ------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------ | ------------------- | --------------------- |
-| `viewer`      | Group  | Group-only sessions in that group and organization-visible sessions | No                       | No                                                     | No                  | No                    |
-| `member`      | Group  | Group-only sessions in that group and organization-visible sessions | Yes, in that group       | Yes when the session write policy allows group members | No                  | No                    |
-| `admin`       | Group  | Group-only sessions in that group and organization-visible sessions | Yes, in that group       | Yes, for sessions owned by that group                  | Yes, for that group | No                    |
-| `super_admin` | Global | All sessions                                                        | Yes, in any active group | Yes, for all sessions                                  | Yes                 | Yes                   |
+| Role          | Scope  | Can read                                                            | Can create sessions      | Can create automations                                       | Can send follow-ups                                    | Can manage group    | Can manage all groups |
+| ------------- | ------ | ------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------ | ------------------------------------------------------ | ------------------- | --------------------- |
+| `viewer`      | Group  | Group-only sessions in that group and organization-visible sessions | No                       | No                                                           | No                                                     | No                  | No                    |
+| `member`      | Group  | Group-only sessions in that group and organization-visible sessions | Yes, in that group       | Yes when the group automation creation policy allows members | Yes when the session write policy allows group members | No                  | No                    |
+| `admin`       | Group  | Group-only sessions in that group and organization-visible sessions | Yes, in that group       | Yes, in that group                                           | Yes, for sessions owned by that group                  | Yes, for that group | No                    |
+| `super_admin` | Global | All sessions                                                        | Yes, in any active group | Yes, in any active group                                     | Yes, for all sessions                                  | Yes                 | Yes                   |
 
 Group admins can add, remove, and change members in groups they administer. Super admins can manage all access groups, all group memberships, and other super admins.
 
@@ -48,8 +48,11 @@ Each group has default session access settings:
 
 - Default visibility: `Organization` or `Group only`.
 - Default write policy: `Group members` or `Creator only`.
+- Automation creation: `Members and admins` or `Admins only`.
 
 New sessions created in a group inherit those defaults. Group admins can override access defaults when creating sessions in their group. Members can create sessions but cannot override the group defaults.
+
+New scheduled automations can be created by group members by default. Group admins can switch a group to `Admins only` so ordinary members can continue creating sessions without being able to create new automations.
 
 For public-trial GitHub auth with `UNSAFE_AUTH_GITHUB_ALLOW_ALL=true`, default-group member sessions use `creator_only` writes so trial users do not get broad write access to each other's sessions.
 
@@ -130,6 +133,7 @@ Archiving a group:
 
 - Hides it from the active groups list.
 - Prevents new sessions from being created in that group.
+- Prevents new automations from being created in that group.
 - Prevents sessions from being moved into that group.
 - Suspends owned automation invocations without changing automation enabled state.
 - Does not archive, delete, or move existing sessions.

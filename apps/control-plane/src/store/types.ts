@@ -30,6 +30,7 @@ export const defaultGroupId = '00000000-0000-4000-8000-000000000001';
 
 export type AuthRole = 'user' | 'super_admin';
 export type GroupRole = 'viewer' | 'member' | 'admin';
+export type AutomationCreateRequiredRole = 'member' | 'admin';
 export type SessionVisibility = 'group' | 'organization';
 export type SessionWritePolicy = 'group_members' | 'creator_only';
 
@@ -66,6 +67,7 @@ export type GroupRecord = {
   name: string;
   defaultVisibility: SessionVisibility;
   defaultWritePolicy: SessionWritePolicy;
+  automationCreateRequiredRole: AutomationCreateRequiredRole;
   archivedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -298,6 +300,8 @@ export type AutomationInvocationRecord = {
   scheduledAt?: Date;
   sessionId?: string;
   messageId?: string;
+  reservedSessionId?: string;
+  reservedMessageId?: string;
   requestedByUserId?: string;
   reason?: string;
   error?: string;
@@ -432,6 +436,8 @@ export type CreateAutomationInvocationRecord = {
   scheduledAt?: Date;
   sessionId?: string;
   messageId?: string;
+  reservedSessionId?: string;
+  reservedMessageId?: string;
   requestedByUserId?: string;
   reason?: string;
   error?: string;
@@ -439,16 +445,16 @@ export type CreateAutomationInvocationRecord = {
 
 export type UpdateAutomationRecord = {
   id: string;
-  name: string;
-  prompt: string;
-  scheduleCron: string;
-  enabled: boolean;
-  ownerGroupId: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
   updatedAt: Date;
-  context?: Record<string, unknown>;
-  nextInvocationAt?: Date;
+  name?: string;
+  prompt?: string;
+  scheduleCron?: string;
+  enabled?: boolean;
+  ownerGroupId?: string;
+  visibility?: SessionVisibility;
+  writePolicy?: SessionWritePolicy;
+  context?: Record<string, unknown> | null;
+  nextInvocationAt?: Date | null;
 };
 
 export interface SessionStore {
@@ -574,7 +580,7 @@ export interface AutomationStore {
   createAutomation(record: CreateAutomationRecord): Promise<AutomationRecord>;
   getAutomation(id: string): Promise<AutomationRecord | null>;
   listAutomations(): Promise<AutomationRecord[]>;
-  updateAutomation(input: UpdateAutomationRecord & { updateNextInvocationAt?: boolean }): Promise<AutomationRecord>;
+  updateAutomation(input: UpdateAutomationRecord): Promise<AutomationRecord>;
   archiveAutomation(input: { automationId: string; archivedAt: Date }): Promise<AutomationRecord | null>;
   unarchiveAutomation(input: { automationId: string; updatedAt: Date }): Promise<AutomationRecord | null>;
   claimAutomation(input: {
@@ -583,11 +589,7 @@ export interface AutomationStore {
     lockOwner: string;
     lockedUntil: Date;
   }): Promise<AutomationRecord | null>;
-  releaseAutomationClaim(input: {
-    automationId: string;
-    lockOwner: string;
-    updatedAt: Date;
-  }): Promise<AutomationRecord | null>;
+  releaseAutomationClaim(input: { automationId: string; lockOwner: string }): Promise<AutomationRecord | null>;
   claimNextDueScheduledAutomation(input: {
     now: Date;
     lockOwner: string;
@@ -598,10 +600,14 @@ export interface AutomationStore {
     lockOwner: string;
     claimedScheduleCron: string;
     nextInvocationAt: Date;
-    updatedAt: Date;
   }): Promise<AutomationRecord | null>;
   createAutomationInvocation(record: CreateAutomationInvocationRecord): Promise<AutomationInvocationRecord>;
   updateAutomationInvocation(record: AutomationInvocationRecord): Promise<AutomationInvocationRecord>;
+  getAutomationInvocationBySchedule(input: {
+    automationId: string;
+    scheduledAt: Date;
+  }): Promise<AutomationInvocationRecord | null>;
+  getBlockingAutomationSession(automationId: string): Promise<SessionRecord | null>;
   listAutomationInvocations(
     automationId: string,
     options?: ListAutomationInvocationsOptions,

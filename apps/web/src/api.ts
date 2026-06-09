@@ -91,6 +91,7 @@ export type AutomationInvocationPage = {
 };
 
 export type GroupRole = 'viewer' | 'member' | 'admin';
+export type AutomationCreateRequiredRole = 'member' | 'admin';
 export type SessionVisibility = 'group' | 'organization';
 export type SessionWritePolicy = 'group_members' | 'creator_only';
 
@@ -99,12 +100,14 @@ export type Group = {
   name: string;
   defaultVisibility: SessionVisibility;
   defaultWritePolicy: SessionWritePolicy;
+  automationCreateRequiredRole: AutomationCreateRequiredRole;
   archivedAt?: string;
   createdAt: string;
   updatedAt: string;
   membershipRole?: GroupRole | null;
-  canCreateSessions?: boolean;
-  canManage?: boolean;
+  canCreateSessions: boolean;
+  canCreateAutomations: boolean;
+  canManage: boolean;
 };
 
 export type GroupMember = {
@@ -484,6 +487,7 @@ export async function createGroup(input: {
   name: string;
   defaultVisibility: SessionVisibility;
   defaultWritePolicy: SessionWritePolicy;
+  automationCreateRequiredRole: AutomationCreateRequiredRole;
   token: string;
 }): Promise<Group> {
   const body = await request<{ group: Group }>('/groups', {
@@ -493,6 +497,7 @@ export async function createGroup(input: {
       name: input.name,
       defaultVisibility: input.defaultVisibility,
       defaultWritePolicy: input.defaultWritePolicy,
+      automationCreateRequiredRole: input.automationCreateRequiredRole,
     },
   });
   return body.group;
@@ -503,6 +508,7 @@ export async function updateGroup(input: {
   name: string;
   defaultVisibility: SessionVisibility;
   defaultWritePolicy: SessionWritePolicy;
+  automationCreateRequiredRole: AutomationCreateRequiredRole;
   archived?: boolean;
   token: string;
 }): Promise<Group> {
@@ -513,6 +519,7 @@ export async function updateGroup(input: {
       name: input.name,
       defaultVisibility: input.defaultVisibility,
       defaultWritePolicy: input.defaultWritePolicy,
+      automationCreateRequiredRole: input.automationCreateRequiredRole,
       ...(input.archived === undefined ? {} : { archived: input.archived }),
     },
   });

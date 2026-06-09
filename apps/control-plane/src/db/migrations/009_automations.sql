@@ -1,3 +1,22 @@
+ALTER TABLE groups
+  ADD COLUMN IF NOT EXISTS automation_create_required_role text;
+
+UPDATE groups
+SET automation_create_required_role = 'member'
+WHERE automation_create_required_role IS NULL
+  OR automation_create_required_role NOT IN ('member', 'admin');
+
+ALTER TABLE groups
+  ALTER COLUMN automation_create_required_role SET DEFAULT 'member',
+  ALTER COLUMN automation_create_required_role SET NOT NULL;
+
+ALTER TABLE groups
+  DROP CONSTRAINT IF EXISTS groups_automation_create_required_role_check;
+
+ALTER TABLE groups
+  ADD CONSTRAINT groups_automation_create_required_role_check
+  CHECK (automation_create_required_role IN ('member', 'admin'));
+
 CREATE TABLE IF NOT EXISTS automations (
   id uuid PRIMARY KEY,
   kind text NOT NULL CHECK (kind IN ('scheduled')),
@@ -33,6 +52,8 @@ CREATE TABLE IF NOT EXISTS automation_invocations (
   scheduled_at timestamptz,
   session_id uuid REFERENCES sessions(id) ON DELETE SET NULL,
   message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
+  reserved_session_id uuid,
+  reserved_message_id uuid,
   requested_by_user_id uuid REFERENCES auth_users(id) ON DELETE SET NULL,
   reason text,
   error text,

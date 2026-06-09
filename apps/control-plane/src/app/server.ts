@@ -4,7 +4,7 @@ import { createAdaptorServer } from '@hono/node-server';
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
-import { AutomationService, AutomationServiceError } from '../automations/service.js';
+import { AutomationService } from '../automations/service.js';
 import { ArtifactService, ArtifactServiceError } from '../artifacts/service.js';
 import type { ArtifactObjectStorage } from '../artifacts/storage.js';
 import {
@@ -14,7 +14,6 @@ import {
   canMoveSession,
   canReadSession,
   canWriteSession,
-  groupRole,
   readRequestAuthorization,
   type RequestAuthorization,
 } from '../auth/authorization.js';
@@ -68,23 +67,28 @@ import type { SandboxProvider } from '../sandbox/types.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
-import { defaultGroupId, StoreConflictError } from '../store/types.js';
+import { defaultGroupId } from '../store/types.js';
 import type {
   AppStore,
   AuthRole,
-  AutomationInvocationRecord,
-  AutomationRecord,
   AuthUserRecord,
   EventRecord,
-  GroupMemberRecord,
-  GroupRecord,
   GroupRole,
   SandboxRecord,
   SessionRecord,
   SessionVisibility,
   SessionWritePolicy,
 } from '../store/types.js';
+import {
+  parseSessionVisibility,
+  parseSessionWritePolicy,
+  resolveSessionCreateGroup,
+  sessionCreateDefaults,
+} from './access-policy.js';
+import { registerAutomationRoutes } from './automation-routes.js';
 import { writeGlobalEventStream, writeSessionEventStream } from './event-stream.js';
+import { registerGroupRoutes, serializeGroupMember } from './group-routes.js';
+import { writeError } from './http-error.js';
 import { configuredModels, ModelAvailabilityService, modelChoices } from './model-availability.js';
 import { buildSetupStatus } from './setup-status.js';
 import {
@@ -121,7 +125,7 @@ import {
   workspaceToolWorkingDirectory,
 } from './workspace-tools.js';
 
-type AppVariables = {
+export type AppVariables = {
   requestId: string;
 };
 
@@ -434,215 +438,8 @@ export function createApp(config: AppConfig, services = createServices()) {
     });
   });
 
-  app.post('/automations', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const name = optionalString(body.name);
-    const prompt = optionalString(body.prompt);
-    const scheduleCron = optionalString(body.scheduleCron);
-    if (!name) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: name');
-    if (!prompt) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: prompt');
-    if (!scheduleCron) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: scheduleCron');
-
-    const group = await resolveSessionCreateGroup(services.store, auth, body.ownerGroupId);
-    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
-    if (group.archivedAt) return writeError(c, 409, 'archived_group', 'Cannot create automations in an archived group');
-    if (!canCreateSessionInGroup(auth, group.id)) {
-      return writeError(c, 403, 'forbidden', 'Group member access is required');
-    }
-
-    const requestedVisibility = body.visibility === undefined ? undefined : parseSessionVisibility(body.visibility);
-    const requestedWritePolicy = body.writePolicy === undefined ? undefined : parseSessionWritePolicy(body.writePolicy);
-    if (body.visibility !== undefined && !requestedVisibility) {
-      return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
-    }
-    if (body.writePolicy !== undefined && !requestedWritePolicy) {
-      return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
-    }
-    const defaults = sessionCreateDefaults(config, auth, group);
-    const canOverrideAccessDefaults = canManageGroup(auth, group.id);
-    if (
-      !canOverrideAccessDefaults &&
-      ((requestedVisibility && requestedVisibility !== defaults.visibility) ||
-        (requestedWritePolicy && requestedWritePolicy !== defaults.writePolicy))
-    ) {
-      return writeError(c, 403, 'forbidden', 'Group admin access is required to override access defaults');
-    }
-
-    try {
-      const context = parseAutomationCreateContextBody(body, config, services);
-      const automation = await services.automations.createScheduled({
-        name,
-        prompt,
-        scheduleCron,
-        ownerGroupId: group.id,
-        visibility: requestedVisibility ?? defaults.visibility,
-        writePolicy: requestedWritePolicy ?? defaults.writePolicy,
-        enabled: body.enabled === undefined ? true : parseBooleanBody(body.enabled, 'enabled'),
-        ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
-        ...(Object.keys(context).length ? { context } : {}),
-      });
-      return c.json({ automation: await serializeAutomation(services, automation, auth) }, 201);
-    } catch (error) {
-      if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
-      throw error;
-    }
-  });
-
-  app.get('/automations', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const automations = (await services.automations.list()).filter((automation) => canReadAutomation(auth, automation));
-    return c.json({
-      automations: await Promise.all(automations.map((automation) => serializeAutomation(services, automation, auth))),
-    });
-  });
-
-  app.get('/automations/:automationId', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const automation = await services.automations.get(c.req.param('automationId'));
-    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
-    if (!canReadAutomation(auth, automation)) return writeError(c, 403, 'forbidden', 'Automation access is required');
-    return c.json({ automation: await serializeAutomation(services, automation, auth) });
-  });
-
-  app.patch('/automations/:automationId', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const automation = await services.automations.get(c.req.param('automationId'));
-    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
-    if (!canManageAutomation(auth, automation))
-      return writeError(c, 403, 'forbidden', 'Automation management access is required');
-    if (automation.archivedAt)
-      return writeError(c, 409, 'automation_archived', 'Restore this automation before editing it');
-
-    const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const accessChangeRequested =
-      body.ownerGroupId !== undefined || body.visibility !== undefined || body.writePolicy !== undefined;
-    if (accessChangeRequested && !canManageGroup(auth, automation.ownerGroupId)) {
-      return writeError(c, 403, 'forbidden', 'Group admin access is required to change automation access');
-    }
-
-    const nextOwnerGroupId = optionalString(body.ownerGroupId) ?? automation.ownerGroupId;
-    const nextGroup = await services.store.getGroup(nextOwnerGroupId);
-    if (!nextGroup) return writeError(c, 404, 'not_found', 'Group not found');
-    if (nextOwnerGroupId !== automation.ownerGroupId && !canManageGroup(auth, nextOwnerGroupId)) {
-      return writeError(c, 403, 'forbidden', 'Group admin access is required for both groups');
-    }
-    if (nextOwnerGroupId !== automation.ownerGroupId && nextGroup.archivedAt) {
-      return writeError(c, 409, 'archived_group', 'Cannot move automations to an archived group');
-    }
-
-    const visibility = body.visibility === undefined ? undefined : parseSessionVisibility(body.visibility);
-    const writePolicy = body.writePolicy === undefined ? undefined : parseSessionWritePolicy(body.writePolicy);
-    if (body.visibility !== undefined && !visibility)
-      return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
-    if (body.writePolicy !== undefined && !writePolicy)
-      return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
-
-    try {
-      const context = parseAutomationUpdateContextBody(body, config, services, automation.context);
-      const updated = await services.automations.updateScheduled({
-        id: automation.id,
-        ...(body.name !== undefined ? { name: optionalString(body.name) ?? '' } : {}),
-        ...(body.prompt !== undefined ? { prompt: optionalString(body.prompt) ?? '' } : {}),
-        ...(body.scheduleCron !== undefined ? { scheduleCron: optionalString(body.scheduleCron) ?? '' } : {}),
-        ...(body.enabled !== undefined ? { enabled: parseBooleanBody(body.enabled, 'enabled') } : {}),
-        ...(accessChangeRequested ? { ownerGroupId: nextOwnerGroupId } : {}),
-        ...(visibility ? { visibility } : {}),
-        ...(writePolicy ? { writePolicy } : {}),
-        ...(context.changed ? { context: context.value } : {}),
-      });
-      return c.json({ automation: await serializeAutomation(services, updated, auth) });
-    } catch (error) {
-      if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
-      throw error;
-    }
-  });
-
-  app.post('/automations/:automationId/archive', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const automation = await services.automations.get(c.req.param('automationId'));
-    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
-    if (!canManageAutomation(auth, automation))
-      return writeError(c, 403, 'forbidden', 'Automation management access is required');
-    try {
-      const archived = await services.automations.archive(automation.id);
-      return c.json({ automation: await serializeAutomation(services, archived, auth) });
-    } catch (error) {
-      if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
-      throw error;
-    }
-  });
-
-  app.post('/automations/:automationId/unarchive', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const automation = await services.automations.get(c.req.param('automationId'));
-    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
-    if (!canManageAutomation(auth, automation))
-      return writeError(c, 403, 'forbidden', 'Automation management access is required');
-    try {
-      const unarchived = await services.automations.unarchive(automation.id);
-      return c.json({ automation: await serializeAutomation(services, unarchived, auth) });
-    } catch (error) {
-      if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
-      throw error;
-    }
-  });
-
-  app.get('/automations/:automationId/invocations', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const automation = await services.automations.get(c.req.param('automationId'));
-    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
-    if (!canReadAutomation(auth, automation)) return writeError(c, 403, 'forbidden', 'Automation access is required');
-    const page = await services.automations.listInvocationPage({
-      automationId: automation.id,
-      limit: parseAutomationInvocationLimit(c.req.query('limit')),
-      ...(c.req.query('cursor') ? { before: parseAutomationInvocationCursor(c.req.query('cursor')) } : {}),
-    });
-    return c.json({
-      invocations: await Promise.all(
-        page.invocations.map((invocation) => serializeAutomationInvocation(services, invocation)),
-      ),
-      ...(page.nextCursor ? { nextCursor: encodeAutomationInvocationCursor(page.nextCursor) } : {}),
-    });
-  });
-
-  app.post('/automations/:automationId/invoke', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const automation = await services.automations.get(c.req.param('automationId'));
-    if (!automation) return writeError(c, 404, 'not_found', 'Automation not found');
-    if (!canManageAutomation(auth, automation))
-      return writeError(c, 403, 'forbidden', 'Automation management access is required');
-    const body = await readJsonBody(c, config.maxJsonBodyBytes);
-
-    try {
-      const result = await services.automations.invokeManual({
-        automationId: automation.id,
-        ...(auth.bypass ? {} : { requestedByUserId: auth.user.id }),
-        allowDisabled: body.allowDisabled === undefined ? false : parseBooleanBody(body.allowDisabled, 'allowDisabled'),
-        allowOverlap: body.allowOverlap === undefined ? false : parseBooleanBody(body.allowOverlap, 'allowOverlap'),
-      });
-      const refreshed = (await services.automations.get(automation.id)) ?? automation;
-      return c.json(
-        {
-          automation: await serializeAutomation(services, refreshed, auth),
-          invocation: await serializeAutomationInvocation(services, result.invocation),
-          ...(result.session ? { session: await serializeSessionWithSandbox(config, services, result.session) } : {}),
-          ...(result.message ? { message: result.message } : {}),
-        },
-        202,
-      );
-    } catch (error) {
-      if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
-      throw error;
-    }
+  registerAutomationRoutes(app, config, services, {
+    serializeSession: (session) => serializeSessionWithSandbox(config, services, session),
   });
 
   app.get('/repositories', async (c) => {
@@ -691,110 +488,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/setup/status', async (c) => c.json(await buildSetupStatus(config, services)));
 
-  app.get('/groups', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const groups = await visibleGroups(services.store, auth);
-    return c.json({ groups: groups.map((group) => serializeGroupForAuth(group, auth)) });
-  });
-
-  app.post('/groups', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    if (!canManageAllGroups(auth)) return writeError(c, 403, 'forbidden', 'Super admin access is required');
-
-    const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const name = optionalString(body.name)?.trim();
-    if (!name) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: name');
-    const now = new Date();
-    try {
-      const group = await services.store.createGroup({
-        id: randomUUID(),
-        name,
-        defaultVisibility: parseSessionVisibility(body.defaultVisibility) ?? 'organization',
-        defaultWritePolicy: parseSessionWritePolicy(body.defaultWritePolicy) ?? 'group_members',
-        createdAt: now,
-        updatedAt: now,
-      });
-      return c.json({ group: serializeGroupForAuth(group, auth) }, 201);
-    } catch (error) {
-      if (error instanceof StoreConflictError && error.code === 'group_name_exists') {
-        return writeError(c, 409, error.code, error.message);
-      }
-      throw error;
-    }
-  });
-
-  app.patch('/groups/:groupId', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const group = await services.store.getGroup(c.req.param('groupId'));
-    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
-    if (!canManageGroup(auth, group.id)) return writeError(c, 403, 'forbidden', 'Group admin access is required');
-
-    const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const name = body.name === undefined ? group.name : optionalString(body.name)?.trim();
-    if (!name) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: name');
-    const visibility =
-      body.defaultVisibility === undefined ? group.defaultVisibility : parseSessionVisibility(body.defaultVisibility);
-    const writePolicy =
-      body.defaultWritePolicy === undefined
-        ? group.defaultWritePolicy
-        : parseSessionWritePolicy(body.defaultWritePolicy);
-    const archived = typeof body.archived === 'boolean' ? body.archived : undefined;
-    if (!visibility) return writeError(c, 400, 'invalid_request', 'Expected valid defaultVisibility');
-    if (!writePolicy) return writeError(c, 400, 'invalid_request', 'Expected valid defaultWritePolicy');
-
-    const now = new Date();
-    const nextGroup: GroupRecord = {
-      ...group,
-      name,
-      defaultVisibility: visibility,
-      defaultWritePolicy: writePolicy,
-      updatedAt: now,
-    };
-    if (archived === true) nextGroup.archivedAt = group.archivedAt ?? now;
-    if (archived === false) delete nextGroup.archivedAt;
-
-    try {
-      const updated = await services.store.updateGroup(nextGroup);
-      return c.json({ group: serializeGroupForAuth(updated, auth) });
-    } catch (error) {
-      if (error instanceof StoreConflictError && error.code === 'group_name_exists') {
-        return writeError(c, 409, error.code, error.message);
-      }
-      throw error;
-    }
-  });
-
-  app.get('/groups/:groupId/members', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const group = await services.store.getGroup(c.req.param('groupId'));
-    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
-    if (!canManageGroup(auth, group.id)) return writeError(c, 403, 'forbidden', 'Group admin access is required');
-    return c.json({ members: (await services.store.listGroupMembers(group.id)).map(serializeGroupMemberWithUser) });
-  });
-
-  app.post('/groups/:groupId/members', async (c) => upsertGroupMemberRoute(c, config, services.store));
-  app.patch('/groups/:groupId/members/:userId', async (c) => upsertGroupMemberRoute(c, config, services.store));
-
-  app.delete('/groups/:groupId/members/:userId', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const groupId = c.req.param('groupId');
-    const userId = c.req.param('userId');
-    if (!groupId) return writeError(c, 400, 'invalid_request', 'Expected groupId');
-    if (!userId) return writeError(c, 400, 'invalid_request', 'Expected userId');
-    const group = await services.store.getGroup(groupId);
-    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
-    if (!canManageGroup(auth, group.id)) return writeError(c, 403, 'forbidden', 'Group admin access is required');
-    if (!canManageAllGroups(auth) && (await wouldRemoveLastGroupAdmin(services.store, group.id, userId))) {
-      return writeError(c, 409, 'last_group_admin', 'Cannot remove the last group admin');
-    }
-    await services.store.deleteGroupMember({ groupId: group.id, userId });
-    return c.json({ ok: true });
-  });
+  registerGroupRoutes(app, config, services, { serializeBasicAuthUser });
 
   app.get('/users', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
@@ -1483,10 +1177,6 @@ const inlineArtifactContentTypes = new Set([
   'image/avif',
 ]);
 
-const defaultAutomationInvocationLimit = 20;
-const maxAutomationInvocationLimit = 200;
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 function artifactDownloadDisposition(
   contentType: string,
   requestedDisposition: string | undefined,
@@ -1510,10 +1200,6 @@ function allowedCorsOrigin(config: AppConfig): (origin: string) => string | unde
   const allowed = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   if (config.webBaseUrl) allowed.add(new URL(config.webBaseUrl).origin);
   return (origin) => (allowed.has(origin) ? origin : undefined);
-}
-
-function writeError(c: Context, statusCode: number, error: string, message: string, details?: Record<string, unknown>) {
-  return c.json({ error, message, ...(details ? { details } : {}) }, statusCode as never);
 }
 
 function writeGitHubRepositoryError(c: Context, error: unknown) {
@@ -1624,168 +1310,6 @@ async function serializeSessionWithSandbox(config: AppConfig, services: AppServi
   return { ...serialized, sandbox: serializeSandboxSummary(sandbox) };
 }
 
-async function serializeAutomation(services: AppServices, automation: AutomationRecord, auth: RequestAuthorization) {
-  const [ownerGroup, invocationPage] = await Promise.all([
-    services.store.getGroup(automation.ownerGroupId),
-    services.automations.listInvocationPage({ automationId: automation.id, limit: 1 }),
-  ]);
-  const lastInvocation = invocationPage.invocations[0];
-  return {
-    id: automation.id,
-    kind: automation.kind,
-    name: automation.name,
-    prompt: automation.prompt,
-    scheduleCron: automation.scheduleCron,
-    scheduleTimezone: 'UTC',
-    enabled: automation.enabled,
-    ownerGroupId: automation.ownerGroupId,
-    ...(ownerGroup ? { ownerGroupName: ownerGroup.name } : {}),
-    ...(ownerGroup?.archivedAt ? { ownerGroupArchivedAt: ownerGroup.archivedAt } : {}),
-    visibility: automation.visibility,
-    writePolicy: automation.writePolicy,
-    ...(automation.createdByUserId ? { createdByUserId: automation.createdByUserId } : {}),
-    ...(automation.context ? { context: automation.context } : {}),
-    ...(automation.archivedAt ? { archivedAt: automation.archivedAt } : {}),
-    ...(automation.nextInvocationAt ? { nextInvocationAt: automation.nextInvocationAt } : {}),
-    createdAt: automation.createdAt,
-    updatedAt: automation.updatedAt,
-    canManage: canManageAutomation(auth, automation),
-    ...(lastInvocation ? { lastInvocation: await serializeAutomationInvocation(services, lastInvocation) } : {}),
-  };
-}
-
-async function serializeAutomationInvocation(services: AppServices, invocation: AutomationInvocationRecord) {
-  const [session, messages] = await Promise.all([
-    invocation.sessionId ? services.store.getSession(invocation.sessionId) : Promise.resolve(null),
-    invocation.sessionId && invocation.messageId
-      ? services.store.getMessages(invocation.sessionId)
-      : Promise.resolve([]),
-  ]);
-  const message = invocation.messageId ? messages.find((candidate) => candidate.id === invocation.messageId) : null;
-  return {
-    id: invocation.id,
-    automationId: invocation.automationId,
-    trigger: invocation.trigger,
-    status: invocation.status,
-    createdAt: invocation.createdAt,
-    metadata: invocation.metadata,
-    ...(invocation.completedAt ? { completedAt: invocation.completedAt } : {}),
-    ...(invocation.scheduledAt ? { scheduledAt: invocation.scheduledAt } : {}),
-    ...(session ? { sessionId: session.id } : {}),
-    ...(session ? { sessionStatus: session.status } : {}),
-    ...(session?.title ? { sessionTitle: session.title } : {}),
-    ...(message ? { messageId: message.id } : {}),
-    ...(message ? { messageStatus: message.status } : {}),
-    ...(invocation.requestedByUserId ? { requestedByUserId: invocation.requestedByUserId } : {}),
-    ...(invocation.reason ? { reason: invocation.reason } : {}),
-    ...(invocation.error ? { error: invocation.error } : {}),
-  };
-}
-
-function canReadAutomation(auth: RequestAuthorization, automation: AutomationRecord): boolean {
-  return canCreateSessionInGroup(auth, automation.ownerGroupId);
-}
-
-function canManageAutomation(auth: RequestAuthorization, automation: AutomationRecord): boolean {
-  if (canManageGroup(auth, automation.ownerGroupId)) return true;
-  return (
-    !auth.bypass &&
-    automation.createdByUserId === auth.user.id &&
-    canCreateSessionInGroup(auth, automation.ownerGroupId)
-  );
-}
-
-function automationServiceErrorResponse(c: Context, error: AutomationServiceError): Response {
-  if (error.code === 'not_found') return writeError(c, 404, 'not_found', error.message);
-  if (error.code === 'disabled') return writeError(c, 409, 'automation_disabled', error.message, error.details);
-  if (error.code === 'archived') return writeError(c, 409, 'automation_archived', error.message, error.details);
-  if (error.code === 'archived_group') return writeError(c, 409, 'archived_group', error.message, error.details);
-  if (error.code === 'overlap') return writeError(c, 409, 'automation_overlap', error.message, error.details);
-  if (error.code === 'invalid_schedule') return writeError(c, 400, 'invalid_schedule', error.message);
-  return writeError(c, 400, 'invalid_request', error.message);
-}
-
-function parseAutomationInvocationLimit(value: string | undefined): number {
-  if (!value) return defaultAutomationInvocationLimit;
-  const limit = Number(value);
-  if (!Number.isInteger(limit) || limit < 1) {
-    throw new HttpRequestError(400, 'invalid_request', 'Expected positive integer invocation limit');
-  }
-  return Math.min(limit, maxAutomationInvocationLimit);
-}
-
-function parseAutomationInvocationCursor(value: string | undefined): { createdAt: Date; id: string } {
-  const [createdAtValue, id, extra] = (value ?? '').split('|');
-  const createdAt = createdAtValue ? new Date(createdAtValue) : null;
-  if (!createdAt || Number.isNaN(createdAt.getTime()) || !id || extra !== undefined || !uuidPattern.test(id)) {
-    throw new HttpRequestError(400, 'invalid_request', 'Invalid automation invocation cursor');
-  }
-  return { createdAt, id };
-}
-
-function encodeAutomationInvocationCursor(cursor: { createdAt: Date; id: string }): string {
-  return `${cursor.createdAt.toISOString()}|${cursor.id}`;
-}
-
-function parseBooleanBody(value: unknown, field: string): boolean {
-  if (typeof value !== 'boolean')
-    throw new HttpRequestError(400, 'invalid_request', `Expected boolean field: ${field}`);
-  return value;
-}
-
-function parseAutomationCreateContextBody(
-  body: Record<string, unknown>,
-  config: AppConfig,
-  services: AppServices,
-): Record<string, unknown> {
-  const repository = parseRepositoryBody(body.repository);
-  const model = parseModelBody(body.model, config);
-  const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModelDefault);
-  if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
-  const branch = repository ? parseBranchBody(body.branch) : undefined;
-  return {
-    ...(repository ? { repository } : {}),
-    ...(model ? { model } : {}),
-    ...(repository && branch ? { branch } : {}),
-  };
-}
-
-function parseAutomationUpdateContextBody(
-  body: Record<string, unknown>,
-  config: AppConfig,
-  services: AppServices,
-  currentContext: Record<string, unknown> | undefined,
-): { changed: boolean; value: Record<string, unknown> | null } {
-  const hasRepository = Object.prototype.hasOwnProperty.call(body, 'repository');
-  const hasModel = Object.prototype.hasOwnProperty.call(body, 'model');
-  const hasBranch = Object.prototype.hasOwnProperty.call(body, 'branch');
-  if (!hasRepository && !hasModel && !hasBranch) return { changed: false, value: null };
-
-  const next = { ...(currentContext ?? {}) };
-  if (hasRepository) {
-    const repository = parseRepositoryBody(body.repository);
-    if (repository) next.repository = repository;
-    else {
-      delete next.repository;
-      delete next.branch;
-    }
-  }
-  if (hasModel) {
-    const model = parseModelBody(body.model, config);
-    const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModelDefault);
-    if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
-    if (model) next.model = model;
-    else delete next.model;
-  }
-  if (hasBranch) {
-    const branch = parseBranchBody(body.branch);
-    if (branch) next.branch = branch;
-    else delete next.branch;
-  }
-
-  return { changed: true, value: Object.keys(next).length ? next : null };
-}
-
 function serializeSandboxSummary(sandbox: SandboxRecord) {
   return {
     id: sandbox.id,
@@ -1891,77 +1415,6 @@ function serializeBasicAuthUser(user: AuthUserRecord) {
   };
 }
 
-function serializeGroupMember(member: GroupMemberRecord) {
-  return {
-    groupId: member.groupId,
-    userId: member.userId,
-    role: member.role,
-    createdAt: member.createdAt,
-    updatedAt: member.updatedAt,
-  };
-}
-
-function serializeGroupMemberWithUser(member: GroupMemberRecord & { user: AuthUserRecord }) {
-  return {
-    ...serializeGroupMember(member),
-    user: serializeBasicAuthUser(member.user),
-  };
-}
-
-function serializeGroupForAuth(group: GroupRecord, auth: RequestAuthorization) {
-  return {
-    id: group.id,
-    name: group.name,
-    defaultVisibility: group.defaultVisibility,
-    defaultWritePolicy: group.defaultWritePolicy,
-    ...(group.archivedAt ? { archivedAt: group.archivedAt } : {}),
-    createdAt: group.createdAt,
-    updatedAt: group.updatedAt,
-    membershipRole: groupRole(auth, group.id),
-    canCreateSessions: canCreateSessionInGroup(auth, group.id),
-    canManage: canManageGroup(auth, group.id),
-  };
-}
-
-async function visibleGroups(store: AppStore, auth: RequestAuthorization): Promise<GroupRecord[]> {
-  const groups = await store.listGroups();
-  if (canManageAllGroups(auth)) return groups;
-  const groupIds = new Set(auth.memberships.map((membership) => membership.groupId));
-  return groups.filter((group) => groupIds.has(group.id));
-}
-
-async function upsertGroupMemberRoute(c: Context, config: AppConfig, store: AppStore): Promise<Response> {
-  const auth = await requireRequestAuthorization(config, store, c);
-  if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-  const groupId = c.req.param('groupId');
-  if (!groupId) return writeError(c, 400, 'invalid_request', 'Expected groupId');
-  const group = await store.getGroup(groupId);
-  if (!group) return writeError(c, 404, 'not_found', 'Group not found');
-  if (!canManageGroup(auth, group.id)) return writeError(c, 403, 'forbidden', 'Group admin access is required');
-
-  const body = await readJsonBody(c, config.maxJsonBodyBytes);
-  const userId = c.req.param('userId') || optionalString(body.userId);
-  const role = parseGroupRole(body.role);
-  if (!userId) return writeError(c, 400, 'invalid_request', 'Expected userId');
-  if (!role) return writeError(c, 400, 'invalid_request', 'Expected valid group role');
-  if (!(await store.listAuthUsers({ query: userId })).some((user) => user.id === userId)) {
-    return writeError(c, 404, 'not_found', 'User not found');
-  }
-  if (!canManageAllGroups(auth) && role !== 'admin' && (await wouldRemoveLastGroupAdmin(store, group.id, userId))) {
-    return writeError(c, 409, 'last_group_admin', 'Cannot remove the last group admin');
-  }
-  const now = new Date();
-  const member = await store.upsertGroupMember({ groupId: group.id, userId, role, createdAt: now, updatedAt: now });
-  return c.json({ member: serializeGroupMember(member) });
-}
-
-async function wouldRemoveLastGroupAdmin(store: AppStore, groupId: string, userId: string): Promise<boolean> {
-  const members = await store.listGroupMembers(groupId);
-  const member = members.find((candidate) => candidate.userId === userId);
-  if (member?.role !== 'admin') return false;
-  return members.filter((candidate) => candidate.role === 'admin').length <= 1;
-}
-
 async function visibleUsersForGroupManager(
   store: AppStore,
   auth: RequestAuthorization,
@@ -1992,40 +1445,6 @@ async function visibleUsersForGroupManager(
     .sort((a, b) => a.username.localeCompare(b.username));
 }
 
-async function resolveSessionCreateGroup(
-  store: AppStore,
-  auth: RequestAuthorization,
-  requestedGroupId: unknown,
-): Promise<GroupRecord | null> {
-  const groupId = optionalString(requestedGroupId);
-  if (groupId) return store.getGroup(groupId);
-
-  const groups = await store.listGroups();
-  const activeGroups = groups.filter((group) => !group.archivedAt);
-  const defaultGroup = activeGroups.find((group) => group.id === defaultGroupId) ?? activeGroups[0];
-  if (auth.bypass || !defaultGroup) return defaultGroup ?? null;
-
-  const creatable = activeGroups.find((group) => canCreateSessionInGroup(auth, group.id));
-  return creatable ?? defaultGroup;
-}
-
-function sessionCreateDefaults(
-  config: AppConfig,
-  auth: RequestAuthorization,
-  group: GroupRecord,
-): { visibility: SessionVisibility; writePolicy: SessionWritePolicy } {
-  const publicTrialMember =
-    config.unsafeAuthGithubAllowAll &&
-    group.id === defaultGroupId &&
-    !auth.bypass &&
-    auth.user.role !== 'super_admin' &&
-    groupRole(auth, group.id) === 'member';
-  return {
-    visibility: group.defaultVisibility,
-    writePolicy: publicTrialMember ? 'creator_only' : group.defaultWritePolicy,
-  };
-}
-
 async function readableEvents(
   store: AppStore,
   auth: RequestAuthorization,
@@ -2043,20 +1462,8 @@ async function canReadEvent(store: AppStore, auth: RequestAuthorization, event: 
   return Boolean(session && canReadSession(auth, session));
 }
 
-function parseGroupRole(value: unknown): GroupRole | null {
-  return value === 'viewer' || value === 'member' || value === 'admin' ? value : null;
-}
-
 function parseAuthRole(value: unknown): AuthRole | null {
   return value === 'user' || value === 'super_admin' ? value : null;
-}
-
-function parseSessionVisibility(value: unknown): SessionVisibility | null {
-  return value === 'group' || value === 'organization' ? value : null;
-}
-
-function parseSessionWritePolicy(value: unknown): SessionWritePolicy | null {
-  return value === 'group_members' || value === 'creator_only' ? value : null;
 }
 
 async function ensureDefaultGroupMembership(store: AppStore, userId: string, role: GroupRole): Promise<void> {

@@ -74,10 +74,14 @@ export type GroupRow = QueryResultRow & {
   name: string;
   default_visibility: SessionVisibility;
   default_write_policy: SessionWritePolicy;
+  automation_create_required_role: GroupRecord['automationCreateRequiredRole'];
   archived_at: Date | null;
   created_at: Date;
   updated_at: Date;
 };
+
+export const groupSelectColumns =
+  'id, name, default_visibility, default_write_policy, automation_create_required_role, archived_at, created_at, updated_at';
 
 export type GroupMemberRow = QueryResultRow & {
   group_id: string;
@@ -228,6 +232,8 @@ export type AutomationInvocationRow = QueryResultRow & {
   scheduled_at: Date | null;
   session_id: string | null;
   message_id: string | null;
+  reserved_session_id: string | null;
+  reserved_message_id: string | null;
   requested_by_user_id: string | null;
   reason: string | null;
   error: string | null;
@@ -237,7 +243,7 @@ export type AutomationInvocationRow = QueryResultRow & {
 };
 
 export const automationInvocationSelectColumns =
-  'id, automation_id, trigger, status, scheduled_at, session_id, message_id, requested_by_user_id, reason, error, metadata, created_at, completed_at';
+  'id, automation_id, trigger, status, scheduled_at, session_id, message_id, reserved_session_id, reserved_message_id, requested_by_user_id, reason, error, metadata, created_at, completed_at';
 
 export type WebhookSourceRow = QueryResultRow & {
   id: string;
@@ -299,6 +305,7 @@ export function toGroup(row: GroupRow): GroupRecord {
     name: row.name,
     defaultVisibility: row.default_visibility,
     defaultWritePolicy: row.default_write_policy,
+    automationCreateRequiredRole: row.automation_create_required_role,
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -509,6 +516,8 @@ export function toAutomationInvocation(row: AutomationInvocationRow): Automation
     ...(row.scheduled_at ? { scheduledAt: row.scheduled_at } : {}),
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.message_id ? { messageId: row.message_id } : {}),
+    ...(row.reserved_session_id ? { reservedSessionId: row.reserved_session_id } : {}),
+    ...(row.reserved_message_id ? { reservedMessageId: row.reserved_message_id } : {}),
     ...(row.requested_by_user_id ? { requestedByUserId: row.requested_by_user_id } : {}),
     ...(row.reason ? { reason: row.reason } : {}),
     ...(row.error ? { error: row.error } : {}),

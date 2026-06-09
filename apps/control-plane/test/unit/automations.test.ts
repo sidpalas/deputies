@@ -178,7 +178,9 @@ describe('scheduled automations', () => {
       status: 'creating',
       scheduledAt,
       createdAt: scheduledAt,
-      metadata: { reservedSessionId: sessionId, reservedMessageId: messageId },
+      reservedSessionId: sessionId,
+      reservedMessageId: messageId,
+      metadata: {},
     });
 
     await services.automations.processNextScheduled({ now, lockOwner: 'scheduler-1' });
@@ -282,6 +284,78 @@ describe('scheduled automations', () => {
     expect(invocationsBody.invocations[0]).toMatchObject({ sessionStatus: 'queued', messageStatus: 'pending' });
   });
 
+  it('enforces per-group automation creation policy', async () => {
+    const now = new Date('2026-06-08T09:00:00Z');
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const app = createApp(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_SESSION_SECRET: 'test-secret',
+        AUTH_STATIC_USERNAME: 'admin',
+        AUTH_STATIC_PASSWORD: 'password',
+      }),
+      services,
+    );
+    const member = await createSignedInUser(store, {
+      userId: '00000000-0000-4000-8000-000000000401',
+      sessionId: 'member-session',
+      username: 'member',
+      role: 'user',
+      groupRole: 'member',
+      now,
+    });
+    const admin = await createSignedInUser(store, {
+      userId: '00000000-0000-4000-8000-000000000402',
+      sessionId: 'admin-session',
+      username: 'group-admin',
+      role: 'user',
+      groupRole: 'admin',
+      now,
+    });
+    const superAdmin = await createSignedInUser(store, {
+      userId: '00000000-0000-4000-8000-000000000403',
+      sessionId: 'super-session',
+      username: 'super-admin',
+      role: 'super_admin',
+      now,
+    });
+
+    const memberAllowed = await app.request(
+      '/automations',
+      jsonRequest(automationCreateBody('Member-created automation'), 'POST', member.cookie),
+    );
+    expect(memberAllowed.status).toBe(201);
+
+    const group = await store.getGroup(defaultGroupId);
+    await store.updateGroup({ ...group!, automationCreateRequiredRole: 'admin', updatedAt: now });
+
+    const groupsForMember = await app.request('/groups', { headers: { cookie: member.cookie } });
+    expect(groupsForMember.status).toBe(200);
+    await expect(groupsForMember.json()).resolves.toMatchObject({
+      groups: [{ automationCreateRequiredRole: 'admin', canCreateAutomations: false }],
+    });
+
+    const memberBlocked = await app.request(
+      '/automations',
+      jsonRequest(automationCreateBody('Blocked member automation'), 'POST', member.cookie),
+    );
+    expect(memberBlocked.status).toBe(403);
+    await expect(memberBlocked.json()).resolves.toMatchObject({ error: 'forbidden' });
+
+    const adminAllowed = await app.request(
+      '/automations',
+      jsonRequest(automationCreateBody('Admin-created automation'), 'POST', admin.cookie),
+    );
+    expect(adminAllowed.status).toBe(201);
+
+    const superAllowed = await app.request(
+      '/automations',
+      jsonRequest(automationCreateBody('Super-created automation'), 'POST', superAdmin.cookie),
+    );
+    expect(superAllowed.status).toBe(201);
+  });
+
   it('archives, restores, and blocks archived automation enablement and invocation', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -301,13 +375,11 @@ describe('scheduled automations', () => {
     expect(archiveBody.automation.enabled).toBe(false);
     expect(archiveBody.automation.archivedAt).toBeTruthy();
 
-    const archived = await services.automations.get(automation.id);
     await store.updateAutomation({
-      ...archived!,
+      id: automation.id,
       enabled: true,
       nextInvocationAt: new Date('2026-06-08T09:00:00Z'),
       updatedAt: new Date('2026-06-08T08:59:00Z'),
-      updateNextInvocationAt: true,
     });
     await expect(
       services.automations.processNextScheduled({ now: new Date('2026-06-08T09:00:30Z'), lockOwner: 'scheduler-1' }),
@@ -423,6 +495,29 @@ describe('scheduled automations', () => {
     expect(enableResponse.status).toBe(200);
     await expect(enableResponse.json()).resolves.toMatchObject({ automation: { enabled: true } });
   });
+
+  it('uses the manual requester as creator for creator-only automation sessions', async () => {
+    const services = createServices(new MemoryStore());
+    const automation = await services.automations.createScheduled({
+      name: 'Creator-only automation',
+      prompt: 'Keep requester write access',
+      scheduleCron: '* * * * *',
+      ownerGroupId: defaultGroupId,
+      visibility: 'group',
+      writePolicy: 'creator_only',
+      createdByUserId: '00000000-0000-4000-8000-000000000301',
+    });
+
+    const result = await services.automations.invokeManual({
+      automationId: automation.id,
+      requestedByUserId: '00000000-0000-4000-8000-000000000302',
+    });
+
+    expect(result.session).toMatchObject({
+      writePolicy: 'creator_only',
+      createdByUserId: '00000000-0000-4000-8000-000000000302',
+    });
+  });
 });
 
 async function setNextInvocationAt(
@@ -432,17 +527,64 @@ async function setNextInvocationAt(
   updatedAt: Date,
 ): Promise<void> {
   await store.updateAutomation({
-    ...automation,
+    id: automation.id,
     nextInvocationAt,
     updatedAt,
-    updateNextInvocationAt: true,
   });
 }
 
-function jsonRequest(body: Record<string, unknown>, method = 'POST'): RequestInit {
+function automationCreateBody(name: string): Record<string, unknown> {
+  return {
+    name,
+    prompt: 'Run from policy test',
+    scheduleCron: '0 9 * * *',
+    ownerGroupId: defaultGroupId,
+  };
+}
+
+async function createSignedInUser(
+  store: MemoryStore,
+  input: {
+    userId: string;
+    sessionId: string;
+    username: string;
+    role: 'user' | 'super_admin';
+    groupRole?: 'viewer' | 'member' | 'admin';
+    now: Date;
+  },
+): Promise<{ cookie: string }> {
+  const user = await store.upsertAuthUserForAccount({
+    userId: input.userId,
+    accountId: input.userId,
+    provider: 'test',
+    providerAccountId: input.username,
+    username: input.username,
+    role: input.role,
+    profile: {},
+    now: input.now,
+  });
+  await store.createAuthSession({
+    id: input.sessionId,
+    userId: user.id,
+    createdAt: input.now,
+    expiresAt: new Date('2999-01-01T00:00:00Z'),
+  });
+  if (input.groupRole) {
+    await store.upsertGroupMember({
+      groupId: defaultGroupId,
+      userId: user.id,
+      role: input.groupRole,
+      createdAt: input.now,
+      updatedAt: input.now,
+    });
+  }
+  return { cookie: `dev_deputies_session=${input.sessionId}` };
+}
+
+function jsonRequest(body: Record<string, unknown>, method = 'POST', cookie?: string): RequestInit {
   return {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
     body: JSON.stringify(body),
   };
 }

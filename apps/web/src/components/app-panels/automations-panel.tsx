@@ -1,17 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
-import {
-  Archive,
-  CalendarClock,
-  ChevronDown,
-  CornerUpLeft,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Play,
-  Plus,
-  RotateCcw,
-  Save,
-  X,
-} from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Archive, CalendarClock, PanelLeftOpen, Play, RotateCcw, Save } from 'lucide-react';
 import {
   ApiError,
   createAutomation,
@@ -23,12 +11,10 @@ import {
   type AutomationInvocation,
   type BranchOption,
   type Group,
-  type Health,
   type ModelChoice,
   type RepositoryOption,
   type Session,
 } from '../../api.js';
-import { archivedAutomationsOpenStorageKey } from '../../app-helpers.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
@@ -36,8 +22,6 @@ import { Input } from '../ui/input.js';
 import { Textarea } from '../ui/textarea.js';
 import { BranchPicker, OptionPicker, RepositoryPicker, type OptionPickerOption } from './option-picker.js';
 import { formatDate, statusTextClass } from './shared.js';
-import { ApiStatusFooter, ThemeToggle } from './session-sidebar.js';
-import type { ConnectionStatus, ThemePreference } from './types.js';
 
 type AutomationForm = {
   id: string;
@@ -58,259 +42,6 @@ type AsyncState<T> = {
 };
 
 const invocationHistoryPageSize = 20;
-
-export function AutomationsSidebar(props: {
-  archivedAutomationsOpen: boolean;
-  authRequired: boolean;
-  automations: Automation[];
-  canCallApi: boolean;
-  canViewGroups: boolean;
-  canViewAutomations: boolean;
-  canViewSetup: boolean;
-  connectionStatus: ConnectionStatus;
-  groups: Group[];
-  health: Health | null;
-  loading: boolean;
-  navPage: 'sessions' | 'setup' | 'groups' | 'automations';
-  selectedAutomationId: string;
-  themePreference: ThemePreference;
-  token: string;
-  onArchiveAutomation: (automationId: string) => void;
-  onArchivedAutomationsOpenChange: (open: boolean) => void;
-  onBackToSessions: () => void;
-  onCollapse: () => void;
-  onCreateAutomation: () => void;
-  onOpenAutomations: () => void;
-  onOpenGroups: () => void;
-  onOpenSessions: () => void;
-  onOpenSetup: () => void;
-  onSelectAutomation: (automationId: string) => void;
-  onSignOut: () => void;
-  onThemeChange: (value: ThemePreference) => void;
-  onUnarchiveAutomation: (automationId: string) => void;
-}) {
-  const [search, setSearch] = useState('');
-  const normalizedSearch = search.trim().toLowerCase();
-  const sortedAutomations = useMemo(
-    () => [...props.automations].sort((a, b) => a.name.localeCompare(b.name)),
-    [props.automations],
-  );
-  const filteredAutomations = normalizedSearch
-    ? sortedAutomations.filter(
-        (automation) =>
-          automation.name.toLowerCase().includes(normalizedSearch) ||
-          automation.scheduleCron.toLowerCase().includes(normalizedSearch),
-      )
-    : sortedAutomations;
-  const activeAutomations = filteredAutomations.filter((automation) => !automation.archivedAt);
-  const archivedAutomations = filteredAutomations.filter((automation) => automation.archivedAt);
-  const searching = Boolean(normalizedSearch);
-  const archivedOpen = searching || props.archivedAutomationsOpen;
-  const emptyActiveAutomationsMessage = activeAutomationsEmptyMessage(props.loading, search);
-
-  function handleArchivedToggle(event: SyntheticEvent<HTMLDetailsElement>) {
-    if (searching) return;
-    const open = event.currentTarget.open;
-    sessionStorage.setItem(archivedAutomationsOpenStorageKey, String(open));
-    props.onArchivedAutomationsOpenChange(open);
-  }
-
-  return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <div className="mb-3 flex shrink-0 items-center gap-2">
-        <Button
-          className="shrink-0"
-          variant="ghost"
-          size="icon"
-          onClick={props.onCollapse}
-          aria-label="Hide sidebar"
-          title="Hide sidebar"
-        >
-          <PanelLeftClose className="h-4 w-4" />
-        </Button>
-        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">Automations</h2>
-        <div className="flex shrink-0 gap-2">
-          <Button
-            variant="secondary"
-            size="icon"
-            onClick={props.onBackToSessions}
-            aria-label="Back to sessions"
-            title="Back to sessions"
-          >
-            <CornerUpLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            size="icon"
-            onClick={props.onCreateAutomation}
-            disabled={!props.canCallApi}
-            aria-label="New automation"
-            title="New automation"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-
-      <div className="relative mb-3 shrink-0">
-        <Input
-          className="pr-9"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search automations..."
-        />
-        {search ? (
-          <Button
-            className="absolute right-1 top-1 h-8 w-8 p-0"
-            variant="ghost"
-            size="icon"
-            onClick={() => setSearch('')}
-            aria-label="Clear automation search"
-            title="Clear automation search"
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        ) : null}
-      </div>
-
-      <div className="min-h-0 min-w-0 flex-1 overflow-auto">
-        <div className="grid min-w-0 gap-1">
-          {activeAutomations.map((automation) => (
-            <AutomationSidebarButton
-              key={automation.id}
-              automation={automation}
-              ownerGroupArchived={automationOwnerGroupArchived(automation, props.groups)}
-              selected={automation.id === props.selectedAutomationId}
-              onArchive={props.onArchiveAutomation}
-              onSelect={props.onSelectAutomation}
-            />
-          ))}
-          {!activeAutomations.length ? (
-            <p className="px-2 py-3 text-sm text-muted-foreground">{emptyActiveAutomationsMessage}</p>
-          ) : null}
-        </div>
-
-        {archivedAutomations.length || searching ? (
-          <details className="mt-4 border-t border-border pt-3" open={archivedOpen} onToggle={handleArchivedToggle}>
-            <summary className="flex cursor-pointer items-center gap-1 text-sm font-medium text-muted-foreground">
-              <ChevronDown className={cn('h-4 w-4 -rotate-90 transition-transform', archivedOpen && 'rotate-0')} />
-              Archived · {archivedAutomations.length}
-            </summary>
-            {archivedAutomations.length ? (
-              <div className="mt-2 grid min-w-0 gap-1 opacity-80">
-                {archivedAutomations.map((automation) => (
-                  <AutomationSidebarButton
-                    key={automation.id}
-                    automation={automation}
-                    ownerGroupArchived={automationOwnerGroupArchived(automation, props.groups)}
-                    selected={automation.id === props.selectedAutomationId}
-                    onSelect={props.onSelectAutomation}
-                    onUnarchive={props.onUnarchiveAutomation}
-                  />
-                ))}
-              </div>
-            ) : (
-              <p className="px-2 py-3 text-sm text-muted-foreground">No matching archived automations.</p>
-            )}
-          </details>
-        ) : null}
-      </div>
-
-      <ThemeToggle preference={props.themePreference} onChange={props.onThemeChange} />
-      <ApiStatusFooter
-        authRequired={props.authRequired}
-        canViewGroups={props.canViewGroups}
-        canViewAutomations={props.canViewAutomations}
-        canViewSetup={props.canViewSetup}
-        health={props.health}
-        navPage={props.navPage}
-        token={props.token}
-        onOpenGroups={props.onOpenGroups}
-        onOpenAutomations={props.onOpenAutomations}
-        onOpenSessions={props.onOpenSessions}
-        onOpenSetup={props.onOpenSetup}
-        onSignOut={props.onSignOut}
-      />
-    </div>
-  );
-}
-
-function AutomationSidebarButton(props: {
-  automation: Automation;
-  ownerGroupArchived: boolean;
-  selected: boolean;
-  onArchive?: (automationId: string) => void;
-  onSelect: (automationId: string) => void;
-  onUnarchive?: (automationId: string) => void;
-}) {
-  const statusLine = automationSidebarStatusLine(props.automation, props.ownerGroupArchived);
-
-  return (
-    <div
-      className={cn(
-        'group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-transparent p-2 text-left hover:bg-accent',
-        props.selected && 'border-primary bg-primary/15',
-      )}
-    >
-      <button
-        type="button"
-        className="block min-w-0 flex-1 overflow-hidden bg-transparent p-0 text-left"
-        onClick={() => props.onSelect(props.automation.id)}
-      >
-        <strong className="block w-full truncate text-sm font-medium text-foreground">{props.automation.name}</strong>
-        <span className="block w-full truncate font-mono text-xs text-muted-foreground">
-          {props.automation.scheduleCron} UTC
-        </span>
-        <span className="block w-full truncate text-xs text-muted-foreground">{statusLine}</span>
-      </button>
-      {props.automation.canManage && !props.automation.archivedAt && props.onArchive ? (
-        <Button
-          className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-          variant="ghost"
-          size="sm"
-          onClick={() => props.onArchive?.(props.automation.id)}
-          aria-label="Archive automation"
-          title="Archive automation"
-        >
-          <Archive className="h-3.5 w-3.5" />
-        </Button>
-      ) : null}
-      {props.automation.canManage && props.automation.archivedAt && props.onUnarchive ? (
-        <Button
-          className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-          variant="ghost"
-          size="sm"
-          onClick={() => props.onUnarchive?.(props.automation.id)}
-          aria-label="Restore automation"
-          title="Restore automation"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-        </Button>
-      ) : null}
-    </div>
-  );
-}
-
-function activeAutomationsEmptyMessage(loading: boolean, search: string): string {
-  if (loading) return 'Loading automations...';
-  if (search) return 'No matching active automations.';
-  return 'No active scheduled automations.';
-}
-
-function automationSidebarStatusLine(automation: Automation, ownerGroupArchived: boolean): string {
-  if (automation.archivedAt) return `Archived · ${formatDate(automation.archivedAt)}`;
-
-  const enabledLabel = automation.enabled ? 'Enabled' : 'Disabled';
-  if (ownerGroupArchived) return `${enabledLabel} · Suspended: access group archived`;
-
-  const nextInvocation = automation.nextInvocationAt ? formatDate(automation.nextInvocationAt) : 'not scheduled';
-  return `${enabledLabel} · Next ${nextInvocation}`;
-}
-
-function automationOwnerGroupArchived(automation: Automation, groups: Group[]): boolean {
-  return Boolean(
-    groups.find((group) => group.id === automation.ownerGroupId)?.archivedAt ?? automation.ownerGroupArchivedAt,
-  );
-}
 
 function automationGroupOptions(input: {
   formGroupId: string;
@@ -354,6 +85,7 @@ export function AutomationsPanel(props: {
   automationsLoaded: boolean;
   automationsLoading: boolean;
   canCallApi: boolean;
+  canCreateAutomations: boolean;
   groups: Group[];
   token: string;
   repositoryOptions: RepositoryOption[];
@@ -389,9 +121,10 @@ export function AutomationsPanel(props: {
   const selectedAutomationIdRef = useRef(selected?.id ?? '');
   const selectableGroups = props.groups.filter((group) => {
     if (group.archivedAt) return false;
-    return selected ? (group.canManage ?? true) : (group.canCreateSessions ?? true);
+    return selected ? group.canManage : group.canCreateAutomations;
   });
   const selectedGroup = props.groups.find((group) => group.id === form.groupId);
+  const selectedOwnerGroup = selected ? props.groups.find((group) => group.id === selected.ownerGroupId) : null;
   const selectedOwnerGroupArchived = Boolean(
     selected && form.groupId === selected.ownerGroupId && (selectedGroup?.archivedAt || selected.ownerGroupArchivedAt),
   );
@@ -413,13 +146,12 @@ export function AutomationsPanel(props: {
     form.model && !modelOptions.some((option) => option.value === form.model)
       ? [{ value: form.model, label: `${form.model} (saved)`, available: true }, ...modelOptions]
       : modelOptions;
-  const canEdit = props.canCallApi && (selected ? Boolean(selected.canManage) && !selectedArchived : true);
+  const canEdit =
+    props.canCallApi && (selected ? Boolean(selected.canManage) && !selectedArchived : props.canCreateAutomations);
   const canEditDefinition = canEdit;
-  const canChangeGroup =
-    canEdit &&
-    (selected ? (props.groups.find((group) => group.id === selected.ownerGroupId)?.canManage ?? true) : true);
+  const canChangeGroup = canEdit && (selected ? Boolean(selectedOwnerGroup?.canManage) : true);
   const formComplete = Boolean(form.groupId && form.name.trim() && form.scheduleCron.trim() && form.prompt.trim());
-  const saveDisabled = !canEdit || saving || !formComplete;
+  const saveDisabled = !canEdit || saving || !formComplete || (!selected && !selectedGroupSelectable);
 
   useEffect(() => {
     selectedAutomationIdRef.current = selected?.id ?? '';
@@ -777,7 +509,7 @@ export function AutomationsPanel(props: {
                 ) : null}
                 {selectedOwnerGroupArchived ? (
                   <div className="rounded-md border border-border bg-muted/60 p-3 text-sm text-muted-foreground">
-                    This automation is {selected?.enabled ? 'enabled' : 'disabled'}, but scheduled and manual
+                    This automation is {selected?.enabled ? 'enabled, but' : 'disabled, and'} scheduled and manual
                     invocations are suspended while its access group is archived. Unarchive the group or move the
                     automation to an active access group to resume creating sessions.
                   </div>
@@ -959,7 +691,7 @@ function emptyForm(groups: Group[]): AutomationForm {
 }
 
 function defaultAutomationGroupId(groups: Group[]): string {
-  return groups.find((group) => !group.archivedAt && (group.canCreateSessions ?? true))?.id ?? '';
+  return groups.find((group) => !group.archivedAt && group.canCreateAutomations)?.id ?? '';
 }
 
 function formFromAutomation(automation: Automation): AutomationForm {

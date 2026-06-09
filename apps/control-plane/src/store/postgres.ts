@@ -43,6 +43,7 @@ import {
   automationInvocationSelectColumns,
   automationSelectColumns,
   getRunMessageIds,
+  groupSelectColumns,
   sessionSelectColumns,
   toArtifact,
   toAutomation,
@@ -85,6 +86,10 @@ import {
 
 const staleCallbackSendingMs = 15 * 60_000;
 const eventNotificationChannel = 'app_events';
+const joinedSessionSelectColumns = sessionSelectColumns
+  .split(', ')
+  .map((column) => `sessions.${column}`)
+  .join(', ');
 
 export type PostgresEventListener = {
   close(): Promise<void>;
@@ -273,14 +278,15 @@ export class PostgresStore implements AppStore {
   async createGroup(record: GroupRecord): Promise<GroupRecord> {
     try {
       const result = await this.pool.query<GroupRow>(
-        `INSERT INTO groups (id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at`,
+        `INSERT INTO groups (id, name, default_visibility, default_write_policy, automation_create_required_role, archived_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING ${groupSelectColumns}`,
         [
           record.id,
           record.name.trim(),
           record.defaultVisibility,
           record.defaultWritePolicy,
+          record.automationCreateRequiredRole,
           record.archivedAt ?? null,
           record.createdAt,
           record.updatedAt,
@@ -297,7 +303,7 @@ export class PostgresStore implements AppStore {
 
   async getGroup(id: string): Promise<GroupRecord | null> {
     const result = await this.pool.query<GroupRow>(
-      `SELECT id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at
+      `SELECT ${groupSelectColumns}
        FROM groups
        WHERE id = $1`,
       [id],
@@ -307,7 +313,7 @@ export class PostgresStore implements AppStore {
 
   async listGroups(): Promise<GroupRecord[]> {
     const result = await this.pool.query<GroupRow>(
-      `SELECT id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at
+      `SELECT ${groupSelectColumns}
        FROM groups
        ORDER BY archived_at ASC NULLS FIRST, name ASC`,
     );
@@ -319,17 +325,19 @@ export class PostgresStore implements AppStore {
       const result = await this.pool.query<GroupRow>(
         `UPDATE groups
          SET name = $2,
-             default_visibility = $3,
-             default_write_policy = $4,
-             archived_at = $5,
-             updated_at = $6
-         WHERE id = $1
-         RETURNING id, name, default_visibility, default_write_policy, archived_at, created_at, updated_at`,
+              default_visibility = $3,
+              default_write_policy = $4,
+              automation_create_required_role = $5,
+              archived_at = $6,
+              updated_at = $7
+          WHERE id = $1
+          RETURNING ${groupSelectColumns}`,
         [
           record.id,
           record.name.trim(),
           record.defaultVisibility,
           record.defaultWritePolicy,
+          record.automationCreateRequiredRole,
           record.archivedAt ?? null,
           record.updatedAt,
         ],
@@ -644,36 +652,31 @@ export class PostgresStore implements AppStore {
     return result.rows.map(toAutomation);
   }
 
-  async updateAutomation(
-    input: UpdateAutomationRecord & { updateNextInvocationAt?: boolean },
-  ): Promise<AutomationRecord> {
-    const nextInvocationSet = input.updateNextInvocationAt ? ', next_invocation_at = $11' : '';
+  async updateAutomation(input: UpdateAutomationRecord): Promise<AutomationRecord> {
+    const updates = ['updated_at = $2'];
+    const values: unknown[] = [input.id, input.updatedAt];
+
+    function addUpdate(column: string, value: unknown): void {
+      values.push(value);
+      updates.push(`${column} = $${values.length}`);
+    }
+
+    if (input.name !== undefined) addUpdate('name', input.name);
+    if (input.prompt !== undefined) addUpdate('prompt', input.prompt);
+    if (input.scheduleCron !== undefined) addUpdate('schedule_cron', input.scheduleCron);
+    if (input.enabled !== undefined) addUpdate('enabled', input.enabled);
+    if (input.ownerGroupId !== undefined) addUpdate('owner_group_id', input.ownerGroupId);
+    if (input.visibility !== undefined) addUpdate('visibility', input.visibility);
+    if (input.writePolicy !== undefined) addUpdate('write_policy', input.writePolicy);
+    if (input.context !== undefined) addUpdate('context', input.context);
+    if (input.nextInvocationAt !== undefined) addUpdate('next_invocation_at', input.nextInvocationAt);
+
     const result = await this.pool.query<AutomationRow>(
       `UPDATE automations
-        SET name = $2,
-            prompt = $3,
-            schedule_cron = $4,
-            enabled = $5,
-            owner_group_id = $6,
-            visibility = $7,
-            write_policy = $8,
-            context = $9,
-            updated_at = $10${nextInvocationSet}
+        SET ${updates.join(', ')}
         WHERE id = $1
         RETURNING ${automationSelectColumns}`,
-      [
-        input.id,
-        input.name,
-        input.prompt,
-        input.scheduleCron,
-        input.enabled,
-        input.ownerGroupId,
-        input.visibility,
-        input.writePolicy,
-        input.context ?? null,
-        input.updatedAt,
-        ...(input.updateNextInvocationAt ? [input.nextInvocationAt ?? null] : []),
-      ],
+      values,
     );
     if (!result.rows[0]) throw new Error(`Automation does not exist: ${input.id}`);
     return toAutomation(result.rows[0]);
@@ -718,30 +721,24 @@ export class PostgresStore implements AppStore {
     const result = await this.pool.query<AutomationRow>(
       `UPDATE automations
        SET scheduler_lock_owner = $2,
-           scheduler_locked_until = $3,
-           updated_at = $4
-       WHERE id = $1
-          AND archived_at IS NULL
-          AND (scheduler_locked_until IS NULL OR scheduler_locked_until <= $4)
-        RETURNING ${automationSelectColumns}`,
+           scheduler_locked_until = $3
+        WHERE id = $1
+           AND archived_at IS NULL
+           AND (scheduler_locked_until IS NULL OR scheduler_locked_until <= $4)
+         RETURNING ${automationSelectColumns}`,
       [input.automationId, input.lockOwner, input.lockedUntil, input.now],
     );
     return result.rows[0] ? toAutomation(result.rows[0]) : null;
   }
 
-  async releaseAutomationClaim(input: {
-    automationId: string;
-    lockOwner: string;
-    updatedAt: Date;
-  }): Promise<AutomationRecord | null> {
+  async releaseAutomationClaim(input: { automationId: string; lockOwner: string }): Promise<AutomationRecord | null> {
     const result = await this.pool.query<AutomationRow>(
       `UPDATE automations
        SET scheduler_lock_owner = NULL,
-           scheduler_locked_until = NULL,
-           updated_at = $3
-       WHERE id = $1 AND scheduler_lock_owner = $2
-       RETURNING ${automationSelectColumns}`,
-      [input.automationId, input.lockOwner, input.updatedAt],
+           scheduler_locked_until = NULL
+        WHERE id = $1 AND scheduler_lock_owner = $2
+        RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.lockOwner],
     );
     return result.rows[0] ? toAutomation(result.rows[0]) : null;
   }
@@ -771,12 +768,11 @@ export class PostgresStore implements AppStore {
 
       const result = await client.query<AutomationRow>(
         `UPDATE automations
-         SET scheduler_lock_owner = $2,
-             scheduler_locked_until = $3,
-             updated_at = $4
-         WHERE id = $1
-         RETURNING ${automationSelectColumns}`,
-        [automationId, input.lockOwner, input.lockedUntil, input.now],
+          SET scheduler_lock_owner = $2,
+              scheduler_locked_until = $3
+          WHERE id = $1
+          RETURNING ${automationSelectColumns}`,
+        [automationId, input.lockOwner, input.lockedUntil],
       );
       return result.rows[0] ? toAutomation(result.rows[0]) : null;
     });
@@ -787,17 +783,15 @@ export class PostgresStore implements AppStore {
     lockOwner: string;
     claimedScheduleCron: string;
     nextInvocationAt: Date;
-    updatedAt: Date;
   }): Promise<AutomationRecord | null> {
     const result = await this.pool.query<AutomationRow>(
       `UPDATE automations
        SET next_invocation_at = $3,
            scheduler_lock_owner = NULL,
-           scheduler_locked_until = NULL,
-           updated_at = $4
-        WHERE id = $1 AND scheduler_lock_owner = $2 AND schedule_cron = $5
-        RETURNING ${automationSelectColumns}`,
-      [input.automationId, input.lockOwner, input.nextInvocationAt, input.updatedAt, input.claimedScheduleCron],
+           scheduler_locked_until = NULL
+         WHERE id = $1 AND scheduler_lock_owner = $2 AND schedule_cron = $4
+         RETURNING ${automationSelectColumns}`,
+      [input.automationId, input.lockOwner, input.nextInvocationAt, input.claimedScheduleCron],
     );
     return result.rows[0] ? toAutomation(result.rows[0]) : null;
   }
@@ -812,6 +806,8 @@ export class PostgresStore implements AppStore {
          scheduled_at,
          session_id,
          message_id,
+         reserved_session_id,
+         reserved_message_id,
          requested_by_user_id,
          reason,
          error,
@@ -819,8 +815,8 @@ export class PostgresStore implements AppStore {
          created_at,
          completed_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-       RETURNING ${automationInvocationSelectColumns}`,
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        RETURNING ${automationInvocationSelectColumns}`,
       [
         record.id,
         record.automationId,
@@ -829,6 +825,8 @@ export class PostgresStore implements AppStore {
         record.scheduledAt ?? null,
         record.sessionId ?? null,
         record.messageId ?? null,
+        record.reservedSessionId ?? null,
+        record.reservedMessageId ?? null,
         record.requestedByUserId ?? null,
         record.reason ?? null,
         record.error ?? null,
@@ -844,23 +842,27 @@ export class PostgresStore implements AppStore {
     const result = await this.pool.query<AutomationInvocationRow>(
       `UPDATE automation_invocations
        SET status = $2,
-           scheduled_at = $3,
-           session_id = $4,
-           message_id = $5,
-           requested_by_user_id = $6,
-           reason = $7,
-           error = $8,
-           metadata = $9,
-           created_at = $10,
-           completed_at = $11
-       WHERE id = $1
-       RETURNING ${automationInvocationSelectColumns}`,
+            scheduled_at = $3,
+            session_id = $4,
+            message_id = $5,
+            reserved_session_id = $6,
+            reserved_message_id = $7,
+            requested_by_user_id = $8,
+            reason = $9,
+            error = $10,
+            metadata = $11,
+            created_at = $12,
+            completed_at = $13
+        WHERE id = $1
+        RETURNING ${automationInvocationSelectColumns}`,
       [
         record.id,
         record.status,
         record.scheduledAt ?? null,
         record.sessionId ?? null,
         record.messageId ?? null,
+        record.reservedSessionId ?? null,
+        record.reservedMessageId ?? null,
         record.requestedByUserId ?? null,
         record.reason ?? null,
         record.error ?? null,
@@ -871,6 +873,35 @@ export class PostgresStore implements AppStore {
     );
     if (!result.rows[0]) throw new Error(`Automation invocation does not exist: ${record.id}`);
     return toAutomationInvocation(result.rows[0]);
+  }
+
+  async getAutomationInvocationBySchedule(input: {
+    automationId: string;
+    scheduledAt: Date;
+  }): Promise<AutomationInvocationRecord | null> {
+    const result = await this.pool.query<AutomationInvocationRow>(
+      `SELECT ${automationInvocationSelectColumns}
+       FROM automation_invocations
+       WHERE automation_id = $1 AND trigger = 'scheduled' AND scheduled_at = $2
+       LIMIT 1`,
+      [input.automationId, input.scheduledAt],
+    );
+    return result.rows[0] ? toAutomationInvocation(result.rows[0]) : null;
+  }
+
+  async getBlockingAutomationSession(automationId: string): Promise<SessionRecord | null> {
+    const result = await this.pool.query<SessionRow>(
+      `SELECT ${joinedSessionSelectColumns}
+       FROM automation_invocations
+       JOIN sessions ON sessions.id = automation_invocations.session_id
+       WHERE automation_invocations.automation_id = $1
+         AND automation_invocations.status = 'created'
+         AND sessions.status IN ('queued', 'active')
+       ORDER BY automation_invocations.created_at DESC, automation_invocations.id DESC
+       LIMIT 1`,
+      [automationId],
+    );
+    return result.rows[0] ? toSession(result.rows[0]) : null;
   }
 
   async listAutomationInvocations(

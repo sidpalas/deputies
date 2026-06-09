@@ -3,6 +3,7 @@ import type { SelectHTMLAttributes, SyntheticEvent } from 'react';
 import { Archive, ChevronDown, CornerUpLeft, PanelLeftClose, PanelLeftOpen, Plus, Save, X } from 'lucide-react';
 import type {
   AuthUser,
+  AutomationCreateRequiredRole,
   Group,
   GroupMember,
   GroupRole,
@@ -25,6 +26,7 @@ export type AccessGroupFormState = {
   name: string;
   visibility: SessionVisibility;
   writePolicy: SessionWritePolicy;
+  automationCreateRequiredRole: AutomationCreateRequiredRole;
   serverError: string;
 };
 
@@ -276,6 +278,7 @@ export function GroupsPanel(props: {
   onAddMember: () => void;
   onArchiveGroup: (groupId: string, archived: boolean) => void;
   onCreateGroup: () => void;
+  onGroupFormAutomationCreateRequiredRoleChange: (value: AutomationCreateRequiredRole) => void;
   onGroupFormNameChange: (value: string) => void;
   onGroupFormVisibilityChange: (value: SessionVisibility) => void;
   onGroupFormWritePolicyChange: (value: SessionWritePolicy) => void;
@@ -350,6 +353,7 @@ export function GroupsPanel(props: {
                 selectedMemberUser={selectedMemberUser}
                 onAddMember={props.onAddMember}
                 onArchiveGroup={props.onArchiveGroup}
+                onGroupFormAutomationCreateRequiredRoleChange={props.onGroupFormAutomationCreateRequiredRoleChange}
                 onGroupFormNameChange={props.onGroupFormNameChange}
                 onGroupFormVisibilityChange={props.onGroupFormVisibilityChange}
                 onGroupFormWritePolicyChange={props.onGroupFormWritePolicyChange}
@@ -463,6 +467,7 @@ function ManagedGroupPanel(props: {
   selectedMemberUser: AuthUser | undefined;
   onAddMember: () => void;
   onArchiveGroup: (groupId: string, archived: boolean) => void;
+  onGroupFormAutomationCreateRequiredRoleChange: (value: AutomationCreateRequiredRole) => void;
   onGroupFormNameChange: (value: string) => void;
   onGroupFormVisibilityChange: (value: SessionVisibility) => void;
   onGroupFormWritePolicyChange: (value: SessionWritePolicy) => void;
@@ -522,6 +527,21 @@ function ManagedGroupPanel(props: {
               <option value="group_members">Group members</option>
               <option value="creator_only">Creator only</option>
             </SelectWithCaret>
+          </label>
+          <label className="grid gap-1 text-sm sm:col-span-3">
+            <span className="text-xs font-medium text-muted-foreground">Automation creation</span>
+            <SelectWithCaret
+              value={props.groupForm.automationCreateRequiredRole}
+              onChange={(event) =>
+                props.onGroupFormAutomationCreateRequiredRoleChange(event.target.value as AutomationCreateRequiredRole)
+              }
+            >
+              <option value="member">Members and admins</option>
+              <option value="admin">Admins only</option>
+            </SelectWithCaret>
+            <span className="text-xs text-muted-foreground">
+              Controls who can create new scheduled automations in this group.
+            </span>
           </label>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -647,6 +667,10 @@ function ReadOnlyGroupPanel(props: { currentUser: AuthUser | null; group: Group 
         <div className="rounded-md border border-border p-3">
           <strong className="block text-foreground">Default writes</strong>
           <span>{sessionWritePolicyLabel(props.group.defaultWritePolicy)}</span>
+        </div>
+        <div className="rounded-md border border-border p-3 sm:col-span-2">
+          <strong className="block text-foreground">Automation creation</strong>
+          <span>{automationCreateRequiredRoleLabel(props.group.automationCreateRequiredRole)}</span>
         </div>
       </div>
     </Card>
@@ -796,6 +820,10 @@ function sessionVisibilityLabel(visibility: SessionVisibility): string {
 
 function sessionWritePolicyLabel(policy: SessionWritePolicy): string {
   return policy === 'group_members' ? 'Group members' : 'Creator only';
+}
+
+function automationCreateRequiredRoleLabel(role: AutomationCreateRequiredRole): string {
+  return role === 'admin' ? 'Admins only' : 'Members and admins';
 }
 
 function authRoleLabel(role: AuthUser['role']): string {

@@ -24,8 +24,10 @@ const group = {
   name: 'Default group',
   defaultVisibility: 'organization',
   defaultWritePolicy: 'group_members',
+  automationCreateRequiredRole: 'member',
   membershipRole: 'admin',
   canCreateSessions: true,
+  canCreateAutomations: true,
   canManage: true,
   createdAt: '2026-05-05T12:00:00.000Z',
   updatedAt: '2026-05-05T12:00:00.000Z',
@@ -54,6 +56,7 @@ type MockApiOptions = {
   externalResources?: unknown[];
   groups?: unknown[];
   createdGroups?: unknown[];
+  groupUpdates?: unknown[];
   groupUpdateStatus?: number;
   groupUpdateError?: unknown;
   groupMembers?: unknown[];
@@ -641,6 +644,23 @@ it('shows an inline error when the server rejects a duplicate access group name'
   fireEvent.click(screen.getByRole('button', { name: 'Save group' }));
 
   expect(await screen.findByText('An access group with this name already exists.')).toBeInTheDocument();
+});
+
+it('saves the group automation creation policy', async () => {
+  const groupUpdates: unknown[] = [];
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user, groupUpdates });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  const policyHelp = await screen.findByText('Controls who can create new scheduled automations in this group.');
+  const policySelect = policyHelp.closest('label')?.querySelector('select');
+  expect(policySelect).toBeTruthy();
+  fireEvent.change(policySelect!, { target: { value: 'admin' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save group' }));
+
+  await waitFor(() => expect(groupUpdates).toHaveLength(1));
+  expect(groupUpdates[0]).toMatchObject({ automationCreateRequiredRole: 'admin' });
 });
 
 it('saves session access group when selected', async () => {
@@ -2435,6 +2455,7 @@ function mockApi(options: MockApiOptions = {}) {
         );
       }
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      options.groupUpdates?.push(body);
       const archivedAt = body.archived === true ? session.updatedAt : undefined;
       const archivedPatch = body.archived === undefined ? {} : archivedAt ? { archivedAt } : { archivedAt: undefined };
       return jsonResponse({ group: { ...group, ...body, ...archivedPatch } });
