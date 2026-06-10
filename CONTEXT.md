@@ -8,6 +8,26 @@ Deputies is a background coding-agent service that creates and runs agent sessio
 The user-visible unit of agent work. A session contains ordered messages, replayable events, artifacts, and the current work state.
 _Avoid_: Conversation, chat, task
 
+**Session Detail Ready**:
+The operator-visible state where a selected session has rendered its ordered messages, replayable events, and metadata for artifacts displayed inline with those messages or runs. It should feel instant to an operator: p95 under 250 ms and p50 under 100 ms for normal session history, while artifact content, external resources, callback deliveries, and sandbox service discovery may still be loading.
+_Avoid_: Thread-ready, fully loaded
+
+**Normal Session History**:
+A selected session with up to 100 messages and 2,000 replayable events. Larger histories may require incremental loading, event compaction, or virtualization.
+_Avoid_: Typical history, small session
+
+**Session Outputs Ready**:
+The operator-visible state where the selected session's persisted secondary outputs have loaded, including the full artifact list, external resources, and callback deliveries. It should complete at p95 under 500 ms for normal output history, may happen after Session Detail Ready, and does not include live sandbox service discovery.
+_Avoid_: Fully loaded, hydrated
+
+**Normal Output History**:
+A selected session with up to 50 artifacts, 50 external resources, and 100 callback deliveries. Larger output histories may require incremental loading.
+_Avoid_: Typical outputs, small outputs
+
+**Sandbox Services Ready**:
+The operator-visible state where the selected session's live sandbox services have been discovered and rendered. It may happen after Session Detail Ready and Session Outputs Ready, and it can fail independently when live sandbox state is unavailable.
+_Avoid_: Services loaded, live previews ready
+
 **Message**:
 A user, integration, or automation prompt inside a session. Messages are ordered within their session and represent work to be processed.
 _Avoid_: Turn, request, job

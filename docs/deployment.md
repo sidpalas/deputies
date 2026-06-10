@@ -125,6 +125,19 @@ session
 
 Use `session` in almost all deployments, especially any browser-facing product deployment. Reserve `none` for local/test environments and `bearer` for narrow machine-to-machine or internal API access.
 
+## Observability
+
+OpenTelemetry export is disabled by default. Enable it on API and worker processes with the standard OTel environment variables:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otel-collector.example.com
+OTEL_SERVICE_NAME=deputies-control-plane
+```
+
+Set `OTEL_SDK_DISABLED=true` to force-disable export. Other standard OTLP variables such as `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, and `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` are passed through to the OpenTelemetry SDK/exporters.
+
+The browser does not export directly to OpenTelemetry. It posts authenticated milestone payloads to `/telemetry/browser-milestones`; keep that route proxied with the rest of the browser-facing API routes.
+
 ## Postgres And Migrations
 
 Recommended durable configuration:
