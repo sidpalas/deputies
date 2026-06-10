@@ -32,7 +32,6 @@ import {
   listCallbacks,
   listGroupMembers,
   listGroups,
-  listEvents,
   listExternalResources,
   listMessages,
   listRepositoryOptions,
@@ -70,6 +69,13 @@ import {
   type SessionWritePolicy,
   type WorkspaceToolId,
 } from './api.js';
+import { isInlineDisplayableArtifact } from './artifact-display.js';
+import {
+  startSessionMilestoneInteraction,
+  type BrowserMilestoneTrigger,
+  type SessionMilestoneInteraction,
+} from './telemetry.js';
+import { componentCause, componentName, loadSessionDetailPhases } from './session-detail-loader.js';
 import {
   activeProgressDisplayText,
   appendActiveProgressEvents,
@@ -245,6 +251,16 @@ function emptyAccessGroupsState(): AccessGroupsState {
   };
 }
 
+function countInlineArtifacts(artifacts: Artifact[], messages: Message[], events: AgentEvent[]): number {
+  const messageIds = new Set(messages.map((message) => message.id));
+  const runIds = new Set(events.flatMap((event) => (event.runId ? [event.runId] : [])));
+  return artifacts.filter((artifact) => {
+    if (!isInlineDisplayableArtifact(artifact)) return false;
+    if (artifact.runId && runIds.has(artifact.runId)) return true;
+    return Boolean(artifact.messageId && messageIds.has(artifact.messageId));
+  }).length;
+}
+
 function loadInitialNavigationState(): NavigationState {
   return {
     selectedSessionId: loadInitialSelectedSessionId(),
@@ -349,6 +365,11 @@ export function App() {
   const sessionsRefreshQueuedRef = useRef(false);
   const detailRefreshInFlightRef = useRef<string | null>(null);
   const detailRefreshQueuedSessionIdRef = useRef<string | null>(null);
+  const sessionMilestoneInteractionRef = useRef<SessionMilestoneInteraction | null>(null);
+  const sessionDetailMilestoneStartedRef = useRef(false);
+  const pendingSessionMilestoneTriggerRef = useRef<BrowserMilestoneTrigger | null>(
+    selectedSessionId ? 'startup_selection' : null,
+  );
   const branchOptionsRepositoryRef = useRef('');
   const defaultSetupGuideOpenedRef = useRef(false);
   const activeProgressTimerRef = useRef<number | null>(null);
@@ -557,6 +578,8 @@ export function App() {
   useEffect(() => {
     return () => {
       if (sessionsRefreshTimerRef.current !== null) window.clearTimeout(sessionsRefreshTimerRef.current);
+      sessionMilestoneInteractionRef.current?.abort('unmount');
+      sessionMilestoneInteractionRef.current = null;
     };
   }, []);
 
@@ -899,9 +922,16 @@ export function App() {
   }, [pageVisible, canCallApi, sessionsLoaded, selectedSessionId, token]);
 
   useEffect(() => {
-    if (!selectedSessionId || !canCallApi) return;
+    if (!selectedSessionId || !canCallApi) {
+      sessionMilestoneInteractionRef.current?.abort('selection_change');
+      sessionMilestoneInteractionRef.current = null;
+      return;
+    }
     setDetailLoadedSessionId((current) => (current === selectedSessionId ? current : ''));
-    refreshSessionDetail(selectedSessionId);
+    const trigger = pendingSessionMilestoneTriggerRef.current ?? 'selection';
+    pendingSessionMilestoneTriggerRef.current = null;
+    sessionDetailMilestoneStartedRef.current = true;
+    refreshSessionDetail(selectedSessionId, trigger);
   }, [selectedSessionId, canCallApi, token]);
 
   useLayoutEffect(() => {
@@ -1076,8 +1106,14 @@ export function App() {
         if (current && nextSessions.some((session) => session.id === current)) return current;
         if (sessionStorage.getItem(newSessionSelectedStorageKey) === 'true') return '';
         const next = nextSessions[0]?.id ?? '';
-        if (next) sessionStorage.setItem(selectedSessionStorageKey, next);
-        else sessionStorage.removeItem(selectedSessionStorageKey);
+        if (next) {
+          pendingSessionMilestoneTriggerRef.current = sessionDetailMilestoneStartedRef.current
+            ? 'selection'
+            : 'startup_selection';
+          sessionStorage.setItem(selectedSessionStorageKey, next);
+        } else {
+          sessionStorage.removeItem(selectedSessionStorageKey);
+        }
         return next;
       });
     } catch (err) {
@@ -1120,7 +1156,7 @@ export function App() {
         return nextGroupId;
       });
     } catch (err) {
-      handleApiError(err);
+      handleApiError(componentCause(err));
     }
   }
 
@@ -1146,33 +1182,137 @@ export function App() {
     }
   }
 
-  async function refreshSessionDetail(sessionId: string) {
+  async function refreshSessionDetail(sessionId: string, trigger?: BrowserMilestoneTrigger) {
     setError('');
+    if (!trigger) {
+      await refreshSessionDetailWithoutMilestones(sessionId);
+      return;
+    }
+
+    await refreshSessionDetailWithMilestones(sessionId, trigger);
+  }
+
+  async function refreshSessionDetailWithoutMilestones(sessionId: string) {
     try {
-      const [nextMessages, nextEvents, nextArtifacts, nextServices, nextExternalResources, nextCallbacks] =
-        await Promise.all([
-          listMessages(sessionId, token),
-          listEvents(sessionId, token),
-          listArtifacts(sessionId, token),
-          listServices(sessionId, token),
-          listExternalResources(sessionId, token),
-          listCallbacks(sessionId, token),
-        ]);
+      const loaded = await loadSessionDetailPhases({ sessionId, token }).allReady;
       if (selectedSessionIdRef.current !== sessionId) return;
-      eventCursor.current = nextEvents.at(-1)?.sequence ?? 0;
+      eventCursor.current = loaded.events.at(-1)?.sequence ?? 0;
       setSessionDetail({
-        messages: nextMessages,
-        events: filterActiveProgressEvents(nextEvents, nextMessages),
-        activeProgress: buildActiveProgress(nextEvents, nextMessages),
-        artifacts: nextArtifacts,
-        services: nextServices,
-        externalResources: nextExternalResources,
-        callbacks: nextCallbacks,
+        messages: loaded.messages,
+        events: filterActiveProgressEvents(loaded.events, loaded.messages),
+        activeProgress: buildActiveProgress(loaded.events, loaded.messages),
+        artifacts: loaded.artifacts,
+        services: loaded.services,
+        externalResources: loaded.externalResources,
+        callbacks: loaded.callbacks,
       });
       setDetailLoadedSessionId(sessionId);
     } catch (err) {
       handleApiError(err);
     }
+  }
+
+  async function refreshSessionDetailWithMilestones(sessionId: string, trigger: BrowserMilestoneTrigger) {
+    sessionMilestoneInteractionRef.current?.abort('selection_change');
+    const milestones = startSessionMilestoneInteraction({ token, trigger });
+    sessionMilestoneInteractionRef.current = milestones;
+
+    const phases = loadSessionDetailPhases({
+      sessionId,
+      token,
+      traceparents: {
+        detail: milestones.detail.traceparent,
+        outputs: milestones.outputs.traceparent,
+        services: milestones.services.traceparent,
+      },
+    });
+    void phases.allReady.catch(() => undefined);
+
+    const detailReadyPromise = phases.detailReady
+      .then((detail) => {
+        if (selectedSessionIdRef.current !== sessionId) {
+          milestones.abort('selection_change');
+          return false;
+        }
+        eventCursor.current = detail.events.at(-1)?.sequence ?? 0;
+        setSessionDetail({
+          messages: detail.messages,
+          events: filterActiveProgressEvents(detail.events, detail.messages),
+          activeProgress: buildActiveProgress(detail.events, detail.messages),
+          artifacts: detail.artifacts,
+          services: [],
+          externalResources: [],
+          callbacks: [],
+        });
+        setDetailLoadedSessionId(sessionId);
+        milestones.detail.success({
+          messageCount: detail.messages.length,
+          eventCount: detail.events.length,
+          inlineArtifactCount: countInlineArtifacts(detail.artifacts, detail.messages, detail.events),
+          artifactCount: detail.artifacts.length,
+        });
+        return true;
+      })
+      .catch((err) => {
+        if (selectedSessionIdRef.current !== sessionId) return;
+        milestones.detail.error(componentName(err, 'render'));
+        handleApiError(componentCause(err));
+        return false;
+      });
+
+    const outputsPromise = phases.outputsReady
+      .then(async (outputs) => {
+        if (!(await detailReadyPromise)) {
+          if (selectedSessionIdRef.current === sessionId) milestones.outputs.error('render');
+          return;
+        }
+        if (selectedSessionIdRef.current !== sessionId) {
+          milestones.outputs.abort('selection_change');
+          return;
+        }
+        setSessionDetail((current) => ({
+          ...current,
+          artifacts: outputs.artifacts,
+          externalResources: outputs.externalResources,
+          callbacks: outputs.callbacks,
+        }));
+        milestones.outputs.success({
+          artifactCount: outputs.artifacts.length,
+          externalResourceCount: outputs.externalResources.length,
+          callbackCount: outputs.callbacks.length,
+          reusedArtifacts: true,
+        });
+      })
+      .catch((err) => {
+        if (selectedSessionIdRef.current !== sessionId) return;
+        milestones.outputs.error(componentName(err, 'render'));
+        handleApiError(componentCause(err));
+      });
+
+    const servicesLoadPromise = phases.servicesReady
+      .then(async (nextServices) => {
+        if (!(await detailReadyPromise)) {
+          if (selectedSessionIdRef.current === sessionId) milestones.services.error('render');
+          return;
+        }
+        if (selectedSessionIdRef.current !== sessionId) {
+          milestones.services.abort('selection_change');
+          return;
+        }
+        setSessionDetail((current) => ({ ...current, services: nextServices }));
+        milestones.services.success({ serviceCount: nextServices.length });
+      })
+      .catch((err) => {
+        if (selectedSessionIdRef.current !== sessionId) return;
+        milestones.services.error(componentName(err, 'services'));
+        handleApiError(componentCause(err));
+      });
+
+    void Promise.all([detailReadyPromise, outputsPromise, servicesLoadPromise]).then(() => {
+      if (sessionMilestoneInteractionRef.current === milestones) sessionMilestoneInteractionRef.current = null;
+    });
+
+    await detailReadyPromise;
   }
 
   async function refreshSessionOutputs(sessionId: string) {
@@ -1286,7 +1426,7 @@ export function App() {
       );
       setThreadAutoFollowEnabled(true);
       await refreshSessions();
-      await refreshSessionDetail(selectedSessionId);
+      await refreshSessionDetail(selectedSessionId, 'refresh');
       return true;
     } catch (err) {
       handleApiError(err);
@@ -1403,7 +1543,7 @@ export function App() {
       setSessionDetail((current) => ({ ...current, messages: [...current.messages, ...retriedMessages] }));
       setThreadAutoFollowEnabled(true);
       await refreshSessions();
-      await refreshSessionDetail(selectedSessionId);
+      await refreshSessionDetail(selectedSessionId, 'refresh');
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -1522,6 +1662,7 @@ export function App() {
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     autoScrolledSessionId.current = '';
+    if (selectedSessionIdRef.current !== sessionId) pendingSessionMilestoneTriggerRef.current = 'selection';
     selectedSessionIdRef.current = sessionId;
     sessionStorage.setItem(selectedSessionStorageKey, sessionId);
     sessionStorage.setItem(sidebarPanelStorageKey, 'sessions');
@@ -2075,7 +2216,7 @@ export function App() {
         ...current,
         callbacks: current.callbacks.map((candidate) => (candidate.id === callback.id ? callback : candidate)),
       }));
-      await refreshSessionDetail(selectedSessionId);
+      await refreshSessionDetail(selectedSessionId, 'refresh');
     } catch (err) {
       handleApiError(err);
     }

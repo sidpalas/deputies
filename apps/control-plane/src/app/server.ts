@@ -91,6 +91,8 @@ import { registerGroupRoutes, serializeGroupMember } from './group-routes.js';
 import { writeError } from './http-error.js';
 import { configuredModels, ModelAvailabilityService, modelChoices } from './model-availability.js';
 import { buildSetupStatus } from './setup-status.js';
+import { routeTelemetryMiddleware } from './telemetry-middleware.js';
+import { registerTelemetryRoutes } from './telemetry-routes.js';
 import {
   appendPreviewCookie,
   authorizePreviewToken,
@@ -190,12 +192,13 @@ export function createApp(config: AppConfig, services = createServices()) {
   const app = new Hono<{ Variables: AppVariables }>();
 
   app.use('*', requestIdMiddleware());
+  app.use('*', routeTelemetryMiddleware(config));
   app.use(
     '*',
     cors({
       origin: allowedCorsOrigin(config),
       credentials: true,
-      allowHeaders: ['authorization', 'content-type', 'x-request-id'],
+      allowHeaders: ['authorization', 'content-type', 'traceparent', 'tracestate', 'x-request-id'],
       allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
   );
@@ -357,6 +360,8 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('/setup', apiAuthMiddleware(config, services.store));
   app.use('/events/*', apiAuthMiddleware(config, services.store));
   app.use('/events', apiAuthMiddleware(config, services.store));
+  app.use('/telemetry/*', apiAuthMiddleware(config, services.store));
+  app.use('/telemetry', apiAuthMiddleware(config, services.store));
 
   app.use('/setup/*', apiUnsafeMethodAdminMiddleware(config, services.store));
   app.use('/setup', apiUnsafeMethodAdminMiddleware(config, services.store));
@@ -441,6 +446,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   registerAutomationRoutes(app, config, services, {
     serializeSession: (session) => serializeSessionWithSandbox(config, services, session),
   });
+  registerTelemetryRoutes(app, config);
 
   app.get('/repositories', async (c) => {
     let repositories = configuredRepositoryOptions(config);
@@ -1191,9 +1197,20 @@ function normalizeContentType(contentType: string): string {
 
 function requestIdMiddleware(): MiddlewareHandler<{ Variables: AppVariables }> {
   return async (c, next) => {
-    c.set('requestId', c.req.header('x-request-id') ?? randomUUID());
-    await next();
+    const requestId = safeRequestId(c.req.header('x-request-id')) ?? randomUUID();
+    c.set('requestId', requestId);
+    c.header('x-request-id', requestId);
+    try {
+      await next();
+    } finally {
+      c.header('x-request-id', requestId);
+    }
   };
+}
+
+function safeRequestId(value: string | undefined): string | null {
+  if (!value || value.length > 128) return null;
+  return /^[\x20-\x7e]+$/.test(value) ? value : null;
 }
 
 function allowedCorsOrigin(config: AppConfig): (origin: string) => string | undefined {

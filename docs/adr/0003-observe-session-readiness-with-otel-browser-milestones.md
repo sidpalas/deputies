@@ -1,0 +1,3 @@
+# Observe session readiness with OTel browser milestones
+
+Deputies measures selected-session perceived performance with three browser-observed milestones: Session Detail Ready, Session Outputs Ready, and Sandbox Services Ready. The browser posts authenticated best-effort milestone payloads to `/telemetry/browser-milestones` with W3C `traceparent` correlation instead of exporting directly to OpenTelemetry; the control plane records them with real OTel SDK instrumentation, standard OTel env vars, low-cardinality metric attributes, and no raw session/run/message IDs, prompts, event payloads, repository data, auth headers, SQL text, or SQL parameters. High-frequency idle worker/store polling is not traced because it creates cost and noise without diagnostic value.

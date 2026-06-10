@@ -13,6 +13,15 @@ import type {
   SandboxService,
 } from '../../api.js';
 import { getApiBaseUrl } from '../../api.js';
+import {
+  artifactName,
+  fileExtension,
+  isBrowserPlayableVideoArtifact,
+  isImageArtifact,
+  isInlineDisplayableArtifact,
+  isTextPreviewableArtifact,
+  stringPayloadValue,
+} from '../../artifact-display.js';
 import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
@@ -1372,8 +1381,7 @@ function callbackEventLabel(eventType: string): string {
 function artifactsForGroup(artifacts: Artifact[], group: MessageGroup): Artifact[] {
   const messageIds = new Set(group.messages.map((message) => message.id));
   return artifacts.filter((artifact) => {
-    if (!isImageArtifact(artifact) && !isBrowserPlayableVideoArtifact(artifact) && !isTextPreviewableArtifact(artifact))
-      return false;
+    if (!isInlineDisplayableArtifact(artifact)) return false;
     if (group.runId && artifact.runId === group.runId) return true;
     return Boolean(artifact.messageId && messageIds.has(artifact.messageId));
   });
@@ -1402,10 +1410,6 @@ function artifactMediaUrl(downloadUrl: string): string {
   return url.toString();
 }
 
-function artifactName(artifact: Artifact): string {
-  return artifact.title || stringPayloadValue(artifact.payload.fileName) || artifact.url || artifact.id;
-}
-
 function safeExternalHref(value: string | undefined): string | null {
   if (!value) return null;
   if (!value.startsWith('/') && !/^https?:\/\//i.test(value)) return null;
@@ -1416,62 +1420,6 @@ function safeExternalHref(value: string | undefined): string | null {
   } catch {
     return null;
   }
-}
-
-function isImageArtifact(artifact: Artifact): boolean {
-  const contentType = stringPayloadValue(artifact.payload.contentType);
-  return artifact.type === 'image' || artifact.type === 'screenshot' || Boolean(contentType?.startsWith('image/'));
-}
-
-function isBrowserPlayableVideoArtifact(artifact: Artifact): boolean {
-  const contentType = stringPayloadValue(artifact.payload.contentType)?.split(';')[0]?.trim().toLowerCase();
-  const extension = fileExtension(stringPayloadValue(artifact.payload.fileName) ?? artifactName(artifact));
-  return contentType === 'video/mp4' || extension === '.mp4' || extension === '.m4v';
-}
-
-function isTextPreviewableArtifact(artifact: Artifact): boolean {
-  if (!artifact.storageKey) return false;
-  const contentType = stringPayloadValue(artifact.payload.contentType)?.split(';')[0]?.trim().toLowerCase() ?? '';
-  if (!isTextContentType(contentType)) return false;
-  if (artifact.type === 'log' || artifact.type === 'report') return true;
-  return previewableTextExtensions.has(
-    fileExtension(stringPayloadValue(artifact.payload.fileName) ?? artifactName(artifact)),
-  );
-}
-
-function isTextContentType(contentType: string): boolean {
-  if (contentType.startsWith('text/')) return true;
-  return [
-    'application/json',
-    'application/xml',
-    'application/yaml',
-    'application/x-yaml',
-    'application/javascript',
-  ].includes(contentType);
-}
-
-const previewableTextExtensions = new Set([
-  '.txt',
-  '.log',
-  '.md',
-  '.markdown',
-  '.json',
-  '.xml',
-  '.yaml',
-  '.yml',
-  '.csv',
-  '.tsv',
-  '.html',
-  '.css',
-  '.js',
-  '.jsx',
-  '.ts',
-  '.tsx',
-  '.sh',
-]);
-
-function fileExtension(fileName: string): string {
-  return fileName.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? '';
 }
 
 function artifactSizeBytes(artifact: Artifact): number | undefined {
@@ -1516,10 +1464,6 @@ function fileNameFromContentDisposition(value: string | null): string | undefine
   if (encoded) return decodeURIComponent(encoded);
   const quoted = value?.match(/filename="([^"]+)"/i)?.[1];
   return quoted || undefined;
-}
-
-function stringPayloadValue(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
 }
 
 function numberPayloadValue(value: unknown): number | undefined {

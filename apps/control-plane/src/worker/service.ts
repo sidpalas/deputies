@@ -15,6 +15,7 @@ import type {
   SessionRecord,
   SessionStore,
 } from '../store/types.js';
+import { traceAsync } from '../telemetry/index.js';
 
 type WorkerStore = RunStore & SessionStore & SandboxStore & CallbackStore;
 
@@ -57,6 +58,10 @@ export class WorkerService {
   }
 
   async processNext(): Promise<boolean> {
+    return this.processNextInternal();
+  }
+
+  private async processNextInternal(): Promise<boolean> {
     await this.recoverStaleRuns();
 
     const now = new Date();
@@ -82,11 +87,13 @@ export class WorkerService {
     try {
       await this.runWithHeartbeat(claimed);
       if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
-      const completed = await this.options.store.completeRunBatch({
-        runId: claimed.run.id,
-        leaseOwner: this.options.leaseOwner,
-        completedAt: new Date(),
-      });
+      const completed = await traceAsync('worker.finalize_run', { 'deputies.result': 'completed' }, () =>
+        this.options.store.completeRunBatch({
+          runId: claimed.run.id,
+          leaseOwner: this.options.leaseOwner,
+          completedAt: new Date(),
+        }),
+      );
       if (!completed) return true;
       for (const message of completed.messages) {
         await this.options.events.append({
@@ -101,12 +108,14 @@ export class WorkerService {
     } catch (error) {
       if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
       const message = error instanceof Error ? error.message : 'Unknown worker error';
-      const failed = await this.options.store.failRunBatch({
-        runId: claimed.run.id,
-        leaseOwner: this.options.leaseOwner,
-        failedAt: new Date(),
-        error: message,
-      });
+      const failed = await traceAsync('worker.finalize_run', { 'deputies.result': 'failed' }, () =>
+        this.options.store.failRunBatch({
+          runId: claimed.run.id,
+          leaseOwner: this.options.leaseOwner,
+          failedAt: new Date(),
+          error: message,
+        }),
+      );
       if (!failed) return true;
       await this.options.events.append({
         sessionId: failed.messages[0]!.sessionId,
@@ -200,7 +209,11 @@ export class WorkerService {
       payload: { provider: this.options.sandboxProvider.name },
     });
     const lifecycle = new SandboxLifecycleService(this.options.store, this.options.sandboxProvider);
-    const { sandbox, record, created, restarted } = await lifecycle.ensure(primary.sessionId);
+    const { sandbox, record, created, restarted } = await traceAsync(
+      'worker.ensure_sandbox',
+      { 'deputies.sandbox_provider': this.options.sandboxProvider.name },
+      () => lifecycle.ensure(primary.sessionId),
+    );
     await this.options.store.updateSandbox({ ...record, updatedAt: new Date() });
     await this.appendOwnedRunEvent({
       sessionId: primary.sessionId,
@@ -221,57 +234,62 @@ export class WorkerService {
       const sessionContext =
         created || restarted ? await this.clearSessionServicesForRun(session, claimed) : (session.context ?? {});
       let runContext = { ...sessionContext, ...buildBatchContext(claimed.messages) };
-      const result = await this.options.runner.run({
-        sessionId: primary.sessionId,
-        runId: claimed.run.id,
-        messageId: primary.id,
-        prompt: buildBatchPrompt(claimed.messages),
-        ...(typeof runContext.model === 'string' ? { model: runContext.model } : {}),
-        context: runContext,
-        sandbox,
-        signal,
-        updateSessionContext: async (context) => {
-          if (signal.aborted || !(await this.isRunOwnedByThisWorker(claimed.run.id))) return runContext;
-          const session = await this.options.store.getSession(primary.sessionId);
-          if (!session) throw new Error(`Session not found: ${primary.sessionId}`);
-          if (signal.aborted || !(await this.isRunOwnedByThisWorker(claimed.run.id))) return runContext;
-          const updated = await this.options.store.updateSessionForRun({
-            record: {
-              ...session,
-              context: { ...(session.context ?? {}), ...context },
-              updatedAt: new Date(),
-            },
-            runId: claimed.run.id,
-            leaseOwner: this.options.leaseOwner,
-            now: new Date(),
-          });
-          if (!updated) return runContext;
-          runContext = updated.context ?? {};
-          await this.appendOwnedRunEvent({
+      const result = await traceAsync(
+        'worker.runner_run',
+        { 'deputies.runner_type': this.options.runnerType, 'deputies.message_count': claimed.messages.length },
+        () =>
+          this.options.runner.run({
             sessionId: primary.sessionId,
             runId: claimed.run.id,
             messageId: primary.id,
-            type: 'session_updated',
-            payload: { title: updated.title ?? null, context: updated.context ?? null },
-          });
-          return updated.context ?? {};
-        },
-        emit: async (event) => {
-          if (signal.aborted) return;
-          const runId = event.runId ?? claimed.run.id;
-          await this.appendOwnedRunEvent({
-            sessionId: event.sessionId,
-            runId,
-            messageId: event.messageId ?? primary.id,
-            type: event.type,
-            payload: event.payload,
-          });
-        },
-        shouldPersist: async () =>
-          !signal.aborted &&
-          !(await this.isRunCancellationRequested(claimed.run.id)) &&
-          (await this.isRunOwnedByThisWorker(claimed.run.id)),
-      });
+            prompt: buildBatchPrompt(claimed.messages),
+            ...(typeof runContext.model === 'string' ? { model: runContext.model } : {}),
+            context: runContext,
+            sandbox,
+            signal,
+            updateSessionContext: async (context) => {
+              if (signal.aborted || !(await this.isRunOwnedByThisWorker(claimed.run.id))) return runContext;
+              const session = await this.options.store.getSession(primary.sessionId);
+              if (!session) throw new Error(`Session not found: ${primary.sessionId}`);
+              if (signal.aborted || !(await this.isRunOwnedByThisWorker(claimed.run.id))) return runContext;
+              const updated = await this.options.store.updateSessionForRun({
+                record: {
+                  ...session,
+                  context: { ...(session.context ?? {}), ...context },
+                  updatedAt: new Date(),
+                },
+                runId: claimed.run.id,
+                leaseOwner: this.options.leaseOwner,
+                now: new Date(),
+              });
+              if (!updated) return runContext;
+              runContext = updated.context ?? {};
+              await this.appendOwnedRunEvent({
+                sessionId: primary.sessionId,
+                runId: claimed.run.id,
+                messageId: primary.id,
+                type: 'session_updated',
+                payload: { title: updated.title ?? null, context: updated.context ?? null },
+              });
+              return updated.context ?? {};
+            },
+            emit: async (event) => {
+              if (signal.aborted) return;
+              const runId = event.runId ?? claimed.run.id;
+              await this.appendOwnedRunEvent({
+                sessionId: event.sessionId,
+                runId,
+                messageId: event.messageId ?? primary.id,
+                type: event.type,
+                payload: event.payload,
+              });
+            },
+            shouldPersist: async () =>
+              !signal.aborted &&
+              !(await this.isRunCancellationRequested(claimed.run.id)) &&
+              (await this.isRunOwnedByThisWorker(claimed.run.id)),
+          }),
+      );
       if (await this.isRunCancellationRequested(claimed.run.id)) return;
       if (!(await this.isRunOwnedByThisWorker(claimed.run.id))) return;
       await this.appendOwnedRunEvent({
@@ -285,12 +303,19 @@ export class WorkerService {
           ...(result.usage ? { usage: result.usage } : {}),
         },
       });
-      const artifacts = await this.artifacts.recordRunArtifacts({
-        sessionId: primary.sessionId,
-        runId: claimed.run.id,
-        messageId: primary.id,
-        result,
-      });
+      const artifacts = await traceAsync('worker.persist_artifacts', {}, (span) =>
+        this.artifacts
+          .recordRunArtifacts({
+            sessionId: primary.sessionId,
+            runId: claimed.run.id,
+            messageId: primary.id,
+            result,
+          })
+          .then((records) => {
+            span.setAttribute('deputies.artifact_count', records.length);
+            return records;
+          }),
+      );
       await new CallbackService(this.options.store).enqueueCompletion({
         claimed: { message: primary, run: claimed.run },
         result,
@@ -356,12 +381,14 @@ export class WorkerService {
 
   private async finalizeCancellationIfRequested(runId: string): Promise<boolean> {
     if (!(await this.isRunCancellationRequested(runId))) return false;
-    const cancelled = await this.options.store.finalizeRunCancellation({
-      runId,
-      leaseOwner: this.options.leaseOwner,
-      cancelledAt: new Date(),
-      error: 'Run cancelled by user',
-    });
+    const cancelled = await traceAsync('worker.finalize_run', { 'deputies.result': 'cancelled' }, () =>
+      this.options.store.finalizeRunCancellation({
+        runId,
+        leaseOwner: this.options.leaseOwner,
+        cancelledAt: new Date(),
+        error: 'Run cancelled by user',
+      }),
+    );
     if (!cancelled) return false;
     const primary = cancelled.messages[0]!;
     await this.options.events.append({

@@ -45,13 +45,17 @@ import { startSandboxReaper } from './sandbox/reaper.js';
 import type { SandboxProvider } from './sandbox/types.js';
 import { MemoryStore } from './store/memory.js';
 import { PostgresStore } from './store/postgres.js';
+import { startTelemetry } from './telemetry/index.js';
+import { instrumentStore } from './telemetry/store.js';
 import type { WebSearchToolServices } from './web-search/tool.js';
 import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from './worker/service.js';
 
 const config = loadConfig(process.env);
+const telemetry = startTelemetry({ runMode: config.runMode });
 const databaseUrl = config.appDataStore === 'postgres' ? requireDatabaseUrl(config) : '';
-const store =
+const baseStore =
   config.appDataStore === 'postgres' ? new PostgresStore(databaseUrl, postgresStoreOptions()) : new MemoryStore();
+const store = instrumentStore(baseStore, { kind: config.appDataStore });
 const sandboxProvider = createSandboxProvider();
 const artifactObjectStorage = config.artifactStorage === 'disabled' ? undefined : createArtifactObjectStorage(config);
 const services = createServices(store, {
@@ -76,12 +80,13 @@ let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
 const processInstanceId = `${hostname()}-${process.pid}-${randomUUID()}`;
 const automationSchedulerLockOwner = `automation-scheduler-${processInstanceId}`;
 
-if ('close' in store && typeof store.close === 'function') resources.push(store as CloseableResource);
+if (telemetry) resources.push(telemetry);
+if ('close' in baseStore && typeof baseStore.close === 'function') resources.push(baseStore as CloseableResource);
 if (
-  store instanceof PostgresStore &&
+  baseStore instanceof PostgresStore &&
   (config.runMode === 'combined' || config.runMode === 'all' || config.runMode === 'api' || config.runMode === 'worker')
 ) {
-  resources.unshift(await store.listenEvents((event) => services.events.publishExternal(event)));
+  resources.unshift(await baseStore.listenEvents((event) => services.events.publishExternal(event)));
 }
 
 if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode === 'api') {

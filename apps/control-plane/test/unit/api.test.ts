@@ -245,6 +245,60 @@ describe('core API', () => {
     expect(validAuthWithUntrustedBrowserHeaders.status).toBe(201);
   });
 
+  it('accepts authenticated browser milestone telemetry without a JSON response body', async () => {
+    await closeServer(server);
+    server = createServer(loadConfig({ API_AUTH_MODE: 'bearer', API_BEARER_TOKEN: 'secret' }));
+    baseUrl = await listen(server);
+
+    const response = await fetch(`${baseUrl}/telemetry/browser-milestones`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer secret',
+        'content-type': 'application/json',
+        traceparent: '00-11111111111111111111111111111111-2222222222222222-01',
+        'x-request-id': 'x'.repeat(129),
+      },
+      body: JSON.stringify(validBrowserMilestone()),
+    });
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe('');
+    expect(response.headers.get('x-request-id')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('rejects malformed browser milestone telemetry through normal API auth', async () => {
+    await closeServer(server);
+    server = createServer(loadConfig({ API_AUTH_MODE: 'bearer', API_BEARER_TOKEN: 'secret' }));
+    baseUrl = await listen(server);
+
+    const missingAuth = await postJson(`${baseUrl}/telemetry/browser-milestones`, validBrowserMilestone());
+    expect(missingAuth.status).toBe(401);
+
+    const unknownField = await postJson(
+      `${baseUrl}/telemetry/browser-milestones`,
+      { ...validBrowserMilestone(), sessionId: '00000000-0000-4000-8000-000000000001' },
+      'secret',
+    );
+    expect(unknownField.status).toBe(400);
+    await expect(unknownField.json()).resolves.toMatchObject({
+      error: 'invalid_request',
+      message: 'Unexpected browser milestone field: sessionId',
+    });
+
+    const badResult = await postJson(
+      `${baseUrl}/telemetry/browser-milestones`,
+      { ...validBrowserMilestone(), result: 'error' },
+      'secret',
+    );
+    expect(badResult.status).toBe(400);
+    await expect(badResult.json()).resolves.toMatchObject({
+      error: 'invalid_request',
+      message: 'Error milestones require failedComponent',
+    });
+  });
+
   it('supports static login with session cookies', async () => {
     await closeServer(server);
     server = createServer(
@@ -2312,6 +2366,22 @@ describe('core API', () => {
     expect(body).toMatchObject({ error: 'payload_too_large' });
   });
 });
+
+function validBrowserMilestone(): Record<string, unknown> {
+  return {
+    name: 'session_detail_ready',
+    result: 'success',
+    durationMs: 123.4,
+    interactionId: '00000000-0000-4000-8000-000000000001',
+    attemptId: '00000000-0000-4000-8000-000000000002',
+    trigger: 'selection',
+    pageVisibility: 'visible',
+    messageCount: 10,
+    eventCount: 20,
+    inlineArtifactCount: 2,
+    artifactCount: 3,
+  };
+}
 
 function postJson(url: string, body: unknown, bearerToken?: string): Promise<Response> {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
