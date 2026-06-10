@@ -82,6 +82,7 @@ type MockApiOptions = {
   globalStreamStatus?: number;
   hangArchive?: boolean;
   hangMessagesForSessions?: string[];
+  hangArtifacts?: boolean;
   hangSessions?: boolean;
   hangUnarchive?: boolean;
   hangSessionsAfterFirst?: boolean;
@@ -323,6 +324,27 @@ it('shows a session loading state instead of stale messages while selected detai
   expect(await screen.findByRole('heading', { name: 'Second session' })).toBeInTheDocument();
   expect(screen.getByText('Loading session')).toBeInTheDocument();
   expect(screen.queryByText('stale first session message')).not.toBeInTheDocument();
+});
+
+it('renders the selected session before artifacts finish loading', async () => {
+  mockApi({
+    hangArtifacts: true,
+    messages: [
+      messageFixture({
+        id: '00000000-0000-4000-8000-000000000011',
+        sequence: 1,
+        status: 'completed',
+        prompt: 'artifact-independent message',
+      }),
+    ],
+  });
+  render(<App />);
+
+  expect(await screen.findByText('artifact-independent message')).toBeInTheDocument();
+  expect(screen.queryByText('Loading session')).not.toBeInTheDocument();
+  expect(
+    screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...'),
+  ).toBeInTheDocument();
 });
 
 it('keeps new-session action available from the sidebar on mobile', async () => {
@@ -2599,6 +2621,7 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname.match(/^\/sessions\/[^/]+\/artifacts$/)) {
+      if (options.hangArtifacts) return new Promise<Response>(() => undefined);
       return jsonResponse({ artifacts: options.artifacts ?? [] });
     }
 

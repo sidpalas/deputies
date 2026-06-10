@@ -42,7 +42,6 @@ export type SessionDetailPhaseHandle = {
 export type SessionDetailData = {
   messages: Message[];
   events: AgentEvent[];
-  artifacts: Artifact[];
 };
 
 export type SessionOutputsData = {
@@ -51,11 +50,10 @@ export type SessionOutputsData = {
   callbacks: CallbackDelivery[];
 };
 
-export type SessionLoadedData = SessionDetailData & {
-  services: SandboxService[];
-  externalResources: ExternalResource[];
-  callbacks: CallbackDelivery[];
-};
+export type SessionLoadedData = SessionDetailData &
+  SessionOutputsData & {
+    services: SandboxService[];
+  };
 
 export function loadSessionDetailPhases(input: {
   sessionId: string;
@@ -87,9 +85,10 @@ export function loadSessionDetailPhases(input: {
     listServices(input.sessionId, input.token, requestOptions(input.traceparents?.services)),
   );
 
-  const detailReady = Promise.all([messagesPromise, eventsPromise, artifactsPromise]).then(
-    ([messages, events, artifacts]) => ({ messages, events, artifacts }),
-  );
+  const detailReady = Promise.all([messagesPromise, eventsPromise]).then(([messages, events]) => ({
+    messages,
+    events,
+  }));
   const outputsReady = Promise.all([artifactsPromise, externalResourcesPromise, callbacksPromise]).then(
     ([artifacts, externalResources, callbacks]) => ({ artifacts, externalResources, callbacks }),
   );

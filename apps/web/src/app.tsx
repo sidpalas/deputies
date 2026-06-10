@@ -1232,14 +1232,14 @@ export function App() {
       .then((detail) => {
         if (selectedSessionIdRef.current !== sessionId) {
           milestones.abort('selection_change');
-          return false;
+          return null;
         }
         eventCursor.current = detail.events.at(-1)?.sequence ?? 0;
         setSessionDetail({
           messages: detail.messages,
           events: filterActiveProgressEvents(detail.events, detail.messages),
           activeProgress: buildActiveProgress(detail.events, detail.messages),
-          artifacts: detail.artifacts,
+          artifacts: [],
           services: [],
           externalResources: [],
           callbacks: [],
@@ -1248,21 +1248,20 @@ export function App() {
         milestones.detail.success({
           messageCount: detail.messages.length,
           eventCount: detail.events.length,
-          inlineArtifactCount: countInlineArtifacts(detail.artifacts, detail.messages, detail.events),
-          artifactCount: detail.artifacts.length,
         });
-        return true;
+        return detail;
       })
       .catch((err) => {
         if (selectedSessionIdRef.current !== sessionId) return;
         milestones.detail.error(componentName(err, 'render'));
         handleApiError(componentCause(err));
-        return false;
+        return null;
       });
 
     const outputsPromise = phases.outputsReady
       .then(async (outputs) => {
-        if (!(await detailReadyPromise)) {
+        const detail = await detailReadyPromise;
+        if (!detail) {
           if (selectedSessionIdRef.current === sessionId) milestones.outputs.error('render');
           return;
         }
@@ -1277,10 +1276,10 @@ export function App() {
           callbacks: outputs.callbacks,
         }));
         milestones.outputs.success({
+          inlineArtifactCount: countInlineArtifacts(outputs.artifacts, detail.messages, detail.events),
           artifactCount: outputs.artifacts.length,
           externalResourceCount: outputs.externalResources.length,
           callbackCount: outputs.callbacks.length,
-          reusedArtifacts: true,
         });
       })
       .catch((err) => {
