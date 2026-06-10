@@ -13,15 +13,16 @@ export default defineConfig({
     baseURL: webBaseUrl,
     trace: 'on-first-retry',
   },
-  webServer:
-    process.env.PLAYWRIGHT_SKIP_WEB_SERVER === 'true'
-      ? undefined
-      : {
+  ...(process.env.PLAYWRIGHT_SKIP_WEB_SERVER === 'true'
+    ? {}
+    : {
+        webServer: {
           command: 'pnpm dev --host 127.0.0.1',
           env: { ...process.env, VITE_API_BASE_URL: apiBaseUrl },
           url: 'http://127.0.0.1:5173',
           reuseExistingServer: !process.env.CI,
         },
+      }),
   projects: [
     {
       name: 'chromium',

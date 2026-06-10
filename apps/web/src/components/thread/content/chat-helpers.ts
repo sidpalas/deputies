@@ -94,7 +94,9 @@ export function groupDiagnosticsByRun(events: AgentEvent[]): Record<string, Agen
     if (event.type === 'message_created' || event.type === 'agent_text_delta' || event.type === 'agent_response_final')
       continue;
     for (const key of diagnosticGroupKeys(event)) {
-      grouped[key] = [...(grouped[key] ?? []), event];
+      const group = grouped[key] ?? [];
+      group.push(event);
+      grouped[key] = group;
     }
   }
   return grouped;

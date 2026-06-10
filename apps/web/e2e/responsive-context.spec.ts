@@ -74,7 +74,27 @@ async function mockApi(page: Page): Promise<void> {
     const url = new URL(route.request().url());
 
     if (url.pathname === '/health') {
-      await route.fulfill({ json: { status: 'ok', runMode: 'combined', apiAuthMode: 'none' } });
+      await route.fulfill({ json: { status: 'ok', runMode: 'combined', apiAuthMode: 'none', hideSetupPage: true } });
+      return;
+    }
+
+    if (url.pathname === '/models') {
+      await route.fulfill({ json: { models: [], modelChoices: [], defaultModel: null } });
+      return;
+    }
+
+    if (url.pathname === '/repositories') {
+      await route.fulfill({ json: { repositories: [] } });
+      return;
+    }
+
+    if (url.pathname === '/groups') {
+      await route.fulfill({ json: { groups: [] } });
+      return;
+    }
+
+    if (url.pathname === '/automations') {
+      await route.fulfill({ json: { automations: [] } });
       return;
     }
 
@@ -105,6 +125,11 @@ async function mockApi(page: Page): Promise<void> {
 
     if (url.pathname === `/sessions/${sessionId}/callbacks`) {
       await route.fulfill({ json: { callbacks } });
+      return;
+    }
+
+    if (url.pathname === `/sessions/${sessionId}/external-resources`) {
+      await route.fulfill({ json: { externalResources: [] } });
       return;
     }
 

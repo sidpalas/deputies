@@ -18,6 +18,10 @@ run = "pnpm preview"
 description = "Typecheck the web app"
 run = "pnpm typecheck"
 
+[tasks."typecheck:e2e"]
+description = "Typecheck web Playwright specs"
+run = "pnpm typecheck:e2e"
+
 [tasks.test]
 description = "Run web unit tests"
 run = "pnpm test"
@@ -29,3 +33,7 @@ run = "pnpm test:watch"
 [tasks.e2e]
 description = "Run web Playwright tests"
 run = "pnpm e2e"
+
+[tasks."e2e:heavy-session"]
+description = "Run the gated heavy-session Playwright profile"
+run = "RUN_HEAVY_SESSION_E2E=true pnpm e2e -- --project=chromium e2e/heavy-session-load.spec.ts"

@@ -1778,8 +1778,9 @@ it('shows run diagnostics for a single-message response', async () => {
 
   await screen.findByText('single response');
 
-  expect(screen.getByText(/Activity · 2 events/)).toBeInTheDocument();
-  expect(screen.getByText('fake sandbox ready')).toBeInTheDocument();
+  fireEvent.click(screen.getByText(/Activity · 2 events/));
+
+  expect(await screen.findByText('fake sandbox ready')).toBeInTheDocument();
 });
 
 it('renders tool diagnostics as readable activity with raw details collapsed', async () => {
@@ -1832,6 +1833,13 @@ it('renders tool diagnostics as readable activity with raw details collapsed', a
   expect(await screen.findByText(codeTextMatcher('pnpm test'))).toBeInTheDocument();
   expect(screen.getByText('Tests failed')).toBeInTheDocument();
   expect(screen.getAllByText('Debug details')).toHaveLength(2);
+  const failedToolCard = screen.getByText('Command failed: pnpm test').closest('article')!;
+  expect(within(failedToolCard).queryByText(/#2 · tool_started/)).not.toBeInTheDocument();
+
+  fireEvent.click(within(failedToolCard).getByText('Debug details'));
+
+  expect(await within(failedToolCard).findByText(/#2 · tool_started/)).toBeInTheDocument();
+  await waitForHighlightedCodeCount(failedToolCard, 3);
 });
 
 it('labels unmatched tool start diagnostics as started instead of running', async () => {
@@ -2020,6 +2028,7 @@ it('renders long diagnostic commands inline without a nested scroller', async ()
   expect(panel).toHaveTextContent('python3 - <<');
   expect(panel).toHaveTextContent('truncated');
   expect(panel.textContent!.length).toBeLessThan(longCommand.length);
+  await waitForHighlightedCodeCount(panel, 1);
 });
 
 it('identifies upstream sandbox provider failures during sandbox startup', async () => {
@@ -2749,6 +2758,10 @@ function filterEventsAfter(events: unknown[], after: string | null): unknown[] {
 
 function codeTextMatcher(text: string): (_: string, element: Element | null) => boolean {
   return (_, element) => element?.tagName.toLowerCase() === 'code' && element.textContent === text;
+}
+
+async function waitForHighlightedCodeCount(container: ParentNode, count: number): Promise<void> {
+  await waitFor(() => expect(container.querySelectorAll('.highlighted-code')).toHaveLength(count));
 }
 
 function callbackFixture(input: {

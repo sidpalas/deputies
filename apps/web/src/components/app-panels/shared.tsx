@@ -5,6 +5,12 @@ import type { ConnectionStatus } from './types.js';
 const connectionLimitHint =
   'If you have Deputies open in several windows, browser connection limits may block API requests.';
 const wakeRecoveryMessage = 'Reconnecting after your computer was asleep or offline.';
+const dateFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  month: 'short',
+  day: 'numeric',
+});
 
 const statusTextClasses: Record<string, string> = {
   active: 'text-info',
@@ -142,12 +148,7 @@ export function blurFocusedTextControl(): void {
 }
 
 export function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    month: 'short',
-    day: 'numeric',
-  }).format(new Date(value));
+  return dateFormatter.format(new Date(value));
 }
 
 export function formatModelLabel(model: string): string {
