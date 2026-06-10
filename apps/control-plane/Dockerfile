@@ -7,6 +7,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches patches
 COPY apps/control-plane/package.json apps/control-plane/package.json
 COPY apps/web/package.json apps/web/package.json
+COPY packages/browser-milestones packages/browser-milestones
 
 RUN pnpm install --frozen-lockfile
 
@@ -24,6 +25,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches patches
 COPY apps/control-plane/package.json apps/control-plane/package.json
 COPY apps/web/package.json apps/web/package.json
+COPY packages/browser-milestones packages/browser-milestones
 
 RUN pnpm install --prod --frozen-lockfile --filter deputies-control-plane
 
@@ -37,6 +39,7 @@ RUN apk add --no-cache docker-cli github-cli \
 COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=prod-deps --chown=node:node /app/apps/control-plane/node_modules ./apps/control-plane/node_modules
 COPY --from=prod-deps --chown=node:node /app/apps/control-plane/package.json ./apps/control-plane/package.json
+COPY --from=prod-deps --chown=node:node /app/packages/browser-milestones ./packages/browser-milestones
 COPY --from=build --chown=node:node /app/apps/control-plane/dist ./apps/control-plane/dist
 
 EXPOSE 3583

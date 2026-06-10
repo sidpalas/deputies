@@ -13,11 +13,11 @@ const tracer = trace.getTracer('deputies-control-plane');
 const meter = metrics.getMeter('deputies-control-plane');
 const milestoneBuckets = [50, 100, 150, 250, 500, 750, 1_000, 2_000, 5_000, 10_000];
 const milestoneHistograms = new Map<BrowserMilestoneName, ReturnType<typeof meter.createHistogram>>();
-const milestoneMetricNames: Record<BrowserMilestoneName, string> = {
+const milestoneMetricNames = {
   session_detail_ready: 'web.session_detail_ready.duration',
   session_outputs_ready: 'web.session_outputs_ready.duration',
   sandbox_services_ready: 'web.sandbox_services_ready.duration',
-};
+} satisfies Record<BrowserMilestoneName, string>;
 
 export function startTelemetry(input: { runMode: RunMode }): TelemetryResource | null {
   if (process.env.OTEL_SDK_DISABLED === 'true') return null;
