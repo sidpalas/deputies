@@ -19,7 +19,7 @@ concurrency:
 jobs:
   format:
     name: Format
-    if: "${{ github.event_name != 'push' || !contains(github.event.head_commit.message, 'chore: release') }}"
+    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -35,7 +35,7 @@ jobs:
 
   typecheck:
     name: Typecheck
-    if: "${{ github.event_name != 'push' || !contains(github.event.head_commit.message, 'chore: release') }}"
+    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -51,7 +51,7 @@ jobs:
 
   unit:
     name: Unit (${{ matrix.package.name }})
-    if: "${{ github.event_name != 'push' || !contains(github.event.head_commit.message, 'chore: release') }}"
+    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -77,7 +77,7 @@ jobs:
 
   control-plane-integration:
     name: Control plane integration
-    if: "${{ github.event_name != 'push' || !contains(github.event.head_commit.message, 'chore: release') }}"
+    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -110,7 +110,7 @@ jobs:
 
   web-e2e:
     name: Web E2E
-    if: "${{ github.event_name != 'push' || !contains(github.event.head_commit.message, 'chore: release') }}"
+    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.59.1-noble@sha256:b0ab6f3cb99aa7803adbc14d9027ec1785fc6e433b97e134e0f8fe61683b6b53
