@@ -1251,6 +1251,13 @@ describe('core API', () => {
       await expect(
         (await fetch(`${baseUrl}/src/main.tsx`, { headers: { 'x-forwarded-host': serviceHost } })).text(),
       ).resolves.toBe('main');
+      const authCollision = await fetch(`${baseUrl}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-host': serviceHost },
+        body: JSON.stringify({ username: 'dev', password: 'dev-secret' }),
+      });
+      expect(authCollision.status).toBe(200);
+      await expect(authCollision.json()).resolves.toEqual({ proxied: true });
       const invalidHost = await fetch(`${baseUrl}/@vite/client`, {
         headers: { 'x-forwarded-host': `s-3000-${session.id}.evil.localhost` },
       });
@@ -2616,6 +2623,11 @@ function createPreviewUpstream(): Server {
     if (request.url === '/headers') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ referer: request.headers.referer ?? null }));
+      return;
+    }
+    if (request.url === '/auth/login') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ proxied: true }));
       return;
     }
     if (request.url?.startsWith('/bridge-base/')) {

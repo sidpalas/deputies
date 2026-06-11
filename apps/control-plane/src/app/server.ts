@@ -216,6 +216,30 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.notFound((c) => c.json({ error: 'not_found', message: 'Route not found' }, 404));
 
+  app.use('*', async (c, next) => {
+    const serviceHost = parseServiceHostFromRequest(config, c);
+    if (!serviceHost) {
+      await next();
+      return;
+    }
+    if (new URL(c.req.url).pathname === '/__preview_auth') {
+      return authorizePreviewToken(config, services.store, c, serviceHost.sessionId, serviceHost.port);
+    }
+    const authorization = await authorizePreviewRequest(config, services.store, c);
+    if (config.apiAuthMode === 'session' && !authorization) {
+      return writeError(c, 403, 'forbidden', 'Preview access is required');
+    }
+    const session = await services.sessions.get(serviceHost.sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+    const service = await getSessionService(config, services, serviceHost.sessionId, serviceHost.port);
+    if (!service) return writeError(c, 404, 'not_found', 'Service URL is not available for this sandbox');
+    if (config.apiAuthMode === 'bearer') {
+      const serviceAuthorized = c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
+      if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Preview access is required');
+    }
+    return appendPreviewCookie(await proxyService(c, config, service), authorization?.cookie);
+  });
+
   app.get('/health', (c) => {
     const notices = services.modelAvailability.notices();
     return c.json({
@@ -372,30 +396,6 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.use('/sessions/:sessionId/*', sessionAuthorizationMiddleware(config, services));
   app.use('/sessions/:sessionId', sessionAuthorizationMiddleware(config, services));
-
-  app.use('*', async (c, next) => {
-    const serviceHost = parseServiceHostFromRequest(config, c);
-    if (!serviceHost) {
-      await next();
-      return;
-    }
-    if (new URL(c.req.url).pathname === '/__preview_auth') {
-      return authorizePreviewToken(config, services.store, c, serviceHost.sessionId, serviceHost.port);
-    }
-    const authorization = await authorizePreviewRequest(config, services.store, c);
-    if (config.apiAuthMode === 'session' && !authorization) {
-      return writeError(c, 403, 'forbidden', 'Preview access is required');
-    }
-    const session = await services.sessions.get(serviceHost.sessionId);
-    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
-    const service = await getSessionService(config, services, serviceHost.sessionId, serviceHost.port);
-    if (!service) return writeError(c, 404, 'not_found', 'Service URL is not available for this sandbox');
-    if (config.apiAuthMode === 'bearer') {
-      const serviceAuthorized = c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
-      if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Preview access is required');
-    }
-    return appendPreviewCookie(await proxyService(c, config, service), authorization?.cookie);
-  });
 
   app.post('/sessions', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
