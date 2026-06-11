@@ -72,6 +72,7 @@ const storeMethods = [
   'listGroups',
   'listIdleSandboxes',
   'listSessions',
+  'listSessionsWithLatestSandbox',
   'listStoppableSandboxes',
   'listUserGroupMemberships',
   'markCallbackDeliveryFailed',
@@ -85,6 +86,7 @@ const storeMethods = [
   'releaseAutomationClaim',
   'requestCallbackReplay',
   'requestRunCancellation',
+  'renewRunLease',
   'resumeSessionQueue',
   'setSandboxSecrets',
   'unarchiveAutomation',
@@ -95,11 +97,18 @@ const storeMethods = [
   'updatePendingMessage',
   'updateSandbox',
   'updateSession',
+  'updateSessionWithEvent',
   'updateSessionForRun',
   'upsertAuthUserForAccount',
   'upsertGroupMember',
   'withExternalThreadLock',
 ] as const satisfies readonly StoreMethod[];
+
+type MissingStoreMethod = Exclude<StoreMethod, (typeof storeMethods)[number]>;
+type AssertTrue<T extends true> = T;
+type _StoreMethodsAreExhaustive = AssertTrue<
+  MissingStoreMethod extends never ? true : { missingStoreMethods: MissingStoreMethod }
+>;
 
 const untracedPollingMethods = new Set<StoreMethod>([
   'claimDueCallbackDeliveries',
