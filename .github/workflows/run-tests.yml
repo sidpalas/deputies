@@ -1,0 +1,125 @@
+name: Run Tests
+
+on:
+  push:
+    branches:
+      - main
+      # Temporary branch trigger to validate this workflow before it exists on main.
+      - ci/run-tests-workflow
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup CI
+        uses: ./.github/actions/setup-ci
+
+      - name: Check formatting
+        run: mise run //:format:check
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup CI
+        uses: ./.github/actions/setup-ci
+
+      - name: Run typechecks
+        run: mise run //:typecheck
+
+  unit:
+    name: Unit (${{ matrix.package.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - name: control-plane
+            task: //apps/control-plane:test
+          - name: web
+            task: //apps/web:test
+          - name: sandbox-bridge
+            task: //packages/sandbox-bridge:test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup CI
+        uses: ./.github/actions/setup-ci
+
+      - name: Run unit tests
+        run: mise run ${{ matrix.package.task }}
+
+  control-plane-integration:
+    name: Control plane integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca
+        env:
+          POSTGRES_DB: flue_test
+          POSTGRES_PASSWORD: flue
+          POSTGRES_USER: flue
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flue -d flue_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup CI
+        uses: ./.github/actions/setup-ci
+
+      - name: Run integration tests
+        env:
+          TEST_DATABASE_URL: postgres://flue:flue@127.0.0.1:5432/flue_test
+        run: mise run //apps/control-plane:test:integration
+
+  web-e2e:
+    name: Web E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup CI
+        uses: ./.github/actions/setup-ci
+
+      - name: Install Playwright Chromium
+        run: pnpm --dir apps/web exec playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: mise run //apps/web:e2e

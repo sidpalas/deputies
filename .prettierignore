@@ -4,6 +4,7 @@ coverage
 playwright-report
 test-results
 .pnpm-store
+.claude
 pnpm-lock.yaml
 CHANGELOG.md
 .env*
