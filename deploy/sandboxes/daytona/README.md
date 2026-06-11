@@ -107,17 +107,19 @@ Inside a Daytona sandbox after the repository is present:
 The script:
 
 1. Starts local Postgres inside the sandbox.
-2. Creates `flue` and `flue_test` databases if needed.
+2. Creates `deputies` and `deputies_test` databases if needed.
 3. Installs pnpm dependencies.
 4. Runs migrations.
 5. Runs API typecheck, unit tests, and integration tests.
 6. Runs web typecheck, unit tests, Playwright e2e tests, and production build.
 
+Remove `$HOME/.deputies/postgres` before restarting if the cluster was initialized with older `flue` database defaults.
+
 It sets these defaults when not already provided:
 
 ```sh
-DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue
-TEST_DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue_test
+DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies
+TEST_DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies_test
 API_AUTH_MODE=none
 ```
 
@@ -134,7 +136,7 @@ For manual development inside a sandbox:
 Then run services directly:
 
 ```sh
-DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue mise run //apps/control-plane:db:migrate
-DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue API_AUTH_MODE=none mise run //apps/control-plane:dev
+DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies mise run //apps/control-plane:db:migrate
+DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies API_AUTH_MODE=none mise run //apps/control-plane:dev
 VITE_API_PROXY_TARGET=http://127.0.0.1:3583 mise run //apps/web:dev
 ```

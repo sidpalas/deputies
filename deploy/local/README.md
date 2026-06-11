@@ -12,7 +12,7 @@ mise run //deploy/local:infra:up
 
 ## Services
 
-- `postgres`: local Postgres database with `flue` and `flue_test` databases.
+- `postgres`: local Postgres database with `deputies` and `deputies_test` databases.
 - `seaweedfs`: local S3-compatible object storage for artifact testing.
 
 ## Commands
@@ -39,11 +39,13 @@ Reset local volumes:
 docker compose -f deploy/local/docker-compose.yml down -v
 ```
 
+Run this reset if your local Postgres volume was created with older `flue` database defaults.
+
 Default local connection strings:
 
 ```sh
-DATABASE_URL=postgres://flue:flue@localhost:5432/flue
-TEST_DATABASE_URL=postgres://flue:flue@localhost:5432/flue_test
+DATABASE_URL=postgres://deputies:deputies@localhost:5432/deputies
+TEST_DATABASE_URL=postgres://deputies:deputies@localhost:5432/deputies_test
 ```
 
 Default local S3-compatible artifact settings:

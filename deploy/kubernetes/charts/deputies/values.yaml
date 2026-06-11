@@ -64,9 +64,9 @@ fullnameOverride: ''
 postgres:
   host: postgres-rw
   port: 5432
-  database: flue
-  username: flue
-  password: flue
+  database: deputies
+  username: deputies
+  password: deputies
   sslMode: ''
   existingSecret: deputies-postgres-app
   secretKeys:

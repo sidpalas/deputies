@@ -44,7 +44,7 @@ When `--include-artifacts` is used, stored artifact files are copied into `apps/
 URLs are rewritten so image and browser-playable video artifacts render in the static demo.
 
 ```sh
-DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue pnpm --dir apps/control-plane demo:export -- --session-id <session-id> --session-id <session-id>
+DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies pnpm --dir apps/control-plane demo:export -- --session-id <session-id> --session-id <session-id>
 mise run //apps/www:build:with-static-demo
 ```
 
