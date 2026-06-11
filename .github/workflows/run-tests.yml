@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-      # Temporary branch trigger to validate this workflow before it exists on main.
-      - ci/run-tests-workflow
     paths-ignore:
       - '**/*.md'
       - 'docs/**'

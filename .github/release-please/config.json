@@ -3,9 +3,15 @@
   "release-type": "node",
   "bump-minor-pre-major": true,
   "changelog-sections": [
+    { "type": "build", "section": "Build System" },
+    { "type": "ci", "section": "Continuous Integration" },
     { "type": "feat", "section": "Features" },
     { "type": "fix", "section": "Bug Fixes" },
-    { "type": "chore", "section": "Chores" }
+    { "type": "chore", "section": "Chores" },
+    { "type": "docs", "section": "Documentation" },
+    { "type": "perf", "section": "Performance Improvements" },
+    { "type": "refactor", "section": "Code Refactoring" },
+    { "type": "test", "section": "Tests" }
   ],
   "packages": {
     ".": {
