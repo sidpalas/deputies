@@ -1952,6 +1952,74 @@ describe('core API', () => {
     await expect(nextEvent).resolves.toMatchObject({ type: 'message_created', sessionId: session.id, id: 2 });
   });
 
+  it('re-evaluates global stream access when session visibility changes mid-stream', async () => {
+    await closeServer(server);
+    store = new MemoryStore();
+    services = createServices(store);
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_SESSION_SECRET: 'test-secret',
+        AUTH_STATIC_USERNAME: 'admin',
+        AUTH_STATIC_PASSWORD: 'password',
+      }),
+      services,
+    );
+    baseUrl = await listen(server);
+
+    const now = new Date();
+    const user = await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000030',
+      accountId: '00000000-0000-4000-8000-000000000031',
+      provider: 'test',
+      providerAccountId: 'outsider',
+      username: 'outsider',
+      role: 'user',
+      profile: {},
+      now,
+    });
+    await store.createAuthSession({
+      id: 'outsider-session',
+      userId: user.id,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    const group = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000032',
+      name: 'Private team',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const watched = await services.sessions.create({
+      title: 'Tightens later',
+      ownerGroupId: group.id,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+    });
+
+    const abort = new AbortController();
+    const streamResponse = await fetch(`${baseUrl}/events/stream?after=0&include=all`, {
+      headers: { cookie: 'dev_deputies_session=outsider-session' },
+      signal: abort.signal,
+    });
+    expect(streamResponse.status).toBe(200);
+
+    const events = readSseEvents(streamResponse, 2, abort);
+    await services.sessions.update({ id: watched.id, visibility: 'group' });
+    await services.messages.enqueue({ sessionId: watched.id, prompt: 'hidden from outsiders' });
+    const visible = await services.sessions.create({ title: 'Outsider visible' });
+
+    // The outsider sees the organization-visible creation, none of the events
+    // emitted after the watched session became group-only, then the new session.
+    await expect(events).resolves.toMatchObject([
+      { type: 'session_created', sessionId: watched.id },
+      { type: 'session_created', sessionId: visible.id },
+    ]);
+  });
+
   it('cleans up SSE subscribers when clients disconnect', async () => {
     const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Cleanup stream session' });
     const { session } = (await createSession.json()) as { session: { id: string } };
@@ -2577,6 +2645,43 @@ async function waitForZero(readValue: () => number, timeoutMs = 1_000): Promise<
   const deadline = Date.now() + timeoutMs;
   while (readValue() !== 0 && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function readSseEvents(
+  response: Response,
+  count: number,
+  abort: AbortController,
+): Promise<Array<{ id: number; type: string; sequence: number; sessionId: string }>> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Expected response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const events: Array<{ id: number; type: string; sequence: number; sessionId: string }> = [];
+
+  try {
+    while (events.length < count) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error('SSE stream ended before events');
+      buffer += decoder.decode(value, { stream: true });
+
+      let eventEnd = buffer.indexOf('\n\n');
+      while (eventEnd !== -1 && events.length < count) {
+        const frame = buffer.slice(0, eventEnd);
+        buffer = buffer.slice(eventEnd + 2);
+        const data = frame
+          .split('\n')
+          .find((line) => line.startsWith('data: '))
+          ?.slice('data: '.length);
+        if (data) events.push(JSON.parse(data) as (typeof events)[number]);
+        eventEnd = buffer.indexOf('\n\n');
+      }
+    }
+    return events;
+  } finally {
+    abort.abort();
+    void response.body?.cancel().catch(() => undefined);
   }
 }
 

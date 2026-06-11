@@ -457,10 +457,16 @@ export type UpdateAutomationRecord = {
   nextInvocationAt?: Date | null;
 };
 
+export type SessionWithSandboxRecord = {
+  session: SessionRecord;
+  sandbox: SandboxRecord | null;
+};
+
 export interface SessionStore {
   createSession(record: CreateSessionRecord): Promise<SessionRecord>;
   getSession(id: string): Promise<SessionRecord | null>;
   listSessions(): Promise<SessionRecord[]>;
+  listSessionsWithLatestSandbox(provider: string): Promise<SessionWithSandboxRecord[]>;
   updateSession(record: SessionRecord): Promise<SessionRecord>;
   archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
     session: SessionRecord;
@@ -622,8 +628,8 @@ export interface EventStore {
     event: Omit<NormalizedEvent, 'runId'> & { runId: string },
     guard: { runId: string; leaseOwner: string; now: Date },
   ): Promise<EventRecord | null>;
-  getEvents(sessionId: string, afterSequence?: number): Promise<EventRecord[]>;
-  listEvents(afterId?: number): Promise<EventRecord[]>;
+  getEvents(sessionId: string, afterSequence?: number, limit?: number): Promise<EventRecord[]>;
+  listEvents(afterId?: number, limit?: number): Promise<EventRecord[]>;
 }
 
 export type EventRecord = NormalizedEvent & { id: number; sequence: number };

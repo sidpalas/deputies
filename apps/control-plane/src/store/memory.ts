@@ -34,6 +34,7 @@ import type {
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
@@ -223,6 +224,16 @@ export class MemoryStore implements AppStore {
 
   async listSessions(): Promise<SessionRecord[]> {
     return [...this.sessions.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+
+  async listSessionsWithLatestSandbox(provider: string): Promise<SessionWithSandboxRecord[]> {
+    const sessions = await this.listSessions();
+    return Promise.all(
+      sessions.map(async (session) => ({
+        session,
+        sandbox: await this.getLatestSandbox(session.id, provider),
+      })),
+    );
   }
 
   async updateSession(record: SessionRecord): Promise<SessionRecord> {
@@ -1008,15 +1019,17 @@ export class MemoryStore implements AppStore {
     return this.appendEventWithNextSequence(event as NormalizedEvent);
   }
 
-  async getEvents(sessionId: string, afterSequence = 0): Promise<EventRecord[]> {
-    return (this.events.get(sessionId) ?? []).filter((event) => event.sequence > afterSequence);
+  async getEvents(sessionId: string, afterSequence = 0, limit?: number): Promise<EventRecord[]> {
+    const events = (this.events.get(sessionId) ?? []).filter((event) => event.sequence > afterSequence);
+    return limit === undefined ? events : events.slice(0, limit);
   }
 
-  async listEvents(afterId = 0): Promise<EventRecord[]> {
-    return [...this.events.values()]
+  async listEvents(afterId = 0, limit?: number): Promise<EventRecord[]> {
+    const events = [...this.events.values()]
       .flat()
       .filter((event) => event.id > afterId)
       .sort((left, right) => left.id - right.id);
+    return limit === undefined ? events : events.slice(0, limit);
   }
 
   async createWebhookSource(record: CreateWebhookSourceRecord): Promise<WebhookSourceRecord> {

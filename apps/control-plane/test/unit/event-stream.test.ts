@@ -1,7 +1,7 @@
 import type { Context } from 'hono';
 import { describe, expect, it } from 'vitest';
 
-import { writeSessionEventStream } from '../../src/app/event-stream.js';
+import { writeGlobalEventStream, writeSessionEventStream } from '../../src/app/event-stream.js';
 import type { EventService } from '../../src/events/service.js';
 import type { EventRecord } from '../../src/store/types.js';
 
@@ -12,9 +12,9 @@ describe('event stream', () => {
     const historicalEvent = eventRecord(2);
     const liveEvent = eventRecord(3);
     const events = {
-      async list() {
+      async listBatch() {
         subscriber?.(liveEvent);
-        return [historicalEvent];
+        return { events: [historicalEvent], cursor: historicalEvent.sequence, hasMore: false };
       },
       subscribe(_sessionId: string, writeEvent: (event: EventRecord) => void) {
         subscriber = writeEvent;
@@ -39,8 +39,13 @@ describe('event stream', () => {
     const abort = new AbortController();
     const historicalEvents = Array.from({ length: 300 }, (_value, index) => eventRecord(index + 1));
     const events = {
-      async list() {
-        return historicalEvents;
+      async listBatch(_sessionId: string, after: number, limit: number) {
+        const batch = historicalEvents.filter((event) => event.sequence > after).slice(0, limit);
+        return {
+          events: batch,
+          cursor: batch[batch.length - 1]?.sequence ?? after,
+          hasMore: batch.length === limit,
+        };
       },
       subscribe(_sessionId: string, _writeEvent: (event: EventRecord) => void) {
         return () => undefined;
@@ -66,13 +71,78 @@ describe('event stream', () => {
     }
   });
 
+  it('replays large backlogs in batches without skipping or repeating events', async () => {
+    const abort = new AbortController();
+    const historicalEvents = Array.from({ length: 1_200 }, (_value, index) => eventRecord(index + 1));
+    const listCalls: Array<{ after: number; limit: number }> = [];
+    const events = {
+      async listBatch(_sessionId: string, after: number, limit: number) {
+        listCalls.push({ after, limit });
+        const batch = historicalEvents.filter((event) => event.sequence > after).slice(0, limit);
+        return {
+          events: batch,
+          cursor: batch[batch.length - 1]?.sequence ?? after,
+          hasMore: batch.length === limit,
+        };
+      },
+      subscribe(_sessionId: string, _writeEvent: (event: EventRecord) => void) {
+        return () => undefined;
+      },
+    } as unknown as EventService;
+
+    const response = await writeSessionEventStream(context(abort), events, 'session-1', 0);
+
+    try {
+      const streamed = await readSseEvents(response, historicalEvents.length);
+      expect(streamed.map((event) => event.sequence)).toEqual(historicalEvents.map((event) => event.sequence));
+      expect(listCalls.length).toBeGreaterThan(1);
+      expect(listCalls[0]?.after).toBe(0);
+    } finally {
+      abort.abort();
+      await response.body?.cancel().catch(() => undefined);
+    }
+  });
+
+  it('advances past replay batches that are entirely filtered out', async () => {
+    const abort = new AbortController();
+    const historicalEvents = Array.from({ length: 600 }, (_value, index) => eventRecord(index + 1));
+    const listAllCalls: number[] = [];
+    const events = {
+      async listAllBatch(after: number, limit: number) {
+        listAllCalls.push(after);
+        const batch = historicalEvents.filter((event) => event.id > after).slice(0, limit);
+        return {
+          events: batch,
+          cursor: batch[batch.length - 1]?.id ?? after,
+          hasMore: batch.length === limit,
+        };
+      },
+      subscribeAllEvents(_writeEvent: (event: EventRecord) => void) {
+        return () => undefined;
+      },
+    } as unknown as EventService;
+
+    const response = await writeGlobalEventStream(context(abort), events, 0, true, true, {
+      filter: (event) => event.id > 500,
+    });
+
+    try {
+      const streamed = await readSseEvents(response, 100);
+      expect(streamed.map((event) => event.id)).toEqual(Array.from({ length: 100 }, (_value, index) => index + 501));
+      expect(listAllCalls).toEqual([0, 500]);
+    } finally {
+      abort.abort();
+      await response.body?.cancel().catch(() => undefined);
+    }
+  });
+
   it('closes slow streams only when the live event backlog exceeds the high-water mark', async () => {
     const abort = new AbortController();
     let subscriber: ((event: EventRecord) => void) | undefined;
     let unsubscribed = false;
     const events = {
-      async list() {
-        return [];
+      async listBatch(_sessionId: string, after: number) {
+        return { events: [], cursor: after, hasMore: false };
       },
       subscribe(_sessionId: string, writeEvent: (event: EventRecord) => void) {
         subscriber = writeEvent;

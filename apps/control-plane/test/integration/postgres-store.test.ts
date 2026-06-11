@@ -24,6 +24,15 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   let store: PostgresStore;
 
   beforeAll(async () => {
+    // Rebuild the dedicated test database from the current migration files so a
+    // schema left behind by an older or in-progress branch cannot leak into this run.
+    const bootstrap = new Pool({ connectionString: testDatabaseUrl });
+    try {
+      await bootstrap.query('DROP SCHEMA public CASCADE');
+      await bootstrap.query('CREATE SCHEMA public');
+    } finally {
+      await bootstrap.end();
+    }
     await runMigrations(testDatabaseUrl!);
     pool = new Pool({ connectionString: testDatabaseUrl });
   });
@@ -185,6 +194,59 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     await expect(
       store.listIdleSandboxes({ provider: 'fake', idleBefore: new Date(now.getTime() + 3_000), limit: 10 }),
     ).resolves.toEqual([]);
+  });
+
+  it('lists sessions with their latest sandbox for one provider in a single batch', async () => {
+    const services = createServices(store);
+    const withSandboxes = await services.sessions.create({ title: 'Has sandboxes' });
+    const otherProvider = await services.sessions.create({ title: 'Other provider only' });
+    const withoutSandbox = await services.sessions.create({ title: 'No sandbox' });
+    const now = new Date();
+
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000711',
+      sessionId: withSandboxes.id,
+      provider: 'fake',
+      providerSandboxId: 'fake-sandbox-old',
+      status: 'destroyed',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: new Date(now.getTime() - 2_000),
+      updatedAt: new Date(now.getTime() - 2_000),
+    });
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000712',
+      sessionId: withSandboxes.id,
+      provider: 'fake',
+      providerSandboxId: 'fake-sandbox-new',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000713',
+      sessionId: otherProvider.id,
+      provider: 'docker',
+      providerSandboxId: 'docker-sandbox-1',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const listed = await store.listSessionsWithLatestSandbox('fake');
+    const bySessionId = new Map(listed.map((item) => [item.session.id, item]));
+
+    expect(listed.map((item) => item.session)).toEqual(await store.listSessions());
+    expect(bySessionId.get(withSandboxes.id)?.sandbox).toMatchObject({
+      providerSandboxId: 'fake-sandbox-new',
+      status: 'ready',
+    });
+    expect(bySessionId.get(otherProvider.id)?.sandbox).toBeNull();
+    expect(bySessionId.get(withoutSandbox.id)?.sandbox).toBeNull();
   });
 
   it('claims pending messages as a queue batch and respects queue pause', async () => {

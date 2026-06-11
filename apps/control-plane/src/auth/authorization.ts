@@ -21,16 +21,39 @@ const groupRoleRank: Record<GroupRole, number> = {
   admin: 3,
 };
 
-export async function readRequestAuthorization(
+// Auth state is resolved by middlewares and handlers independently, so memoize the
+// underlying lookups per request to avoid repeating the same store queries.
+const requestAuthUserCache = new WeakMap<Request, Promise<AuthUserRecord | null>>();
+const requestAuthorizationCache = new WeakMap<Request, Promise<RequestAuthorization | null>>();
+
+export function readRequestAuthUser(store: AppStore, c: Context): Promise<AuthUserRecord | null> {
+  const request = c.req.raw;
+  let user = requestAuthUserCache.get(request);
+  if (!user) {
+    const sessionId = readSessionId(c);
+    user = sessionId ? store.getAuthUserBySession({ sessionId, now: new Date() }) : Promise.resolve(null);
+    requestAuthUserCache.set(request, user);
+  }
+  return user;
+}
+
+export function readRequestAuthorization(
   config: AppConfig,
   store: AppStore,
   c: Context,
 ): Promise<RequestAuthorization | null> {
-  if (config.apiAuthMode !== 'session') return { bypass: true, user: null, memberships: [] };
-  const sessionId = readSessionId(c);
-  const user = sessionId ? await store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
-  if (!user) return null;
-  return { bypass: false, user, memberships: await store.listUserGroupMemberships(user.id) };
+  if (config.apiAuthMode !== 'session') return Promise.resolve({ bypass: true, user: null, memberships: [] });
+  const request = c.req.raw;
+  let authorization = requestAuthorizationCache.get(request);
+  if (!authorization) {
+    authorization = (async (): Promise<RequestAuthorization | null> => {
+      const user = await readRequestAuthUser(store, c);
+      if (!user) return null;
+      return { bypass: false, user, memberships: await store.listUserGroupMemberships(user.id) };
+    })();
+    requestAuthorizationCache.set(request, authorization);
+  }
+  return authorization;
 }
 
 export function canReadSession(auth: RequestAuthorization, session: SessionRecord): boolean {
