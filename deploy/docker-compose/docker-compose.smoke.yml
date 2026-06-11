@@ -13,7 +13,7 @@ services:
       AUTH_GITHUB_DEFAULT_GROUP_ROLE: member
       UNSAFE_AUTH_GITHUB_ALLOW_ALL: 'false'
       APP_DATA_STORE: postgres
-      DATABASE_URL: postgres://flue:flue@postgres:5432/flue
+      DATABASE_URL: postgres://deputies:deputies@postgres:5432/deputies
       RUNNER: fake
       SANDBOX_PROVIDER: fake
       FAKE_RUNNER_ARTIFACT_JSON: '{"type":"file","title":"Smoke Artifact","content":"hello artifact storage","contentType":"text/plain","fileName":"smoke-artifact.txt"}'

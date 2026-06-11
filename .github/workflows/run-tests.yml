@@ -83,13 +83,13 @@ jobs:
       postgres:
         image: postgres:17-alpine@sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca
         env:
-          POSTGRES_DB: flue_test
-          POSTGRES_PASSWORD: flue
-          POSTGRES_USER: flue
+          POSTGRES_DB: deputies_test
+          POSTGRES_PASSWORD: deputies
+          POSTGRES_USER: deputies
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U flue -d flue_test"
+          --health-cmd "pg_isready -U deputies -d deputies_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -103,7 +103,7 @@ jobs:
 
       - name: Run integration tests
         env:
-          TEST_DATABASE_URL: postgres://flue:flue@127.0.0.1:5432/flue_test
+          TEST_DATABASE_URL: postgres://deputies:deputies@127.0.0.1:5432/deputies_test
         run: mise run //apps/control-plane:test:integration
 
   web-e2e:

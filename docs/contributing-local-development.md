@@ -41,8 +41,8 @@ Edit `.env.local` with this baseline. Use one generated value for `AUTH_SESSION_
 RUN_MODE=combined
 
 APP_DATA_STORE=postgres
-DATABASE_URL=postgres://flue:flue@localhost:5432/flue
-TEST_DATABASE_URL=postgres://flue:flue@localhost:5432/flue_test
+DATABASE_URL=postgres://deputies:deputies@localhost:5432/deputies
+TEST_DATABASE_URL=postgres://deputies:deputies@localhost:5432/deputies_test
 RUNNER_STATE_STORE=postgres
 
 ARTIFACT_STORAGE_PROVIDER=s3

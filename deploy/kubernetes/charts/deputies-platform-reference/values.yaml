@@ -29,10 +29,10 @@ postgresql:
   credentials:
     create: true
     secretName: deputies-postgres-app
-    username: flue
-    password: flue
-    database: flue
-  testDatabase: flue_test
+    username: deputies
+    password: deputies
+    database: deputies
+  testDatabase: deputies_test
   service:
     name: postgres-rw
     port: 5432

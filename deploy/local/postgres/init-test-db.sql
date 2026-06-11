@@ -1,1 +1,1 @@
-CREATE DATABASE flue_test;
+CREATE DATABASE deputies_test;

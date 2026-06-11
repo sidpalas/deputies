@@ -6,8 +6,8 @@ cd "$repo_root"
 
 ./deploy/sandboxes/daytona/start-postgres.sh
 
-export DATABASE_URL=${DATABASE_URL:-postgres://flue:flue@127.0.0.1:5432/flue}
-export TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://flue:flue@127.0.0.1:5432/flue_test}
+export DATABASE_URL=${DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:5432/deputies}
+export TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:5432/deputies_test}
 export API_AUTH_MODE=${API_AUTH_MODE:-none}
 
 pnpm install --frozen-lockfile

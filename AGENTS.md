@@ -36,15 +36,15 @@ Some sandbox providers do not support nested Docker or Docker Compose. For Postg
 This creates and starts a local Postgres cluster and ensures these databases exist:
 
 ```text
-flue
-flue_test
+deputies
+deputies_test
 ```
 
 Use these connection strings unless the task provides different ones:
 
 ```sh
-export DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue
-export TEST_DATABASE_URL=postgres://flue:flue@127.0.0.1:5432/flue_test
+export DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies
+export TEST_DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies_test
 ```
 
 Run migrations before API integration or UAT checks:

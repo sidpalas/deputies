@@ -15,8 +15,8 @@ services:
     environment:
       PORT: 3583
       RUN_MODE: api
-      DATABASE_URL: postgres://flue:flue@postgres:5432/flue
-      TEST_DATABASE_URL: postgres://flue:flue@postgres:5432/flue_test
+      DATABASE_URL: postgres://deputies:deputies@postgres:5432/deputies
+      TEST_DATABASE_URL: postgres://deputies:deputies@postgres:5432/deputies_test
       DOCKER_ORCHESTRATOR_MODE: http
       DOCKER_ORCHESTRATOR_URL: http://docker-orchestrator:3585
       DOCKER_SANDBOX_BRIDGE_HOST: host.docker.internal
@@ -47,8 +47,8 @@ services:
     environment:
       RUN_MODE: worker
       OPENAI_CODEX_AUTH_FILE: /run/secrets/openai-codex-auth.json
-      DATABASE_URL: postgres://flue:flue@postgres:5432/flue
-      TEST_DATABASE_URL: postgres://flue:flue@postgres:5432/flue_test
+      DATABASE_URL: postgres://deputies:deputies@postgres:5432/deputies
+      TEST_DATABASE_URL: postgres://deputies:deputies@postgres:5432/deputies_test
       DOCKER_ORCHESTRATOR_MODE: http
       DOCKER_ORCHESTRATOR_URL: http://docker-orchestrator:3585
       DOCKER_SANDBOX_BRIDGE_HOST: host.docker.internal
