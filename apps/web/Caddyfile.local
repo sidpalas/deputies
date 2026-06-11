@@ -4,9 +4,8 @@
 
 	# Keep this forwarded-host routing aligned with the Helm-rendered Caddyfile used
 	# when web.trustForwardedServiceHosts=true.
-	# Override SERVICE_HOST_REGEX when this instance's own web host starts with s-
-	# (e.g. a nested Deputies preview), so only true service hosts match:
-	# SERVICE_HOST_REGEX=^s-\d+-[^.]+\.<this-instance-web-host>
+	# Set SERVICE_HOST_REGEX=^$ when this instance runs only as an app preview
+	# behind another Deputies service host and should not route service hosts itself.
 	@service_host header_regexp Host {$SERVICE_HOST_REGEX:^s-}
 	# Portless terminates TLS locally and may forward Caddy an internal Host
 	# while preserving the browser service host/proto in X-Forwarded-* or X-Original-*.

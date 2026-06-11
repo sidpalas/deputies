@@ -41,9 +41,8 @@ export function createPreviewCookie(
   config: AppConfig,
   token: string,
   maxAgeSeconds = previewCookieMaxAgeSeconds,
-  domain?: string,
 ): string {
-  return `${config.previewCookieName}=${token}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=${formatSameSite(config)}${config.authCookieSecure ? '; Secure' : ''}${domain ? `; Domain=${domain}` : ''}`;
+  return `${config.previewCookieName}=${token}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=${formatSameSite(config)}${config.authCookieSecure ? '; Secure' : ''}`;
 }
 
 export type OAuthState = {

@@ -5,9 +5,9 @@ import tailwindcss from '@tailwindcss/vite';
 
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:3583';
 const portlessUrl = process.env.VITE_PORTLESS_URL ?? 'https://deputies.localhost';
-// Override SERVICE_HOST_REGEX when this instance's own web host starts with s-
-// (e.g. a nested Deputies preview), so only true service hosts match. Keep this
-// aligned with apps/web/Caddyfile and apps/web/Caddyfile.local.
+// Set SERVICE_HOST_REGEX=^$ when this instance runs only as an app preview
+// behind another Deputies service host and should not route service hosts itself.
+// Keep this aligned with apps/web/Caddyfile and apps/web/Caddyfile.local.
 const serviceHostRegex = new RegExp(process.env.SERVICE_HOST_REGEX ?? '^s-');
 const allowedHosts = process.env.VITE_DEV_ALLOWED_HOSTS
   ? process.env.VITE_DEV_ALLOWED_HOSTS.split(',')

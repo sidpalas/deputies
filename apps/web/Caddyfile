@@ -2,9 +2,8 @@
 	root * /usr/share/caddy
 	encode zstd gzip
 
-	# Override SERVICE_HOST_REGEX when this instance's own web host starts with s-
-	# (e.g. a nested Deputies preview), so only true service hosts match:
-	# SERVICE_HOST_REGEX=^s-\d+-[^.]+\.<this-instance-web-host>
+	# Set SERVICE_HOST_REGEX=^$ when this instance runs only as an app preview
+	# behind another Deputies service host and should not route service hosts itself.
 	@service_host header_regexp Host {$SERVICE_HOST_REGEX:^s-}
 	handle @service_host {
 		reverse_proxy {$API_UPSTREAM:http://control-plane:3583} {

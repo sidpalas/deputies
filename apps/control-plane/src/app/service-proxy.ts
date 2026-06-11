@@ -215,17 +215,7 @@ export function appendPreviewCookie(response: Response, cookie: string | undefin
   return response;
 }
 
-export type ServiceHostMatch = {
-  sessionId: string;
-  port: number;
-  // True when the request host has labels below the direct service host, e.g.
-  // s-<port>-<id>.s-<port>-<id>.<domain> from a nested Deputies instance.
-  nested: boolean;
-  // The direct service host (service label + matched domain) without nested labels.
-  serviceHost: string;
-};
-
-export function parseServiceHostFromRequest(config: AppConfig, c: Context): ServiceHostMatch | null {
+export function parseServiceHostFromRequest(config: AppConfig, c: Context): { sessionId: string; port: number } | null {
   return parsePreviewHostFromHosts(previewRequestHosts(config, c), previewAllowedDomains(config, c));
 }
 
@@ -252,7 +242,8 @@ export async function authorizePreviewToken(
   config: AppConfig,
   store: AppStore,
   c: Context,
-  serviceHost: ServiceHostMatch,
+  previewSessionId: string,
+  port: number,
 ): Promise<Response> {
   const token = c.req.query('token');
   const redirect = previewAuthRedirect(c.req.query('redirect'));
@@ -262,8 +253,8 @@ export async function authorizePreviewToken(
     !authToken ||
     !payload ||
     payload.kind !== 'bootstrap' ||
-    payload.previewSessionId !== serviceHost.sessionId ||
-    payload.port !== serviceHost.port
+    payload.previewSessionId !== previewSessionId ||
+    payload.port !== port
   ) {
     return new Response('Forbidden', { status: 403 });
   }
@@ -280,9 +271,7 @@ export async function authorizePreviewToken(
     headers: {
       location: redirect,
       'referrer-policy': 'no-referrer',
-      // Scope the cookie to the service host and its subdomains so a nested
-      // instance's own service hosts stay authorized at this proxy layer.
-      'set-cookie': createPreviewCookie(config, cookieToken, previewCookieMaxAgeSeconds, serviceHost.serviceHost),
+      'set-cookie': createPreviewCookie(config, cookieToken, previewCookieMaxAgeSeconds),
     },
   });
 }
@@ -511,30 +500,14 @@ function previewHostLabel(sessionId: string, port: number): string {
   return `s-${port}-${sessionId}`;
 }
 
-function parsePreviewHost(host: string | undefined, allowedDomains?: string[]): ServiceHostMatch | null {
+function parsePreviewHost(
+  host: string | undefined,
+  allowedDomains?: string[],
+): { sessionId: string; port: number } | null {
   const hostname = host?.split(':')[0]?.toLowerCase();
   if (!hostname) return null;
-  if (allowedDomains?.length) {
-    // Prefer the most specific domain so a nested instance's own base domain wins
-    // over a broader suffix that also matches.
-    const domain = allowedDomains
-      .filter((candidate) => hostname.endsWith(`.${candidate}`))
-      .sort((a, b) => b.length - a.length)[0];
-    if (!domain) return null;
-    // Parse the label adjacent to the matched domain; labels below it belong to a
-    // nested instance running inside the sandbox and are forwarded untouched.
-    const labels = hostname.slice(0, hostname.length - domain.length - 1).split('.');
-    const label = labels[labels.length - 1];
-    const parsed = parseServiceHostLabel(label);
-    if (!parsed) return null;
-    return { ...parsed, nested: labels.length > 1, serviceHost: `${label}.${domain}` };
-  }
-  const parsed = parseServiceHostLabel(hostname.split('.')[0]);
-  if (!parsed) return null;
-  return { ...parsed, nested: false, serviceHost: hostname };
-}
-
-function parseServiceHostLabel(label: string | undefined): { sessionId: string; port: number } | null {
+  if (allowedDomains?.length && !allowedDomains.some((domain) => hostname.endsWith(`.${domain}`))) return null;
+  const label = hostname.split('.')[0];
   const match = label?.match(/^s-(\d+)-(.+)$/);
   if (!match) return null;
   const port = parseServicePort(match[1]);
@@ -542,11 +515,17 @@ function parseServiceHostLabel(label: string | undefined): { sessionId: string; 
   return { port, sessionId: match[2]! };
 }
 
-function parsePreviewHostFromNodeRequest(config: AppConfig, request: IncomingMessage): ServiceHostMatch | null {
+function parsePreviewHostFromNodeRequest(
+  config: AppConfig,
+  request: IncomingMessage,
+): { sessionId: string; port: number } | null {
   return parsePreviewHostFromHosts(previewNodeRequestHosts(config, request), previewAllowedDomains(config, request));
 }
 
-function parsePreviewHostFromHosts(hosts: string[], allowedDomains: string[]): ServiceHostMatch | null {
+function parsePreviewHostFromHosts(
+  hosts: string[],
+  allowedDomains: string[],
+): { sessionId: string; port: number } | null {
   for (const host of hosts) {
     const parsed = parsePreviewHost(host, allowedDomains);
     if (parsed) return parsed;
@@ -815,7 +794,7 @@ async function readPreviewAuthUser(
   const memberships = await store.listUserGroupMemberships(user.id);
   const auth: RequestAuthorization = { bypass: false, user, memberships };
   if (!canReadSession(auth, session)) return null;
-  const cookie = options.renew ? renewedPreviewCookie(config, payload, hostPreview.serviceHost) : undefined;
+  const cookie = options.renew ? renewedPreviewCookie(config, payload) : undefined;
   return { user, canWrite: canWriteSession(auth, session), ...(cookie ? { cookie } : {}) };
 }
 
@@ -835,13 +814,13 @@ function createPreviewCookieToken(config: AppConfig, payload: PreviewAuthToken):
   );
 }
 
-function renewedPreviewCookie(config: AppConfig, payload: PreviewAuthToken, domain: string): string | undefined {
+function renewedPreviewCookie(config: AppConfig, payload: PreviewAuthToken): string | undefined {
   const now = Math.floor(Date.now() / 1000);
   if (payload.exp - now > previewCookieMaxAgeSeconds / 2) return undefined;
   const exp = Math.min(now + previewCookieMaxAgeSeconds, payload.grantExp);
   if (exp <= now) return undefined;
   const token = signPreviewAuthToken({ ...payload, exp }, requireAuthSessionSecret(config));
-  return createPreviewCookie(config, token, exp - now, domain);
+  return createPreviewCookie(config, token, exp - now);
 }
 
 function isTrustedPreviewRequest(config: AppConfig, c: Context): boolean {

@@ -379,10 +379,8 @@ export function createApp(config: AppConfig, services = createServices()) {
       await next();
       return;
     }
-    // Nested hosts belong to an instance running inside the sandbox, so its
-    // /__preview_auth must proxy through instead of being handled here.
-    if (!serviceHost.nested && new URL(c.req.url).pathname === '/__preview_auth') {
-      return authorizePreviewToken(config, services.store, c, serviceHost);
+    if (new URL(c.req.url).pathname === '/__preview_auth') {
+      return authorizePreviewToken(config, services.store, c, serviceHost.sessionId, serviceHost.port);
     }
     const authorization = await authorizePreviewRequest(config, services.store, c);
     if (config.apiAuthMode === 'session' && !authorization) {

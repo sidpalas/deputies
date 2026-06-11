@@ -1459,146 +1459,6 @@ describe('core API', () => {
       });
       expect(renewed.status).toBe(200);
       expect(renewed.headers.get('set-cookie')).toContain(`${previewCookieName}=`);
-      expect(renewed.headers.get('set-cookie')).toContain(`Domain=${serviceHost}`);
-    } finally {
-      await closeServer(upstream);
-    }
-  });
-
-  it('routes nested service hosts to the session adjacent to the base domain', async () => {
-    const upstream = createPreviewUpstream();
-    const upstreamBaseUrl = await listen(upstream);
-    await closeServer(server);
-    const provider = new ServiceSandboxProvider(upstreamBaseUrl);
-    server = createServer(
-      loadConfig({
-        API_AUTH_MODE: 'none',
-        WEB_BASE_URL: 'https://deputies.localhost',
-        SERVICE_TRUST_FORWARDED_HOSTS: 'true',
-      }),
-      createServices(store, { sandboxProvider: provider }),
-    );
-    baseUrl = await listen(server);
-
-    try {
-      const session = await services.sessions.create({ title: 'Nested service host' });
-      const sandbox = await provider.create({ sessionId: session.id });
-      const now = new Date();
-      await store.createSandbox({
-        id: '00000000-0000-4000-8000-000000000513',
-        sessionId: session.id,
-        provider: provider.name,
-        providerSandboxId: sandbox.providerSandboxId,
-        status: 'ready',
-        workspacePath: '/workspace',
-        metadata: { runtimeId: 'runtime-1' },
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      // A nested Deputies instance exposed on port 3000 generates its own service
-      // hosts below the outer service host; the outer instance must resolve the
-      // label adjacent to its base domain, not the first label.
-      const nestedHost = `s-4000-inner-session.s-3000-${session.id}.deputies.localhost`;
-      const nested = await fetch(`${baseUrl}/echo-host`, { headers: { 'x-forwarded-host': nestedHost } });
-      expect(nested.status).toBe(200);
-      await expect(nested.json()).resolves.toEqual({ host: nestedHost, forwardedHost: nestedHost });
-
-      // The nested instance owns preview auth for its hosts, so /__preview_auth on
-      // a nested host proxies through instead of being handled by this instance.
-      const nestedPreviewAuth = await fetch(`${baseUrl}/__preview_auth?token=inner-token`, {
-        headers: { 'x-forwarded-host': nestedHost },
-      });
-      expect(nestedPreviewAuth.status).toBe(404);
-      await expect(nestedPreviewAuth.json()).resolves.toEqual({ error: 'not_found' });
-
-      // First-label parsing must not resurface for unknown adjacent labels.
-      const unknownAdjacent = await fetch(`${baseUrl}/echo-host`, {
-        headers: { 'x-forwarded-host': `s-4000-inner-session.unrelated.deputies.localhost` },
-      });
-      expect(unknownAdjacent.status).toBe(404);
-    } finally {
-      await closeServer(upstream);
-    }
-  });
-
-  it('authorizes nested service hosts with the domain-scoped preview cookie', async () => {
-    const upstream = createPreviewUpstream();
-    const upstreamBaseUrl = await listen(upstream);
-    await closeServer(server);
-    const provider = new ServiceSandboxProvider(upstreamBaseUrl);
-    server = createServer(
-      loadConfig({
-        API_AUTH_MODE: 'session',
-        AUTH_STATIC_USERNAME: 'dev',
-        AUTH_STATIC_PASSWORD: 'password',
-        AUTH_SESSION_SECRET: 'test-secret',
-        WEB_BASE_URL: 'https://deputies.localhost',
-        SERVICE_TRUST_FORWARDED_HOSTS: 'true',
-      }),
-      createServices(store, { sandboxProvider: provider }),
-    );
-    baseUrl = await listen(server);
-
-    try {
-      const login = await postJson(`${baseUrl}/auth/login`, { username: 'dev', password: 'password' });
-      const cookie = login.headers.get('set-cookie');
-      const session = await services.sessions.create({ title: 'Nested preview auth' });
-      const sandbox = await provider.create({ sessionId: session.id });
-      const now = new Date();
-      await store.createSandbox({
-        id: '00000000-0000-4000-8000-000000000514',
-        sessionId: session.id,
-        provider: provider.name,
-        providerSandboxId: sandbox.providerSandboxId,
-        status: 'ready',
-        workspacePath: '/workspace',
-        metadata: { runtimeId: 'runtime-1' },
-        createdAt: now,
-        updatedAt: now,
-      });
-      const serviceHost = `s-3000-${session.id}.deputies.localhost`;
-      const nestedHost = `s-4000-inner-session.${serviceHost}`;
-
-      const servicesResponse = await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`, {
-        headers: { cookie: cookie! },
-      });
-      const servicesBody = (await servicesResponse.json()) as { services: Array<{ url: string }> };
-      const previewAuthUrl = new URL(servicesBody.services[0]!.url);
-
-      const previewAuth = await fetch(`${baseUrl}${previewAuthUrl.pathname}${previewAuthUrl.search}`, {
-        headers: { 'x-forwarded-host': serviceHost },
-        redirect: 'manual',
-      });
-      expect(previewAuth.status).toBe(302);
-      const previewCookie = previewAuth.headers.get('set-cookie');
-      // The cookie is scoped to the service host so the browser also sends it for
-      // nested service hosts below it.
-      expect(previewCookie).toContain(`Domain=${serviceHost}`);
-      const previewCookiePair = `${previewCookieName}=${cookieValue(previewCookie!, previewCookieName)}`;
-
-      const nestedGet = await fetch(`${baseUrl}/echo-host`, {
-        headers: { cookie: previewCookiePair, 'x-forwarded-host': nestedHost },
-      });
-      expect(nestedGet.status).toBe(200);
-      await expect(nestedGet.json()).resolves.toEqual({ host: nestedHost, forwardedHost: nestedHost });
-
-      const nestedPost = await fetch(`${baseUrl}/`, {
-        method: 'POST',
-        headers: { cookie: previewCookiePair, 'x-forwarded-host': nestedHost, origin: `https://${nestedHost}` },
-      });
-      expect(nestedPost.status).toBe(200);
-
-      // The nested instance's own /__preview_auth proxies through with the outer
-      // preview cookie stripped from the forwarded request.
-      const nestedPreviewAuth = await fetch(`${baseUrl}/__preview_auth?token=inner-token`, {
-        headers: { cookie: previewCookiePair, 'x-forwarded-host': nestedHost },
-      });
-      expect(nestedPreviewAuth.status).toBe(404);
-      await expect(nestedPreviewAuth.json()).resolves.toEqual({ error: 'not_found' });
-
-      const withoutCookie = await fetch(`${baseUrl}/echo-host`, { headers: { 'x-forwarded-host': nestedHost } });
-      expect(withoutCookie.status).toBe(403);
     } finally {
       await closeServer(upstream);
     }
@@ -1609,6 +1469,7 @@ describe('core API', () => {
     const upstreamBaseUrl = await listen(upstream);
     await closeServer(server);
     const provider = new ServiceSandboxProvider(upstreamBaseUrl);
+    services = createServices(store, { sandboxProvider: provider });
     server = createServer(
       loadConfig({
         API_AUTH_MODE: 'session',
@@ -1620,7 +1481,7 @@ describe('core API', () => {
         SESSION_COOKIE_NAME: 'inner_deputies_session',
         PREVIEW_COOKIE_NAME: 'inner_deputies_preview',
       }),
-      createServices(store, { sandboxProvider: provider }),
+      services,
     );
     baseUrl = await listen(server);
 
@@ -2755,16 +2616,6 @@ function createPreviewUpstream(): Server {
     if (request.url === '/headers') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ referer: request.headers.referer ?? null }));
-      return;
-    }
-    if (request.url === '/echo-host') {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(
-        JSON.stringify({
-          host: request.headers.host ?? null,
-          forwardedHost: request.headers['x-forwarded-host'] ?? null,
-        }),
-      );
       return;
     }
     if (request.url?.startsWith('/bridge-base/')) {
