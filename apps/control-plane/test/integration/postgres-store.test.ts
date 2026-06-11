@@ -24,6 +24,22 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   let store: PostgresStore;
 
   beforeAll(async () => {
+    // Rebuild the dedicated test database from the current migration files so a
+    // schema left behind by an older or in-progress branch cannot leak into this run.
+    // The reset is destructive, so refuse anything that is not clearly a test database.
+    const databaseName = new URL(testDatabaseUrl!).pathname.replace(/^\//, '');
+    if (!/test/i.test(databaseName)) {
+      throw new Error(
+        `Refusing to reset database "${databaseName}": TEST_DATABASE_URL must point at a dedicated test database (name containing "test", e.g. flue_test)`,
+      );
+    }
+    const bootstrap = new Pool({ connectionString: testDatabaseUrl });
+    try {
+      await bootstrap.query('DROP SCHEMA public CASCADE');
+      await bootstrap.query('CREATE SCHEMA public');
+    } finally {
+      await bootstrap.end();
+    }
     await runMigrations(testDatabaseUrl!);
     pool = new Pool({ connectionString: testDatabaseUrl });
   });
@@ -185,6 +201,148 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     await expect(
       store.listIdleSandboxes({ provider: 'fake', idleBefore: new Date(now.getTime() + 3_000), limit: 10 }),
     ).resolves.toEqual([]);
+  });
+
+  it('lists sessions with their latest sandbox for one provider in a single batch', async () => {
+    const services = createServices(store);
+    const withSandboxes = await services.sessions.create({ title: 'Has sandboxes' });
+    const otherProvider = await services.sessions.create({ title: 'Other provider only' });
+    const withoutSandbox = await services.sessions.create({ title: 'No sandbox' });
+    const now = new Date();
+
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000711',
+      sessionId: withSandboxes.id,
+      provider: 'fake',
+      providerSandboxId: 'fake-sandbox-old',
+      status: 'destroyed',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: new Date(now.getTime() - 2_000),
+      updatedAt: new Date(now.getTime() - 2_000),
+    });
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000712',
+      sessionId: withSandboxes.id,
+      provider: 'fake',
+      providerSandboxId: 'fake-sandbox-new',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000713',
+      sessionId: otherProvider.id,
+      provider: 'docker',
+      providerSandboxId: 'docker-sandbox-1',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const listed = await store.listSessionsWithLatestSandbox('fake');
+    const bySessionId = new Map(listed.map((item) => [item.session.id, item]));
+
+    expect(listed.map((item) => item.session)).toEqual(await store.listSessions());
+    expect(bySessionId.get(withSandboxes.id)?.sandbox).toMatchObject({
+      providerSandboxId: 'fake-sandbox-new',
+      status: 'ready',
+    });
+    expect(bySessionId.get(otherProvider.id)?.sandbox).toBeNull();
+    expect(bySessionId.get(withoutSandbox.id)?.sandbox).toBeNull();
+  });
+
+  it('filters non-visible sessions inside the batched session list query', async () => {
+    const services = createServices(store);
+    const now = new Date();
+    const memberGroup = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000721',
+      name: 'Member group',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const otherGroup = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000722',
+      name: 'Other group',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const organizationVisible = await services.sessions.create({
+      title: 'Org visible',
+      ownerGroupId: otherGroup.id,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+    });
+    const ownGroupSession = await services.sessions.create({
+      title: 'Own group',
+      ownerGroupId: memberGroup.id,
+      visibility: 'group',
+      writePolicy: 'group_members',
+    });
+    const hiddenSession = await services.sessions.create({
+      title: 'Hidden',
+      ownerGroupId: otherGroup.id,
+      visibility: 'group',
+      writePolicy: 'group_members',
+    });
+
+    const listed = await store.listSessionsWithLatestSandbox('fake', { groupIds: [memberGroup.id] });
+    const listedIds = listed.map((item) => item.session.id);
+
+    expect(listedIds).toContain(organizationVisible.id);
+    expect(listedIds).toContain(ownGroupSession.id);
+    expect(listedIds).not.toContain(hiddenSession.id);
+  });
+
+  it('limits event reads when a batch size is requested', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Event limits' });
+    for (let index = 0; index < 5; index += 1) {
+      await services.events.append({ sessionId: session.id, type: 'session_queue_paused', payload: {} });
+    }
+
+    const firstTwo = await store.getEvents(session.id, 0, 2);
+    expect(firstTwo.map((event) => event.sequence)).toEqual([1, 2]);
+
+    const nextTwo = await store.getEvents(session.id, firstTwo[1]!.sequence, 2);
+    expect(nextTwo.map((event) => event.sequence)).toEqual([3, 4]);
+
+    const unbounded = await store.getEvents(session.id);
+    expect(unbounded).toHaveLength(6);
+
+    const globalFirst = await store.listEvents(0, 3);
+    expect(globalFirst).toHaveLength(3);
+    const globalRest = await store.listEvents(globalFirst[2]!.id, 100);
+    expect(globalRest).toHaveLength(3);
+    expect([...globalFirst, ...globalRest].map((event) => event.id)).toEqual(
+      (await store.listEvents()).map((event) => event.id),
+    );
+  });
+
+  it('commits session updates atomically with their session_updated event', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Atomic update' });
+
+    const updated = await services.sessions.update({ id: session.id, title: 'Atomic update', visibility: 'group' });
+    expect(updated.visibility).toBe('group');
+
+    const events = await store.getEvents(session.id);
+    expect(events.map((event) => event.type)).toEqual(['session_created', 'session_updated']);
+    expect(events[1]).toMatchObject({
+      sequence: 2,
+      payload: { title: 'Atomic update', visibility: 'group' },
+    });
+    await expect(store.getSession(session.id)).resolves.toMatchObject({ visibility: 'group' });
   });
 
   it('claims pending messages as a queue batch and respects queue pause', async () => {

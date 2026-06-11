@@ -34,6 +34,8 @@ import type {
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  SessionVisibilityFilter,
+  SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
@@ -62,6 +64,7 @@ import {
   toRun,
   toSandbox,
   toSession,
+  toSessionWithSandbox,
   toWebhookSource,
   type AutomationInvocationRow,
   type AutomationRow,
@@ -81,6 +84,7 @@ import {
   type RunRow,
   type SandboxRow,
   type SessionRow,
+  type SessionWithSandboxRow,
   type WebhookSourceRow,
 } from './postgres/records.js';
 
@@ -464,6 +468,41 @@ export class PostgresStore implements AppStore {
     return result.rows.map(toSession);
   }
 
+  async listSessionsWithLatestSandbox(
+    provider: string,
+    visibleTo?: SessionVisibilityFilter,
+  ): Promise<SessionWithSandboxRecord[]> {
+    const result = await this.pool.query<SessionWithSandboxRow>(
+      `SELECT ${joinedSessionSelectColumns},
+              latest_sandbox.id AS sandbox_id,
+              latest_sandbox.provider AS sandbox_provider,
+              latest_sandbox.provider_sandbox_id AS sandbox_provider_sandbox_id,
+              latest_sandbox.status AS sandbox_status,
+              latest_sandbox.workspace_path AS sandbox_workspace_path,
+              latest_sandbox.metadata AS sandbox_metadata,
+              latest_sandbox.created_at AS sandbox_created_at,
+              latest_sandbox.updated_at AS sandbox_updated_at,
+              latest_sandbox.last_health_check_at AS sandbox_last_health_check_at,
+              latest_sandbox.keepalive_until AS sandbox_keepalive_until,
+              latest_sandbox.destroyed_at AS sandbox_destroyed_at
+       FROM sessions
+       LEFT JOIN LATERAL (
+         SELECT id, provider, provider_sandbox_id, status, workspace_path, metadata,
+                created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at
+         FROM sandboxes
+         WHERE sandboxes.session_id = sessions.id
+           AND sandboxes.provider = $1
+         ORDER BY updated_at DESC
+         LIMIT 1
+       ) latest_sandbox ON TRUE
+       ${visibleTo ? `WHERE sessions.visibility = 'organization' OR sessions.owner_group_id = ANY($2::uuid[])` : ''}
+       ORDER BY sessions.updated_at DESC, sessions.created_at DESC`,
+      visibleTo ? [provider, visibleTo.groupIds] : [provider],
+    );
+
+    return result.rows.map(toSessionWithSandbox);
+  }
+
   async updateSession(record: SessionRecord): Promise<SessionRecord> {
     const result = await this.pool.query<SessionRow>(
       `UPDATE sessions
@@ -495,6 +534,71 @@ export class PostgresStore implements AppStore {
     const row = result.rows[0];
     if (!row) throw new Error(`Session does not exist: ${record.id}`);
     return toSession(row);
+  }
+
+  async updateSessionWithEvent(
+    record: SessionRecord,
+    event: NormalizedEvent,
+  ): Promise<{ session: SessionRecord; event: EventRecord }> {
+    return this.transaction(async (client) => {
+      const updated = await client.query<SessionRow>(
+        `UPDATE sessions
+         SET status = $2,
+             title = $3,
+             context = $4,
+             created_at = $5,
+             updated_at = $6,
+             owner_group_id = $7,
+             visibility = $8,
+             write_policy = $9,
+             created_by_user_id = $10
+         WHERE id = $1
+         RETURNING ${sessionSelectColumns}`,
+        [
+          record.id,
+          record.status,
+          record.title ?? null,
+          record.context ?? null,
+          record.createdAt,
+          record.updatedAt,
+          record.ownerGroupId,
+          record.visibility,
+          record.writePolicy,
+          record.createdByUserId ?? null,
+        ],
+      );
+      const sessionRow = updated.rows[0];
+      if (!sessionRow) throw new Error(`Session does not exist: ${record.id}`);
+
+      const inserted = await client.query<EventRow>(
+        `WITH next_sequence AS (
+           INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
+           VALUES ($1, 'events', 2)
+           ON CONFLICT (session_id, kind)
+           DO UPDATE SET next_sequence = session_sequence_counters.next_sequence + 1
+           RETURNING next_sequence - 1 AS sequence
+         ), inserted AS (
+           INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
+           SELECT $1, $2, $3, sequence, $4, $5, $6
+           FROM next_sequence
+           RETURNING id, session_id, run_id, message_id, sequence, type, payload, created_at
+         )
+         SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at,
+                pg_notify($7, json_build_object('id', id)::text)
+         FROM inserted`,
+        [
+          event.sessionId,
+          event.runId ?? null,
+          event.messageId ?? null,
+          event.type,
+          event.payload,
+          event.createdAt,
+          eventNotificationChannel,
+        ],
+      );
+
+      return { session: toSession(sessionRow), event: toEvent(inserted.rows[0]!) };
+    });
   }
 
   async archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
@@ -1757,25 +1861,27 @@ export class PostgresStore implements AppStore {
     return result.rows[0] ? toEvent(result.rows[0]) : null;
   }
 
-  async getEvents(sessionId: string, afterSequence = 0): Promise<EventRecord[]> {
+  async getEvents(sessionId: string, afterSequence = 0, limit?: number): Promise<EventRecord[]> {
     const result = await this.pool.query<EventRow>(
       `SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at
        FROM events
        WHERE session_id = $1 AND sequence > $2
-       ORDER BY sequence ASC`,
-      [sessionId, afterSequence],
+       ORDER BY sequence ASC
+       ${limit === undefined ? '' : 'LIMIT $3'}`,
+      limit === undefined ? [sessionId, afterSequence] : [sessionId, afterSequence, limit],
     );
 
     return result.rows.map(toEvent);
   }
 
-  async listEvents(afterId = 0): Promise<EventRecord[]> {
+  async listEvents(afterId = 0, limit?: number): Promise<EventRecord[]> {
     const result = await this.pool.query<EventRow>(
       `SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at
        FROM events
        WHERE id > $1
-       ORDER BY id ASC`,
-      [afterId],
+       ORDER BY id ASC
+       ${limit === undefined ? '' : 'LIMIT $2'}`,
+      limit === undefined ? [afterId] : [afterId, limit],
     );
 
     return result.rows.map(toEvent);

@@ -14,7 +14,9 @@ import {
   canMoveSession,
   canReadSession,
   canWriteSession,
+  isSuperAdmin,
   readRequestAuthorization,
+  readRequestAuthUser,
   type RequestAuthorization,
 } from '../auth/authorization.js';
 import { FetchGitHubOAuthClient, type GitHubOAuthClient } from '../auth/github.js';
@@ -67,6 +69,7 @@ import type { SandboxProvider } from '../sandbox/types.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
+import type { NormalizedEventType } from '../events/types.js';
 import { defaultGroupId } from '../store/types.js';
 import type {
   AppStore,
@@ -129,6 +132,7 @@ import {
 
 export type AppVariables = {
   requestId: string;
+  authorizedSession?: SessionRecord;
 };
 
 export type AppServices = {
@@ -436,10 +440,19 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.get('/sessions', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const sessions = await services.sessions.list();
-    const visible = sessions.filter((session) => canReadSession(auth, session));
+    const visibleTo =
+      auth.bypass || isSuperAdmin(auth)
+        ? undefined
+        : { groupIds: auth.memberships.map((membership) => membership.groupId) };
+    const [sessionsWithSandbox, groups] = await Promise.all([
+      services.store.listSessionsWithLatestSandbox(config.sandboxProvider, visibleTo),
+      services.store.listGroups(),
+    ]);
+    const groupNames = new Map(groups.map((group) => [group.id, group.name]));
     return c.json({
-      sessions: await Promise.all(visible.map((session) => serializeSessionWithSandbox(config, services, session))),
+      sessions: sessionsWithSandbox
+        .filter(({ session }) => canReadSession(auth, session))
+        .map(({ session, sandbox }) => serializeSessionView(session, sandbox, groupNames.get(session.ownerGroupId))),
     });
   });
 
@@ -547,7 +560,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     const after = parseCursor(c.req.query('after') ?? c.req.header('last-event-id') ?? null) ?? 0;
     const includeAll = c.req.query('include') === 'all';
     return writeGlobalEventStream(c, services.events, after, c.req.query('replay') !== 'false', includeAll, {
-      filter: (event) => canReadEvent(services.store, auth, event),
+      filter: createEventReadFilter(services.store, auth),
     });
   });
 
@@ -667,7 +680,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   });
 
   app.get('/sessions/:sessionId', async (c) => {
-    const session = await services.sessions.get(c.req.param('sessionId'));
+    const session = getAuthorizedSession(c, c.req.param('sessionId'));
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
     return c.json({ session: await serializeSessionWithSandbox(config, services, session) });
   });
@@ -692,7 +705,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.patch('/sessions/:sessionId/access', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const session = await services.sessions.get(c.req.param('sessionId'));
+    const session = getAuthorizedSession(c, c.req.param('sessionId'));
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
@@ -819,7 +832,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/messages', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const messages = await services.messages.list(sessionId);
@@ -876,7 +889,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/events', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const after = parseCursor(c.req.query('after') ?? null);
@@ -886,7 +899,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/artifacts', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const artifacts = await services.artifacts.list(sessionId);
@@ -895,7 +908,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/external-resources', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const externalResources = await services.externalResources.list(sessionId);
@@ -904,7 +917,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/artifacts/:artifactId/download', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     try {
@@ -929,7 +942,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/artifacts/:artifactId/preview', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     try {
@@ -956,7 +969,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/services', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const auth = await requireRequestAuthorization(config, services.store, c);
@@ -998,7 +1011,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.post('/sessions/:sessionId/sandbox/extend', async (c) => {
     if (!services.sandboxKeepalive) return writeError(c, 404, 'not_found', 'Sandbox provider is not configured');
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
@@ -1021,7 +1034,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       return writeError(c, 404, 'not_found', 'Sandbox provider is not configured');
     }
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const tool = workspaceTool(c.req.param('toolId'));
@@ -1101,7 +1114,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/callbacks', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const messageId = optionalString(c.req.query('messageId'));
@@ -1111,7 +1124,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.post('/sessions/:sessionId/callbacks/:deliveryId/replay', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     try {
@@ -1126,7 +1139,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/events/stream', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await services.sessions.get(sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const after = parseCursor(c.req.query('after') ?? c.req.header('last-event-id') ?? null) ?? 0;
@@ -1235,7 +1248,10 @@ function writeGitHubRepositoryError(c: Context, error: unknown) {
   throw error;
 }
 
-function sessionAuthorizationMiddleware(config: AppConfig, services: AppServices): MiddlewareHandler {
+function sessionAuthorizationMiddleware(
+  config: AppConfig,
+  services: AppServices,
+): MiddlewareHandler<{ Variables: AppVariables }> {
   return async (c, next) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
@@ -1248,8 +1264,17 @@ function sessionAuthorizationMiddleware(config: AppConfig, services: AppServices
       ? canWriteSession(auth, session)
       : canReadSession(auth, session);
     if (!allowed) return writeError(c, 403, 'forbidden', 'Session access is required');
+    c.set('authorizedSession', session);
     await next();
   };
+}
+
+// Only returns the session resolved by sessionAuthorizationMiddleware. There is
+// deliberately no store fallback: a route that reaches this without the middleware
+// has skipped authorization and must not see the session.
+function getAuthorizedSession(c: Context<{ Variables: AppVariables }>, sessionId: string): SessionRecord | null {
+  const session = c.get('authorizedSession');
+  return session && session.id === sessionId ? session : null;
 }
 
 async function requireRequestAuthorization(
@@ -1315,10 +1340,18 @@ async function serializeSessionWithSandbox(config: AppConfig, services: AppServi
     services.store.getLatestSandbox(session.id, config.sandboxProvider),
     services.store.getGroup(session.ownerGroupId),
   ]);
+  return serializeSessionView(session, sandbox, ownerGroup?.name);
+}
+
+function serializeSessionView(
+  session: SessionRecord,
+  sandbox: SandboxRecord | null,
+  ownerGroupName: string | undefined,
+) {
   const display = sessionDisplayStatus(session, sandbox);
   const serialized = {
     ...session,
-    ...(ownerGroup ? { ownerGroupName: ownerGroup.name } : {}),
+    ...(ownerGroupName ? { ownerGroupName } : {}),
     displayStatus: display.status,
     displayStatusTooltip: display.tooltip,
   };
@@ -1384,12 +1417,13 @@ async function previewAuthTokenForRequest(
 ): Promise<string | undefined> {
   if (config.apiAuthMode !== 'session') return undefined;
   const authSessionId = readSessionId(c);
-  const user = authSessionId ? await store.getAuthUserBySession({ sessionId: authSessionId, now: new Date() }) : null;
-  const session = await store.getSession(previewSessionId);
-  if (!authSessionId || !user || !session) return undefined;
-  const memberships = await store.listUserGroupMemberships(user.id);
-  if (!canReadSession({ bypass: false, user, memberships }, session)) return undefined;
-  return createPreviewAuthToken(config, { authSessionId, previewSessionId, port, userId: user.id });
+  const [auth, session] = await Promise.all([
+    readRequestAuthorization(config, store, c),
+    store.getSession(previewSessionId),
+  ]);
+  if (!authSessionId || !auth || auth.bypass || !session) return undefined;
+  if (!canReadSession(auth, session)) return undefined;
+  return createPreviewAuthToken(config, { authSessionId, previewSessionId, port, userId: auth.user.id });
 }
 
 async function messageAuthor(
@@ -1398,8 +1432,7 @@ async function messageAuthor(
   store: AppStore,
 ): Promise<{ authorUserId: string; authorName: string } | Record<string, never>> {
   if (config.apiAuthMode !== 'session') return {};
-  const sessionId = readSessionId(c);
-  const user = sessionId ? await store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
+  const user = await readRequestAuthUser(store, c);
   return user ? { authorUserId: user.id, authorName: user.username } : {};
 }
 
@@ -1467,16 +1500,36 @@ async function readableEvents(
   auth: RequestAuthorization,
   events: EventRecord[],
 ): Promise<EventRecord[]> {
+  const filter = createEventReadFilter(store, auth);
   const readable: EventRecord[] = [];
   for (const event of events) {
-    if (await canReadEvent(store, auth, event)) readable.push(event);
+    if (await filter(event)) readable.push(event);
   }
   return readable;
 }
 
-async function canReadEvent(store: AppStore, auth: RequestAuthorization, event: EventRecord): Promise<boolean> {
-  const session = await store.getSession(event.sessionId);
-  return Boolean(session && canReadSession(auth, session));
+const eventReadCacheTtlMs = 30_000;
+const eventReadCacheMaxSessions = 10_000;
+
+// Session access events change the outcome of canReadSession, so they bypass the
+// cache; they are ordered before any subsequent events for the same session, which
+// keeps the cached decision current from the moment access changes.
+const eventReadRefreshTypes = new Set<NormalizedEventType>(['session_created', 'session_updated']);
+
+function createEventReadFilter(store: AppStore, auth: RequestAuthorization): (event: EventRecord) => Promise<boolean> {
+  const decisions = new Map<string, { canRead: boolean; expiresAt: number }>();
+  return async (event) => {
+    const now = Date.now();
+    if (!eventReadRefreshTypes.has(event.type)) {
+      const cached = decisions.get(event.sessionId);
+      if (cached && cached.expiresAt > now) return cached.canRead;
+    }
+    const session = await store.getSession(event.sessionId);
+    const canRead = Boolean(session && canReadSession(auth, session));
+    if (decisions.size >= eventReadCacheMaxSessions) decisions.clear();
+    decisions.set(event.sessionId, { canRead, expiresAt: now + eventReadCacheTtlMs });
+    return canRead;
+  };
 }
 
 function parseAuthRole(value: unknown): AuthRole | null {

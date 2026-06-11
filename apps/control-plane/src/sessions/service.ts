@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { EventService } from '../events/service.js';
+import { normalizeAppendInput, type EventService } from '../events/service.js';
 import { defaultGroupId } from '../store/types.js';
 import type { SessionRecord, SessionStore, SessionVisibility, SessionWritePolicy } from '../store/types.js';
 
@@ -84,17 +84,23 @@ export class SessionService {
     if (input.visibility) next.visibility = input.visibility;
     if (input.writePolicy) next.writePolicy = input.writePolicy;
 
-    const session = await this.store.updateSession(next);
-    await this.events.append({
-      sessionId: session.id,
-      type: 'session_updated',
-      payload: {
-        title: session.title ?? null,
-        ownerGroupId: session.ownerGroupId,
-        visibility: session.visibility,
-        writePolicy: session.writePolicy,
-      },
-    });
+    // Commit the update and its session_updated event atomically: stream filters
+    // refresh access decisions on session_updated, so no event committed after an
+    // access change may be notified ahead of the change itself.
+    const { session, event } = await this.store.updateSessionWithEvent(
+      next,
+      normalizeAppendInput({
+        sessionId: next.id,
+        type: 'session_updated',
+        payload: {
+          title: next.title ?? null,
+          ownerGroupId: next.ownerGroupId,
+          visibility: next.visibility,
+          writePolicy: next.writePolicy,
+        },
+      }),
+    );
+    this.events.publishExternal(event);
     return session;
   }
 

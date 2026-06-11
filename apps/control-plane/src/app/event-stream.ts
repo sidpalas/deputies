@@ -1,8 +1,9 @@
 import type { Context } from 'hono';
-import type { EventService } from '../events/service.js';
+import type { EventBatch, EventService } from '../events/service.js';
 import type { EventRecord } from '../store/types.js';
 
 const sseWriteQueueHighWater = 256;
+const replayBatchSize = 500;
 
 export async function writeSessionEventStream(
   c: Context,
@@ -13,7 +14,7 @@ export async function writeSessionEventStream(
   return writeEventStream(c, {
     after: afterSequence,
     id: (event) => event.sequence,
-    list: () => events.list(sessionId, afterSequence),
+    list: (after, limit) => events.listBatch(sessionId, after, limit),
     subscribe: (writeEvent) => events.subscribe(sessionId, writeEvent),
   });
 }
@@ -29,8 +30,10 @@ export async function writeGlobalEventStream(
   return writeEventStream(c, {
     after: afterId,
     id: (event) => event.id,
-    list: async () =>
-      filterEvents(includeAll ? await events.listAllEvents(afterId) : await events.listAll(afterId), options.filter),
+    list: async (after, limit) => {
+      const batch = await events.listAllBatch(after, limit, includeAll);
+      return { ...batch, events: await filterEvents(batch.events, options.filter) };
+    },
     replay,
     subscribe: (writeEvent) => (includeAll ? events.subscribeAllEvents(writeEvent) : events.subscribeAll(writeEvent)),
     ...(options.filter ? { filter: options.filter } : {}),
@@ -42,7 +45,7 @@ async function writeEventStream(
   options: {
     after: number;
     id: (event: EventRecord) => number;
-    list: () => Promise<EventRecord[]>;
+    list: (after: number, limit: number) => Promise<EventBatch>;
     replay?: boolean;
     subscribe: (writeEvent: (event: EventRecord) => void) => () => void;
     filter?: (event: EventRecord) => boolean | Promise<boolean>;
@@ -142,8 +145,19 @@ async function writeEventStream(
     try {
       await write(': connected\n\n');
       if (options.replay !== false) {
-        for (const event of await options.list()) {
-          await emitEventAndDrain(event);
+        // Replay in batches so a reconnect with an old cursor never loads the
+        // full backlog into memory at once.
+        let after = options.after;
+        while (!closed) {
+          const batch = await options.list(after, replayBatchSize);
+          for (const event of batch.events) {
+            await emitEventAndDrain(event);
+          }
+          // The batch cursor tracks fetched (pre-filter) events, so advance past
+          // filtered-out events instead of refetching them.
+          if (cursor < batch.cursor) cursor = batch.cursor;
+          if (!batch.hasMore || batch.cursor <= after) break;
+          after = batch.cursor;
         }
       }
       replaying = false;

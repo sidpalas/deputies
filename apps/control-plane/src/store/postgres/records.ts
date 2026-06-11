@@ -29,6 +29,7 @@ import type {
   SessionRecord,
   SessionStatus,
   SessionVisibility,
+  SessionWithSandboxRecord,
   SessionWritePolicy,
   WebhookSourceRecord,
 } from '../types.js';
@@ -154,6 +155,20 @@ export type SandboxRow = QueryResultRow & {
   last_health_check_at: Date | null;
   keepalive_until: Date | null;
   destroyed_at: Date | null;
+};
+
+export type SessionWithSandboxRow = SessionRow & {
+  sandbox_id: string | null;
+  sandbox_provider: string | null;
+  sandbox_provider_sandbox_id: string | null;
+  sandbox_status: SandboxStatus | null;
+  sandbox_workspace_path: string | null;
+  sandbox_metadata: Record<string, unknown> | null;
+  sandbox_created_at: Date | null;
+  sandbox_updated_at: Date | null;
+  sandbox_last_health_check_at: Date | null;
+  sandbox_keepalive_until: Date | null;
+  sandbox_destroyed_at: Date | null;
 };
 
 export type ArtifactRow = QueryResultRow & {
@@ -426,6 +441,28 @@ export function toSandbox(row: SandboxRow): SandboxRecord {
   if (row.keepalive_until) record.keepaliveUntil = row.keepalive_until;
   if (row.destroyed_at) record.destroyedAt = row.destroyed_at;
   return record;
+}
+
+export function toSessionWithSandbox(row: SessionWithSandboxRow): SessionWithSandboxRecord {
+  return {
+    session: toSession(row),
+    sandbox: row.sandbox_id
+      ? toSandbox({
+          id: row.sandbox_id,
+          session_id: row.id,
+          provider: row.sandbox_provider!,
+          provider_sandbox_id: row.sandbox_provider_sandbox_id!,
+          status: row.sandbox_status!,
+          workspace_path: row.sandbox_workspace_path!,
+          metadata: row.sandbox_metadata!,
+          created_at: row.sandbox_created_at!,
+          updated_at: row.sandbox_updated_at!,
+          last_health_check_at: row.sandbox_last_health_check_at,
+          keepalive_until: row.sandbox_keepalive_until,
+          destroyed_at: row.sandbox_destroyed_at,
+        })
+      : null,
+  };
 }
 
 export function toArtifact(row: ArtifactRow): ArtifactRecord {

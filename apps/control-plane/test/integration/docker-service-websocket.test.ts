@@ -122,7 +122,7 @@ describe('Docker service WebSocket proxy integration', () => {
       expect(response).toContain('HTTP/1.1 101 Switching Protocols');
       expect(response).toContain(`X-Upstream-Origin: https://${serviceHost}`);
       expect(response).toContain('X-Upstream-Path: /stable-code-server?reconnection=false');
-      expect(response).toContain(`X-Upstream-Host: 127.0.0.1:${upstreamPort}`);
+      expect(response).toContain(`X-Upstream-Host: ${serviceHost}`);
     }
   });
 });
