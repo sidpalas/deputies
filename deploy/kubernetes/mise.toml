@@ -1,6 +1,7 @@
 [tools]
-"github:kubernetes-sigs/cloud-provider-kind" = "0.9"
+helm = "3.19"
 kind = "0.30"
+kubectl = "1.34"
 
 [tasks.deps]
 description = "Update Helm dependencies for Kubernetes charts"
@@ -8,7 +9,7 @@ run = "helm dependency update charts/deputies-platform-reference"
 
 [tasks.cloud-provider-kind]
 description = "Run cloud-provider-kind for kind LoadBalancer access"
-run = "sudo cloud-provider-kind"
+run = "mise exec github:kubernetes-sigs/cloud-provider-kind@0.9 -- sudo cloud-provider-kind"
 
 [tasks."platform:install"]
 description = "Install the reference Kubernetes platform chart"

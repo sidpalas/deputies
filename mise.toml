@@ -29,6 +29,10 @@ run = "pnpm -r --if-present typecheck"
 description = "Run formatting, typechecks, and unit tests"
 depends = ["format:check", "typecheck", "test"]
 
+[tasks."ci:smoke:local"]
+description = "Run smoke GitHub Actions workflow locally with Agent CI"
+run = "AI_AGENT=1 pnpm dlx @redwoodjs/agent-ci run --workflow .github/workflows/smoke-tests.yml --pause-on-failure --jobs 1"
+
 [tasks.mise-fzf]
 description = "[Mise] Pick one task; print it and copy the run command"
 run = '''

@@ -76,6 +76,7 @@ services:
 
   postgres:
     ports: !reset []
+    volumes: !reset []
 
   seaweedfs:
     ports: !reset []
@@ -88,4 +89,4 @@ services:
   web:
     ports: !override
       - '15173:5173'
-    volumes: []
+    volumes: !reset []

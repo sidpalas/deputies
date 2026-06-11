@@ -8,6 +8,12 @@ APP_RELEASE="${K8S_SMOKE_APP_RELEASE:-deputies}"
 ACCESS_MODE="${K8S_SMOKE_ACCESS_MODE:-cloud-provider-kind}"
 TOPOLOGY_MODE="${K8S_SMOKE_TOPOLOGY_MODE:-combined}"
 INGRESS_CLASS="${K8S_SMOKE_INGRESS_CLASS:-traefik-$NAMESPACE}"
+CONTROL_PLANE_IMAGE_REPOSITORY="${K8S_SMOKE_CONTROL_PLANE_IMAGE_REPOSITORY:-ghcr.io/sidpalas/deputies-control-plane}"
+CONTROL_PLANE_IMAGE_TAG="${K8S_SMOKE_CONTROL_PLANE_IMAGE_TAG:-latest}"
+CONTROL_PLANE_IMAGE_PULL_POLICY="${K8S_SMOKE_CONTROL_PLANE_IMAGE_PULL_POLICY:-IfNotPresent}"
+WEB_IMAGE_REPOSITORY="${K8S_SMOKE_WEB_IMAGE_REPOSITORY:-ghcr.io/sidpalas/deputies-web}"
+WEB_IMAGE_TAG="${K8S_SMOKE_WEB_IMAGE_TAG:-latest}"
+WEB_IMAGE_PULL_POLICY="${K8S_SMOKE_WEB_IMAGE_PULL_POLICY:-IfNotPresent}"
 PLATFORM_CHART="$ROOT_DIR/deploy/kubernetes/charts/deputies-platform-reference"
 APP_CHART="$ROOT_DIR/deploy/kubernetes/charts/deputies"
 FORWARD_PID=""
@@ -90,6 +96,11 @@ wait_for_pod_selector app.kubernetes.io/component=seaweedfs 180
 
 SMOKE_VALUES="$(mktemp)"
 cat >"$SMOKE_VALUES" <<YAML
+controlPlane:
+  image:
+    repository: "$CONTROL_PLANE_IMAGE_REPOSITORY"
+    tag: "$CONTROL_PLANE_IMAGE_TAG"
+    pullPolicy: "$CONTROL_PLANE_IMAGE_PULL_POLICY"
 config:
   runner: fake
   sandboxProvider: fake
@@ -106,6 +117,7 @@ config:
     GITHUB_ALLOWED_REPOSITORIES: acme/widget,acme/api
     FAKE_RUNNER_ARTIFACT_JSON: '{"type":"file","title":"Smoke Artifact","content":"hello artifact storage","contentType":"text/plain","fileName":"smoke-artifact.txt"}'
 secrets:
+  sandboxSecretEncryptionKey: "deputies-smoke-sandbox-secret"
   anthropicApiKey: ""
   openaiApiKey: ""
   daytonaApiKey: ""
@@ -122,6 +134,10 @@ gateway:
   services:
     host: ""
 web:
+  image:
+    repository: "$WEB_IMAGE_REPOSITORY"
+    tag: "$WEB_IMAGE_TAG"
+    pullPolicy: "$WEB_IMAGE_PULL_POLICY"
   trustForwardedServiceHosts: true
 topology:
   mode: $TOPOLOGY_MODE
@@ -170,7 +186,7 @@ case "$ACCESS_MODE" in
   port-forward)
     kubectl port-forward -n "$NAMESPACE" service/traefik 15173:80 >/tmp/deputies-k8s-smoke-port-forward.log 2>&1 &
     FORWARD_PID="$!"
-    BASE_URL="http://deputies-k8s.localhost:15173"
+    BASE_URL="http://127.0.0.1:15173"
     HOST_RESOLVER_RULES=""
     ;;
   *)
@@ -195,8 +211,7 @@ case "$ACCESS_MODE" in
   cloud-provider-kind|port-forward)
     response_body="$(mktemp)"
     if [[ "$ACCESS_MODE" == "port-forward" ]]; then
-      service_url="http://$SERVICE_HOST:15173/"
-      status="$(curl -sS -o "$response_body" -w "%{http_code}" "$service_url" || true)"
+      status="$(curl -sS -H "Host: $SERVICE_HOST" -o "$response_body" -w "%{http_code}" "$BASE_URL/" || true)"
     else
       status="$(curl -sS --resolve "$SERVICE_HOST:80:$INGRESS_IP" -o "$response_body" -w "%{http_code}" "http://$SERVICE_HOST/" || true)"
     fi

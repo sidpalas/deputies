@@ -1,0 +1,166 @@
+name: Smoke Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/actions/setup-ci/**'
+      - '.github/agent-ci.Dockerfile'
+      - '.github/scripts/install-playwright-chromium.sh'
+      - '.github/workflows/smoke-tests.yml'
+      - 'apps/control-plane/**'
+      - 'apps/web/**'
+      - 'deploy/docker-compose/**'
+      - 'deploy/kubernetes/**'
+      - 'deploy/local/postgres/**'
+      - 'mise.toml'
+      - 'package.json'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-compose:
+    name: Docker Compose smoke
+    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup CI
+        uses: ./.github/actions/setup-ci
+
+      - name: Check Docker tooling
+        run: |
+          docker version
+          docker compose version
+
+      - name: Install Playwright dependencies
+        timeout-minutes: 10
+        run: |
+          if [[ "${AGENT_CI_LOCAL:-}" == "true" ]]; then
+            echo "Playwright system dependencies are preinstalled in .github/agent-ci.Dockerfile."
+          else
+            pnpm --dir apps/web exec playwright install-deps chromium
+          fi
+
+      - name: Install Playwright Chromium
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-chromium.sh
+
+      - name: Run Docker Compose smoke test
+        timeout-minutes: 25
+        run: mise run //deploy/docker-compose:smoke:full-stack
+
+  kubernetes-kind:
+    name: Kubernetes kind smoke
+    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup CI
+        uses: ./.github/actions/setup-ci
+
+      - name: Install Kubernetes tools
+        working-directory: deploy/kubernetes
+        run: mise install
+
+      - name: Check Kubernetes tooling
+        working-directory: deploy/kubernetes
+        run: |
+          docker version
+          mise exec -- kind version
+          mise exec -- kubectl version --client
+          mise exec -- helm version
+
+      - name: Install Playwright dependencies
+        timeout-minutes: 10
+        run: |
+          if [[ "${AGENT_CI_LOCAL:-}" == "true" ]]; then
+            echo "Playwright system dependencies are preinstalled in .github/agent-ci.Dockerfile."
+          else
+            pnpm --dir apps/web exec playwright install-deps chromium
+          fi
+
+      - name: Install Playwright Chromium
+        timeout-minutes: 10
+        run: bash .github/scripts/install-playwright-chromium.sh
+
+      - name: Build Kubernetes smoke images
+        timeout-minutes: 20
+        run: |
+          docker build -t deputies-control-plane:smoke -f apps/control-plane/Dockerfile .
+          docker build -t deputies-web:smoke -f apps/web/Dockerfile .
+
+      - name: Create kind cluster
+        timeout-minutes: 5
+        working-directory: deploy/kubernetes
+        run: |
+          if [[ "${AGENT_CI_LOCAL:-}" == "true" ]]; then
+            kind_config="${RUNNER_TEMP}/kind-agent-ci.yml"
+            cat > "$kind_config" <<'YAML'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          networking:
+            apiServerAddress: 0.0.0.0
+          YAML
+            mise exec -- kind create cluster --config "$kind_config" --wait 120s
+            server="$(mise exec -- kubectl config view --raw -o jsonpath='{.clusters[?(@.name=="kind-kind")].cluster.server}')"
+            port="${server##*:}"
+            mise exec -- kubectl config set-cluster kind-kind --server="https://host.docker.internal:${port}" --tls-server-name=0.0.0.0
+          else
+            mise exec -- kind create cluster --wait 120s
+          fi
+
+      - name: Load smoke images into kind
+        timeout-minutes: 5
+        working-directory: deploy/kubernetes
+        run: mise exec -- kind load docker-image deputies-control-plane:smoke deputies-web:smoke
+
+      - name: Run Kubernetes smoke test
+        timeout-minutes: 30
+        env:
+          K8S_SMOKE_KEEP: true
+          K8S_SMOKE_CONTROL_PLANE_IMAGE_PULL_POLICY: Never
+          K8S_SMOKE_CONTROL_PLANE_IMAGE_REPOSITORY: deputies-control-plane
+          K8S_SMOKE_CONTROL_PLANE_IMAGE_TAG: smoke
+          K8S_SMOKE_WEB_IMAGE_PULL_POLICY: Never
+          K8S_SMOKE_WEB_IMAGE_REPOSITORY: deputies-web
+          K8S_SMOKE_WEB_IMAGE_TAG: smoke
+        run: mise run //deploy/kubernetes:smoke:port-forward
+
+      - name: Show Kubernetes diagnostics
+        if: failure()
+        working-directory: deploy/kubernetes
+        run: |
+          mise exec -- kubectl get pods --namespace deputies-smoke -o wide || true
+          mise exec -- kubectl get jobs --namespace deputies-smoke -o wide || true
+          mise exec -- kubectl get events --namespace deputies-smoke --sort-by=.lastTimestamp || true
+          mise exec -- kubectl describe deployment --namespace deputies-smoke deputies-control-plane || true
+          for pod in $(mise exec -- kubectl get pods --namespace deputies-smoke -o name); do
+            echo "--- describe $pod"
+            mise exec -- kubectl describe --namespace deputies-smoke "$pod" || true
+            echo "--- logs $pod"
+            mise exec -- kubectl logs --namespace deputies-smoke "$pod" --all-containers --tail=200 || true
+          done
+
+      - name: Delete kind cluster
+        if: always()
+        working-directory: deploy/kubernetes
+        run: mise exec -- kind delete cluster || true
