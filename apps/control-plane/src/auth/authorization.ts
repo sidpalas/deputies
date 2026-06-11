@@ -26,11 +26,11 @@ const groupRoleRank: Record<GroupRole, number> = {
 const requestAuthUserCache = new WeakMap<Request, Promise<AuthUserRecord | null>>();
 const requestAuthorizationCache = new WeakMap<Request, Promise<RequestAuthorization | null>>();
 
-export function readRequestAuthUser(store: AppStore, c: Context): Promise<AuthUserRecord | null> {
+export function readRequestAuthUser(config: AppConfig, store: AppStore, c: Context): Promise<AuthUserRecord | null> {
   const request = c.req.raw;
   let user = requestAuthUserCache.get(request);
   if (!user) {
-    const sessionId = readSessionId(c);
+    const sessionId = readSessionId(config, c);
     user = sessionId ? store.getAuthUserBySession({ sessionId, now: new Date() }) : Promise.resolve(null);
     requestAuthUserCache.set(request, user);
   }
@@ -47,7 +47,7 @@ export function readRequestAuthorization(
   let authorization = requestAuthorizationCache.get(request);
   if (!authorization) {
     authorization = (async (): Promise<RequestAuthorization | null> => {
-      const user = await readRequestAuthUser(store, c);
+      const user = await readRequestAuthUser(config, store, c);
       if (!user) return null;
       return { bypass: false, user, memberships: await store.listUserGroupMemberships(user.id) };
     })();

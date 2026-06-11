@@ -13,9 +13,9 @@ data:
       encode zstd gzip
 
       # Keep this forwarded-host routing aligned with apps/web/Caddyfile.local.
-      @service_host header_regexp Host ^s-
-      @service_forwarded_host header_regexp X-Forwarded-Host ^s-
-      @service_original_host header_regexp X-Original-Host ^s-
+      @service_host header_regexp Host {$SERVICE_HOST_REGEX:^s-}
+      @service_forwarded_host header_regexp X-Forwarded-Host {$SERVICE_HOST_REGEX:^s-}
+      @service_original_host header_regexp X-Original-Host {$SERVICE_HOST_REGEX:^s-}
       handle @service_host {
         reverse_proxy {$API_UPSTREAM:http://control-plane:3583} {
           header_up X-Original-Host {host}

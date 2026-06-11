@@ -326,7 +326,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.post('/auth/logout', async (c) => {
     if (config.apiAuthMode === 'session') {
-      const sessionId = readSessionId(c);
+      const sessionId = readSessionId(config, c);
       if (sessionId && !isTrustedCookieAuthRequest(c, config)) {
         return writeError(c, 403, 'forbidden', 'Untrusted browser request');
       }
@@ -343,7 +343,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.get('/auth/me', async (c) => {
     if (config.apiAuthMode === 'none') return c.json({ user: null });
     if (config.apiAuthMode === 'bearer') return c.json({ user: null });
-    const sessionId = readSessionId(c);
+    const sessionId = readSessionId(config, c);
     const user = sessionId ? await services.store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
     if (!user) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     return c.json({ user: await serializeAuthUser(services.store, user) });
@@ -379,8 +379,10 @@ export function createApp(config: AppConfig, services = createServices()) {
       await next();
       return;
     }
-    if (new URL(c.req.url).pathname === '/__preview_auth') {
-      return authorizePreviewToken(config, services.store, c, serviceHost.sessionId, serviceHost.port);
+    // Nested hosts belong to an instance running inside the sandbox, so its
+    // /__preview_auth must proxy through instead of being handled here.
+    if (!serviceHost.nested && new URL(c.req.url).pathname === '/__preview_auth') {
+      return authorizePreviewToken(config, services.store, c, serviceHost);
     }
     const authorization = await authorizePreviewRequest(config, services.store, c);
     if (config.apiAuthMode === 'session' && !authorization) {
@@ -1416,7 +1418,7 @@ async function previewAuthTokenForRequest(
   port: number,
 ): Promise<string | undefined> {
   if (config.apiAuthMode !== 'session') return undefined;
-  const authSessionId = readSessionId(c);
+  const authSessionId = readSessionId(config, c);
   const [auth, session] = await Promise.all([
     readRequestAuthorization(config, store, c),
     store.getSession(previewSessionId),
@@ -1432,7 +1434,7 @@ async function messageAuthor(
   store: AppStore,
 ): Promise<{ authorUserId: string; authorName: string } | Record<string, never>> {
   if (config.apiAuthMode !== 'session') return {};
-  const user = await readRequestAuthUser(store, c);
+  const user = await readRequestAuthUser(config, store, c);
   return user ? { authorUserId: user.id, authorName: user.username } : {};
 }
 

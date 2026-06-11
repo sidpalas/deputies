@@ -223,7 +223,7 @@ The web entrypoint should proxy these paths to the control-plane API:
 /webhooks*
 ```
 
-It should also proxy sandbox service preview hosts whose hostname starts with `s-` to the control-plane service proxy. See `apps/web/Caddyfile` and `apps/web/Caddyfile.local` for reference Caddy configs.
+It should also proxy sandbox service preview hosts whose hostname starts with `s-` to the control-plane service proxy. See `apps/web/Caddyfile` and `apps/web/Caddyfile.local` for reference Caddy configs. The matcher defaults to the `^s-` host prefix and can be overridden with `SERVICE_HOST_REGEX`, which is required when the instance itself runs behind another Deputies service preview (see `docs/nested-preview.md`).
 
 Recommended same-origin production shape:
 

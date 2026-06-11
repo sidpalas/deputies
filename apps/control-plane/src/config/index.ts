@@ -66,6 +66,8 @@ export type AppConfig = {
   authSessionSecret?: string;
   authCookieSecure: boolean;
   authCookieSameSite: AuthCookieSameSite;
+  sessionCookieName: string;
+  previewCookieName: string;
   webBaseUrl?: string;
   serviceBaseDomain?: string;
   serviceTrustForwardedHosts: boolean;
@@ -188,6 +190,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     authProvider: parseEnum(env.AUTH_PROVIDER, ['static', 'github'], 'static'),
     authCookieSecure: parseBoolean(env.AUTH_COOKIE_SECURE, false, 'AUTH_COOKIE_SECURE'),
     authCookieSameSite: parseEnum(env.AUTH_COOKIE_SAME_SITE, ['lax', 'none'], 'lax'),
+    sessionCookieName: parseCookieName(env.SESSION_COOKIE_NAME, 'dev_deputies_session', 'SESSION_COOKIE_NAME'),
+    previewCookieName: parseCookieName(env.PREVIEW_COOKIE_NAME, 'deputies_preview', 'PREVIEW_COOKIE_NAME'),
     serviceTrustForwardedHosts: parseBoolean(env.SERVICE_TRUST_FORWARDED_HOSTS, false, 'SERVICE_TRUST_FORWARDED_HOSTS'),
     githubOAuthBaseUrl: env.GITHUB_OAUTH_BASE_URL ?? 'https://github.com',
     authGithubAdminUsers: parseStringList(env.AUTH_GITHUB_ADMIN_USERS),
@@ -532,6 +536,14 @@ function parseBoolean(value: string | undefined, fallback: boolean, name: string
   if (value === 'true') return true;
   if (value === 'false') return false;
   throw new Error(`${name} must be true or false, received "${value}"`);
+}
+
+function parseCookieName(value: string | undefined, fallback: string, name: string): string {
+  if (!value) return fallback;
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new Error(`${name} must contain only letters, digits, hyphens, and underscores, received "${value}"`);
+  }
+  return value;
 }
 
 function parseStringList(value: string | undefined): string[] {

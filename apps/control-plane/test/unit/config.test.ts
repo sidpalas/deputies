@@ -37,6 +37,8 @@ describe('loadConfig', () => {
       authProvider: 'static',
       authCookieSecure: false,
       authCookieSameSite: 'lax',
+      sessionCookieName: 'dev_deputies_session',
+      previewCookieName: 'deputies_preview',
       serviceTrustForwardedHosts: false,
       githubOAuthBaseUrl: 'https://github.com',
       authGithubAdminUsers: [],
