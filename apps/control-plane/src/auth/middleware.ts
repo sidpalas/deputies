@@ -1,8 +1,8 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import { requireApiBearerToken } from '../config/index.js';
 import type { AppConfig } from '../config/index.js';
-import type { AppStore, AuthUserRecord } from '../store/types.js';
-import { readSessionId } from './session.js';
+import type { AppStore } from '../store/types.js';
+import { readRequestAuthUser } from './authorization.js';
 
 const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const trustedDevOrigins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
@@ -15,7 +15,7 @@ export function apiAuthMiddleware(config: AppConfig, store: AppStore): Middlewar
     }
 
     if (config.apiAuthMode === 'session') {
-      const user = await readAuthUser(c, store);
+      const user = await readRequestAuthUser(store, c);
       if (!user) return writeAuthError(c, 'Missing or invalid session');
       if (!isTrustedCookieAuthRequest(c, config)) return writeCsrfError(c);
       await next();
@@ -38,7 +38,7 @@ export function apiAdminMiddleware(config: AppConfig, store: AppStore): Middlewa
       return;
     }
 
-    const user = await readAuthUser(c, store);
+    const user = await readRequestAuthUser(store, c);
     if (!user) return writeAuthError(c, 'Missing or invalid session');
     if (user.role !== 'super_admin')
       return c.json({ error: 'forbidden', message: 'Super admin access is required' }, 403);
@@ -54,11 +54,6 @@ export function apiUnsafeMethodAdminMiddleware(config: AppConfig, store: AppStor
     }
     return apiAdminMiddleware(config, store)(c, next);
   };
-}
-
-async function readAuthUser(c: Context, store: AppStore): Promise<AuthUserRecord | null> {
-  const sessionId = readSessionId(c);
-  return sessionId ? await store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
 }
 
 function writeAuthError(c: Context, message: string) {

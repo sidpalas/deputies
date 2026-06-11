@@ -457,11 +457,32 @@ export type UpdateAutomationRecord = {
   nextInvocationAt?: Date | null;
 };
 
+export type SessionWithSandboxRecord = {
+  session: SessionRecord;
+  sandbox: SandboxRecord | null;
+};
+
+// Limits a session listing to what a non-admin user can read: organization-visible
+// sessions plus sessions owned by one of the user's groups.
+export type SessionVisibilityFilter = {
+  groupIds: string[];
+};
+
 export interface SessionStore {
   createSession(record: CreateSessionRecord): Promise<SessionRecord>;
   getSession(id: string): Promise<SessionRecord | null>;
   listSessions(): Promise<SessionRecord[]>;
+  listSessionsWithLatestSandbox(
+    provider: string,
+    visibleTo?: SessionVisibilityFilter,
+  ): Promise<SessionWithSandboxRecord[]>;
   updateSession(record: SessionRecord): Promise<SessionRecord>;
+  // Commits the session update and its event atomically, so no event committed
+  // after an access change can be notified ahead of the change itself.
+  updateSessionWithEvent(
+    record: SessionRecord,
+    event: NormalizedEvent,
+  ): Promise<{ session: SessionRecord; event: EventRecord }>;
   archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
     session: SessionRecord;
     cancelledMessages: MessageRecord[];
@@ -622,8 +643,8 @@ export interface EventStore {
     event: Omit<NormalizedEvent, 'runId'> & { runId: string },
     guard: { runId: string; leaseOwner: string; now: Date },
   ): Promise<EventRecord | null>;
-  getEvents(sessionId: string, afterSequence?: number): Promise<EventRecord[]>;
-  listEvents(afterId?: number): Promise<EventRecord[]>;
+  getEvents(sessionId: string, afterSequence?: number, limit?: number): Promise<EventRecord[]>;
+  listEvents(afterId?: number, limit?: number): Promise<EventRecord[]>;
 }
 
 export type EventRecord = NormalizedEvent & { id: number; sequence: number };

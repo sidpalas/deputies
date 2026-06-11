@@ -34,6 +34,8 @@ import type {
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  SessionVisibilityFilter,
+  SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
@@ -225,6 +227,22 @@ export class MemoryStore implements AppStore {
     return [...this.sessions.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }
 
+  async listSessionsWithLatestSandbox(
+    provider: string,
+    visibleTo?: SessionVisibilityFilter,
+  ): Promise<SessionWithSandboxRecord[]> {
+    const sessions = (await this.listSessions()).filter(
+      (session) =>
+        !visibleTo || session.visibility === 'organization' || visibleTo.groupIds.includes(session.ownerGroupId),
+    );
+    return Promise.all(
+      sessions.map(async (session) => ({
+        session,
+        sandbox: await this.getLatestSandbox(session.id, provider),
+      })),
+    );
+  }
+
   async updateSession(record: SessionRecord): Promise<SessionRecord> {
     if (!this.sessions.has(record.id)) {
       throw new Error(`Session does not exist: ${record.id}`);
@@ -232,6 +250,14 @@ export class MemoryStore implements AppStore {
 
     this.sessions.set(record.id, record);
     return record;
+  }
+
+  async updateSessionWithEvent(
+    record: SessionRecord,
+    event: NormalizedEvent,
+  ): Promise<{ session: SessionRecord; event: EventRecord }> {
+    const session = await this.updateSession(record);
+    return { session, event: await this.appendEventWithNextSequence(event) };
   }
 
   async archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
@@ -1008,15 +1034,17 @@ export class MemoryStore implements AppStore {
     return this.appendEventWithNextSequence(event as NormalizedEvent);
   }
 
-  async getEvents(sessionId: string, afterSequence = 0): Promise<EventRecord[]> {
-    return (this.events.get(sessionId) ?? []).filter((event) => event.sequence > afterSequence);
+  async getEvents(sessionId: string, afterSequence = 0, limit?: number): Promise<EventRecord[]> {
+    const events = (this.events.get(sessionId) ?? []).filter((event) => event.sequence > afterSequence);
+    return limit === undefined ? events : events.slice(0, limit);
   }
 
-  async listEvents(afterId = 0): Promise<EventRecord[]> {
-    return [...this.events.values()]
+  async listEvents(afterId = 0, limit?: number): Promise<EventRecord[]> {
+    const events = [...this.events.values()]
       .flat()
       .filter((event) => event.id > afterId)
       .sort((left, right) => left.id - right.id);
+    return limit === undefined ? events : events.slice(0, limit);
   }
 
   async createWebhookSource(record: CreateWebhookSourceRecord): Promise<WebhookSourceRecord> {

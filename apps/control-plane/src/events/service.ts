@@ -28,6 +28,14 @@ const globalEventTypes = new Set<NormalizedEventType>([
   'callback_failed',
 ]);
 
+export type EventBatch = {
+  events: EventRecord[];
+  // Cursor of the last *fetched* event (before filtering), so callers can page past
+  // events that were filtered out without refetching them forever.
+  cursor: number;
+  hasMore: boolean;
+};
+
 type PersistedEvent<T extends NormalizedEventType = NormalizedEventType> = EventRecord & NormalizedEvent<T>;
 type EventSubscriber = (event: PersistedEvent) => void;
 type GlobalEventSubscriber = { handler: EventSubscriber; allEvents: boolean };
@@ -75,12 +83,30 @@ export class EventService {
     return this.store.getEvents(sessionId, afterSequence);
   }
 
+  async listBatch(sessionId: string, afterSequence: number, limit: number): Promise<EventBatch> {
+    const events = await this.store.getEvents(sessionId, afterSequence, limit);
+    return {
+      events,
+      cursor: events[events.length - 1]?.sequence ?? afterSequence,
+      hasMore: events.length === limit,
+    };
+  }
+
   async listAll(afterId?: number): Promise<EventRecord[]> {
     return (await this.store.listEvents(afterId)).filter(isGlobalEvent);
   }
 
   async listAllEvents(afterId?: number): Promise<EventRecord[]> {
     return this.store.listEvents(afterId);
+  }
+
+  async listAllBatch(afterId: number, limit: number, includeAllEvents: boolean): Promise<EventBatch> {
+    const fetched = await this.store.listEvents(afterId, limit);
+    return {
+      events: includeAllEvents ? fetched : fetched.filter(isGlobalEvent),
+      cursor: fetched[fetched.length - 1]?.id ?? afterId,
+      hasMore: fetched.length === limit,
+    };
   }
 
   publishExternal(event: EventRecord): void {
@@ -139,7 +165,7 @@ function sanitizeJsonPayload(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeJsonPayload(item)]));
 }
 
-function normalizeAppendInput<T extends NormalizedEventType>(input: AppendEventInput<T>): NormalizedEvent<T> {
+export function normalizeAppendInput<T extends NormalizedEventType>(input: AppendEventInput<T>): NormalizedEvent<T> {
   const event = {
     sessionId: input.sessionId,
     type: input.type,
