@@ -165,7 +165,7 @@ function sanitizeJsonPayload(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeJsonPayload(item)]));
 }
 
-function normalizeAppendInput<T extends NormalizedEventType>(input: AppendEventInput<T>): NormalizedEvent<T> {
+export function normalizeAppendInput<T extends NormalizedEventType>(input: AppendEventInput<T>): NormalizedEvent<T> {
   const event = {
     sessionId: input.sessionId,
     type: input.type,

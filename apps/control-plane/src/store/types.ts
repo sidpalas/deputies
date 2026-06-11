@@ -462,12 +462,27 @@ export type SessionWithSandboxRecord = {
   sandbox: SandboxRecord | null;
 };
 
+// Limits a session listing to what a non-admin user can read: organization-visible
+// sessions plus sessions owned by one of the user's groups.
+export type SessionVisibilityFilter = {
+  groupIds: string[];
+};
+
 export interface SessionStore {
   createSession(record: CreateSessionRecord): Promise<SessionRecord>;
   getSession(id: string): Promise<SessionRecord | null>;
   listSessions(): Promise<SessionRecord[]>;
-  listSessionsWithLatestSandbox(provider: string): Promise<SessionWithSandboxRecord[]>;
+  listSessionsWithLatestSandbox(
+    provider: string,
+    visibleTo?: SessionVisibilityFilter,
+  ): Promise<SessionWithSandboxRecord[]>;
   updateSession(record: SessionRecord): Promise<SessionRecord>;
+  // Commits the session update and its event atomically, so no event committed
+  // after an access change can be notified ahead of the change itself.
+  updateSessionWithEvent(
+    record: SessionRecord,
+    event: NormalizedEvent,
+  ): Promise<{ session: SessionRecord; event: EventRecord }>;
   archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
     session: SessionRecord;
     cancelledMessages: MessageRecord[];

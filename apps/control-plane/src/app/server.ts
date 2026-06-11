@@ -14,6 +14,7 @@ import {
   canMoveSession,
   canReadSession,
   canWriteSession,
+  isSuperAdmin,
   readRequestAuthorization,
   readRequestAuthUser,
   type RequestAuthorization,
@@ -439,8 +440,12 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.get('/sessions', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const visibleTo =
+      auth.bypass || isSuperAdmin(auth)
+        ? undefined
+        : { groupIds: auth.memberships.map((membership) => membership.groupId) };
     const [sessionsWithSandbox, groups] = await Promise.all([
-      services.store.listSessionsWithLatestSandbox(config.sandboxProvider),
+      services.store.listSessionsWithLatestSandbox(config.sandboxProvider, visibleTo),
       services.store.listGroups(),
     ]);
     const groupNames = new Map(groups.map((group) => [group.id, group.name]));
@@ -675,7 +680,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   });
 
   app.get('/sessions/:sessionId', async (c) => {
-    const session = await getAuthorizedSession(c, services, c.req.param('sessionId'));
+    const session = getAuthorizedSession(c, c.req.param('sessionId'));
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
     return c.json({ session: await serializeSessionWithSandbox(config, services, session) });
   });
@@ -700,7 +705,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.patch('/sessions/:sessionId/access', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const session = await getAuthorizedSession(c, services, c.req.param('sessionId'));
+    const session = getAuthorizedSession(c, c.req.param('sessionId'));
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
@@ -827,7 +832,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/messages', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const messages = await services.messages.list(sessionId);
@@ -884,7 +889,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/events', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const after = parseCursor(c.req.query('after') ?? null);
@@ -894,7 +899,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/artifacts', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const artifacts = await services.artifacts.list(sessionId);
@@ -903,7 +908,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/external-resources', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const externalResources = await services.externalResources.list(sessionId);
@@ -912,7 +917,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/artifacts/:artifactId/download', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     try {
@@ -937,7 +942,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/artifacts/:artifactId/preview', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     try {
@@ -964,7 +969,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/services', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const auth = await requireRequestAuthorization(config, services.store, c);
@@ -1006,7 +1011,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.post('/sessions/:sessionId/sandbox/extend', async (c) => {
     if (!services.sandboxKeepalive) return writeError(c, 404, 'not_found', 'Sandbox provider is not configured');
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
@@ -1029,7 +1034,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       return writeError(c, 404, 'not_found', 'Sandbox provider is not configured');
     }
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const tool = workspaceTool(c.req.param('toolId'));
@@ -1109,7 +1114,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/callbacks', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const messageId = optionalString(c.req.query('messageId'));
@@ -1119,7 +1124,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.post('/sessions/:sessionId/callbacks/:deliveryId/replay', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     try {
@@ -1134,7 +1139,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.get('/sessions/:sessionId/events/stream', async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await getAuthorizedSession(c, services, sessionId);
+    const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const after = parseCursor(c.req.query('after') ?? c.req.header('last-event-id') ?? null) ?? 0;
@@ -1264,14 +1269,12 @@ function sessionAuthorizationMiddleware(
   };
 }
 
-async function getAuthorizedSession(
-  c: Context<{ Variables: AppVariables }>,
-  services: AppServices,
-  sessionId: string,
-): Promise<SessionRecord | null> {
+// Only returns the session resolved by sessionAuthorizationMiddleware. There is
+// deliberately no store fallback: a route that reaches this without the middleware
+// has skipped authorization and must not see the session.
+function getAuthorizedSession(c: Context<{ Variables: AppVariables }>, sessionId: string): SessionRecord | null {
   const session = c.get('authorizedSession');
-  if (session && session.id === sessionId) return session;
-  return services.sessions.get(sessionId);
+  return session && session.id === sessionId ? session : null;
 }
 
 async function requireRequestAuthorization(

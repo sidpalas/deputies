@@ -34,6 +34,7 @@ import type {
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  SessionVisibilityFilter,
   SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
@@ -226,8 +227,14 @@ export class MemoryStore implements AppStore {
     return [...this.sessions.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }
 
-  async listSessionsWithLatestSandbox(provider: string): Promise<SessionWithSandboxRecord[]> {
-    const sessions = await this.listSessions();
+  async listSessionsWithLatestSandbox(
+    provider: string,
+    visibleTo?: SessionVisibilityFilter,
+  ): Promise<SessionWithSandboxRecord[]> {
+    const sessions = (await this.listSessions()).filter(
+      (session) =>
+        !visibleTo || session.visibility === 'organization' || visibleTo.groupIds.includes(session.ownerGroupId),
+    );
     return Promise.all(
       sessions.map(async (session) => ({
         session,
@@ -243,6 +250,14 @@ export class MemoryStore implements AppStore {
 
     this.sessions.set(record.id, record);
     return record;
+  }
+
+  async updateSessionWithEvent(
+    record: SessionRecord,
+    event: NormalizedEvent,
+  ): Promise<{ session: SessionRecord; event: EventRecord }> {
+    const session = await this.updateSession(record);
+    return { session, event: await this.appendEventWithNextSequence(event) };
   }
 
   async archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{

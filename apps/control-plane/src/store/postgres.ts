@@ -34,6 +34,7 @@ import type {
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  SessionVisibilityFilter,
   SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
@@ -467,7 +468,10 @@ export class PostgresStore implements AppStore {
     return result.rows.map(toSession);
   }
 
-  async listSessionsWithLatestSandbox(provider: string): Promise<SessionWithSandboxRecord[]> {
+  async listSessionsWithLatestSandbox(
+    provider: string,
+    visibleTo?: SessionVisibilityFilter,
+  ): Promise<SessionWithSandboxRecord[]> {
     const result = await this.pool.query<SessionWithSandboxRow>(
       `SELECT ${joinedSessionSelectColumns},
               latest_sandbox.id AS sandbox_id,
@@ -491,8 +495,9 @@ export class PostgresStore implements AppStore {
          ORDER BY updated_at DESC
          LIMIT 1
        ) latest_sandbox ON TRUE
+       ${visibleTo ? `WHERE sessions.visibility = 'organization' OR sessions.owner_group_id = ANY($2::uuid[])` : ''}
        ORDER BY sessions.updated_at DESC, sessions.created_at DESC`,
-      [provider],
+      visibleTo ? [provider, visibleTo.groupIds] : [provider],
     );
 
     return result.rows.map(toSessionWithSandbox);
@@ -529,6 +534,71 @@ export class PostgresStore implements AppStore {
     const row = result.rows[0];
     if (!row) throw new Error(`Session does not exist: ${record.id}`);
     return toSession(row);
+  }
+
+  async updateSessionWithEvent(
+    record: SessionRecord,
+    event: NormalizedEvent,
+  ): Promise<{ session: SessionRecord; event: EventRecord }> {
+    return this.transaction(async (client) => {
+      const updated = await client.query<SessionRow>(
+        `UPDATE sessions
+         SET status = $2,
+             title = $3,
+             context = $4,
+             created_at = $5,
+             updated_at = $6,
+             owner_group_id = $7,
+             visibility = $8,
+             write_policy = $9,
+             created_by_user_id = $10
+         WHERE id = $1
+         RETURNING ${sessionSelectColumns}`,
+        [
+          record.id,
+          record.status,
+          record.title ?? null,
+          record.context ?? null,
+          record.createdAt,
+          record.updatedAt,
+          record.ownerGroupId,
+          record.visibility,
+          record.writePolicy,
+          record.createdByUserId ?? null,
+        ],
+      );
+      const sessionRow = updated.rows[0];
+      if (!sessionRow) throw new Error(`Session does not exist: ${record.id}`);
+
+      const inserted = await client.query<EventRow>(
+        `WITH next_sequence AS (
+           INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
+           VALUES ($1, 'events', 2)
+           ON CONFLICT (session_id, kind)
+           DO UPDATE SET next_sequence = session_sequence_counters.next_sequence + 1
+           RETURNING next_sequence - 1 AS sequence
+         ), inserted AS (
+           INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
+           SELECT $1, $2, $3, sequence, $4, $5, $6
+           FROM next_sequence
+           RETURNING id, session_id, run_id, message_id, sequence, type, payload, created_at
+         )
+         SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at,
+                pg_notify($7, json_build_object('id', id)::text)
+         FROM inserted`,
+        [
+          event.sessionId,
+          event.runId ?? null,
+          event.messageId ?? null,
+          event.type,
+          event.payload,
+          event.createdAt,
+          eventNotificationChannel,
+        ],
+      );
+
+      return { session: toSession(sessionRow), event: toEvent(inserted.rows[0]!) };
+    });
   }
 
   async archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
