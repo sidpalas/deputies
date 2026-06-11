@@ -15,6 +15,7 @@ import {
   requireGitHubAppCredentials,
   requireRunnerModelDefault,
 } from './config/index.js';
+import { startEventCompactor } from './events/compaction.js';
 import { GitHubArchivedSessionNotifier } from './integrations/github/archived-session-notifier.js';
 import { GitHubCompletionCallbackSender } from './integrations/github/callback-sender.js';
 import { GitHubClient } from './integrations/github/client.js';
@@ -76,6 +77,7 @@ if (githubClient && githubRepositoryAccess) {
 const resources: CloseableResource[] = [];
 let server: ReturnType<typeof createServer> | undefined;
 let workerLoop: WorkerLoopHandle | undefined;
+let eventCompactor: ReturnType<typeof startEventCompactor> | undefined;
 let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
 const processInstanceId = `${hostname()}-${process.pid}-${randomUUID()}`;
 const automationSchedulerLockOwner = `automation-scheduler-${processInstanceId}`;
@@ -139,6 +141,15 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
     if (event.type === 'message_created' || event.type === 'callback_retry_scheduled') workerLoop?.wake();
   });
   resources.unshift({ close: unsubscribeWorkerWake });
+  if (config.eventDeltaCompactionEnabled) {
+    eventCompactor = startEventCompactor({
+      store,
+      retentionMs: config.eventDeltaCompactionRetentionMs,
+      intervalMs: config.eventDeltaCompactionIntervalMs,
+      batchSize: config.eventDeltaCompactionBatchSize,
+      onError: (error: unknown) => console.error(error instanceof Error ? error.message : error),
+    });
+  }
   if (services.sandboxCleanup) {
     sandboxReaper = startSandboxReaper({
       cleanup: services.sandboxCleanup,
@@ -201,6 +212,7 @@ const lifecycleOptions = {
 };
 if (server) Object.assign(lifecycleOptions, { server });
 if (workerLoop) Object.assign(lifecycleOptions, { workerLoop });
+if (eventCompactor) resources.unshift(eventCompactor);
 if (sandboxReaper) resources.unshift(sandboxReaper);
 installProcessShutdownHandlers(new AppLifecycle(lifecycleOptions));
 

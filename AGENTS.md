@@ -47,6 +47,14 @@ export DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies
 export TEST_DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies_test
 ```
 
+For local Docker-based development outside a sandbox, you can also start the test database with:
+
+```sh
+mise run //deploy/local:infra:up
+```
+
+That starts the local Postgres service used by the repo and creates the `deputies_test` database for integration tests.
+
 Run migrations before API integration or UAT checks:
 
 ```sh

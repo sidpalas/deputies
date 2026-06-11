@@ -23,6 +23,7 @@ import type {
   GroupRecord,
   IntegrationDeliveryRecord,
   EventRecord,
+  EventDeltaCompactionInput,
   CreateMessageRecord,
   CreateSessionRecord,
   ClaimedMessage,
@@ -1001,7 +1002,8 @@ export class MemoryStore implements AppStore {
   }
 
   async nextEventSequence(sessionId: string): Promise<number> {
-    return (this.events.get(sessionId)?.length ?? 0) + 1;
+    const maxSequence = Math.max(0, ...(this.events.get(sessionId) ?? []).map((event) => event.sequence));
+    return maxSequence + 1;
   }
 
   async appendEvent(event: NormalizedEvent & { sequence: number }): Promise<EventRecord> {
@@ -1045,6 +1047,53 @@ export class MemoryStore implements AppStore {
       .filter((event) => event.id > afterId)
       .sort((left, right) => left.id - right.id);
     return limit === undefined ? events : events.slice(0, limit);
+  }
+
+  async compactFinalizedAgentTextDeltas(input: EventDeltaCompactionInput): Promise<number> {
+    let remaining = input.limit;
+    let compacted = 0;
+    const finalizedBeforeMs = input.finalizedBefore.getTime();
+
+    for (const [sessionId, events] of this.events) {
+      if (remaining <= 0) break;
+
+      const finalizedMessageSequences = new Map<string, number>();
+      for (const event of events) {
+        if (
+          event.type !== 'agent_response_final' ||
+          !event.messageId ||
+          event.createdAt.getTime() >= finalizedBeforeMs ||
+          typeof event.payload.text !== 'string'
+        ) {
+          continue;
+        }
+        finalizedMessageSequences.set(
+          event.messageId,
+          Math.max(finalizedMessageSequences.get(event.messageId) ?? 0, event.sequence),
+        );
+      }
+      if (!finalizedMessageSequences.size) continue;
+
+      const kept: EventRecord[] = [];
+      for (const event of events) {
+        const finalSequence = event.messageId ? finalizedMessageSequences.get(event.messageId) : undefined;
+        if (
+          remaining > 0 &&
+          event.type === 'agent_text_delta' &&
+          event.createdAt.getTime() < finalizedBeforeMs &&
+          finalSequence !== undefined &&
+          event.sequence < finalSequence
+        ) {
+          remaining -= 1;
+          compacted += 1;
+          continue;
+        }
+        kept.push(event);
+      }
+      this.events.set(sessionId, kept);
+    }
+
+    return compacted;
   }
 
   async createWebhookSource(record: CreateWebhookSourceRecord): Promise<WebhookSourceRecord> {

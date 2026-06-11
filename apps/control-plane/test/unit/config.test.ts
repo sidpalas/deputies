@@ -17,6 +17,10 @@ describe('loadConfig', () => {
       sandboxRetentionMs: 3_600_000,
       sandboxKeepaliveMaxExtensionMs: 7_200_000,
       sandboxWorkspacePath: '/workspace',
+      eventDeltaCompactionEnabled: true,
+      eventDeltaCompactionRetentionMs: 86_400_000,
+      eventDeltaCompactionIntervalMs: 60_000,
+      eventDeltaCompactionBatchSize: 5_000,
       runMode: 'combined',
       runner: 'fake',
       sandboxProvider: 'fake',
@@ -88,6 +92,10 @@ describe('loadConfig', () => {
         SANDBOX_STOP_DELAY_SECONDS: '30',
         SANDBOX_RETENTION_SECONDS: '240',
         SANDBOX_KEEPALIVE_MAX_EXTENSION_SECONDS: '300',
+        EVENT_DELTA_COMPACTION_ENABLED: 'false',
+        EVENT_DELTA_COMPACTION_RETENTION_SECONDS: '86400',
+        EVENT_DELTA_COMPACTION_INTERVAL_SECONDS: '300',
+        EVENT_DELTA_COMPACTION_BATCH_SIZE: '250',
         RUN_MODE: 'worker',
         RUNNER: 'flue',
         SANDBOX_PROVIDER: 'unsafe-local',
@@ -181,6 +189,10 @@ describe('loadConfig', () => {
       sandboxRetentionMs: 240_000,
       sandboxKeepaliveMaxExtensionMs: 300_000,
       sandboxWorkspacePath: '/workspace/custom',
+      eventDeltaCompactionEnabled: false,
+      eventDeltaCompactionRetentionMs: 86_400_000,
+      eventDeltaCompactionIntervalMs: 300_000,
+      eventDeltaCompactionBatchSize: 250,
       runMode: 'worker',
       runner: 'flue',
       sandboxProvider: 'unsafe-local',
@@ -520,6 +532,12 @@ describe('loadConfig', () => {
     );
   });
 
+  it('rejects invalid event delta compaction intervals', () => {
+    expect(() => loadConfig({ EVENT_DELTA_COMPACTION_INTERVAL_SECONDS: '0' })).toThrow(
+      'EVENT_DELTA_COMPACTION_INTERVAL_SECONDS must be a positive integer',
+    );
+  });
+
   it('rejects invalid sandbox stop delay', () => {
     expect(() => loadConfig({ SANDBOX_STOP_DELAY_SECONDS: '-1' })).toThrow(
       'SANDBOX_STOP_DELAY_SECONDS must be a non-negative integer',
@@ -558,6 +576,9 @@ describe('loadConfig', () => {
     );
     expect(() => loadConfig({ API_AUTH_MODE: 'none', UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS: 'yes' })).toThrow(
       'UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS must be true or false',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', EVENT_DELTA_COMPACTION_ENABLED: 'yes' })).toThrow(
+      'EVENT_DELTA_COMPACTION_ENABLED must be true or false',
     );
   });
 });

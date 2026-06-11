@@ -1,14 +1,16 @@
+import {
+  runWithOptionalAdvisoryLock,
+  startPeriodicTask,
+  type AdvisoryLockStore,
+  type PeriodicTaskHandle,
+} from '../app/periodic-task.js';
 import { SandboxCleanupService } from './service.js';
 
 const sandboxReaperLockId = 742_358_001;
 
-export type AdvisoryLockStore = {
-  withAdvisoryLock<T>(lockId: number, fn: () => Promise<T>): Promise<T | null>;
-};
-
 export type SandboxReaperOptions = {
   cleanup: SandboxCleanupService;
-  store: unknown;
+  store: object & Partial<AdvisoryLockStore>;
   stopDelayMs: number;
   retentionMs: number;
   batchSize?: number;
@@ -16,10 +18,7 @@ export type SandboxReaperOptions = {
   onError?: (error: unknown) => void;
 };
 
-export type SandboxReaperHandle = {
-  stop(): Promise<void>;
-  close(): Promise<void>;
-};
+export type SandboxReaperHandle = PeriodicTaskHandle;
 
 export async function runSandboxReaperOnce(
   options: Pick<SandboxReaperOptions, 'cleanup' | 'store' | 'stopDelayMs' | 'retentionMs' | 'batchSize'>,
@@ -36,46 +35,13 @@ export async function runSandboxReaperOnce(
     return stopResult.stopped + destroyResult.destroyed;
   };
 
-  if (hasAdvisoryLock(options.store)) return (await options.store.withAdvisoryLock(sandboxReaperLockId, run)) ?? 0;
-  return run();
+  return runWithOptionalAdvisoryLock({ store: options.store, lockId: sandboxReaperLockId, run, locked: 0 });
 }
 
 export function startSandboxReaper(options: SandboxReaperOptions): SandboxReaperHandle {
-  let stopped = false;
-  let inFlight: Promise<void> | null = null;
-
-  const tick = () => {
-    if (stopped || inFlight) return;
-    inFlight = runSandboxReaperOnce(options)
-      .then(() => {})
-      .catch((error: unknown) => {
-        options.onError?.(error);
-      })
-      .finally(() => {
-        inFlight = null;
-      });
-  };
-
-  const timer = setInterval(tick, options.intervalMs ?? 60_000);
-  tick();
-
-  const stop = async (): Promise<void> => {
-    stopped = true;
-    clearInterval(timer);
-    await inFlight;
-  };
-
-  return {
-    stop,
-    close: stop,
-  };
-}
-
-function hasAdvisoryLock(store: unknown): store is AdvisoryLockStore {
-  return Boolean(
-    store &&
-    typeof store === 'object' &&
-    'withAdvisoryLock' in store &&
-    typeof (store as AdvisoryLockStore).withAdvisoryLock === 'function',
-  );
+  return startPeriodicTask({
+    run: () => runSandboxReaperOnce(options),
+    intervalMs: options.intervalMs,
+    onError: options.onError,
+  });
 }

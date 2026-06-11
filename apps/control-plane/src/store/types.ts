@@ -645,9 +645,11 @@ export interface EventStore {
   ): Promise<EventRecord | null>;
   getEvents(sessionId: string, afterSequence?: number, limit?: number): Promise<EventRecord[]>;
   listEvents(afterId?: number, limit?: number): Promise<EventRecord[]>;
+  compactFinalizedAgentTextDeltas(input: EventDeltaCompactionInput): Promise<number>;
 }
 
 export type EventRecord = NormalizedEvent & { id: number; sequence: number };
+export type EventDeltaCompactionInput = { finalizedBefore: Date; limit: number };
 
 export interface AppStore
   extends SessionStore, MessageStore, RunStore, SandboxStore, CallbackStore, AutomationStore, EventStore {
