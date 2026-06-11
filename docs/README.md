@@ -40,7 +40,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 4. Durable state lives in Postgres, not memory or cloud-specific actors.
 5. Integrations are thin ingress/egress adapters. They never run agents directly.
 6. Sandboxes are provider-backed through a stable interface.
-7. Events are append-only and replayable. Streaming is delivery, not storage.
+7. Events are replayable, with compactable streaming deltas treated as storage optimization rather than durable audit history.
 8. Tests define product behavior. Do not weaken tests to match accidental current behavior.
 9. Agent context is production code. Prompt templates, skills, roles, and constraints need tests.
 10. Trust is layered: permissions, conventions, lifecycle gates, tests, and review pipelines.

@@ -23,6 +23,7 @@ const storeMethods = [
   'claimNextDueScheduledAutomation',
   'claimNextPendingMessage',
   'claimNextPendingMessageBatch',
+  'compactFinalizedAgentTextDeltas',
   'completeRun',
   'completeRunBatch',
   'completeScheduledAutomationClaim',

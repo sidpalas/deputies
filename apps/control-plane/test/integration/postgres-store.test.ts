@@ -1,62 +1,25 @@
-import type { Server } from 'node:http';
 import type { SessionData } from '@flue/runtime';
-import { Pool } from 'pg';
-import { createServer, createServices } from '../../src/app/server.js';
-import type { CompletionCallbackSender } from '../../src/callbacks/service.js';
-import { loadConfig } from '../../src/config/index.js';
-import { runMigrations } from '../../src/db/migrate.js';
+import type { Pool } from 'pg';
+import { createServices } from '../../src/app/server.js';
 import { PostgresFlueSessionStore } from '../../src/runner-flue/session-store.js';
 import {
   PI_SESSION_DATA_VERSION,
   PostgresPiSessionStore,
   type PiSessionData,
 } from '../../src/runner-pi/session-store.js';
-import { FakeRunner } from '../../src/runner/fake.js';
-import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
-import { PostgresStore, type PostgresEventListener } from '../../src/store/postgres.js';
-import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from '../../src/worker/service.js';
-import { expectGenericWebhookResponse } from '../support/contracts.js';
-
-const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+import { PostgresStore } from '../../src/store/postgres.js';
+import { waitFor } from '../support/http.js';
+import { setupPostgresStoreSuite, testDatabaseUrl } from '../support/postgres-store-suite.js';
 
 describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   let pool: Pool;
   let store: PostgresStore;
+  let databaseUrl: string;
 
-  beforeAll(async () => {
-    // Rebuild the dedicated test database from the current migration files so a
-    // schema left behind by an older or in-progress branch cannot leak into this run.
-    // The reset is destructive, so refuse anything that is not clearly a test database.
-    const databaseName = new URL(testDatabaseUrl!).pathname.replace(/^\//, '');
-    if (!/test/i.test(databaseName)) {
-      throw new Error(
-        `Refusing to reset database "${databaseName}": TEST_DATABASE_URL must point at a dedicated test database (name containing "test", e.g. flue_test)`,
-      );
-    }
-    const bootstrap = new Pool({ connectionString: testDatabaseUrl });
-    try {
-      await bootstrap.query('DROP SCHEMA public CASCADE');
-      await bootstrap.query('CREATE SCHEMA public');
-    } finally {
-      await bootstrap.end();
-    }
-    await runMigrations(testDatabaseUrl!);
-    pool = new Pool({ connectionString: testDatabaseUrl });
-  });
-
-  beforeEach(async () => {
-    await pool.query(
-      'TRUNCATE pi_sessions, flue_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE',
-    );
-    store = new PostgresStore(testDatabaseUrl!);
-  });
-
-  afterEach(async () => {
-    await store.close();
-  });
-
-  afterAll(async () => {
-    await pool.end();
+  setupPostgresStoreSuite('postgres_store', (context) => {
+    pool = context.pool;
+    store = context.store;
+    databaseUrl = context.databaseUrl;
   });
 
   it('preserves session, message, and event behavior', async () => {
@@ -90,16 +53,18 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(events.map((event) => event.type)).toEqual(['session_created', 'message_created']);
     expect(events.map((event) => event.sequence)).toEqual([1, 2]);
 
-    await store.close();
-    store = new PostgresStore(testDatabaseUrl!);
-    const restartedServices = createServices(store);
-
-    const replayed = await restartedServices.events.list(session.id, 1);
-    expect(replayed.map((event) => event.type)).toEqual(['message_created']);
+    const restartedStore = new PostgresStore(databaseUrl);
+    try {
+      const restartedServices = createServices(restartedStore);
+      const replayed = await restartedServices.events.list(session.id, 1);
+      expect(replayed.map((event) => event.type)).toEqual(['message_created']);
+    } finally {
+      await restartedStore.close();
+    }
   });
 
   it('persists Flue session data opaquely', async () => {
-    const flueStore = new PostgresFlueSessionStore(testDatabaseUrl!);
+    const flueStore = new PostgresFlueSessionStore(databaseUrl);
     try {
       const data: SessionData = {
         version: 3,
@@ -120,7 +85,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   });
 
   it('persists Pi session data opaquely', async () => {
-    const piStore = new PostgresPiSessionStore(testDatabaseUrl!);
+    const piStore = new PostgresPiSessionStore(databaseUrl);
     try {
       const session = await createServices(store).sessions.create({ title: 'Pi session data' });
       const data: PiSessionData = {
@@ -668,7 +633,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
 
   it('runs postgres advisory locks on only one holder', async () => {
     const locked = await store.withAdvisoryLock(12345, async () => {
-      const competing = new PostgresStore(testDatabaseUrl!);
+      const competing = new PostgresStore(databaseUrl);
       try {
         return competing.withAdvisoryLock(12345, async () => 'competing');
       } finally {
@@ -905,444 +870,4 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       leaseExpiresAt: new Date(claimedAt.getTime() + 1_000),
     });
   });
-
-  it('processes an HTTP-created message through the worker using Postgres', async () => {
-    const services = createServices(store);
-    const server = createServer(
-      loadConfig({ API_AUTH_MODE: 'none', APP_DATA_STORE: 'postgres', DATABASE_URL: testDatabaseUrl! }),
-      services,
-    );
-    const baseUrl = await listen(server);
-
-    try {
-      const createSession = await postJson(`${baseUrl}/sessions`, { title: 'HTTP worker' });
-      const { session } = (await createSession.json()) as { session: { id: string } };
-
-      const createMessage = await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'ship it' });
-      expect(createMessage.status).toBe(202);
-
-      const worker = new WorkerService({
-        store,
-        events: services.events,
-        artifacts: services.artifacts,
-        runner: new FakeRunner(),
-        runnerType: 'fake',
-        sandboxProvider: new FakeSandboxProvider(),
-        leaseOwner: 'integration-worker',
-      });
-      await expect(worker.processNext()).resolves.toBe(true);
-
-      const eventsResponse = await fetch(`${baseUrl}/sessions/${session.id}/events`);
-      const { events } = (await eventsResponse.json()) as { events: Array<{ type: string }> };
-      expect(events.map((event) => event.type)).toEqual([
-        'session_created',
-        'message_created',
-        'message_started',
-        'sandbox_starting',
-        'sandbox_ready',
-        'run_started',
-        'agent_text_delta',
-        'run_completed',
-        'agent_response_final',
-        'message_completed',
-      ]);
-    } finally {
-      await close(server);
-    }
-  });
-
-  it('accepts concurrent writes through multiple API replicas sharing Postgres', async () => {
-    const replicaStoreA = new PostgresStore(testDatabaseUrl!);
-    const replicaStoreB = new PostgresStore(testDatabaseUrl!);
-    const serverA = createServer(
-      loadConfig({ API_AUTH_MODE: 'none', APP_DATA_STORE: 'postgres', DATABASE_URL: testDatabaseUrl! }),
-      createServices(replicaStoreA),
-    );
-    const serverB = createServer(
-      loadConfig({ API_AUTH_MODE: 'none', APP_DATA_STORE: 'postgres', DATABASE_URL: testDatabaseUrl! }),
-      createServices(replicaStoreB),
-    );
-    const [baseUrlA, baseUrlB] = await Promise.all([listen(serverA), listen(serverB)]);
-
-    try {
-      const createSession = await postJson(`${baseUrlA}/sessions`, { title: 'Multi API' });
-      expect(createSession.status).toBe(201);
-      const { session } = (await createSession.json()) as { session: { id: string } };
-
-      const responses = await Promise.all(
-        Array.from({ length: 20 }, (_, index) =>
-          postJson(`${index % 2 === 0 ? baseUrlA : baseUrlB}/sessions/${session.id}/messages`, {
-            prompt: `message ${index + 1}`,
-          }),
-        ),
-      );
-
-      expect(responses.map((response) => response.status)).toEqual(new Array(20).fill(202));
-
-      const messagesResponse = await fetch(`${baseUrlB}/sessions/${session.id}/messages`);
-      const { messages } = (await messagesResponse.json()) as { messages: Array<{ sequence: number; status: string }> };
-      expect(messages).toHaveLength(20);
-      expect(messages.map((message) => message.sequence)).toEqual(Array.from({ length: 20 }, (_, index) => index + 1));
-      expect(messages.every((message) => message.status === 'pending')).toBe(true);
-    } finally {
-      await Promise.all([close(serverA), close(serverB)]);
-      await Promise.all([replicaStoreA.close(), replicaStoreB.close()]);
-    }
-  });
-
-  it('wakes a worker loop on callback retry scheduled events from another Postgres connection', async () => {
-    const apiStore = new PostgresStore(testDatabaseUrl!);
-    const workerStore = new PostgresStore(testDatabaseUrl!);
-    const apiServices = createServices(apiStore);
-    const workerServices = createServices(workerStore);
-    let listener: PostgresEventListener | undefined;
-    let loop: WorkerLoopHandle | undefined;
-    let processNextCalls = 0;
-    let deliveryAttempts = 0;
-    const sender: CompletionCallbackSender = {
-      type: 'http',
-      async deliver() {
-        deliveryAttempts += 1;
-      },
-    };
-
-    try {
-      const worker = new WorkerService({
-        store: workerStore,
-        events: workerServices.events,
-        artifacts: workerServices.artifacts,
-        runner: new FakeRunner(),
-        runnerType: 'fake',
-        sandboxProvider: new FakeSandboxProvider(),
-        leaseOwner: 'callback-retry-worker',
-        callbackSenders: [sender],
-      });
-      loop = startWorkerLoop(
-        {
-          async processNext() {
-            processNextCalls += 1;
-            return worker.processNext();
-          },
-        },
-        60_000,
-      );
-      listener = await workerStore.listenEvents((event) => {
-        if (event.type === 'callback_retry_scheduled') loop?.wake();
-      });
-      await waitFor(() => Promise.resolve(processNextCalls === 1));
-
-      const session = await apiServices.sessions.create({ title: 'Callback retry wake' });
-      const now = new Date();
-      const delivery = await apiStore.createCallbackDelivery({
-        id: '00000000-0000-4000-8000-000000000401',
-        sessionId: session.id,
-        targetType: 'http',
-        target: { url: 'https://example.com/callback' },
-        eventType: 'message_completed',
-        payload: {
-          event: 'message_completed',
-          sessionId: session.id,
-          runId: '00000000-0000-4000-8000-000000000402',
-          messageId: '00000000-0000-4000-8000-000000000403',
-          text: 'completed',
-          artifacts: [],
-        },
-        createdAt: now,
-        updatedAt: now,
-        nextAttemptAt: now,
-      });
-
-      await apiServices.events.append({
-        sessionId: session.id,
-        type: 'callback_retry_scheduled',
-        payload: {
-          deliveryId: delivery.id,
-          error: 'previous attempt failed',
-          targetType: delivery.targetType,
-          attempts: delivery.attempts,
-          nextAttemptAt: now.toISOString(),
-        },
-      });
-
-      await waitFor(async () => deliveryAttempts === 1, 3_000);
-      await expect(apiStore.listCallbackDeliveries({ sessionId: session.id })).resolves.toMatchObject([
-        { id: delivery.id, status: 'sent', attempts: 1 },
-      ]);
-    } finally {
-      await loop?.stop();
-      await listener?.close();
-      await Promise.all([apiStore.close(), workerStore.close()]);
-    }
-  });
-
-  it('accepts generic webhooks with DB-backed source prompts and dedupe', async () => {
-    const services = createServices(store);
-    const now = new Date();
-    await store.createWebhookSource({
-      id: '00000000-0000-4000-8000-000000000201',
-      key: 'foo',
-      name: 'Foo',
-      enabled: true,
-      bearerToken: 'secret',
-      promptPrefix: 'bar baz',
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    const server = createServer(
-      loadConfig({ API_AUTH_MODE: 'none', APP_DATA_STORE: 'postgres', DATABASE_URL: testDatabaseUrl! }),
-      services,
-    );
-    const baseUrl = await listen(server);
-
-    try {
-      const first = await postJsonWithAuth(`${baseUrl}/webhooks/generic/foo`, 'secret', {
-        thread: { externalId: 'thread-1' },
-        dedupeKey: 'delivery-1',
-        title: 'Foo task',
-        prompt: 'do work',
-      });
-      expect(first.status).toBe(202);
-      const firstBody = await first.json();
-      expectGenericWebhookResponse(firstBody);
-      expect(firstBody.duplicate).toBe(false);
-      expect(firstBody.message?.prompt).toBe('bar baz\n\ndo work');
-
-      const duplicate = await postJsonWithAuth(`${baseUrl}/webhooks/generic/foo`, 'secret', {
-        thread: { externalId: 'thread-1' },
-        dedupeKey: 'delivery-1',
-        prompt: 'do work again',
-      });
-      expect(duplicate.status).toBe(202);
-      const duplicateBody = await duplicate.json();
-      expectGenericWebhookResponse(duplicateBody);
-      expect(duplicateBody).toMatchObject({ duplicate: true });
-
-      const followUp = await postJsonWithAuth(`${baseUrl}/webhooks/generic/foo`, 'secret', {
-        thread: { externalId: 'thread-1' },
-        dedupeKey: 'delivery-2',
-        prompt: 'follow up',
-      });
-      const followUpBody = await followUp.json();
-      expectGenericWebhookResponse(followUpBody);
-      expect(followUpBody.session?.id).toBe(firstBody.session?.id);
-
-      await expect(
-        postJsonWithAuth(`${baseUrl}/webhooks/generic/foo`, 'wrong', {
-          thread: { externalId: 'thread-2' },
-          dedupeKey: 'delivery-3',
-          prompt: 'nope',
-        }),
-      ).resolves.toMatchObject({ status: 401 });
-
-      const concurrentPayload = {
-        thread: { externalId: 'thread-concurrent' },
-        dedupeKey: 'delivery-concurrent',
-        prompt: 'do work once',
-      };
-      const concurrent = await Promise.all([
-        postJsonWithAuth(`${baseUrl}/webhooks/generic/foo`, 'secret', concurrentPayload),
-        postJsonWithAuth(`${baseUrl}/webhooks/generic/foo`, 'secret', concurrentPayload),
-      ]);
-      const concurrentBodies = (await Promise.all(concurrent.map((response) => response.json()))) as Array<{
-        duplicate: boolean;
-        session: { id: string };
-      }>;
-      expect(concurrentBodies.map((body) => body.duplicate).sort()).toEqual([false, true]);
-      const concurrentAccepted = concurrentBodies.find((body) => !body.duplicate)!;
-      await expect(store.getMessages(concurrentAccepted.session.id)).resolves.toHaveLength(1);
-    } finally {
-      await close(server);
-    }
-  });
-
-  it('does not reclaim received deliveries but retries failed deliveries and dedupes processed ones', async () => {
-    const now = new Date('2026-05-14T00:00:00.000Z');
-    const staleReceivedBefore = new Date(now.getTime() - 15 * 60_000);
-
-    const received = await store.createIntegrationDelivery({
-      id: '00000000-0000-4000-8000-000000000301',
-      source: 'github',
-      dedupeKey: 'received-delivery',
-      receivedAt: now,
-      staleReceivedBefore,
-      metadata: { attempt: 1 },
-    });
-    expect(received).toMatchObject({ status: 'received', metadata: { attempt: 1 } });
-    await expect(
-      store.createIntegrationDelivery({
-        id: '00000000-0000-4000-8000-000000000302',
-        source: 'github',
-        dedupeKey: 'received-delivery',
-        receivedAt: new Date(now.getTime() + 1_000),
-        staleReceivedBefore,
-        metadata: { attempt: 2 },
-      }),
-    ).resolves.toBeNull();
-    await expect(
-      store.createIntegrationDelivery({
-        id: '00000000-0000-4000-8000-000000000302',
-        source: 'github',
-        dedupeKey: 'received-delivery',
-        receivedAt: new Date(now.getTime() + 1_000),
-        staleReceivedBefore: new Date(now.getTime() + 1),
-        metadata: { attempt: 2 },
-      }),
-    ).resolves.toBeNull();
-
-    const failed = await store.createIntegrationDelivery({
-      id: '00000000-0000-4000-8000-000000000303',
-      source: 'github',
-      dedupeKey: 'failed-delivery',
-      receivedAt: now,
-      staleReceivedBefore,
-      metadata: { attempt: 1 },
-    });
-    await expect(
-      store.markIntegrationDeliveryFailed({
-        id: failed!.id,
-        source: 'github',
-        dedupeKey: 'failed-delivery',
-        failedAt: new Date(now.getTime() + 1_000),
-        error: 'temporary_failure',
-      }),
-    ).resolves.toBe(true);
-    const failedRetry = await store.createIntegrationDelivery({
-      id: '00000000-0000-4000-8000-000000000304',
-      source: 'github',
-      dedupeKey: 'failed-delivery',
-      receivedAt: new Date(now.getTime() + 2_000),
-      staleReceivedBefore,
-      metadata: { attempt: 2 },
-    });
-    expect(failedRetry).toMatchObject({ status: 'received', metadata: { attempt: 2 } });
-    expect(failedRetry?.processedAt).toBeUndefined();
-    expect(failedRetry?.error).toBeUndefined();
-
-    await expect(
-      store.markIntegrationDeliveryProcessed({
-        id: failedRetry!.id,
-        source: 'github',
-        dedupeKey: 'failed-delivery',
-        processedAt: new Date(now.getTime() + 3_000),
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      store.createIntegrationDelivery({
-        id: '00000000-0000-4000-8000-000000000305',
-        source: 'github',
-        dedupeKey: 'failed-delivery',
-        receivedAt: new Date(now.getTime() + 4_000),
-        staleReceivedBefore,
-        metadata: { attempt: 3 },
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it('fences integration delivery status updates by active lease', async () => {
-    const now = new Date('2026-05-14T00:00:00.000Z');
-    const first = await store.createIntegrationDelivery({
-      id: '00000000-0000-4000-8000-000000000306',
-      source: 'github',
-      dedupeKey: 'fenced-delivery',
-      receivedAt: now,
-      staleReceivedBefore: new Date(now.getTime() - 1),
-      metadata: { attempt: 1 },
-    });
-    await expect(
-      store.markIntegrationDeliveryProcessed({
-        id: first!.id,
-        source: 'github',
-        dedupeKey: 'fenced-delivery',
-        processedAt: new Date(now.getTime() + 1_000),
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      store.markIntegrationDeliveryFailed({
-        id: first!.id,
-        source: 'github',
-        dedupeKey: 'fenced-delivery',
-        failedAt: new Date(now.getTime() + 2_000),
-        error: 'late_failure',
-      }),
-    ).resolves.toBe(false);
-
-    await expect(
-      store.createIntegrationDelivery({
-        id: '00000000-0000-4000-8000-000000000307',
-        source: 'github',
-        dedupeKey: 'fenced-delivery',
-        receivedAt: new Date(now.getTime() + 3_000),
-        staleReceivedBefore: new Date(now.getTime() + 3_000),
-        metadata: { attempt: 2 },
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it('reports lost integration delivery finalization leases', async () => {
-    const now = new Date('2026-05-14T00:00:00.000Z');
-    const delivery = await store.createIntegrationDelivery({
-      id: '00000000-0000-4000-8000-000000000308',
-      source: 'github',
-      dedupeKey: 'lost-lease-delivery',
-      receivedAt: now,
-      staleReceivedBefore: new Date(now.getTime() - 1),
-      metadata: {},
-    });
-
-    await expect(
-      store.markIntegrationDeliveryProcessed({
-        id: '00000000-0000-4000-8000-000000000309',
-        source: 'github',
-        dedupeKey: 'lost-lease-delivery',
-        processedAt: new Date(now.getTime() + 1_000),
-      }),
-    ).resolves.toBe(false);
-    await expect(
-      store.markIntegrationDeliveryProcessed({
-        id: delivery!.id,
-        source: 'github',
-        dedupeKey: 'lost-lease-delivery',
-        processedAt: new Date(now.getTime() + 2_000),
-      }),
-    ).resolves.toBe(true);
-  });
 });
-
-function postJson(url: string, body: unknown): Promise<Response> {
-  return fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-}
-
-function postJsonWithAuth(url: string, token: string, body: unknown): Promise<Response> {
-  return fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify(body),
-  });
-}
-
-async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Expected TCP server address');
-  return `http://${address.address}:${address.port}`;
-}
-
-async function close(server: Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 1_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error('Timed out waiting for condition');
-}

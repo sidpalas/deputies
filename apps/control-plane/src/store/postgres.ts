@@ -20,6 +20,7 @@ import type {
   CreateSandboxRecord,
   CreateSessionRecord,
   CreateWebhookSourceRecord,
+  EventDeltaCompactionInput,
   EventRecord,
   ExternalResourceRecord,
   ExternalThreadRecord,
@@ -1885,6 +1886,35 @@ export class PostgresStore implements AppStore {
     );
 
     return result.rows.map(toEvent);
+  }
+
+  async compactFinalizedAgentTextDeltas(input: EventDeltaCompactionInput): Promise<number> {
+    const result = await this.pool.query(
+      `WITH candidates AS (
+         SELECT delta.id
+         FROM events delta
+         WHERE delta.type = 'agent_text_delta'
+           AND delta.message_id IS NOT NULL
+           AND delta.created_at < $1
+           AND EXISTS (
+             SELECT 1
+             FROM events final_event
+             WHERE final_event.type = 'agent_response_final'
+               AND final_event.session_id = delta.session_id
+               AND final_event.message_id = delta.message_id
+               AND final_event.sequence > delta.sequence
+               AND final_event.created_at < $1
+               AND jsonb_typeof(final_event.payload->'text') = 'string'
+           )
+         ORDER BY delta.id ASC
+         LIMIT $2
+       )
+       DELETE FROM events
+       WHERE id IN (SELECT id FROM candidates)`,
+      [input.finalizedBefore, input.limit],
+    );
+
+    return result.rowCount ?? 0;
   }
 
   async createWebhookSource(record: CreateWebhookSourceRecord): Promise<WebhookSourceRecord> {

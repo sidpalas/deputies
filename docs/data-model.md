@@ -357,7 +357,7 @@ Rules:
 
 ## Events
 
-Append-only event log.
+Replayable event log. Semantic events are append-only; finalized streaming text deltas may be compacted once a later valid final response preserves the rendered text.
 
 Suggested columns:
 
@@ -414,7 +414,8 @@ callback_replay_requested
 Rules:
 
 - Events are never updated for normal behavior.
-- Consumers replay from `(session_id, sequence)`.
+- `agent_text_delta` rows are compactable only when they are older than the compaction retention window, precede a valid `agent_response_final` for the same message, and are not needed to preserve failed/cancelled partial output.
+- Consumers replay from `(session_id, sequence)`; sequences are monotonic but may have gaps after compactable deltas are removed.
 - Large payloads should be moved to object storage and referenced by URL/key.
 - Sensitive values must be redacted before event write.
 

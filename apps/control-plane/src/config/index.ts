@@ -32,6 +32,10 @@ export type AppConfig = {
   sandboxRetentionMs: number;
   sandboxKeepaliveMaxExtensionMs: number;
   sandboxWorkspacePath: string;
+  eventDeltaCompactionEnabled: boolean;
+  eventDeltaCompactionRetentionMs: number;
+  eventDeltaCompactionIntervalMs: number;
+  eventDeltaCompactionBatchSize: number;
   runMode: RunMode;
   runner: RunnerKind;
   sandboxProvider: SandboxProviderKind;
@@ -145,6 +149,25 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
         'SANDBOX_KEEPALIVE_MAX_EXTENSION_SECONDS',
       ) * 1000,
     sandboxWorkspacePath: env.SANDBOX_WORKSPACE_PATH ?? '/workspace',
+    eventDeltaCompactionEnabled: parseBoolean(
+      env.EVENT_DELTA_COMPACTION_ENABLED,
+      true,
+      'EVENT_DELTA_COMPACTION_ENABLED',
+    ),
+    eventDeltaCompactionRetentionMs:
+      parsePositiveInteger(
+        env.EVENT_DELTA_COMPACTION_RETENTION_SECONDS,
+        24 * 60 * 60,
+        'EVENT_DELTA_COMPACTION_RETENTION_SECONDS',
+      ) * 1000,
+    eventDeltaCompactionIntervalMs:
+      parsePositiveInteger(env.EVENT_DELTA_COMPACTION_INTERVAL_SECONDS, 60, 'EVENT_DELTA_COMPACTION_INTERVAL_SECONDS') *
+      1000,
+    eventDeltaCompactionBatchSize: parsePositiveInteger(
+      env.EVENT_DELTA_COMPACTION_BATCH_SIZE,
+      5_000,
+      'EVENT_DELTA_COMPACTION_BATCH_SIZE',
+    ),
     runMode: parseEnum(env.RUN_MODE, ['combined', 'all', 'api', 'worker'], 'combined'),
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
