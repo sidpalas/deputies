@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.9.0](https://github.com/sidpalas/deputies/compare/v0.8.0...v0.9.0) (2026-06-11)
+
+
+### Continuous Integration
+
+* add run tests workflow ([#60](https://github.com/sidpalas/deputies/issues/60)) ([826b76b](https://github.com/sidpalas/deputies/commit/826b76b145b036a9adaf71a449dd30e159448d9c))
+* update workflow release config ([755fd49](https://github.com/sidpalas/deputies/commit/755fd49451ac37401bdd32919c86c80ce269501d))
+
+
+### Features
+
+* add session readiness telemetry ([#57](https://github.com/sidpalas/deputies/issues/57)) ([0a67078](https://github.com/sidpalas/deputies/commit/0a670782ee3d13a0d434bb1ea886939f7f01ea95))
+
+
+### Bug Fixes
+
+* **control-plane:** expose instrumented store methods ([1decd61](https://github.com/sidpalas/deputies/commit/1decd61f6b1728e75abf12e431939ceb2fcb1509))
+* include browser milestones package in docker builds ([d1cde8f](https://github.com/sidpalas/deputies/commit/d1cde8f77ae01852f0e6a80c9cd178c4d530d07c))
+
+
+### Performance Improvements
+
+* **control-plane:** cut hot-path database query load ([#59](https://github.com/sidpalas/deputies/issues/59)) ([0a3fa65](https://github.com/sidpalas/deputies/commit/0a3fa65c8b2da2d0fb231e7fc2622dfcc1934b69))
+* **web:** decouple session detail from outputs ([37d721e](https://github.com/sidpalas/deputies/commit/37d721e2d02aa3e89e21c7fdb9f855c7e48cd08d))
+* **web:** optimize heavy session rendering ([1b5f964](https://github.com/sidpalas/deputies/commit/1b5f964f6a5212cb53232d5eb74c9b0755e99e13))
+
 ## [0.8.0](https://github.com/sidpalas/deputies/compare/v0.7.0...v0.8.0) (2026-06-09)
 
 
