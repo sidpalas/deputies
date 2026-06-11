@@ -109,6 +109,8 @@ jobs:
   web-e2e:
     name: Web E2E
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble@sha256:b0ab6f3cb99aa7803adbc14d9027ec1785fc6e433b97e134e0f8fe61683b6b53
     timeout-minutes: 20
 
     steps:
@@ -117,9 +119,6 @@ jobs:
 
       - name: Setup CI
         uses: ./.github/actions/setup-ci
-
-      - name: Install Playwright Chromium
-        run: pnpm --dir apps/web exec playwright install --with-deps chromium
 
       - name: Run Playwright tests
         run: mise run //apps/web:e2e
