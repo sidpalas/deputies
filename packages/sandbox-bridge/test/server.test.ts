@@ -3,9 +3,17 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
-import { createServer, type Server } from 'node:http';
+import { createServer, request as httpRequest, type Server } from 'node:http';
 import { gzipSync } from 'node:zlib';
 import { createSandboxBridgeServer } from '../src/server.js';
+
+type PreviewStreamResult =
+  | { type: 'request-error'; body: string; error: Error }
+  | { type: 'response-aborted'; body: string }
+  | { type: 'response-close'; body: string }
+  | { type: 'response-end'; body: string }
+  | { type: 'response-error'; body: string; error: Error }
+  | { type: 'timeout'; body: string };
 
 describe('sandbox bridge server', () => {
   let workspacePath: string;
@@ -34,6 +42,14 @@ describe('sandbox bridge server', () => {
 
   it('requires bearer auth', async () => {
     const response = await fetch(`${baseUrl}/health`);
+
+    expect(response.status).toBe(401);
+  });
+
+  it('rejects equal-length bearer token mismatches', async () => {
+    const response = await fetch(`${baseUrl}/health`, {
+      headers: { authorization: 'Bearer test-tokem' },
+    });
 
     expect(response.status).toBe(401);
   });
@@ -337,6 +353,46 @@ describe('sandbox bridge server', () => {
     }
   });
 
+  it('closes preview responses when upstream fails after headers are sent', async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    const upstream = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.write('partial', () => {
+        response.destroy(new Error('upstream aborted mid-stream'));
+      });
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const address = upstream.address();
+    if (typeof address !== 'object' || !address) throw new Error('Expected upstream address');
+
+    try {
+      const result = await readPreviewStream(`/preview/${address.port}/partial`, 1000);
+      if (result.type === 'timeout') {
+        throw new Error(`Timed out waiting for bridge to close/reset truncated preview response. Body: ${result.body}`);
+      }
+      if (result.type === 'response-end') {
+        throw new Error(`Expected truncated preview response to fail, but bridge ended normally. Body: ${result.body}`);
+      }
+
+      expect(result.type).toMatch(/^(request-error|response-aborted|response-close|response-error)$/);
+      expect(result.body).toBe('partial');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it('passes preview redirects back to the browser', async () => {
     const upstream = createServer((request, response) => {
       if (request.url === '/login') {
@@ -505,6 +561,44 @@ describe('sandbox bridge server', () => {
         authorization: `Bearer ${token}`,
         ...init.headers,
       },
+    });
+  }
+
+  function readPreviewStream(path: string, timeoutMs: number): Promise<PreviewStreamResult> {
+    const url = new URL(`${baseUrl}${path}`);
+
+    return new Promise((resolve) => {
+      let body = '';
+      let settled = false;
+      let responseEnded = false;
+
+      const finish = (result: PreviewStreamResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const request = httpRequest(url, { headers: { authorization: `Bearer ${token}` } }, (response) => {
+        response.setEncoding('utf-8');
+        response.on('data', (chunk: string) => {
+          body += chunk;
+        });
+        response.once('aborted', () => finish({ type: 'response-aborted', body }));
+        response.once('end', () => {
+          responseEnded = true;
+          finish({ type: 'response-end', body });
+        });
+        response.once('error', (error) => finish({ type: 'response-error', body, error }));
+        response.once('close', () => {
+          if (!responseEnded) finish({ type: 'response-close', body });
+        });
+      });
+      const timer = setTimeout(() => {
+        finish({ type: 'timeout', body });
+        request.destroy();
+      }, timeoutMs);
+      request.once('error', (error) => finish({ type: 'request-error', body, error }));
+      request.end();
     });
   }
 

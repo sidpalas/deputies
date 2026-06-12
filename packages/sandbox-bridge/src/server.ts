@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import http, {
@@ -170,6 +171,10 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
 
       writeJson(response, 404, { error: 'not_found' });
     } catch (error) {
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
       writeJson(response, statusCodeForError(error), {
         error: error instanceof Error ? error.message : 'Unknown bridge error',
       });
@@ -637,7 +642,14 @@ function writeJson(response: ServerResponse, status: number, body: unknown): voi
 }
 
 function isAuthorized(request: IncomingMessage, token: string): boolean {
-  return request.headers.authorization === `Bearer ${token}`;
+  const authorization = request.headers.authorization;
+  return authorization !== undefined && safeEqual(authorization, `Bearer ${token}`);
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 function appendBounded(current: string, chunk: string, maxBytes: number): string {
