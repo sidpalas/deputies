@@ -70,6 +70,8 @@ Do not collapse product state and Flue runtime state into one concept.
 
 Product state is the source of truth for the app. Flue state is the source of truth for Flue's internal conversation continuity. Both are required.
 
+Compatibility boundary: Flue session blobs are opaque runtime-owned data, not a long-term product-history format. Runtime upgrades may reject older blob versions. The `@flue/runtime@0.11.1` upgrade deliberately treats pre-upgrade `0.8.0` blobs as absent and starts a fresh Flue session for the next run, while keeping all Deputies-owned product history intact.
+
 ## Required Table
 
 The current implementation uses a dedicated table for Flue session data.

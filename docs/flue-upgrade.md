@@ -2,6 +2,12 @@
 
 Deputies is currently pinned to `@flue/runtime@0.11.1`.
 
+## Operator Impact
+
+Deploying the `0.11.1` upgrade intentionally does **not** migrate existing `@flue/runtime@0.8.0` session blobs. Follow-up messages on product sessions that have old Flue runtime state will start a fresh Flue session the first time they run after the deploy.
+
+This does not delete Deputies history: product sessions, messages, events, artifacts, runs, sandboxes, callbacks, and integration records remain in Deputies-owned tables. The only lost continuity is Flue's opaque internal conversation/tool/task state for that runner. Operators should schedule the deploy with the expectation that in-flight or long-running Flue conversations may need the next prompt to restate any context that was only present inside Flue runtime memory.
+
 ## Upgrade Plan
 
 1. Phase 1: upgrade Flue and handle breaking changes.
