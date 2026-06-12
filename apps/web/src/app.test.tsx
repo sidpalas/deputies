@@ -651,7 +651,9 @@ it('moves archived groups below the archived groups toggle', async () => {
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  fireEvent.click(screen.getByText('Archive group').closest('button')!);
+  const archiveButton = screen.getByText('Archive group').closest('button');
+  if (!archiveButton) throw new Error('Expected archive group button');
+  fireEvent.click(archiveButton);
 
   const archivedSummary = await screen.findByText('Archived groups · 1');
   const archivedDetails = archivedSummary.closest('details')!;
@@ -786,8 +788,8 @@ it('saves the group automation creation policy', async () => {
   expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
   const policyHelp = await screen.findByText('Controls who can create new scheduled automations in this group.');
   const policySelect = policyHelp.closest('label')?.querySelector('select');
-  expect(policySelect).toBeTruthy();
-  fireEvent.change(policySelect!, { target: { value: 'admin' } });
+  if (!policySelect) throw new Error('Expected automation creation policy select');
+  fireEvent.change(policySelect, { target: { value: 'admin' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save group' }));
 
   await waitFor(() => expect(groupUpdates).toHaveLength(1));
@@ -996,10 +998,10 @@ it('shows derived session display statuses', async () => {
   expect(await screen.findAllByText('stopped')).not.toHaveLength(0);
 
   sessions[0] = {
-    ...sessions[0]!,
+    ...sessions[0],
     displayStatus: 'expired',
     displayStatusTooltip: 'Sandbox expired to control costs. Filesystem state was not preserved.',
-    sandbox: { ...sessions[0]!.sandbox, status: 'destroyed' },
+    sandbox: { ...sessions[0].sandbox, status: 'destroyed' },
   };
   pushGlobalEvent?.(eventFixture({ id: 3, sequence: 3, type: 'sandbox_destroyed', payload: {} }));
 
@@ -1286,7 +1288,9 @@ it('requires restoring archived sessions before sending messages', async () => {
   const composer = screen.getByPlaceholderText('Restore this archived session before sending new work.');
   expect(composer).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
-  fireEvent.click(screen.getAllByRole('button', { name: 'Restore session' }).at(-1)!);
+  const restoreButton = screen.getAllByRole('button', { name: 'Restore session' }).at(-1);
+  if (!restoreButton) throw new Error('Expected restore session button');
+  fireEvent.click(restoreButton);
 
   await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
   expect(submittedPrompts).toEqual([]);
@@ -2139,7 +2143,7 @@ it('renders long diagnostic commands inline without a nested scroller', async ()
   expect(panel).not.toHaveClass('overflow-auto');
   expect(panel).toHaveTextContent('python3 - <<');
   expect(panel).toHaveTextContent('truncated');
-  expect(panel.textContent!.length).toBeLessThan(longCommand.length);
+  expect(panel.textContent.length).toBeLessThan(longCommand.length);
   await waitForHighlightedCodeCount(panel, 1);
 });
 
@@ -2427,7 +2431,9 @@ it('keeps the new-session page selected after archiving and refreshing', async (
   mockApi();
   const first = render(<App />);
 
-  fireEvent.click((await screen.findAllByRole('button', { name: 'Archive session' }))[0]!);
+  const archiveButton = (await screen.findAllByRole('button', { name: 'Archive session' }))[0];
+  if (!archiveButton) throw new Error('Expected archive session button');
+  fireEvent.click(archiveButton);
 
   expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
   expect(sessionStorage.getItem('deputies-selected-session-id')).toBeNull();
@@ -2459,11 +2465,11 @@ it('restores the selected session before waiting for the restore request', async
   render(<App />);
 
   expect(await screen.findByText('This session is archived.')).toBeInTheDocument();
-  fireEvent.click(
-    screen
-      .getAllByRole('button', { name: 'Restore session' })
-      .find((button) => button.textContent?.includes('Restore session'))!,
-  );
+  const restoreButton = screen
+    .getAllByRole('button', { name: 'Restore session' })
+    .find((button) => button.textContent?.includes('Restore session'));
+  if (!restoreButton) throw new Error('Expected restore session button');
+  fireEvent.click(restoreButton);
 
   expect(screen.queryByText('This session is archived.')).not.toBeInTheDocument();
   expect(

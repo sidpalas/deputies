@@ -213,10 +213,10 @@ function adaptSession(session: FlueSession): FlueSessionPort {
   const activeCalls = new Set<CallHandle<unknown>>();
 
   const track = <T>(call: CallHandle<T>): CallHandle<T> => {
-    activeCalls.add(call as CallHandle<unknown>);
+    activeCalls.add(call);
     void Promise.resolve(call)
       .finally(() => {
-        activeCalls.delete(call as CallHandle<unknown>);
+        activeCalls.delete(call);
       })
       .catch(() => {});
     return call;

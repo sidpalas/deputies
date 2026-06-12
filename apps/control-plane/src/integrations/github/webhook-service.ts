@@ -143,7 +143,7 @@ export class GitHubWebhookService {
     headers: GitHubWebhookHeaders;
     payload: Record<string, unknown>;
   }): Promise<GitHubWebhookResult> {
-    const accepted = parseAcceptedEvent(input.headers, input.payload as GitHubWebhookPayload);
+    const accepted = parseAcceptedEvent(input.headers, input.payload);
     if (!accepted) return { ok: true, type: 'ignored', reason: 'unsupported_event' };
 
     const received = await receiveIntegrationDelivery(this.store, {

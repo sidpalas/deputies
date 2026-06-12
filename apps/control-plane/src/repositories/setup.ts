@@ -32,11 +32,6 @@ export async function prepareRepositoryShellSetup(input: {
 }): Promise<RepositoryShellSetup | null> {
   const repository = parseRepositoryContext(input.context);
   if (!repository) return null;
-  if (repository.provider !== 'github')
-    throw new RepositorySetupError(
-      'unsupported_repository_provider',
-      `Unsupported repository provider: ${repository.provider}`,
-    );
   if (!input.github)
     throw new RepositorySetupError('repository_access_unavailable', 'GitHub repository access is not configured');
 

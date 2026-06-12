@@ -139,7 +139,6 @@ export class GitHubRepositoryAccessService {
 
   private assertAllowed(repository: GitHubRepository): void {
     if (!this.allowedRepositories.length) return;
-    const key = repositoryKey(repository).toLowerCase();
     const allowed = isRepositoryAllowed(repository, this.allowedRepositories);
     if (!allowed)
       throw new GitHubRepositoryAccessError(

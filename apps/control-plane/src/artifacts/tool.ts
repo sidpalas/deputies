@@ -108,7 +108,13 @@ function artifactDownloadUrl(sessionId: string, artifactId: string): string {
 }
 
 function artifactLinkLabel(value: string): string {
-  return value.replace(/[\[\]\r\n]/g, '').trim() || 'Download artifact';
+  return (
+    value
+      .replaceAll('[', '')
+      .replaceAll(']', '')
+      .replace(/[\r\n]/g, '')
+      .trim() || 'Download artifact'
+  );
 }
 
 function validateParams(params: Record<string, unknown>): ArtifactCreateInput {

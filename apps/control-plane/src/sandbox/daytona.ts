@@ -197,7 +197,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     await sandbox.refreshActivity?.();
   }
 
-  private createParams(input: CreateSandboxInput, bridgeToken: string): Record<string, unknown> {
+  private createParams(input: CreateSandboxInput, _bridgeToken: string): Record<string, unknown> {
     const labels = {
       ...this.options.labels,
       'flue-session-id': input.sessionId,
@@ -424,7 +424,7 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Pro
       },
       (error: unknown) => {
         signal.removeEventListener('abort', abort);
-        reject(error);
+        reject(error instanceof Error ? error : new Error('Daytona command failed', { cause: error }));
       },
     );
   });

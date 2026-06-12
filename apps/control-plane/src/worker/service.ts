@@ -490,7 +490,7 @@ export function startWorkerLoop(worker: Pick<WorkerService, 'processNext'>, poll
     }
     pendingWake = false;
     inFlight = (async () => {
-      let processed = false;
+      let processed: boolean;
       do {
         processed = await worker.processNext();
       } while (!stopped && processed);

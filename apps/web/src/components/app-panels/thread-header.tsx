@@ -110,7 +110,12 @@ export function ThreadHeader(props: ThreadHeaderProps) {
         <div className="min-w-0 flex-1 overflow-hidden">
           <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Session</p>
           {editingTitle ? (
-            <form className="mt-1 flex flex-wrap items-center gap-2" onSubmit={handleSubmit}>
+            <form
+              className="mt-1 flex flex-wrap items-center gap-2"
+              onSubmit={(event) => {
+                void handleSubmit(event);
+              }}
+            >
               <Input
                 className="max-w-xl"
                 value={titleDraft}
@@ -186,7 +191,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                         className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={workspaceToolsDisabled || Boolean(openingWorkspaceTool)}
                         role="menuitem"
-                        onClick={() => openWorkspaceTool(id)}
+                        onClick={() => {
+                          void openWorkspaceTool(id);
+                        }}
                       >
                         <Icon className="h-4 w-4" />
                         <span className="min-w-0 flex-1">{label}</span>

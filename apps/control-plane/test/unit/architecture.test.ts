@@ -158,7 +158,7 @@ describe('architecture boundaries', () => {
 async function sourceFiles(dir = srcRoot): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files = await Promise.all(
-    entries.map((entry) => {
+    entries.map(async (entry) => {
       const path = join(dir, entry.name);
       return entry.isDirectory() ? sourceFiles(path) : path.endsWith('.ts') ? [path] : [];
     }),

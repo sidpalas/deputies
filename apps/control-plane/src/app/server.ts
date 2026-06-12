@@ -20,12 +20,7 @@ import {
   type RequestAuthorization,
 } from '../auth/authorization.js';
 import { FetchGitHubOAuthClient, type GitHubOAuthClient } from '../auth/github.js';
-import {
-  apiAdminMiddleware,
-  apiAuthMiddleware,
-  apiUnsafeMethodAdminMiddleware,
-  isTrustedCookieAuthRequest,
-} from '../auth/middleware.js';
+import { apiAuthMiddleware, apiUnsafeMethodAdminMiddleware, isTrustedCookieAuthRequest } from '../auth/middleware.js';
 import { oauthSuccessHtml } from '../auth/oauth-success-page.js';
 import {
   clearSessionCookie,
@@ -1005,7 +1000,10 @@ export function createApp(config: AppConfig, services = createServices()) {
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const seconds = parseKeepaliveSeconds(body.seconds ?? body.ttlSeconds);
-    const port = body.port === undefined ? undefined : parseServicePort(String(body.port));
+    const port =
+      body.port === undefined || (typeof body.port !== 'string' && typeof body.port !== 'number')
+        ? undefined
+        : parseServicePort(String(body.port));
     if (body.port !== undefined && !port) return writeError(c, 400, 'invalid_request', 'Invalid service port');
 
     const result = await services.sandboxKeepalive.extend({

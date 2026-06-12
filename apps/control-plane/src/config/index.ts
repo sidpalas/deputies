@@ -614,7 +614,7 @@ function parseEnum<const T extends readonly string[]>(
   fallback: T[number],
 ): T[number] {
   if (!value) return fallback;
-  if ((allowed as readonly string[]).includes(value)) return value as T[number];
+  if ((allowed as readonly string[]).includes(value)) return value;
 
   throw new Error(`Expected one of ${allowed.join(', ')}, received "${value}"`);
 }

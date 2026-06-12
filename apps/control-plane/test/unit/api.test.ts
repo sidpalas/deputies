@@ -1381,7 +1381,7 @@ describe('core API', () => {
         headers: { 'content-type': 'text/plain', 'x-forwarded-host': serviceHost },
         body: stream,
         duplex: 'half',
-      } as RequestInit & { duplex: 'half' });
+      });
       await expect(streamedBody.json()).resolves.toEqual({
         contentLength: null,
         transferEncoding: 'chunked',

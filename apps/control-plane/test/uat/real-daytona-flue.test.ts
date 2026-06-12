@@ -135,7 +135,9 @@ async function waitForEvents(sessionId: string, terminalTypes: string[], timeout
     }, timeoutMs);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${message}. Last events response status=${lastStatus} body=${JSON.stringify(lastBody)}`);
+    throw new Error(`${message}. Last events response status=${lastStatus} body=${JSON.stringify(lastBody)}`, {
+      cause: error,
+    });
   }
 
   return lastEvents;

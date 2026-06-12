@@ -404,7 +404,7 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
     };
   }
 
-  private sandboxResource(name: string, sessionId: string, metadata: Record<string, unknown>): AgentSandboxResource {
+  private sandboxResource(name: string, sessionId: string, _metadata: Record<string, unknown>): AgentSandboxResource {
     const labels = this.labels(sessionId);
     const pvcSpec: Record<string, unknown> = {
       accessModes: ['ReadWriteOnce'],
@@ -859,7 +859,7 @@ async function bridgeFetch(
 }
 
 async function readBridgeJson(response: Response): Promise<unknown> {
-  return response.json() as Promise<unknown>;
+  return response.json();
 }
 
 async function waitForBridge(descriptor: AgentSandboxDescriptor): Promise<void> {

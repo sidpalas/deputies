@@ -92,5 +92,5 @@ function redactSecrets(value: string, token: string): string {
 }
 
 function quoteShell(value: string): string {
-  return `'${value.replace(/'/g, `'\''`)}'`;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

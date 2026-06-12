@@ -815,7 +815,9 @@ export function SessionAccessPanel(props: {
             <SelectWithCaret
               className="h-8 min-w-0 pl-2 text-sm text-foreground"
               value={ownerGroupId}
-              onChange={(event) => handleOwnerGroupChange(event.target.value)}
+              onChange={(event) => {
+                void handleOwnerGroupChange(event.target.value);
+              }}
               disabled={saving}
             >
               {editableGroups.map((group) => (

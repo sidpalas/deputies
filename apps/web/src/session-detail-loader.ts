@@ -22,7 +22,7 @@ export type SessionDetailComponent =
   | 'services'
   | 'render';
 
-export type SessionDetailComponentError = { component: SessionDetailComponent; cause: unknown };
+export type SessionDetailComponentError = Error & { component: SessionDetailComponent; cause: unknown };
 
 export type SessionDetailPhaseTraceparents = {
   detail?: TraceparentSource;
@@ -114,7 +114,10 @@ export function componentCause(error: unknown): unknown {
 
 function withComponent<T>(component: SessionDetailComponent, promise: Promise<T>): Promise<T> {
   return promise.catch((cause: unknown) => {
-    throw { component, cause } satisfies SessionDetailComponentError;
+    throw Object.assign(new Error(`${component} failed`, { cause }), {
+      component,
+      cause,
+    }) satisfies SessionDetailComponentError;
   });
 }
 

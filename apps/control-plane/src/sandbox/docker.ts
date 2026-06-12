@@ -700,7 +700,7 @@ async function bridgeFetch(
 }
 
 async function readBridgeJson(response: Response): Promise<unknown> {
-  return response.json() as Promise<unknown>;
+  return response.json();
 }
 
 async function waitForBridge(descriptor: DockerSandboxDescriptor): Promise<void> {

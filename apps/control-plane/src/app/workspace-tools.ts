@@ -222,5 +222,5 @@ function shell(strings: TemplateStringsArray, ...values: string[]): string {
 }
 
 function quoteShell(value: string): string {
-  return `'${value.replace(/'/g, `'\''`)}'`;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

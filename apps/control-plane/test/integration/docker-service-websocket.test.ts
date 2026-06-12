@@ -236,7 +236,7 @@ function rawUpgrade(
       );
     });
     socket.on('data', (chunk) => {
-      response += chunk;
+      response += chunk.toString('utf8');
     });
     socket.once('end', () => resolve(response));
     socket.once('error', reject);

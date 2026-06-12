@@ -34,7 +34,8 @@ describe('sandbox bridge server', () => {
   afterEach(async () => {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => {
-        error ? reject(error) : resolve();
+        if (error) reject(error);
+        else resolve();
       });
     });
     await rm(workspacePath, { recursive: true, force: true });
@@ -310,20 +311,22 @@ describe('sandbox bridge server', () => {
   });
 
   it('proxies preview POST bodies to localhost with content length', async () => {
-    const upstream = createServer(async (request, response) => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      response.writeHead(401, { 'content-type': 'application/json' });
-      response.end(
-        JSON.stringify({
-          method: request.method,
-          url: request.url,
-          contentLength: request.headers['content-length'] ?? null,
-          contentType: request.headers['content-type'] ?? null,
-          transferEncoding: request.headers['transfer-encoding'] ?? null,
-          body: Buffer.concat(chunks).toString('utf-8'),
-        }),
-      );
+    const upstream = createServer((request, response) => {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        response.writeHead(401, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            method: request.method,
+            url: request.url,
+            contentLength: request.headers['content-length'] ?? null,
+            contentType: request.headers['content-type'] ?? null,
+            transferEncoding: request.headers['transfer-encoding'] ?? null,
+            body: Buffer.concat(chunks).toString('utf-8'),
+          }),
+        );
+      })();
     });
     upstream.listen(0, '127.0.0.1');
     await once(upstream, 'listening');
@@ -509,13 +512,14 @@ describe('sandbox bridge server', () => {
   it('preserves preview websocket origins for forwarded service hosts', async () => {
     const upstream = createServer();
     upstream.on('upgrade', (request, socket) => {
+      const forwardedHost = request.headers['x-forwarded-host'];
       socket.write(
         'HTTP/1.1 101 Switching Protocols\r\n' +
           'Connection: Upgrade\r\n' +
           'Upgrade: websocket\r\n' +
           `X-Upstream-Host: ${request.headers.host}\r\n` +
           `X-Upstream-Origin: ${request.headers.origin}\r\n` +
-          `X-Upstream-Forwarded-Host: ${request.headers['x-forwarded-host']}\r\n` +
+          `X-Upstream-Forwarded-Host: ${Array.isArray(forwardedHost) ? forwardedHost.join(', ') : (forwardedHost ?? '')}\r\n` +
           '\r\n',
       );
       socket.end();
@@ -628,7 +632,7 @@ describe('sandbox bridge server', () => {
         );
       });
       socket.on('data', (chunk) => {
-        response += chunk;
+        response += chunk.toString('utf8');
       });
       socket.once('end', () => resolve(response));
       socket.once('error', reject);

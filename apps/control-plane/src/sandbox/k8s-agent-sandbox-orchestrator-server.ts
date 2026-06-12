@@ -1,4 +1,4 @@
-import { createServer } from 'node:http';
+import { createServer, type ServerResponse } from 'node:http';
 import { sandboxBridgeSkippedCookieNames } from './bridge-env.js';
 import { InProcessAgentSandboxOrchestrator, createAgentSandboxOrchestratorHttpHandler } from './k8s-agent-sandbox.js';
 
@@ -22,24 +22,28 @@ const handler = createAgentSandboxOrchestratorHttpHandler(
   token,
 );
 
-const server = createServer(async (request, response) => {
-  const url = `http://${request.headers.host ?? `${host}:${port}`}${request.url ?? '/'}`;
-  const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : request;
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (Array.isArray(value)) headers.set(key, value.join(', '));
-    else if (value !== undefined) headers.set(key, value);
-  }
-  const webResponse = await handler(
-    new Request(url, {
-      method: request.method,
-      headers,
-      body,
-      duplex: 'half',
-    } as RequestInit & { duplex: 'half' }),
-  );
-  response.writeHead(webResponse.status, Object.fromEntries(webResponse.headers.entries()));
-  response.end(Buffer.from(await webResponse.arrayBuffer()));
+const server = createServer((request, response) => {
+  void (async () => {
+    const url = `http://${request.headers.host ?? `${host}:${port}`}${request.url ?? '/'}`;
+    const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : request;
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(request.headers)) {
+      if (Array.isArray(value)) headers.set(key, value.join(', '));
+      else if (value !== undefined) headers.set(key, value);
+    }
+    const webResponse = await handler(
+      new Request(url, {
+        method: request.method,
+        headers,
+        body,
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' }),
+    );
+    response.writeHead(webResponse.status, Object.fromEntries(webResponse.headers.entries()));
+    response.end(Buffer.from(await webResponse.arrayBuffer()));
+  })().catch((error: unknown) => {
+    reportRequestFailure(error, response);
+  });
 });
 
 server.listen(port, host, () => {
@@ -51,6 +55,22 @@ function parsePort(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) throw new Error(`Invalid port: ${value}`);
   return parsed;
+}
+
+function reportRequestFailure(error: unknown, response: ServerResponse): void {
+  console.error('agent sandbox orchestrator request failed', error);
+  if (response.writableEnded) return;
+  if (response.headersSent) {
+    response.destroy(error instanceof Error ? error : undefined);
+    return;
+  }
+
+  try {
+    response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+    response.end('Internal Server Error');
+  } catch {
+    response.destroy(error instanceof Error ? error : undefined);
+  }
 }
 
 function optional<T extends Record<string, unknown>>(input: T): T {

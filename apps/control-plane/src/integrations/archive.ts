@@ -20,7 +20,7 @@ export function isArchivedSessionRecoveryOnly(text: string | undefined): boolean
     .replace(/<@[a-z0-9]+>/gi, ' ')
     .replace(/@[a-z0-9][a-z0-9_-]*/gi, ' ')
     .replace(/[`*_~]/g, ' ')
-    .replace(/[\s.!?"'(),:;\[\]{}-]+/g, ' ')
+    .replace(/[\s.!?"'(),:;[\]{}-]+/g, ' ')
     .trim();
   return normalized === ARCHIVED_SESSION_RECOVERY_PHRASE;
 }

@@ -144,7 +144,6 @@ export class PiRunner implements Runner {
     const pendingEvents: Array<Promise<void>> = [];
     let sawTextDelta = false;
     let responseText = '';
-    let responseMetadata: Pick<RunnerResult, 'model' | 'usage'> = {};
     let session!: AgentSession;
     let completed = false;
 
@@ -217,7 +216,7 @@ export class PiRunner implements Runner {
         throw new Error(assistantMessage.errorMessage ?? 'Pi agent failed');
       }
       if (!sawTextDelta) responseText = assistantMessageText(assistantMessage);
-      responseMetadata = assistantMessageMetadata(assistantMessage);
+      const responseMetadata = assistantMessageMetadata(assistantMessage);
 
       await input.emit({
         sessionId: input.sessionId,

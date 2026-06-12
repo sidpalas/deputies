@@ -259,7 +259,7 @@ describe('PiRunner', () => {
                 { agent: 'explore', task: `child-${index}` },
                 undefined,
                 undefined,
-                undefined as never,
+                undefined,
               );
               const content = toolResult.content[0];
               messages[0]!.content[0]!.text = content?.type === 'text' ? content.text : '';
@@ -532,7 +532,7 @@ describe('PiRunner', () => {
                 },
                 undefined,
                 undefined,
-                undefined as never,
+                undefined,
               );
               const result = JSON.parse(toolResult.content[0]!.text) as { downloadUrl: string };
               messages[0]!.content[0]!.text = `Created ${result.downloadUrl}`;
@@ -609,7 +609,7 @@ describe('PiRunner', () => {
               { action: 'publish', port: 5173, label: 'Web app', path: '/dashboard' },
               undefined,
               undefined,
-              undefined as never,
+              undefined,
             );
             const result = JSON.parse(toolResult.content[0]!.text) as { services: unknown[] };
             messages[0]!.content[0]!.text = `Published ${result.services.length} service`;
@@ -689,21 +689,21 @@ describe('PiRunner', () => {
               { action: 'set', owner: 'manaflow-ai', repo: 'manaflow' },
               undefined,
               undefined,
-              undefined as never,
+              undefined,
             );
             const prepared = await repositoryTool!.execute(
               'tool-2',
               { action: 'prepare' },
               undefined,
               undefined,
-              undefined as never,
+              undefined,
             );
             const pushed = await gitTool!.execute(
               'tool-3',
               { args: ['push', 'origin', 'sp/test'] },
               undefined,
               undefined,
-              undefined as never,
+              undefined,
             );
             const pullRequest = await ghTool!.execute(
               'tool-4',
@@ -712,7 +712,7 @@ describe('PiRunner', () => {
               },
               undefined,
               undefined,
-              undefined as never,
+              undefined,
             );
             messages[0]!.content[0]!.text = [
               prepared.content[0]!.type === 'text' ? prepared.content[0]!.text : '',
@@ -952,7 +952,7 @@ async function executeTool(
 ): Promise<SandboxPiToolResult> {
   const tool = tools.find((candidate) => candidate.name === name);
   if (!tool) throw new Error(`Missing tool: ${name}`);
-  return tool.execute('tool-call', params as never, undefined, undefined, undefined as never);
+  return tool.execute('tool-call', params, undefined, undefined, undefined as never);
 }
 
 function textResult(result: SandboxPiToolResult): string {

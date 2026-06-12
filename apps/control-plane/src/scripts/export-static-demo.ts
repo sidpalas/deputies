@@ -414,6 +414,7 @@ function stringPayload(value: unknown): string | undefined {
 
 function safeFileName(value: string): string {
   const cleaned = value
+    // eslint-disable-next-line no-control-regex -- control characters are intentionally stripped from filenames.
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-')
     .replace(/^\.+$/, '')
     .trim();

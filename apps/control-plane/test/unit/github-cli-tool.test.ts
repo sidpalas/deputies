@@ -13,7 +13,7 @@ describe('GitHub CLI Flue tool', () => {
     };
     const tool = createGitHubCliTool(repositoryServices(), { runner });
 
-    let result = '';
+    let result: string;
     try {
       result = await tool.execute({ args: ['issue', 'create', '--title', 'Test', '--body', 'Body'] });
     } finally {

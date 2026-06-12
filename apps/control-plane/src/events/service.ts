@@ -63,7 +63,7 @@ export class EventService {
 
     const persisted = await this.store.appendEventWithNextSequence(event);
     this.publish(persisted);
-    return persisted as PersistedEvent<T>;
+    return persisted;
   }
 
   async appendForRun<T extends NormalizedEventType>(
@@ -76,7 +76,7 @@ export class EventService {
     const persisted = await this.store.appendEventWithNextSequenceForRun(event, guard);
     if (!persisted) return null;
     this.publish(persisted);
-    return persisted as PersistedEvent<T>;
+    return persisted;
   }
 
   async list(sessionId: string, afterSequence?: number) {

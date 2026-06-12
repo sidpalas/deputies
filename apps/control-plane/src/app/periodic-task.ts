@@ -20,7 +20,7 @@ export async function runWithOptionalAdvisoryLock<T>(options: {
   locked: T;
 }): Promise<T> {
   if (!options.store.withAdvisoryLock) return options.run();
-  return (await options.store.withAdvisoryLock(options.lockId, options.run)) ?? options.locked;
+  return (await options.store.withAdvisoryLock(options.lockId, () => options.run())) ?? options.locked;
 }
 
 export function startPeriodicTask(options: PeriodicTaskOptions): PeriodicTaskHandle {

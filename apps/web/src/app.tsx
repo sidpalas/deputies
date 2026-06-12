@@ -803,7 +803,7 @@ export function App() {
 
   useEffect(() => {
     if (!canCallApi) return;
-    refreshSessions();
+    void refreshSessions();
   }, [canCallApi, token]);
 
   useEffect(() => {
@@ -931,7 +931,7 @@ export function App() {
     const trigger = pendingSessionMilestoneTriggerRef.current ?? 'selection';
     pendingSessionMilestoneTriggerRef.current = null;
     sessionDetailMilestoneStartedRef.current = true;
-    refreshSessionDetail(selectedSessionId, trigger);
+    void refreshSessionDetail(selectedSessionId, trigger);
   }, [selectedSessionId, canCallApi, token]);
 
   useLayoutEffect(() => {
@@ -1221,9 +1221,9 @@ export function App() {
       sessionId,
       token,
       traceparents: {
-        detail: milestones.detail.traceparent,
-        outputs: milestones.outputs.traceparent,
-        services: milestones.services.traceparent,
+        detail: () => milestones.detail.traceparent(),
+        outputs: () => milestones.outputs.traceparent(),
+        services: () => milestones.services.traceparent(),
       },
     });
     void phases.allReady.catch(() => undefined);
@@ -2287,7 +2287,7 @@ export function App() {
           provider={health?.authProvider ?? 'static'}
           username={loginUsername}
           onPasswordChange={setLoginPassword}
-          onSubmit={handleLogin}
+          onSubmit={fireAndForget(handleLogin)}
           onUsernameChange={setLoginUsername}
         />
       ) : (
@@ -2349,7 +2349,7 @@ export function App() {
                     navPage={showingSetupGuide ? 'setup' : groupsPanelOpen ? 'groups' : 'sessions'}
                     onBackToSessions={backToSessionsSidebar}
                     onCollapse={collapseSidebar}
-                    onArchiveGroup={handleArchiveGroup}
+                    onArchiveGroup={fireAndForget(handleArchiveGroup)}
                     onCreateGroup={startNewGroup}
                     onOpenAutomations={openAutomationsPanel}
                     onOpenGroups={openGroupsPanel}
@@ -2379,7 +2379,7 @@ export function App() {
                     themePreference={themePreference}
                     token={token}
                     onBackToSessions={backToSessionsSidebar}
-                    onArchiveAutomation={handleArchiveAutomation}
+                    onArchiveAutomation={fireAndForget(handleArchiveAutomation)}
                     onArchivedAutomationsOpenChange={setArchivedAutomationsOpen}
                     onCollapse={collapseSidebar}
                     onCreateAutomation={startNewAutomation}
@@ -2390,7 +2390,7 @@ export function App() {
                     onSelectAutomation={selectAutomationPanel}
                     onSignOut={signOut}
                     onThemeChange={setThemePreference}
-                    onUnarchiveAutomation={handleUnarchiveAutomation}
+                    onUnarchiveAutomation={fireAndForget(handleUnarchiveAutomation)}
                   />
                 ) : (
                   <ThreadSidebar
@@ -2409,7 +2409,7 @@ export function App() {
                     sessions={sortedSessions}
                     selectedSessionId={selectedSessionId}
                     token={token}
-                    onArchive={archiveFromList}
+                    onArchive={fireAndForget(archiveFromList)}
                     onArchivedSessionsOpenChange={setArchivedSessionsOpen}
                     onCollapse={collapseSidebar}
                     onNewThread={startNewThread}
@@ -2417,12 +2417,12 @@ export function App() {
                     onOpenGroups={openGroupsPanel}
                     onOpenSessions={showSessionsSidebar}
                     onOpenSetup={openSetupGuide}
-                    onRefresh={refreshSessions}
+                    onRefresh={fireAndForget(refreshSessions)}
                     onSelect={selectSession}
                     onSignOut={signOut}
                     onThemeChange={setThemePreference}
                     themePreference={themePreference}
-                    onUnarchive={unarchiveFromList}
+                    onUnarchive={fireAndForget(unarchiveFromList)}
                   />
                 )}
               </aside>
@@ -2446,9 +2446,9 @@ export function App() {
                     superAdminSearch={superAdminSearch}
                     superAdminUsers={currentSuperAdminUsers}
                     showOpenSidebar={!sidebarOpen}
-                    onAddMember={handleAddGroupMember}
-                    onArchiveGroup={handleArchiveGroup}
-                    onCreateGroup={handleCreateGroup}
+                    onAddMember={fireAndForget(handleAddGroupMember)}
+                    onArchiveGroup={fireAndForget(handleArchiveGroup)}
+                    onCreateGroup={fireAndForget(handleCreateGroup)}
                     onGroupFormAutomationCreateRequiredRoleChange={setGroupFormAutomationCreateRequiredRole}
                     onGroupFormNameChange={handleGroupFormNameChange}
                     onGroupFormVisibilityChange={setGroupFormVisibility}
@@ -2458,16 +2458,16 @@ export function App() {
                     onMemberUserIdChange={setMemberUserId}
                     onOpenSidebar={expandSidebar}
                     onSelectMemberUser={selectMemberUser}
-                    onPromoteSuperAdmin={handlePromoteSuperAdmin}
-                    onRemoveMember={handleRemoveGroupMember}
-                    onRemoveSuperAdmin={handleRemoveSuperAdmin}
-                    onSaveGroup={handleSaveGroup}
+                    onPromoteSuperAdmin={fireAndForget(handlePromoteSuperAdmin)}
+                    onRemoveMember={fireAndForget(handleRemoveGroupMember)}
+                    onRemoveSuperAdmin={fireAndForget(handleRemoveSuperAdmin)}
+                    onSaveGroup={fireAndForget(handleSaveGroup)}
                     onSelectGroup={selectGroupPanel}
                     onSelectSuperAdminUser={selectSuperAdminUser}
                     onSelectSuperAdmins={selectSuperAdminsPanel}
                     onSuperAdminSearchQueryChange={setSuperAdminSearchQuery}
                     onSuperAdminUserIdChange={setSuperAdminUserId}
-                    onUpdateMemberRole={handleUpdateGroupMemberRole}
+                    onUpdateMemberRole={fireAndForget(handleUpdateGroupMemberRole)}
                   />
                 ) : showingSetupGuide ? (
                   <SetupGuidePanel
@@ -2483,7 +2483,7 @@ export function App() {
                           : 'Open sessions'
                     }
                     onOpenSidebar={expandSidebar}
-                    onRefresh={refreshSetupStatus}
+                    onRefresh={fireAndForget(refreshSetupStatus)}
                     onStartNewThread={startNewThread}
                     canStartNewThread={canCreateThread}
                   />
@@ -2504,12 +2504,12 @@ export function App() {
                     showOpenSidebar={!sidebarOpen}
                     openSidebarLabel="Open automations"
                     onAutomationChanged={handleAutomationChanged}
-                    onArchiveAutomation={handleArchiveAutomation}
+                    onArchiveAutomation={fireAndForget(handleArchiveAutomation)}
                     onAutomationSaved={handleAutomationSaved}
                     onOpenSidebar={expandSidebar}
                     onSessionCreated={handleAutomationSessionCreated}
                     onSelectSession={selectSession}
-                    onUnarchiveAutomation={handleUnarchiveAutomation}
+                    onUnarchiveAutomation={fireAndForget(handleUnarchiveAutomation)}
                     onError={handleApiError}
                   />
                 ) : isCreatingThread || !selectedSession ? (
@@ -2545,7 +2545,7 @@ export function App() {
                     onRepositoryChange={setNewThreadRepository}
                     onBranchChange={setNewThreadBranch}
                     onModelChange={setNewThreadModel}
-                    onSubmit={handleCreateThread}
+                    onSubmit={fireAndForget(handleCreateThread)}
                   />
                 ) : (
                   <section className="flex h-full min-h-0 flex-col">
@@ -2560,7 +2560,7 @@ export function App() {
                             ? 'Open automations'
                             : 'Open sessions'
                       }
-                      onArchive={handleArchiveSession}
+                      onArchive={fireAndForget(handleArchiveSession)}
                       onOpenSidebar={expandSidebar}
                       onUpdateTitle={handleUpdateTitle}
                       onOpenWorkspaceTool={handleOpenWorkspaceTool}
@@ -2595,8 +2595,8 @@ export function App() {
                                   externalResources={externalResources}
                                   callbacks={callbacks}
                                   canWriteSession={canWriteSelectedSession}
-                                  onExtendSandbox={handleExtendSandbox}
-                                  onReplayCallback={handleReplayCallback}
+                                  onExtendSandbox={fireAndForget(handleExtendSandbox)}
+                                  onReplayCallback={fireAndForget(handleReplayCallback)}
                                 />
                                 <ChatPanel
                                   artifacts={artifacts}
@@ -2608,14 +2608,14 @@ export function App() {
                                   messages={messages}
                                   canRetryMessages={canWriteSelectedSession && !selectedSessionArchived}
                                   canWriteSession={canWriteSelectedSession}
-                                  onCancelEdit={() => finishEditingMessage(true)}
-                                  onCancelQueuedMessage={cancelQueuedMessage}
-                                  onCancelRun={cancelRun}
-                                  onEditMessage={startEditingMessage}
+                                  onCancelEdit={() => void finishEditingMessage(true)}
+                                  onCancelQueuedMessage={fireAndForget(cancelQueuedMessage)}
+                                  onCancelRun={fireAndForget(cancelRun)}
+                                  onEditMessage={fireAndForget(startEditingMessage)}
                                   onMessageDraftChange={setMessageDraft}
-                                  onRetryFailedMessages={retryFailedMessages}
-                                  onSaveEdit={saveMessageEdit}
-                                  onExtendSandbox={handleExtendSandbox}
+                                  onRetryFailedMessages={fireAndForget(retryFailedMessages)}
+                                  onSaveEdit={fireAndForget(saveMessageEdit)}
+                                  onExtendSandbox={fireAndForget(handleExtendSandbox)}
                                   onLoadArtifactPreview={(artifact) =>
                                     getArtifactPreview({
                                       sessionId: artifact.sessionId,
@@ -2639,7 +2639,9 @@ export function App() {
                             </Button>
                           ) : null}
                         </div>
-                        {selectedSessionArchived ? <ArchivedSessionNotice onRestore={restoreSelectedSession} /> : null}
+                        {selectedSessionArchived ? (
+                          <ArchivedSessionNotice onRestore={fireAndForget(restoreSelectedSession)} />
+                        ) : null}
                         {selectedSessionDetailLoading ? null : (
                           <MessageComposer
                             key={selectedSession.id}
@@ -2685,8 +2687,8 @@ export function App() {
                           externalResources={externalResources}
                           callbacks={callbacks}
                           canWriteSession={canWriteSelectedSession}
-                          onExtendSandbox={handleExtendSandbox}
-                          onReplayCallback={handleReplayCallback}
+                          onExtendSandbox={fireAndForget(handleExtendSandbox)}
+                          onReplayCallback={fireAndForget(handleReplayCallback)}
                         />
                       )}
                     </div>
@@ -2699,6 +2701,12 @@ export function App() {
       )}
     </main>
   );
+}
+
+function fireAndForget<Args extends unknown[]>(handler: (...args: Args) => Promise<unknown>): (...args: Args) => void {
+  return (...args) => {
+    void handler(...args);
+  };
 }
 
 function ThreadDetailLoadingPanel() {

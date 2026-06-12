@@ -41,12 +41,12 @@ describe('GitHub prompt helpers', () => {
       Address the mention from @octocat.
 
       ### Issue Body
-      <github_untrusted_content source=\"issue #12 body\">
+      <github_untrusted_content source="issue #12 body">
       CI fails on main
       </github_untrusted_content>
 
       ### Mention Comment
-      <github_untrusted_content source=\"comment by octocat\">
+      <github_untrusted_content source="comment by octocat">
       please investigate
       </github_untrusted_content>"
     `);

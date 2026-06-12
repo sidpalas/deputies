@@ -67,6 +67,7 @@ async function readAuthFile(authFile: string): Promise<Record<string, unknown>> 
     if (isNodeError(error) && error.code === 'ENOENT') {
       throw new Error(
         `Pi auth file not found at ${authFile}. Run pnpm --dir apps/control-plane auth:login:openai-codex first.`,
+        { cause: error },
       );
     }
     throw error;
@@ -77,7 +78,7 @@ function parseAuthFile(content: string, authFile: string): Record<string, unknow
   try {
     return JSON.parse(content) as Record<string, unknown>;
   } catch (error) {
-    if (error instanceof SyntaxError) throw new Error(`Invalid Pi auth file JSON at ${authFile}`);
+    if (error instanceof SyntaxError) throw new Error(`Invalid Pi auth file JSON at ${authFile}`, { cause: error });
     throw error;
   }
 }

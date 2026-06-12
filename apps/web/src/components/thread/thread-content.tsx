@@ -15,7 +15,6 @@ import type {
 import { getApiBaseUrl } from '../../api.js';
 import {
   artifactName,
-  fileExtension,
   isBrowserPlayableVideoArtifact,
   isImageArtifact,
   isInlineDisplayableArtifact,
@@ -310,6 +309,13 @@ function truncateStreamingProgressText(text: string): string {
   return `Showing latest deputy progress; ${omitted.toLocaleString()} earlier characters hidden while the run is active.\n\n…${text.slice(-STREAMING_PROGRESS_MAX_CHARS)}`;
 }
 
+function markdownNodeText(children: ReactNode): string {
+  if (typeof children === 'string') return children;
+  if (typeof children === 'number' || typeof children === 'bigint') return children.toString();
+  if (Array.isArray(children)) return children.map(markdownNodeText).join('');
+  return '';
+}
+
 function MarkdownText(props: { text: string }) {
   const highlightCode = true;
   return (
@@ -321,9 +327,9 @@ function MarkdownText(props: { text: string }) {
           <blockquote className={cn('border-l-2 border-border pl-3 text-muted-foreground', className)} {...props} />
         ),
         code: ({ children, className, ...props }) => {
-          const code = String(children).replace(/\n$/, '');
+          const code = markdownNodeText(children).replace(/\n$/, '');
           const language = className?.match(/language-(\S+)/)?.[1];
-          if (language || String(children).includes('\n'))
+          if (language || code.includes('\n'))
             return <HighlightedCode code={code} highlight={highlightCode} {...(language ? { language } : {})} />;
           return (
             <code
@@ -406,7 +412,9 @@ function MarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
       href={href}
       target={artifactDownload ? undefined : '_blank'}
       rel="noreferrer"
-      onClick={handleClick}
+      onClick={(event) => {
+        void handleClick(event);
+      }}
       {...rest}
     >
       {downloading ? 'Downloading...' : props.children}
@@ -920,7 +928,12 @@ function TextArtifactPreview(props: TextArtifactPreviewProps) {
   }
 
   return (
-    <details className="mt-3 min-w-0" onToggle={handleToggle}>
+    <details
+      className="mt-3 min-w-0"
+      onToggle={(event) => {
+        void handleToggle(event);
+      }}
+    >
       <summary className="cursor-pointer text-sm font-medium text-primary">Preview {name}</summary>
       <div className="mt-2 min-w-0 rounded-md border border-border bg-muted/30 p-2 text-xs">
         {loading ? <p className="text-muted-foreground">Loading preview...</p> : null}
@@ -957,7 +970,9 @@ function ArtifactDownloadLink(props: { artifact: Artifact; downloadUrl: string; 
     <a
       className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:text-primary/80"
       href={props.downloadUrl}
-      onClick={handleClick}
+      onClick={(event) => {
+        void handleClick(event);
+      }}
     >
       <Download className="h-3.5 w-3.5" /> {downloading ? 'Downloading...' : props.label}
     </a>

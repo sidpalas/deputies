@@ -760,7 +760,7 @@ export class MemoryStore implements AppStore {
     failedAt: Date;
     error: string;
   }): Promise<ClaimedMessageBatch | null> {
-    const claimed = await this.finishRun(input.runId, input.leaseOwner, input.failedAt, 'failed');
+    const claimed = this.finishRun(input.runId, input.leaseOwner, input.failedAt, 'failed');
     if (!claimed) return null;
     this.runs.set(input.runId, { ...claimed.run, error: input.error });
     return { ...claimed, run: this.runs.get(input.runId)! };

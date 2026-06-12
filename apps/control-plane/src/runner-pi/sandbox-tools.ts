@@ -449,13 +449,22 @@ function sandboxFindCommand(input: FindInput, searchPath: string): string {
   return `(command -v fd >/dev/null 2>&1 && exec fd ${quotedArgs}; command -v fdfind >/dev/null 2>&1 && exec fdfind ${quotedArgs}; echo 'fd is not available in the sandbox' >&2; exit 127)`;
 }
 
-function parseRipgrepEvents(stdout: string): Array<Record<string, any>> {
-  const events: Array<Record<string, any>> = [];
+type RipgrepEvent = {
+  data?: {
+    line_number?: unknown;
+    lines?: { text?: unknown };
+    path?: { text?: unknown };
+  };
+  type?: unknown;
+};
+
+function parseRipgrepEvents(stdout: string): RipgrepEvent[] {
+  const events: RipgrepEvent[] = [];
   for (const line of stdout.split('\n')) {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line) as unknown;
-      if (typeof parsed === 'object' && parsed !== null) events.push(parsed as Record<string, any>);
+      if (typeof parsed === 'object' && parsed !== null) events.push(parsed);
     } catch {
       // Sandbox output may be truncated; ignore incomplete JSON lines.
     }

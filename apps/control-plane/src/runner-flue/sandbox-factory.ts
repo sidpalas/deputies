@@ -2,7 +2,7 @@ import { createSandboxSessionEnv } from '@flue/runtime';
 import type { FileStat, SandboxApi, SandboxFactory, SessionEnv } from '@flue/runtime';
 import type { SandboxHandle } from '../sandbox/types.js';
 
-export function sandboxHandleToFlueFactory(handle: SandboxHandle, cleanup?: () => Promise<void>): SandboxFactory {
+export function sandboxHandleToFlueFactory(handle: SandboxHandle, _cleanup?: () => Promise<void>): SandboxFactory {
   return {
     async createSessionEnv(): Promise<SessionEnv> {
       return createSandboxSessionEnv(new SandboxHandleApi(handle), handle.workspacePath);

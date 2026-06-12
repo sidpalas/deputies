@@ -191,7 +191,12 @@ function proxyServiceRequest(
       return;
     }
 
-    upstream.end(String(requestBody));
+    if (requestBody instanceof URLSearchParams) {
+      upstream.end(requestBody.toString());
+      return;
+    }
+
+    upstream.end(Object.prototype.toString.call(requestBody));
   });
 }
 

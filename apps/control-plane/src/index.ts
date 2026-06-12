@@ -84,7 +84,7 @@ const processInstanceId = `${hostname()}-${process.pid}-${randomUUID()}`;
 const automationSchedulerLockOwner = `automation-scheduler-${processInstanceId}`;
 
 if (telemetry) resources.push(telemetry);
-if ('close' in baseStore && typeof baseStore.close === 'function') resources.push(baseStore as CloseableResource);
+if ('close' in baseStore && typeof baseStore.close === 'function') resources.push(baseStore);
 if (
   baseStore instanceof PostgresStore &&
   (config.runMode === 'combined' || config.runMode === 'all' || config.runMode === 'api' || config.runMode === 'worker')

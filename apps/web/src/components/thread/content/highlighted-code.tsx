@@ -76,7 +76,9 @@ export function HighlightedCode(props: {
           <button
             className="inline-flex items-center gap-1 rounded border border-border bg-background px-2 py-1 text-[0.65rem] text-muted-foreground transition hover:text-foreground"
             type="button"
-            onClick={copyCode}
+            onClick={() => {
+              void copyCode();
+            }}
             aria-label="Copy code"
           >
             {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}

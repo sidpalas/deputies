@@ -56,14 +56,6 @@ export type SandboxBridgeOptions = {
   skippedCookieNames?: string[];
 };
 
-type ExecRequest = {
-  command?: unknown;
-  cwd?: unknown;
-  env?: unknown;
-  timeoutMs?: unknown;
-  stdin?: unknown;
-};
-
 type ParsedExecRequest = {
   command: string;
   cwd?: string;
@@ -78,107 +70,109 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
   const maxOutputBytes = options.maxOutputBytes ?? defaultMaxOutputBytes;
   const skippedCookieNames = new Set(options.skippedCookieNames ?? defaultSkippedCookieNames);
 
-  const server = createServer(async (request, response) => {
-    try {
-      if (!isAuthorized(request, options.token)) {
-        writeJson(response, 401, { error: 'unauthorized' });
-        return;
-      }
+  const server = createServer((request, response) => {
+    void (async () => {
+      try {
+        if (!isAuthorized(request, options.token)) {
+          writeJson(response, 401, { error: 'unauthorized' });
+          return;
+        }
 
-      const url = new URL(request.url ?? '/', 'http://sandbox-bridge.local');
-      if (request.method === 'GET' && url.pathname === '/health') {
-        writeJson(response, 200, { status: 'ready', workspacePath });
-        return;
-      }
+        const url = new URL(request.url ?? '/', 'http://sandbox-bridge.local');
+        if (request.method === 'GET' && url.pathname === '/health') {
+          writeJson(response, 200, { status: 'ready', workspacePath });
+          return;
+        }
 
-      if (request.method === 'POST' && url.pathname === '/exec') {
-        const body = parseExecRequest(await readJson(request, maxBodyBytes));
-        const abort = new AbortController();
-        response.on('close', () => {
-          if (!response.writableEnded) abort.abort();
+        if (request.method === 'POST' && url.pathname === '/exec') {
+          const body = parseExecRequest(await readJson(request, maxBodyBytes));
+          const abort = new AbortController();
+          response.on('close', () => {
+            if (!response.writableEnded) abort.abort();
+          });
+          const result = await execCommand(workspacePath, body, maxOutputBytes, abort.signal);
+          writeJson(response, 200, result);
+          return;
+        }
+
+        if (request.method === 'GET' && url.pathname === '/fs/read') {
+          const content = await readFile(resolveWorkspacePath(workspacePath, requirePathParam(url)));
+          response.writeHead(200, { 'content-type': 'application/octet-stream' });
+          response.end(content);
+          return;
+        }
+
+        if (request.method === 'PUT' && url.pathname === '/fs/write') {
+          const path = resolveWorkspacePath(workspacePath, requirePathParam(url));
+          const content = await readBody(request, maxBodyBytes);
+          await mkdir(dirname(path), { recursive: true });
+          await writeFile(path, content);
+          writeJson(response, 200, { ok: true });
+          return;
+        }
+
+        if (request.method === 'GET' && url.pathname === '/fs/stat') {
+          const info = await stat(resolveWorkspacePath(workspacePath, requirePathParam(url)));
+          writeJson(response, 200, {
+            isFile: info.isFile(),
+            isDirectory: info.isDirectory(),
+            isSymbolicLink: info.isSymbolicLink(),
+            size: info.size,
+            mtime: info.mtime.toISOString(),
+          });
+          return;
+        }
+
+        if (request.method === 'GET' && url.pathname === '/fs/readdir') {
+          writeJson(response, 200, {
+            entries: await readdir(resolveWorkspacePath(workspacePath, requirePathParam(url))),
+          });
+          return;
+        }
+
+        if (request.method === 'GET' && url.pathname === '/fs/exists') {
+          writeJson(response, 200, {
+            exists: await pathExists(resolveWorkspacePath(workspacePath, requirePathParam(url))),
+          });
+          return;
+        }
+
+        if (request.method === 'POST' && url.pathname === '/fs/mkdir') {
+          const body = await readJson(request, maxBodyBytes);
+          await mkdir(resolveWorkspacePath(workspacePath, requireJsonPath(body)), {
+            recursive: Boolean(readObject(body).recursive),
+          });
+          writeJson(response, 200, { ok: true });
+          return;
+        }
+
+        if (request.method === 'POST' && url.pathname === '/fs/rm') {
+          const body = readObject(await readJson(request, maxBodyBytes));
+          await rm(resolveWorkspacePath(workspacePath, requireJsonPath(body)), {
+            recursive: Boolean(body.recursive),
+            force: Boolean(body.force),
+          });
+          writeJson(response, 200, { ok: true });
+          return;
+        }
+
+        const previewMatch = url.pathname.match(/^\/preview\/(\d+)(?:\/(.*))?$/);
+        if (previewMatch) {
+          await proxyPreviewRequest(request, response, previewMatch, url, maxBodyBytes, skippedCookieNames);
+          return;
+        }
+
+        writeJson(response, 404, { error: 'not_found' });
+      } catch (error) {
+        if (response.headersSent) {
+          response.destroy();
+          return;
+        }
+        writeJson(response, statusCodeForError(error), {
+          error: error instanceof Error ? error.message : 'Unknown bridge error',
         });
-        const result = await execCommand(workspacePath, body, maxOutputBytes, abort.signal);
-        writeJson(response, 200, result);
-        return;
       }
-
-      if (request.method === 'GET' && url.pathname === '/fs/read') {
-        const content = await readFile(resolveWorkspacePath(workspacePath, requirePathParam(url)));
-        response.writeHead(200, { 'content-type': 'application/octet-stream' });
-        response.end(content);
-        return;
-      }
-
-      if (request.method === 'PUT' && url.pathname === '/fs/write') {
-        const path = resolveWorkspacePath(workspacePath, requirePathParam(url));
-        const content = await readBody(request, maxBodyBytes);
-        await mkdir(dirname(path), { recursive: true });
-        await writeFile(path, content);
-        writeJson(response, 200, { ok: true });
-        return;
-      }
-
-      if (request.method === 'GET' && url.pathname === '/fs/stat') {
-        const info = await stat(resolveWorkspacePath(workspacePath, requirePathParam(url)));
-        writeJson(response, 200, {
-          isFile: info.isFile(),
-          isDirectory: info.isDirectory(),
-          isSymbolicLink: info.isSymbolicLink(),
-          size: info.size,
-          mtime: info.mtime.toISOString(),
-        });
-        return;
-      }
-
-      if (request.method === 'GET' && url.pathname === '/fs/readdir') {
-        writeJson(response, 200, {
-          entries: await readdir(resolveWorkspacePath(workspacePath, requirePathParam(url))),
-        });
-        return;
-      }
-
-      if (request.method === 'GET' && url.pathname === '/fs/exists') {
-        writeJson(response, 200, {
-          exists: await pathExists(resolveWorkspacePath(workspacePath, requirePathParam(url))),
-        });
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/fs/mkdir') {
-        const body = await readJson(request, maxBodyBytes);
-        await mkdir(resolveWorkspacePath(workspacePath, requireJsonPath(body)), {
-          recursive: Boolean(readObject(body).recursive),
-        });
-        writeJson(response, 200, { ok: true });
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/fs/rm') {
-        const body = readObject(await readJson(request, maxBodyBytes));
-        await rm(resolveWorkspacePath(workspacePath, requireJsonPath(body)), {
-          recursive: Boolean(body.recursive),
-          force: Boolean(body.force),
-        });
-        writeJson(response, 200, { ok: true });
-        return;
-      }
-
-      const previewMatch = url.pathname.match(/^\/preview\/(\d+)(?:\/(.*))?$/);
-      if (previewMatch) {
-        await proxyPreviewRequest(request, response, previewMatch, url, maxBodyBytes, skippedCookieNames);
-        return;
-      }
-
-      writeJson(response, 404, { error: 'not_found' });
-    } catch (error) {
-      if (response.headersSent) {
-        response.destroy();
-        return;
-      }
-      writeJson(response, statusCodeForError(error), {
-        error: error instanceof Error ? error.message : 'Unknown bridge error',
-      });
-    }
+    })();
   });
   server.on('upgrade', (request, socket, head) => {
     handlePreviewUpgrade(request, socket, head, options.token, skippedCookieNames);
