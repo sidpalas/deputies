@@ -5,7 +5,6 @@ FROM node:24-bookworm-slim AS bridge-build
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY patches patches
 COPY packages/sandbox-bridge/package.json packages/sandbox-bridge/package.json
 
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
