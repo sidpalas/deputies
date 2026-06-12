@@ -1,6 +1,6 @@
 # Packages
 
-Reusable libraries shared by deployable apps belong here.
+Reusable libraries shared by apps belong here.
 
 Examples that may fit here later:
 
@@ -12,6 +12,7 @@ Examples that may fit here later:
 
 Current packages:
 
+- `browser-milestones`: shared browser milestone telemetry payload types and validation.
 - `sandbox-bridge`: in-container bridge process for sandbox exec and filesystem APIs.
 
 Deployable applications and services belong in `apps/`, not `packages/`.

@@ -29,7 +29,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - `apps/`: independently runnable and deployable applications/services.
 - `apps/control-plane/`: Node/Hono control-plane API, worker runtime, integrations, stores, and sandbox providers.
 - `apps/web/`: Vite React operator UI.
-- `packages/`: reusable libraries shared by apps. It is intentionally empty until shared code is extracted.
+- `packages/`: reusable libraries shared by apps, including the Docker sandbox bridge and the browser-milestones telemetry package.
 - `deploy/`: deployment and local runtime configuration.
 - `docs/`: architecture and product documentation.
 
