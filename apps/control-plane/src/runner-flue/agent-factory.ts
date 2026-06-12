@@ -1,5 +1,6 @@
 import {
   type CallHandle,
+  configureProvider,
   createAgent,
   type AgentProfile,
   type FlueHarness,
@@ -9,7 +10,6 @@ import {
   type SessionStore,
   type ShellOptions,
 } from '@flue/runtime';
-import { configureProvider } from '@flue/runtime/app';
 import { createFlueContext, InMemorySessionStore, resolveModel } from '@flue/runtime/internal';
 import type { FlueAgentFactory, FlueAgentPort, FlueSessionPort } from './types.js';
 import { sandboxHandleToFlueFactory } from './sandbox-factory.js';
@@ -17,6 +17,8 @@ import { sandboxHandleToFlueFactory } from './sandbox-factory.js';
 const FLUE_INSTANCE_ID = 'deputies';
 const FLUE_HARNESS_NAME = 'runner';
 const FLUE_DEFAULT_SUBAGENT_DEPTH = 4;
+const CURRENT_FLUE_SESSION_VERSION = 5;
+const FLUE_AFFINITY_KEY_PATTERN = /^aff_[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 const DEPUTIES_SYSTEM_PROMPT = [
   'You are a software engineering agent running in a sandbox for the Deputies product.',
   'When generating files for users, prefer broadly compatible formats that can be opened in modern browsers and common desktop tools.',
@@ -36,7 +38,7 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
   private readonly env: Record<string, unknown>;
 
   constructor(private readonly options: RealFlueAgentFactoryOptions) {
-    this.sessionStore = options.sessionStore ?? new InMemorySessionStore();
+    this.sessionStore = new FreshStartUnsupportedSessionStore(options.sessionStore ?? new InMemorySessionStore());
     this.env = options.env ?? {};
     for (const [provider, settings] of Object.entries(options.providers ?? {})) {
       configureProvider(provider, settings);
@@ -65,7 +67,6 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
       instructions: DEPUTIES_SYSTEM_PROMPT,
       sandbox: sandboxHandleToFlueFactory(input.sandbox),
       model: input.model ?? this.options.model,
-      persist: this.sessionStore,
       subagents: [createDefaultSubagent(FLUE_DEFAULT_SUBAGENT_DEPTH)],
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.tools ? { tools: input.tools } : {}),
@@ -84,6 +85,61 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
 
   async deleteSession(id: string): Promise<void> {
     await Promise.all(flueSessionStorageKeys(id, id).map((key) => this.sessionStore.delete(key)));
+  }
+}
+
+class FreshStartUnsupportedSessionStore implements SessionStore {
+  private readonly warnedKeys = new Set<string>();
+
+  constructor(private readonly inner: SessionStore) {}
+
+  async save(id: string, data: SessionData): Promise<void> {
+    this.warnedKeys.delete(id);
+    await this.inner.save(id, data);
+  }
+
+  async load(id: string): Promise<SessionData | null> {
+    const data = await this.inner.load(id);
+    const reason = unsupportedSessionDataReason(data);
+    if (!reason) {
+      this.warnedKeys.delete(id);
+      return data;
+    }
+
+    if (!this.warnedKeys.has(id)) {
+      this.warnedKeys.add(id);
+      console.warn(
+        `[flue] Ignoring persisted pre-upgrade Flue session state for Deputies session "${sessionIdFromStorageKey(id)}" (${reason}); starting a fresh Flue session. Deputies session history is unaffected.`,
+      );
+    }
+    return null;
+  }
+
+  async delete(id: string): Promise<void> {
+    this.warnedKeys.delete(id);
+    await this.inner.delete(id);
+  }
+}
+
+function unsupportedSessionDataReason(data: SessionData | null): string | null {
+  if (!data) return null;
+  const candidate = data as { version?: unknown; affinityKey?: unknown };
+  if (candidate.version !== CURRENT_FLUE_SESSION_VERSION) {
+    return `session data version ${String(candidate.version)} is unsupported by @flue/runtime 0.11.1`;
+  }
+  if (typeof candidate.affinityKey !== 'string' || !FLUE_AFFINITY_KEY_PATTERN.test(candidate.affinityKey)) {
+    return 'session data affinity key is missing or malformed for @flue/runtime 0.11.1';
+  }
+  return null;
+}
+
+function sessionIdFromStorageKey(key: string): string {
+  if (!key.startsWith('agent-session:')) return key;
+  try {
+    const parts = JSON.parse(key.slice('agent-session:'.length)) as unknown;
+    return Array.isArray(parts) && typeof parts.at(-1) === 'string' ? parts.at(-1) : key;
+  } catch {
+    return key;
   }
 }
 

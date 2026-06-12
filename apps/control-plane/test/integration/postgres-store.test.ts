@@ -67,7 +67,8 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     const flueStore = new PostgresFlueSessionStore(databaseUrl);
     try {
       const data: SessionData = {
-        version: 3,
+        version: 5,
+        affinityKey: 'aff_01ARZ3NDEKTSV4RRFFQ69G5FAV',
         entries: [],
         leafId: null,
         metadata: { appSessionId: 'session-1' },

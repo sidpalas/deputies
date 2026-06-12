@@ -2,6 +2,8 @@ packages:
   - apps/*
   - packages/*
 minimumReleaseAge: 4320
+minimumReleaseAgeExclude:
+  - '@flue/runtime'
 allowBuilds:
   '@google/genai': false
   '@mongodb-js/zstd': false
@@ -16,5 +18,3 @@ overrides:
   '@opentelemetry/exporter-trace-otlp-grpc@0.217.0>@grpc/grpc-js': 1.14.4
   '@opentelemetry/otlp-grpc-exporter-base@0.217.0>@grpc/grpc-js': 1.14.4
   '@opentelemetry/otlp-transformer@0.217.0>protobufjs': 8.2.0
-patchedDependencies:
-  '@flue/runtime@0.8.0': patches/@flue__runtime@0.8.0.patch

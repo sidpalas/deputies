@@ -101,7 +101,7 @@ class PostgresFlueSessionStore implements SessionStore {
 }
 ```
 
-Use the actual Flue SDK types during implementation.
+Use the actual Flue runtime types from `@flue/runtime` during implementation.
 
 Rules:
 
@@ -146,7 +146,7 @@ The worker must restore both layers before running a follow-up:
 ```txt
 load product session
 connect or create sandbox
-initialize Flue with PostgresFlueSessionStore
+create Flue context with defaultStore=PostgresFlueSessionStore
 open stable Flue session
 run prompt
 ```
@@ -195,7 +195,7 @@ UAT tests:
 
 - `apps/control-plane/src/runner-flue/session-store.ts` implements Flue's `SessionStore` interface with Postgres.
 - `save`, `load`, and `delete` use the exact opaque store key provided by Flue.
-- `RealFlueAgentFactory` uses the configured session store as both `defaultStore` and `persist`.
+- `RealFlueAgentFactory` passes the configured session store as `defaultStore` to `createFlueContext({ defaultStore })`; Flue 0.11.1 no longer uses a `persist` runtime-config field.
 - During cancellation, `FlueRunner` snapshots and restores the active Flue session to avoid persisting partial aborted turns.
 
 The architecture assumes a custom Postgres Flue session store is required for durable deployments.

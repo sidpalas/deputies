@@ -227,20 +227,22 @@ The preferred MVP remains embedded Flue execution behind `runner-flue`, because 
 
 The implementation should still align with Flue's Node deployment model:
 
-- use `init({ persist })` for Postgres-backed Flue session persistence;
+- create the runtime context with `createFlueContext({ defaultStore })` for Postgres-backed Flue session persistence;
 - use `agent.session()` rather than custom conversation history;
 - use Flue commands/tools/MCP rather than building a parallel tool registry;
 - use Flue sandbox connectors for remote environments;
 - treat Flue live events as input to our product event log.
 
-The embedded runner uses Flue the same way the generated Node server does: construct a `createFlueContext()` in the worker process, then call `init()`. The difference is that our `init()` receives a product-managed provider sandbox via a Flue `SandboxFactory`, plus the Postgres-backed Flue `SessionStore`, instead of relying on the generated server's default in-memory store.
+The embedded runner uses Flue the same way the generated Node server does: construct a `createFlueContext({ defaultStore })` in the worker process, create an agent profile with `createAgent(...)`, then call `ctx.init(agent, { name })`. The agent profile receives the product-managed provider sandbox via a Flue `SandboxFactory`, while `defaultStore` supplies the Postgres-backed Flue `SessionStore` instead of relying on the generated server's default in-memory store.
 
 Flue live events are normalized before being written to the product event log:
 
 - `text_delta` -> `agent_text_delta`.
-- `tool_start` and `command_start` and `task_start` -> `tool_started`.
-- `tool_end` and `command_end` and `task_end` -> `tool_finished`.
-- low-level lifecycle events such as `agent_start`, `turn_end`, `idle`, and compaction events are currently ignored unless they need product-visible UI later.
+- `tool_start` -> `tool_started`; `tool_call` -> `tool_finished`.
+- `task_start` -> `tool_started` with `toolName: "task"`; `task` -> `tool_finished`.
+- Shell `operation_start` -> `tool_started` with `toolName: "command"`; shell `operation` -> `tool_finished`.
+- Error `run_end` and error-level `log` events -> `tool_finished` with `toolName: "flue"`.
+- Lifecycle/model events such as `run_start`, `run_resume`, `agent_start`, `agent_end`, `turn_*`, `message_*`, `thinking_*`, `compaction_*`, and `idle` are ignored unless they need product-visible UI later.
 
 ## Flue Custom Tools
 
@@ -483,7 +485,7 @@ Implementations:
 
 `FlueRunner` responsibilities include:
 
-- configure Flue with the Postgres-backed Flue session store;
+- create Flue contexts with `defaultStore` set to the Postgres-backed Flue session store;
 - use stable Flue agent/session IDs derived from product session IDs;
 - follow Flue's remote coding-agent pattern: create or connect a real sandbox, run setup in that sandbox, then initialize a project-scoped agent with `cwd` set to the cloned repo;
 - call Flue `agent.session()` / `session.prompt()` / `session.skill()` / `session.task()` instead of implementing its own conversation or subagent system;

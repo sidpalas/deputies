@@ -43,7 +43,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 6. Sandboxes are provider-backed through a stable interface.
 7. Events are replayable, with compactable streaming deltas treated as storage optimization rather than durable audit history.
 8. Tests define product behavior. Do not weaken tests to match accidental current behavior.
-9. Agent context is production code. Prompt templates, skills, roles, and constraints need tests.
+9. Agent context is production code. Prompt templates, skills, subagents, and constraints need tests.
 10. Trust is layered: permissions, conventions, lifecycle gates, tests, and review pipelines.
 
 ## Design Synthesis
@@ -67,10 +67,10 @@ Flue is more than a low-level model SDK. The product should use these Flue capab
 
 - Agent/runtime identity through stable agent IDs.
 - Flue sessions through `agent.session(id?)` and `agent.sessions`.
-- Custom session persistence through `init({ persist })`.
+- Custom session persistence through `createFlueContext({ defaultStore })`.
 - Built-in tools for file reads/writes/edits, search, shell, and task delegation.
 - `session.task()` and the built-in `task` tool for subagents inside a run.
-- Roles and skills for scoped behavior and reusable agent instructions.
+- Subagents and skills for scoped behavior and reusable agent instructions.
 - Live Flue events and SSE as the source stream for runner progress.
 - Sandbox integration through Flue `SandboxFactory` / `SessionEnv` connectors.
 - Commands and MCP tools for controlled external capabilities.

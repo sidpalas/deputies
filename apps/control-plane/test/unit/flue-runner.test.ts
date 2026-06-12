@@ -16,6 +16,8 @@ import type { SandboxFileSystem, SandboxHandle } from '../../src/sandbox/types.j
 import { MemoryStore } from '../../src/store/memory.js';
 import { defaultGroupId } from '../../src/store/types.js';
 
+const TEST_FLUE_AFFINITY_KEY = 'aff_01ARZ3NDEKTSV4RRFFQ69G5FAV';
+
 describe('FlueRunner', () => {
   it('uses stable product session IDs for Flue agent and session identity', async () => {
     const calls: Parameters<FlueAgentFactory['create']>[0][] = [];
@@ -332,7 +334,8 @@ describe('FlueRunner', () => {
 
   it('restores persisted Flue session state after abort', async () => {
     const previousSession = {
-      version: 3 as const,
+      version: 5 as const,
+      affinityKey: TEST_FLUE_AFFINITY_KEY,
       entries: [
         {
           type: 'message' as const,
@@ -445,7 +448,8 @@ describe('FlueRunner', () => {
 
   it('restores Flue session state when abort arrives after prompt resolves', async () => {
     const previousSession = {
-      version: 3 as const,
+      version: 5 as const,
+      affinityKey: TEST_FLUE_AFFINITY_KEY,
       entries: [],
       leafId: null,
       metadata: {},
@@ -512,7 +516,8 @@ describe('FlueRunner', () => {
   it('maps product session IDs to Flue storage keys for snapshots', async () => {
     const keys: string[] = [];
     const data = {
-      version: 3,
+      version: 5,
+      affinityKey: TEST_FLUE_AFFINITY_KEY,
       entries: [],
       leafId: null,
       metadata: {},

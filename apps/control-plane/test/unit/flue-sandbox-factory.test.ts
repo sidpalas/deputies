@@ -56,12 +56,11 @@ describe('sandboxHandleToFlueFactory', () => {
 
     const env = await sandboxHandleToFlueFactory(handle).createSessionEnv({
       id: 'session-1',
-      cwd: '/workspace/project',
     });
 
     await env.writeFile('file.txt', 'hello');
     expect(await env.readFile('file.txt')).toBe('hello');
     await expect(env.exec('pwd')).resolves.toEqual({ exitCode: 0, stdout: 'ok', stderr: '' });
-    expect(commands).toEqual([{ command: 'pwd', cwd: '/workspace/project' }]);
+    expect(commands).toEqual([{ command: 'pwd', cwd: '/workspace' }]);
   });
 });

@@ -404,6 +404,7 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
         payload: { toolName: 'flue', isError: true, error: event.message, flueSessionId },
       };
     case 'run_start':
+    case 'run_resume':
     case 'agent_start':
     case 'agent_end':
     case 'turn_start':
@@ -412,9 +413,6 @@ function normalizeFlueEvent(event: FlueEvent, input: RunnerInput): NormalizedEve
     case 'message_start':
     case 'message_update':
     case 'message_end':
-    case 'tool_execution_start':
-    case 'tool_execution_update':
-    case 'tool_execution_end':
     case 'thinking_start':
     case 'thinking_delta':
     case 'thinking_end':

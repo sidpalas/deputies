@@ -4,8 +4,8 @@ import type { SandboxHandle } from '../sandbox/types.js';
 
 export function sandboxHandleToFlueFactory(handle: SandboxHandle, cleanup?: () => Promise<void>): SandboxFactory {
   return {
-    async createSessionEnv({ cwd }: { id: string; cwd?: string }): Promise<SessionEnv> {
-      return createSandboxSessionEnv(new SandboxHandleApi(handle), cwd ?? handle.workspacePath);
+    async createSessionEnv(): Promise<SessionEnv> {
+      return createSandboxSessionEnv(new SandboxHandleApi(handle), handle.workspacePath);
     },
   };
 }
