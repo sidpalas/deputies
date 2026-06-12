@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.10.0](https://github.com/sidpalas/deputies/compare/v0.9.0...v0.10.0) (2026-06-12)
+
+
+### Continuous Integration
+
+* add deployment smoke workflow ([668f333](https://github.com/sidpalas/deputies/commit/668f333c416c8d5109e587ad3a2ba0c7d4906044))
+* make compose smoke script executable ([92f9e36](https://github.com/sidpalas/deputies/commit/92f9e36a9032138042ea4f660e51fc0531d66111))
+* match release please commit scope ([c5b386d](https://github.com/sidpalas/deputies/commit/c5b386d8d09b97d3548336179f15d0940e36caa2))
+* skip tests on release commits ([2c7273e](https://github.com/sidpalas/deputies/commit/2c7273ef982c5c26ad74757adb57269165f48056))
+
+
+### Features
+
+* **control-plane:** compact finalized text deltas ([#61](https://github.com/sidpalas/deputies/issues/61)) ([1de90fb](https://github.com/sidpalas/deputies/commit/1de90fbc900c0b4099be185ce884ff373d80e6be))
+* **control-plane:** configure daytona sandbox resources ([b89d2a7](https://github.com/sidpalas/deputies/commit/b89d2a7d722cce97c458b9cd1a96bfa15b5cd983))
+* **control-plane:** support Deputies previews inside sandboxes ([#63](https://github.com/sidpalas/deputies/issues/63)) ([f53050b](https://github.com/sidpalas/deputies/commit/f53050b62551ef8bb759fb49ec033254d3cc25c0))
+
+
+### Bug Fixes
+
+* **control-plane:** clear high dependency audit advisories ([86ad0d5](https://github.com/sidpalas/deputies/commit/86ad0d5e05aa94998655d15231b9b1dbfe866992))
+* **control-plane:** finalize stale runs with no recoverable messages ([b1a8b00](https://github.com/sidpalas/deputies/commit/b1a8b001f2598019b29b350b130d48434d86ad62))
+* **control-plane:** use timing-safe generic webhook auth ([ad21838](https://github.com/sidpalas/deputies/commit/ad2183803acfdd1af260193f8a292832a3d4ecc8))
+* **docker:** remove stale patches copy ([9c08b79](https://github.com/sidpalas/deputies/commit/9c08b793f56f6d974599f5fc85aa9ad46da9c86c))
+* **sandbox-bridge:** harden preview proxy failures ([a3e8fd6](https://github.com/sidpalas/deputies/commit/a3e8fd68e0b779bbaea5cf6c3019e98ec5a2989b))
+* **web:** preserve early events for new sessions ([#65](https://github.com/sidpalas/deputies/issues/65)) ([ae1dbd1](https://github.com/sidpalas/deputies/commit/ae1dbd1d1ff1e634b46d048f6235b60cca6860fe))
+
+
+### Chores
+
+* add eslint baseline ([fd46fe0](https://github.com/sidpalas/deputies/commit/fd46fe07da3f1a86d9dee6caf2a8f2d63e401969))
+* align repo housekeeping docs and vitest ([9ce53b5](https://github.com/sidpalas/deputies/commit/9ce53b59c22a1a559b9286db0d8cf0887c8ce895))
+* **control-plane:** upgrade flue runtime to 0.11.1 ([8c379cf](https://github.com/sidpalas/deputies/commit/8c379cf84d0c1ba1b070ed368e9a6ea35dc01aff))
+* fix eslint baseline violations ([28573f6](https://github.com/sidpalas/deputies/commit/28573f6564f54fb579590f4d05eba6f6f48608be))
+
+
+### Documentation
+
+* clarify flue session fresh-start impact ([ddf29e4](https://github.com/sidpalas/deputies/commit/ddf29e44cc08796f73b6ce05f526e84e3035d74f))
+* harden inner app preview runbook ([42ca671](https://github.com/sidpalas/deputies/commit/42ca671dca996d27d84731d3e63bb70c48e729c4))
+* update implementation plan statuses ([01d7dea](https://github.com/sidpalas/deputies/commit/01d7dea0b020e46f40ac0ed3335bda83b0c415b5))
+
+
+### Performance Improvements
+
+* **control-plane:** page global event listing ([4454a5f](https://github.com/sidpalas/deputies/commit/4454a5f7b6ee4978fa882dbbcd9039a4c8d7fcce))
+* **control-plane:** page session event replay ([f036c76](https://github.com/sidpalas/deputies/commit/f036c768174d26aa64ab2422fe8e01f5359325df))
+
+
+### Code Refactoring
+
+* **control-plane:** segregate store interfaces ([70be981](https://github.com/sidpalas/deputies/commit/70be981c3015aca487f4dc1b361a9b40cd13565f))
+* **web:** extract access groups admin hook ([6a8695d](https://github.com/sidpalas/deputies/commit/6a8695dc2c0795756525eb8a7731b094d4ecae56))
+
+
+### Tests
+
+* **control-plane:** add cross-group access matrix ([2883cf4](https://github.com/sidpalas/deputies/commit/2883cf4b78cd3a35dd145e433ccd4734694daefc))
+* **web:** make responsive e2e api mocks origin agnostic ([7f46408](https://github.com/sidpalas/deputies/commit/7f464080faddddf51d9528640904089d544db63a))
+
 ## [0.9.0](https://github.com/sidpalas/deputies/compare/v0.8.0...v0.9.0) (2026-06-11)
 
 
