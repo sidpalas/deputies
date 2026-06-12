@@ -216,6 +216,10 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.notFound((c) => c.json({ error: 'not_found', message: 'Route not found' }, 404));
 
+  // Service-host requests must take precedence over product API routes so paths
+  // like /auth/login on a service host proxy into the sandbox instead.
+  app.use('*', servicePreviewMiddleware(config, services));
+
   app.get('/health', (c) => {
     const notices = services.modelAvailability.notices();
     return c.json({
@@ -326,7 +330,7 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.post('/auth/logout', async (c) => {
     if (config.apiAuthMode === 'session') {
-      const sessionId = readSessionId(c);
+      const sessionId = readSessionId(config, c);
       if (sessionId && !isTrustedCookieAuthRequest(c, config)) {
         return writeError(c, 403, 'forbidden', 'Untrusted browser request');
       }
@@ -343,7 +347,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.get('/auth/me', async (c) => {
     if (config.apiAuthMode === 'none') return c.json({ user: null });
     if (config.apiAuthMode === 'bearer') return c.json({ user: null });
-    const sessionId = readSessionId(c);
+    const sessionId = readSessionId(config, c);
     const user = sessionId ? await services.store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
     if (!user) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     return c.json({ user: await serializeAuthUser(services.store, user) });
@@ -372,30 +376,6 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.use('/sessions/:sessionId/*', sessionAuthorizationMiddleware(config, services));
   app.use('/sessions/:sessionId', sessionAuthorizationMiddleware(config, services));
-
-  app.use('*', async (c, next) => {
-    const serviceHost = parseServiceHostFromRequest(config, c);
-    if (!serviceHost) {
-      await next();
-      return;
-    }
-    if (new URL(c.req.url).pathname === '/__preview_auth') {
-      return authorizePreviewToken(config, services.store, c, serviceHost.sessionId, serviceHost.port);
-    }
-    const authorization = await authorizePreviewRequest(config, services.store, c);
-    if (config.apiAuthMode === 'session' && !authorization) {
-      return writeError(c, 403, 'forbidden', 'Preview access is required');
-    }
-    const session = await services.sessions.get(serviceHost.sessionId);
-    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
-    const service = await getSessionService(config, services, serviceHost.sessionId, serviceHost.port);
-    if (!service) return writeError(c, 404, 'not_found', 'Service URL is not available for this sandbox');
-    if (config.apiAuthMode === 'bearer') {
-      const serviceAuthorized = c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
-      if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Preview access is required');
-    }
-    return appendPreviewCookie(await proxyService(c, config, service), authorization?.cookie);
-  });
 
   app.post('/sessions', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
@@ -1248,6 +1228,38 @@ function writeGitHubRepositoryError(c: Context, error: unknown) {
   throw error;
 }
 
+// Proxies requests whose host is a sandbox service host (s-<port>-<session-id>)
+// into the sandbox. Registered before all product API routes so a service host
+// never reaches this instance's own API handlers. Non-service hosts fall through.
+function servicePreviewMiddleware(
+  config: AppConfig,
+  services: AppServices,
+): MiddlewareHandler<{ Variables: AppVariables }> {
+  return async (c, next) => {
+    const serviceHost = parseServiceHostFromRequest(config, c);
+    if (!serviceHost) {
+      await next();
+      return;
+    }
+    if (new URL(c.req.url).pathname === '/__preview_auth') {
+      return authorizePreviewToken(config, services.store, c, serviceHost.sessionId, serviceHost.port);
+    }
+    const authorization = await authorizePreviewRequest(config, services.store, c);
+    if (config.apiAuthMode === 'session' && !authorization) {
+      return writeError(c, 403, 'forbidden', 'Preview access is required');
+    }
+    const session = await services.sessions.get(serviceHost.sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+    const service = await getSessionService(config, services, serviceHost.sessionId, serviceHost.port);
+    if (!service) return writeError(c, 404, 'not_found', 'Service URL is not available for this sandbox');
+    if (config.apiAuthMode === 'bearer') {
+      const serviceAuthorized = c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
+      if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Preview access is required');
+    }
+    return appendPreviewCookie(await proxyService(c, config, service), authorization?.cookie);
+  };
+}
+
 function sessionAuthorizationMiddleware(
   config: AppConfig,
   services: AppServices,
@@ -1416,7 +1428,7 @@ async function previewAuthTokenForRequest(
   port: number,
 ): Promise<string | undefined> {
   if (config.apiAuthMode !== 'session') return undefined;
-  const authSessionId = readSessionId(c);
+  const authSessionId = readSessionId(config, c);
   const [auth, session] = await Promise.all([
     readRequestAuthorization(config, store, c),
     store.getSession(previewSessionId),
@@ -1432,7 +1444,7 @@ async function messageAuthor(
   store: AppStore,
 ): Promise<{ authorUserId: string; authorName: string } | Record<string, never>> {
   if (config.apiAuthMode !== 'session') return {};
-  const user = await readRequestAuthUser(store, c);
+  const user = await readRequestAuthUser(config, store, c);
   return user ? { authorUserId: user.id, authorName: user.username } : {};
 }
 

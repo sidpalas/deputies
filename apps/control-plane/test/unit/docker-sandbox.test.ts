@@ -160,6 +160,36 @@ describe('DockerSandboxProvider', () => {
     }
   });
 
+  it('passes the bridge skip-cookie-names env to docker run', async () => {
+    vi.resetModules();
+    const commands: string[][] = [];
+    const spawnMock = vi.fn((command: string, args: string[]) => {
+      commands.push([command, ...args]);
+      return mockDockerProcess(args);
+    });
+    vi.doMock('node:child_process', () => ({ spawn: spawnMock }));
+
+    try {
+      const { InProcessDockerOrchestrator: MockedInProcessDockerOrchestrator } =
+        await import('../../src/sandbox/docker.js');
+      const orchestrator = new MockedInProcessDockerOrchestrator({
+        bridgeSkippedCookieNames: 'inner_deputies_preview,inner_deputies_session',
+      });
+
+      await orchestrator.create({ sessionId: 'session-6' }).catch(() => undefined);
+
+      expect(commands[0]).toEqual(
+        expect.arrayContaining([
+          '-e',
+          'DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES=inner_deputies_preview,inner_deputies_session',
+        ]),
+      );
+    } finally {
+      vi.doUnmock('node:child_process');
+      vi.resetModules();
+    }
+  });
+
   it('kills Docker CLI calls and rejects when they exceed the configured timeout', async () => {
     vi.resetModules();
     vi.useFakeTimers();

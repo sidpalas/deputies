@@ -95,6 +95,10 @@ The Deputies web dev server moves its own Vite HMR socket to `/__deputies_vite_h
 
 If you keep using plain Vite without a wildcard proxy, keep `AUTH_COOKIE_SECURE=false` and use an HTTP `WEB_BASE_URL` instead.
 
+### Deputies App Preview Inside A Sandbox
+
+You can run a full inner Deputies app inside an outer Deputies sandbox and expose the inner web app through the outer service preview, e.g. for dogfooding UX changes from a branch. The setup runbook is written for the agent performing the setup inside the sandbox; see [Deputies App Preview](./deputies-app-preview.md).
+
 ## Auth
 
 The UI supports all product API auth modes exposed by `/health`:

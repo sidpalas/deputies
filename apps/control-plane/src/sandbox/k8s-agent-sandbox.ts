@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import { sandboxBridgeSkipCookieNamesEnv } from './bridge-env.js';
 import type {
   ConnectSandboxInput,
   CreateSandboxInput,
@@ -56,6 +57,7 @@ export type InProcessAgentSandboxOrchestratorOptions = {
   workspacePath?: string | undefined;
   storageSize?: string | undefined;
   storageClassName?: string | undefined;
+  bridgeSkippedCookieNames?: string | undefined;
 };
 
 export type HttpAgentSandboxOrchestratorClientOptions = {
@@ -154,6 +156,7 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
   private readonly workspacePath: string;
   private readonly storageSize: string;
   private readonly storageClassName: string | undefined;
+  private readonly bridgeSkippedCookieNames: string | undefined;
   private readonly kube: KubernetesApiClient;
   private readonly descriptors = new Map<string, AgentSandboxDescriptor>();
 
@@ -163,6 +166,7 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
     this.workspacePath = options.workspacePath ?? '/workspace';
     this.storageSize = options.storageSize ?? '1Gi';
     this.storageClassName = options.storageClassName;
+    this.bridgeSkippedCookieNames = options.bridgeSkippedCookieNames;
     this.kube = new KubernetesApiClient();
   }
 
@@ -428,6 +432,9 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
                     valueFrom: { secretKeyRef: { name, key: 'DEPUTIES_SANDBOX_TOKEN' } },
                   },
                   { name: 'DEPUTIES_WORKSPACE', value: this.workspacePath },
+                  ...(this.bridgeSkippedCookieNames
+                    ? [{ name: sandboxBridgeSkipCookieNamesEnv, value: this.bridgeSkippedCookieNames }]
+                    : []),
                 ],
                 volumeMounts: [{ name: 'workspace', mountPath: this.workspacePath }],
               },

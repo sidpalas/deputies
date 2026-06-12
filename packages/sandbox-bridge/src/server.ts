@@ -42,13 +42,17 @@ const skippedPreviewUpgradeHeaders = new Set([
   'x-daytona-preview-token',
   'x-daytona-skip-preview-warning',
 ]);
-const skippedPreviewCookieNames = new Set(['deputies_preview', 'dev_deputies_session']);
+// Keep in sync with the control-plane defaults; override with
+// DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES when SESSION_COOKIE_NAME or
+// PREVIEW_COOKIE_NAME is customized on the instance running this sandbox.
+const defaultSkippedCookieNames = ['deputies_preview', 'dev_deputies_session'];
 
 export type SandboxBridgeOptions = {
   workspacePath: string;
   token: string;
   maxBodyBytes?: number;
   maxOutputBytes?: number;
+  skippedCookieNames?: string[];
 };
 
 type ExecRequest = {
@@ -71,6 +75,7 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
   const workspacePath = resolve(options.workspacePath);
   const maxBodyBytes = options.maxBodyBytes ?? defaultMaxBodyBytes;
   const maxOutputBytes = options.maxOutputBytes ?? defaultMaxOutputBytes;
+  const skippedCookieNames = new Set(options.skippedCookieNames ?? defaultSkippedCookieNames);
 
   const server = createServer(async (request, response) => {
     try {
@@ -159,7 +164,7 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
 
       const previewMatch = url.pathname.match(/^\/preview\/(\d+)(?:\/(.*))?$/);
       if (previewMatch) {
-        await proxyPreviewRequest(request, response, previewMatch, url, maxBodyBytes);
+        await proxyPreviewRequest(request, response, previewMatch, url, maxBodyBytes, skippedCookieNames);
         return;
       }
 
@@ -171,12 +176,18 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
     }
   });
   server.on('upgrade', (request, socket, head) => {
-    handlePreviewUpgrade(request, socket, head, options.token);
+    handlePreviewUpgrade(request, socket, head, options.token, skippedCookieNames);
   });
   return server;
 }
 
-function handlePreviewUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer, token: string): void {
+function handlePreviewUpgrade(
+  request: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  token: string,
+  skippedCookieNames: Set<string>,
+): void {
   if (!isAuthorized(request, token)) {
     socket.destroy();
     return;
@@ -195,17 +206,23 @@ function handlePreviewUpgrade(request: IncomingMessage, socket: Duplex, head: Bu
   const path = match[2] ? `/${match[2]}` : '/';
   const target = new URL(`http://127.0.0.1:${port}${path}`);
   target.search = url.search;
-  proxyPreviewUpgrade(request, socket, head, target);
+  proxyPreviewUpgrade(request, socket, head, target, skippedCookieNames);
 }
 
-function proxyPreviewUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer, target: URL): void {
+function proxyPreviewUpgrade(
+  request: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  target: URL,
+  skippedCookieNames: Set<string>,
+): void {
   const upstream = net.connect({ host: target.hostname, port: Number(target.port) });
   const close = () => {
     upstream.destroy();
     socket.destroy();
   };
   upstream.once('connect', () => {
-    upstream.write(upgradeRequestHead(request, target));
+    upstream.write(upgradeRequestHead(request, target, skippedCookieNames));
     if (head.length) upstream.write(head);
     upstream.pipe(socket);
     socket.pipe(upstream);
@@ -214,7 +231,7 @@ function proxyPreviewUpgrade(request: IncomingMessage, socket: Duplex, head: Buf
   socket.once('error', close);
 }
 
-function upgradeRequestHead(request: IncomingMessage, target: URL): string {
+function upgradeRequestHead(request: IncomingMessage, target: URL, skippedCookieNames: Set<string>): string {
   const forwardedHost = previewForwardedHost(request.headers);
   const headers: Array<[string, string]> = [['host', forwardedHost ?? target.host]];
   let hasOrigin = false;
@@ -229,7 +246,7 @@ function upgradeRequestHead(request: IncomingMessage, target: URL): string {
     headers.push(['x-forwarded-host', forwardedHost]);
     headers.push(['x-original-host', forwardedHost]);
   }
-  const cookie = previewCookieHeader(headerValue(request.headers.cookie));
+  const cookie = previewCookieHeader(headerValue(request.headers.cookie), skippedCookieNames);
   if (cookie) headers.push(['cookie', cookie]);
   if (!hasOrigin) headers.push(['origin', target.origin]);
   return [
@@ -246,13 +263,14 @@ async function proxyPreviewRequest(
   match: RegExpMatchArray,
   requestUrl: URL,
   maxBodyBytes: number,
+  skippedCookieNames: Set<string>,
 ): Promise<void> {
   const port = Number(match[1]);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new BridgeHttpError(400, 'Invalid preview port');
   const path = match[2] ? `/${match[2]}` : '/';
   const target = new URL(`http://127.0.0.1:${port}${path}`);
   target.search = requestUrl.search;
-  const headers = previewHeaders(request.headers);
+  const headers = previewHeaders(request.headers, skippedCookieNames);
   const body = await previewRequestBody(request, maxBodyBytes);
   const bodyLength = previewRequestBodyLength(body) ?? headerValue(request.headers['content-length']);
   if (bodyLength !== undefined) headers['content-length'] = String(bodyLength);
@@ -281,7 +299,10 @@ function previewRequestBodyLength(body: Buffer | IncomingMessage | undefined): n
   return Buffer.isBuffer(body) ? body.byteLength : undefined;
 }
 
-function previewHeaders(input: IncomingMessage['headers']): Record<string, string | string[]> {
+function previewHeaders(
+  input: IncomingMessage['headers'],
+  skippedCookieNames: Set<string>,
+): Record<string, string | string[]> {
   const headers: Record<string, string | string[]> = {};
   for (const [key, value] of Object.entries(input)) {
     const lower = key.toLowerCase();
@@ -295,7 +316,7 @@ function previewHeaders(input: IncomingMessage['headers']): Record<string, strin
     headers['x-forwarded-host'] = forwardedHost;
     headers['x-original-host'] = forwardedHost;
   }
-  const cookie = previewCookieHeader(headerValue(input.cookie));
+  const cookie = previewCookieHeader(headerValue(input.cookie), skippedCookieNames);
   if (cookie) headers.cookie = cookie;
   headers['accept-encoding'] = 'identity';
   return headers;
@@ -374,14 +395,14 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value.join('; ') : value;
 }
 
-function previewCookieHeader(header: string | undefined): string | undefined {
+function previewCookieHeader(header: string | undefined, skippedCookieNames: Set<string>): string | undefined {
   if (!header) return undefined;
   const cookies = header
     .split(';')
     .map((part) => part.trim())
     .filter((part) => {
       const name = part.split('=')[0]?.trim();
-      return name && !skippedPreviewCookieNames.has(name);
+      return name && !skippedCookieNames.has(name);
     });
   return cookies.length ? cookies.join('; ') : undefined;
 }
@@ -639,6 +660,15 @@ function signalExitCode(signal: NodeJS.Signals | null): number {
   return signal === 'SIGTERM' ? 143 : 1;
 }
 
+function parseSkippedCookieNames(value: string | undefined): string[] | undefined {
+  if (!value) return undefined;
+  const names = value
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  return names.length ? names : undefined;
+}
+
 function isMissingPathError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
@@ -663,7 +693,12 @@ async function main(): Promise<void> {
   if (!token) throw new Error('DEPUTIES_SANDBOX_TOKEN is required');
   const workspacePath = process.env.DEPUTIES_WORKSPACE ?? '/workspace';
   await mkdir(workspacePath, { recursive: true });
-  const server = createSandboxBridgeServer({ workspacePath, token });
+  const skippedCookieNames = parseSkippedCookieNames(process.env.DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES);
+  const server = createSandboxBridgeServer({
+    workspacePath,
+    token,
+    ...(skippedCookieNames ? { skippedCookieNames } : {}),
+  });
   const host = process.env.DEPUTIES_SANDBOX_BRIDGE_HOST ?? '0.0.0.0';
   const port = Number(process.env.DEPUTIES_SANDBOX_BRIDGE_PORT ?? defaultPort);
   server.listen(port, host);

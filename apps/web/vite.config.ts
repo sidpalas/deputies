@@ -5,6 +5,12 @@ import tailwindcss from '@tailwindcss/vite';
 
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:3583';
 const portlessUrl = process.env.VITE_PORTLESS_URL ?? 'https://deputies.localhost';
+// Set SERVICE_HOST_REGEX=^$ when this instance runs only as an app preview
+// behind another Deputies service host and should not route service hosts itself.
+// Keep this aligned with apps/web/Caddyfile and apps/web/Caddyfile.local.
+// An empty value falls back to the default: an empty regex matches every host,
+// which would misroute the whole app to the service proxy.
+const serviceHostRegex = new RegExp(process.env.SERVICE_HOST_REGEX || '^s-');
 const allowedHosts = process.env.VITE_DEV_ALLOWED_HOSTS
   ? process.env.VITE_DEV_ALLOWED_HOSTS.split(',')
       .map((host) => host.trim())
@@ -34,7 +40,7 @@ function isServiceRequest(headers: {
 }): boolean {
   return [headers.host, headers['x-forwarded-host'], headers['x-original-host']]
     .flatMap((value) => (Array.isArray(value) ? value : value ? [value] : []))
-    .some((host) => host.split(',').some((item) => item.trim().startsWith('s-')));
+    .some((host) => host.split(',').some((item) => serviceHostRegex.test(item.trim())));
 }
 
 export default defineConfig({

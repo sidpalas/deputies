@@ -59,6 +59,10 @@ spec:
               value: {{ .Values.web.service.port | quote }}
             - name: API_UPSTREAM
               value: {{ printf "http://%s:%v" (include "deputies.apiServiceName" .) .Values.controlPlane.service.port | quote }}
+            {{- with .Values.web.serviceHostRegex }}
+            - name: SERVICE_HOST_REGEX
+              value: {{ . | quote }}
+            {{- end }}
           {{- if .Values.web.trustForwardedServiceHosts }}
           volumeMounts:
             - name: caddyfile

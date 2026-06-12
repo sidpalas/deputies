@@ -15,7 +15,7 @@ export function apiAuthMiddleware(config: AppConfig, store: AppStore): Middlewar
     }
 
     if (config.apiAuthMode === 'session') {
-      const user = await readRequestAuthUser(store, c);
+      const user = await readRequestAuthUser(config, store, c);
       if (!user) return writeAuthError(c, 'Missing or invalid session');
       if (!isTrustedCookieAuthRequest(c, config)) return writeCsrfError(c);
       await next();
@@ -38,7 +38,7 @@ export function apiAdminMiddleware(config: AppConfig, store: AppStore): Middlewa
       return;
     }
 
-    const user = await readRequestAuthUser(store, c);
+    const user = await readRequestAuthUser(config, store, c);
     if (!user) return writeAuthError(c, 'Missing or invalid session');
     if (user.role !== 'super_admin')
       return c.json({ error: 'forbidden', message: 'Super admin access is required' }, 403);

@@ -37,6 +37,8 @@ describe('loadConfig', () => {
       authProvider: 'static',
       authCookieSecure: false,
       authCookieSameSite: 'lax',
+      sessionCookieName: 'dev_deputies_session',
+      previewCookieName: 'deputies_preview',
       serviceTrustForwardedHosts: false,
       githubOAuthBaseUrl: 'https://github.com',
       authGithubAdminUsers: [],
@@ -126,6 +128,8 @@ describe('loadConfig', () => {
         AUTH_SESSION_SECRET: 'session-secret',
         AUTH_COOKIE_SECURE: 'true',
         AUTH_COOKIE_SAME_SITE: 'none',
+        SESSION_COOKIE_NAME: 'inner_deputies_session',
+        PREVIEW_COOKIE_NAME: 'inner-deputies-preview',
         WEB_BASE_URL: 'https://deputies.example/app',
         AUTH_GITHUB_ADMIN_USERS: 'admin1, admin2',
         AUTH_GITHUB_ALLOWED_USERS: 'user1, user2',
@@ -222,6 +226,8 @@ describe('loadConfig', () => {
       authSessionSecret: 'session-secret',
       authCookieSecure: true,
       authCookieSameSite: 'none',
+      sessionCookieName: 'inner_deputies_session',
+      previewCookieName: 'inner-deputies-preview',
       webBaseUrl: 'https://deputies.example/app',
       authGithubAdminUsers: ['admin1', 'admin2'],
       authGithubAllowedUsers: ['user1', 'user2'],
@@ -498,6 +504,15 @@ describe('loadConfig', () => {
       githubOAuthClientId: 'client-id',
       githubOAuthClientSecret: 'client-secret',
     });
+  });
+
+  it('rejects invalid cookie names', () => {
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', SESSION_COOKIE_NAME: 'bad name' })).toThrow(
+      'SESSION_COOKIE_NAME must contain only letters, digits, hyphens, and underscores',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', PREVIEW_COOKIE_NAME: 'bad.name' })).toThrow(
+      'PREVIEW_COOKIE_NAME must contain only letters, digits, hyphens, and underscores',
+    );
   });
 
   it('rejects invalid ports', () => {

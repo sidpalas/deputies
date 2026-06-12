@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Daytona } from '@daytona/sdk';
 import type { Sandbox as DaytonaSandbox } from '@daytona/sdk';
+import { sandboxBridgeSkipCookieNamesEnv } from './bridge-env.js';
 import type {
   ConnectSandboxInput,
   CreateSandboxInput,
@@ -70,6 +71,7 @@ export type DaytonaSandboxProviderOptions = {
   idleTimeoutMs?: number;
   envVars?: Record<string, string>;
   labels?: Record<string, string>;
+  bridgeSkippedCookieNames?: string;
 };
 
 export const daytonaCapabilities: SandboxCapabilities = {
@@ -167,7 +169,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     const sandbox = await this.client.get(input.providerSandboxId);
     const bridgeToken = input.secrets?.bridgeToken ?? randomUUID();
     const workspacePath = this.options.workspacePath ?? (await sandbox.getWorkDir()) ?? '/workspace';
-    await ensureDaytonaBridge(sandbox, workspacePath, bridgeToken);
+    await ensureDaytonaBridge(sandbox, workspacePath, bridgeToken, this.options.bridgeSkippedCookieNames);
     const preview = await resolveDaytonaPreviewUrl(sandbox, daytonaBridgePort);
     if (!preview) return null;
     return {
@@ -288,6 +290,7 @@ async function ensureDaytonaBridge(
   sandbox: DaytonaSandboxLike,
   workspacePath: string,
   bridgeToken: string,
+  skippedCookieNames?: string,
 ): Promise<void> {
   const pidFile = '/tmp/deputies-sandbox-bridge.pid';
   const logFile = '/tmp/deputies-sandbox-bridge.log';
@@ -295,6 +298,7 @@ async function ensureDaytonaBridge(
     [
       `TOKEN=${quoteShell(bridgeToken)};`,
       `WORKSPACE=${quoteShell(workspacePath)};`,
+      `SKIP_COOKIE_NAMES=${quoteShell(skippedCookieNames ?? '')};`,
       `PID_FILE=${quoteShell(pidFile)};`,
       `LOG_FILE=${quoteShell(logFile)};`,
       `HEALTH_URL=${quoteShell(`http://127.0.0.1:${daytonaBridgePort}/health`)};`,
@@ -306,6 +310,7 @@ async function ensureDaytonaBridge(
       'start_bridge() {',
       'DEPUTIES_SANDBOX_TOKEN="$TOKEN"',
       'DEPUTIES_WORKSPACE="$WORKSPACE"',
+      `${sandboxBridgeSkipCookieNamesEnv}="$SKIP_COOKIE_NAMES"`,
       'DEPUTIES_SANDBOX_BRIDGE_HOST=0.0.0.0',
       `DEPUTIES_SANDBOX_BRIDGE_PORT=${daytonaBridgePort}`,
       'nohup node /opt/deputies/sandbox-bridge/dist/server.js >> "$LOG_FILE" 2>&1 & echo $! > "$PID_FILE";',

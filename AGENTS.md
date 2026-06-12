@@ -71,6 +71,10 @@ For broad coverage inside a sandbox image that includes the Daytona verification
 
 This starts Postgres, installs dependencies, runs migrations, then runs API typecheck/unit/integration tests and web typecheck/unit/e2e/build checks.
 
+## Previewing This Branch As A Sandbox Service
+
+When asked to run or preview the Deputies app from this checkout inside the sandbox (login, sessions, and web/API UX through the outer instance's service preview), follow [docs/deputies-app-preview.md](docs/deputies-app-preview.md).
+
 ## Common Test Commands
 
 ```sh

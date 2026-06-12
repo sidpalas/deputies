@@ -233,6 +233,43 @@ describe('DaytonaSandboxProvider', () => {
     );
   });
 
+  it('starts the Daytona bridge with the configured skip-cookie-names env', async () => {
+    const sandbox = createMockDaytonaSandbox();
+    sandbox.getPreviewLink = async (port) => ({ url: `https://${port}-sandbox.daytona.test` });
+    sandbox.process.executeCommand = vi.fn(async () => ({ result: 'bridge started', exitCode: 0 }));
+    const provider = new DaytonaSandboxProvider({
+      client: {
+        async create() {
+          return sandbox;
+        },
+        async get() {
+          return sandbox;
+        },
+      },
+      bridgeSkippedCookieNames: 'inner_deputies_preview,inner_deputies_session',
+    });
+
+    await provider.getPreviewUrl({
+      providerSandboxId: 'sandbox-1',
+      sessionId: 'session-1',
+      port: 3000,
+      secrets: { bridgeToken: 'bridge-token' },
+    });
+
+    expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
+      expect.stringContaining(`SKIP_COOKIE_NAMES='inner_deputies_preview,inner_deputies_session'`),
+      undefined,
+      undefined,
+      10,
+    );
+    expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
+      expect.stringContaining('DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES="$SKIP_COOKIE_NAMES"'),
+      undefined,
+      undefined,
+      10,
+    );
+  });
+
   it('rejects Daytona bridge preview URLs when the bridge does not become ready', async () => {
     const sandbox = createMockDaytonaSandbox();
     sandbox.getPreviewLink = async (port) => ({ url: `https://${port}-sandbox.daytona.test`, token: 'preview-token' });

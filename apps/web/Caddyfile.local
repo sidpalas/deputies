@@ -4,11 +4,13 @@
 
 	# Keep this forwarded-host routing aligned with the Helm-rendered Caddyfile used
 	# when web.trustForwardedServiceHosts=true.
-	@service_host header_regexp Host ^s-
+	# Set SERVICE_HOST_REGEX=^$ when this instance runs only as an app preview
+	# behind another Deputies service host and should not route service hosts itself.
+	@service_host header_regexp Host {$SERVICE_HOST_REGEX:^s-}
 	# Portless terminates TLS locally and may forward Caddy an internal Host
 	# while preserving the browser service host/proto in X-Forwarded-* or X-Original-*.
-	@service_forwarded_host header_regexp X-Forwarded-Host ^s-
-	@service_original_host header_regexp X-Original-Host ^s-
+	@service_forwarded_host header_regexp X-Forwarded-Host {$SERVICE_HOST_REGEX:^s-}
+	@service_original_host header_regexp X-Original-Host {$SERVICE_HOST_REGEX:^s-}
 	handle @service_host {
 		reverse_proxy {$API_UPSTREAM:http://control-plane:3583} {
 			header_up X-Original-Host {host}

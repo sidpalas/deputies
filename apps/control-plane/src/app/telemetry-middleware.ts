@@ -2,12 +2,13 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
 import type { AppConfig } from '../config/index.js';
 import { runWithExtractedTraceContext, traceAsync } from '../telemetry/index.js';
+import { parseServiceHostFromRequest } from './service-proxy.js';
 import type { AppVariables } from './server.js';
 
 export function routeTelemetryMiddleware(config: AppConfig): MiddlewareHandler<{ Variables: AppVariables }> {
   return async (c, next) => {
     const method = c.req.method.toUpperCase();
-    const route = telemetryRoute(c);
+    const route = telemetryRoute(config, c);
     const spanName = `${method} ${route}`;
     await runWithExtractedTraceContext(c.req.raw.headers, () =>
       traceAsync(
@@ -32,8 +33,8 @@ export function routeTelemetryMiddleware(config: AppConfig): MiddlewareHandler<{
   };
 }
 
-function telemetryRoute(c: Context<{ Variables: AppVariables }>): string {
-  if (new URL(c.req.url).host.startsWith('s-')) return '/preview-service';
+function telemetryRoute(config: AppConfig, c: Context<{ Variables: AppVariables }>): string {
+  if (parseServiceHostFromRequest(config, c)) return '/preview-service';
   const matchedPath = routePath(c, -1);
   return matchedPath && matchedPath !== '*' ? matchedPath : scrubDynamicPath(c.req.path);
 }

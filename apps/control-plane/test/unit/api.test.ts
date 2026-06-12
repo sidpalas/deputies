@@ -6,12 +6,7 @@ import { gzipSync } from 'node:zlib';
 import { ArtifactService } from '../../src/artifacts/service.js';
 import { FilesystemArtifactObjectStorage, type ArtifactObjectStorage } from '../../src/artifacts/storage.js';
 import { createServer, createServices, createWorkerHealthServer, type AppServices } from '../../src/app/server.js';
-import {
-  previewCookieMaxAgeSeconds,
-  previewCookieName,
-  sessionCookieName,
-  signPreviewAuthToken,
-} from '../../src/auth/session.js';
+import { previewCookieMaxAgeSeconds, signPreviewAuthToken } from '../../src/auth/session.js';
 import { loadConfig } from '../../src/config/index.js';
 import { GitHubApiError } from '../../src/integrations/github/client.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
@@ -30,6 +25,10 @@ import {
   expectSessionResponse,
   expectSessionsResponse,
 } from '../support/contracts.js';
+
+// Default platform cookie names; overridable with SESSION_COOKIE_NAME / PREVIEW_COOKIE_NAME.
+const sessionCookieName = 'dev_deputies_session';
+const previewCookieName = 'deputies_preview';
 
 describe('core API', () => {
   let server: Server;
@@ -1252,6 +1251,13 @@ describe('core API', () => {
       await expect(
         (await fetch(`${baseUrl}/src/main.tsx`, { headers: { 'x-forwarded-host': serviceHost } })).text(),
       ).resolves.toBe('main');
+      const authCollision = await fetch(`${baseUrl}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-host': serviceHost },
+        body: JSON.stringify({ username: 'dev', password: 'dev-secret' }),
+      });
+      expect(authCollision.status).toBe(200);
+      await expect(authCollision.json()).resolves.toEqual({ proxied: true });
       const invalidHost = await fetch(`${baseUrl}/@vite/client`, {
         headers: { 'x-forwarded-host': `s-3000-${session.id}.evil.localhost` },
       });
@@ -1460,6 +1466,75 @@ describe('core API', () => {
       });
       expect(renewed.status).toBe(200);
       expect(renewed.headers.get('set-cookie')).toContain(`${previewCookieName}=`);
+    } finally {
+      await closeServer(upstream);
+    }
+  });
+
+  it('uses configured cookie names and forwards default-named cookies to services', async () => {
+    const upstream = createPreviewUpstream();
+    const upstreamBaseUrl = await listen(upstream);
+    await closeServer(server);
+    const provider = new ServiceSandboxProvider(upstreamBaseUrl);
+    services = createServices(store, { sandboxProvider: provider });
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_STATIC_USERNAME: 'dev',
+        AUTH_STATIC_PASSWORD: 'password',
+        AUTH_SESSION_SECRET: 'test-secret',
+        WEB_BASE_URL: 'https://deputies.localhost',
+        SERVICE_TRUST_FORWARDED_HOSTS: 'true',
+        SESSION_COOKIE_NAME: 'inner_deputies_session',
+        PREVIEW_COOKIE_NAME: 'inner_deputies_preview',
+      }),
+      services,
+    );
+    baseUrl = await listen(server);
+
+    try {
+      const login = await postJson(`${baseUrl}/auth/login`, { username: 'dev', password: 'password' });
+      const cookie = login.headers.get('set-cookie');
+      expect(cookie).toContain('inner_deputies_session=');
+      const session = await services.sessions.create({ title: 'Custom cookie names' });
+      const sandbox = await provider.create({ sessionId: session.id });
+      const now = new Date();
+      await store.createSandbox({
+        id: '00000000-0000-4000-8000-000000000515',
+        sessionId: session.id,
+        provider: provider.name,
+        providerSandboxId: sandbox.providerSandboxId,
+        status: 'ready',
+        workspacePath: '/workspace',
+        metadata: { runtimeId: 'runtime-1' },
+        createdAt: now,
+        updatedAt: now,
+      });
+      const serviceHost = `s-3000-${session.id}.deputies.localhost`;
+
+      const servicesResponse = await fetch(`${baseUrl}/sessions/${session.id}/services?port=3000`, {
+        headers: { cookie: cookie! },
+      });
+      const servicesBody = (await servicesResponse.json()) as { services: Array<{ url: string }> };
+      const previewAuthUrl = new URL(servicesBody.services[0]!.url);
+      const previewAuth = await fetch(`${baseUrl}${previewAuthUrl.pathname}${previewAuthUrl.search}`, {
+        headers: { 'x-forwarded-host': serviceHost },
+        redirect: 'manual',
+      });
+      expect(previewAuth.status).toBe(302);
+      const previewCookie = previewAuth.headers.get('set-cookie');
+      expect(previewCookie).toContain('inner_deputies_preview=');
+      const previewCookiePair = `inner_deputies_preview=${cookieValue(previewCookie!, 'inner_deputies_preview')}`;
+
+      // Only this instance's configured cookie names are stripped, so an outer
+      // instance's default-named cookies pass through to the proxied service.
+      const appMe = await fetch(`${baseUrl}/app-me`, {
+        headers: {
+          cookie: `${previewCookiePair}; inner_deputies_session=leak; ${sessionCookieName}=outer; app_session=ok`,
+          'x-forwarded-host': serviceHost,
+        },
+      });
+      await expect(appMe.json()).resolves.toEqual({ cookie: `${sessionCookieName}=outer; app_session=ok` });
     } finally {
       await closeServer(upstream);
     }
@@ -2548,6 +2623,11 @@ function createPreviewUpstream(): Server {
     if (request.url === '/headers') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ referer: request.headers.referer ?? null }));
+      return;
+    }
+    if (request.url === '/auth/login') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ proxied: true }));
       return;
     }
     if (request.url?.startsWith('/bridge-base/')) {

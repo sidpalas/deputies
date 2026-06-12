@@ -2,9 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Context } from 'hono';
 import type { AppConfig } from '../config/index.js';
 
-export const sessionCookieName = 'dev_deputies_session';
 export const sessionMaxAgeSeconds = 7 * 24 * 60 * 60;
-export const previewCookieName = 'deputies_preview';
 export const previewBootstrapMaxAgeSeconds = 2 * 60;
 export const previewCookieMaxAgeSeconds = 30 * 60;
 export const previewGrantMaxAgeSeconds = 2 * 60 * 60;
@@ -24,19 +22,19 @@ export function createSessionId(): string {
 }
 
 export function createSessionCookie(config: AppConfig, sessionId: string): string {
-  return `${sessionCookieName}=${sessionId}; Path=/; Max-Age=${sessionMaxAgeSeconds}; HttpOnly; SameSite=${formatSameSite(config)}${config.authCookieSecure ? '; Secure' : ''}`;
+  return `${config.sessionCookieName}=${sessionId}; Path=/; Max-Age=${sessionMaxAgeSeconds}; HttpOnly; SameSite=${formatSameSite(config)}${config.authCookieSecure ? '; Secure' : ''}`;
 }
 
 export function clearSessionCookie(config: AppConfig): string {
-  return `${sessionCookieName}=; Path=/; Max-Age=0; HttpOnly; SameSite=${formatSameSite(config)}${config.authCookieSecure ? '; Secure' : ''}`;
+  return `${config.sessionCookieName}=; Path=/; Max-Age=0; HttpOnly; SameSite=${formatSameSite(config)}${config.authCookieSecure ? '; Secure' : ''}`;
 }
 
-export function readSessionId(c: Context): string | null {
-  return parseCookies(c.req.header('cookie') ?? '')[sessionCookieName] ?? null;
+export function readSessionId(config: AppConfig, c: Context): string | null {
+  return parseCookies(c.req.header('cookie') ?? '')[config.sessionCookieName] ?? null;
 }
 
-export function readPreviewCookie(c: Context): string | null {
-  return parseCookies(c.req.header('cookie') ?? '')[previewCookieName] ?? null;
+export function readPreviewCookie(config: AppConfig, c: Context): string | null {
+  return parseCookies(c.req.header('cookie') ?? '')[config.previewCookieName] ?? null;
 }
 
 export function createPreviewCookie(
@@ -44,7 +42,7 @@ export function createPreviewCookie(
   token: string,
   maxAgeSeconds = previewCookieMaxAgeSeconds,
 ): string {
-  return `${previewCookieName}=${token}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=${formatSameSite(config)}${config.authCookieSecure ? '; Secure' : ''}`;
+  return `${config.previewCookieName}=${token}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=${formatSameSite(config)}${config.authCookieSecure ? '; Secure' : ''}`;
 }
 
 export type OAuthState = {

@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { sandboxBridgeSkippedCookieNames } from './bridge-env.js';
 import { InProcessAgentSandboxOrchestrator, createAgentSandboxOrchestratorHttpHandler } from './k8s-agent-sandbox.js';
 
 const port = parsePort(process.env.AGENT_SANDBOX_ORCHESTRATOR_PORT, 3587);
@@ -12,6 +13,10 @@ const handler = createAgentSandboxOrchestratorHttpHandler(
       workspacePath: process.env.SANDBOX_WORKSPACE_PATH,
       storageSize: process.env.AGENT_SANDBOX_STORAGE_SIZE,
       storageClassName: process.env.AGENT_SANDBOX_STORAGE_CLASS_NAME,
+      bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames({
+        previewCookieName: process.env.PREVIEW_COOKIE_NAME,
+        sessionCookieName: process.env.SESSION_COOKIE_NAME,
+      }),
     }),
   ),
   token,

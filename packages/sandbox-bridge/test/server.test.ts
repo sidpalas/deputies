@@ -231,6 +231,45 @@ describe('sandbox bridge server', () => {
     }
   });
 
+  it('strips configured cookie names instead of the defaults', async () => {
+    const upstream = createServer((request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ cookie: request.headers.cookie ?? null }));
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const upstreamAddress = upstream.address();
+    if (typeof upstreamAddress !== 'object' || !upstreamAddress) throw new Error('Expected upstream address');
+
+    const customBridge = createSandboxBridgeServer({
+      workspacePath,
+      token,
+      skippedCookieNames: ['inner_deputies_preview', 'inner_deputies_session'],
+    });
+    customBridge.listen(0, '127.0.0.1');
+    await once(customBridge, 'listening');
+    const bridgeAddress = customBridge.address();
+    if (typeof bridgeAddress !== 'object' || !bridgeAddress) throw new Error('Expected bridge address');
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/preview/${upstreamAddress.port}/`, {
+        headers: {
+          authorization: `Bearer ${token}`,
+          cookie: 'inner_deputies_preview=platform; inner_deputies_session=session; deputies_preview=passthrough',
+        },
+      });
+
+      await expect(response.json()).resolves.toEqual({ cookie: 'deputies_preview=passthrough' });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        customBridge.close((error) => (error ? reject(error) : resolve()));
+      });
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it('does not trust forwarded hosts without a private Deputies preview host', async () => {
     const upstream = createServer((request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
