@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { sandboxBridgeSkipCookieNamesEnv } from './bridge-env.js';
 import type {
   ConnectSandboxInput,
   CreateSandboxInput,
@@ -53,6 +54,7 @@ export type InProcessDockerOrchestratorOptions = {
   memory?: string | undefined;
   cpus?: string | undefined;
   dockerCliTimeoutMs?: number | undefined;
+  bridgeSkippedCookieNames?: string | undefined;
 };
 
 export type HttpDockerOrchestratorClientOptions = {
@@ -184,6 +186,9 @@ export class InProcessDockerOrchestrator implements DockerOrchestrator {
       '-p',
       `127.0.0.1::${bridgePort}`,
     ];
+    if (this.options.bridgeSkippedCookieNames) {
+      args.push('-e', `${sandboxBridgeSkipCookieNamesEnv}=${this.options.bridgeSkippedCookieNames}`);
+    }
     if (this.options.network) args.push('--network', this.options.network);
     if (this.options.memory) args.push('--memory', this.options.memory);
     if (this.options.cpus) args.push('--cpus', this.options.cpus);

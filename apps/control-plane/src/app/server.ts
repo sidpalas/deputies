@@ -216,29 +216,9 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.notFound((c) => c.json({ error: 'not_found', message: 'Route not found' }, 404));
 
-  app.use('*', async (c, next) => {
-    const serviceHost = parseServiceHostFromRequest(config, c);
-    if (!serviceHost) {
-      await next();
-      return;
-    }
-    if (new URL(c.req.url).pathname === '/__preview_auth') {
-      return authorizePreviewToken(config, services.store, c, serviceHost.sessionId, serviceHost.port);
-    }
-    const authorization = await authorizePreviewRequest(config, services.store, c);
-    if (config.apiAuthMode === 'session' && !authorization) {
-      return writeError(c, 403, 'forbidden', 'Preview access is required');
-    }
-    const session = await services.sessions.get(serviceHost.sessionId);
-    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
-    const service = await getSessionService(config, services, serviceHost.sessionId, serviceHost.port);
-    if (!service) return writeError(c, 404, 'not_found', 'Service URL is not available for this sandbox');
-    if (config.apiAuthMode === 'bearer') {
-      const serviceAuthorized = c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
-      if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Preview access is required');
-    }
-    return appendPreviewCookie(await proxyService(c, config, service), authorization?.cookie);
-  });
+  // Service-host requests must take precedence over product API routes so paths
+  // like /auth/login on a service host proxy into the sandbox instead.
+  app.use('*', servicePreviewMiddleware(config, services));
 
   app.get('/health', (c) => {
     const notices = services.modelAvailability.notices();
@@ -1246,6 +1226,38 @@ function writeGitHubRepositoryError(c: Context, error: unknown) {
     return writeError(c, 502, 'github_api_error', 'GitHub API request failed');
   }
   throw error;
+}
+
+// Proxies requests whose host is a sandbox service host (s-<port>-<session-id>)
+// into the sandbox. Registered before all product API routes so a service host
+// never reaches this instance's own API handlers. Non-service hosts fall through.
+function servicePreviewMiddleware(
+  config: AppConfig,
+  services: AppServices,
+): MiddlewareHandler<{ Variables: AppVariables }> {
+  return async (c, next) => {
+    const serviceHost = parseServiceHostFromRequest(config, c);
+    if (!serviceHost) {
+      await next();
+      return;
+    }
+    if (new URL(c.req.url).pathname === '/__preview_auth') {
+      return authorizePreviewToken(config, services.store, c, serviceHost.sessionId, serviceHost.port);
+    }
+    const authorization = await authorizePreviewRequest(config, services.store, c);
+    if (config.apiAuthMode === 'session' && !authorization) {
+      return writeError(c, 403, 'forbidden', 'Preview access is required');
+    }
+    const session = await services.sessions.get(serviceHost.sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+    const service = await getSessionService(config, services, serviceHost.sessionId, serviceHost.port);
+    if (!service) return writeError(c, 404, 'not_found', 'Service URL is not available for this sandbox');
+    if (config.apiAuthMode === 'bearer') {
+      const serviceAuthorized = c.req.header('authorization') === `Bearer ${requireApiBearerToken(config)}`;
+      if (!serviceAuthorized) return writeError(c, 403, 'forbidden', 'Preview access is required');
+    }
+    return appendPreviewCookie(await proxyService(c, config, service), authorization?.cookie);
+  };
 }
 
 function sessionAuthorizationMiddleware(

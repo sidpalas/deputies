@@ -1,6 +1,7 @@
 import {
   AgentSandboxProvider,
   HttpAgentSandboxOrchestratorClient,
+  InProcessAgentSandboxOrchestrator,
   agentSandboxCapabilities,
   createAgentSandboxOrchestratorHttpHandler,
   type AgentSandboxDescriptor,
@@ -33,6 +34,48 @@ describe('AgentSandboxProvider', () => {
       exitCode: 0,
     });
     await expect(provider.health(handle)).resolves.toMatchObject({ status: 'ready' });
+  });
+
+  it('injects the bridge skip-cookie-names env into the sandbox pod manifest', async () => {
+    const orchestrator = new InProcessAgentSandboxOrchestrator({
+      namespace: 'test-ns',
+      bridgeSkippedCookieNames: 'inner_deputies_preview,inner_deputies_session',
+    });
+    const posted: Array<{ path: string; body: unknown }> = [];
+    const kubeStub = {
+      async get() {
+        return { status: { serviceFQDN: 'sandbox.test-ns.svc' }, spec: {} };
+      },
+      async post(path: string, body: unknown) {
+        posted.push({ path, body });
+        return {};
+      },
+      async patch() {
+        return {};
+      },
+      async delete() {
+        return null;
+      },
+    };
+    (orchestrator as unknown as { kube: typeof kubeStub }).kube = kubeStub;
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{"status":"ready"}', { status: 200 }));
+
+    try {
+      await orchestrator.create({ sessionId: 'session-env' });
+
+      const manifest = posted.find(({ path }) => path.includes('/sandboxes'))?.body as {
+        spec: { podTemplate: { spec: { containers: Array<{ env: Array<{ name: string; value?: string }> }> } } };
+      };
+      expect(manifest.spec.podTemplate.spec.containers[0]?.env).toEqual(
+        expect.arrayContaining([
+          { name: 'DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES', value: 'inner_deputies_preview,inner_deputies_session' },
+        ]),
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it('supports an HTTP orchestrator client/server boundary', async () => {

@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { sandboxBridgeSkippedCookieNames } from './bridge-env.js';
 import { InProcessDockerOrchestrator, createDockerOrchestratorHttpHandler } from './docker.js';
 
 const port = parsePort(process.env.DOCKER_ORCHESTRATOR_PORT, 3585);
@@ -13,6 +14,10 @@ const handler = createDockerOrchestratorHttpHandler(
       memory: process.env.DOCKER_SANDBOX_MEMORY,
       cpus: process.env.DOCKER_SANDBOX_CPUS,
       dockerCliTimeoutMs: parsePositiveInteger(process.env.DOCKER_CLI_TIMEOUT_MS, 30_000, 'DOCKER_CLI_TIMEOUT_MS'),
+      bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames({
+        previewCookieName: process.env.PREVIEW_COOKIE_NAME,
+        sessionCookieName: process.env.SESSION_COOKIE_NAME,
+      }),
     }),
   ),
   process.env.DOCKER_ORCHESTRATOR_TOKEN,

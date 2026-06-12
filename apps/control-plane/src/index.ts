@@ -33,6 +33,7 @@ import { FlueRunner } from './runner-flue/runner.js';
 import { PostgresFlueSessionStore } from './runner-flue/session-store.js';
 import { PiRunner, type PiRunnerOptions } from './runner-pi/runner.js';
 import { PostgresPiSessionStore } from './runner-pi/session-store.js';
+import { sandboxBridgeSkippedCookieNames } from './sandbox/bridge-env.js';
 import { DaytonaSandboxProvider } from './sandbox/daytona.js';
 import { DockerSandboxProvider, HttpDockerOrchestratorClient, InProcessDockerOrchestrator } from './sandbox/docker.js';
 import { FakeSandboxProvider } from './sandbox/fake.js';
@@ -241,6 +242,7 @@ function createSandboxProvider(): SandboxProvider {
               memory: config.dockerSandboxMemory,
               cpus: config.dockerSandboxCpus,
               dockerCliTimeoutMs: config.dockerCliTimeoutMs,
+              bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
             }),
           );
     return new DockerSandboxProvider({ orchestrator });
@@ -254,7 +256,10 @@ function createSandboxProvider(): SandboxProvider {
     if (config.daytonaTarget) Object.assign(options, { target: config.daytonaTarget });
     if (config.daytonaImage) Object.assign(options, { image: config.daytonaImage });
     if (config.daytonaSnapshot) Object.assign(options, { snapshot: config.daytonaSnapshot });
-    Object.assign(options, { workspacePath: config.sandboxWorkspacePath });
+    Object.assign(options, {
+      workspacePath: config.sandboxWorkspacePath,
+      bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
+    });
     return new DaytonaSandboxProvider(options);
   }
   if (config.sandboxProvider === 'k8s-agent-sandbox') {
@@ -273,6 +278,7 @@ function createSandboxProvider(): SandboxProvider {
               workspacePath: config.sandboxWorkspacePath,
               storageSize: config.agentSandboxStorageSize,
               storageClassName: config.agentSandboxStorageClassName,
+              bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
             }),
           );
     return new AgentSandboxProvider({ orchestrator });
