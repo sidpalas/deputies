@@ -33,6 +33,22 @@ jobs:
       - name: Check formatting
         run: mise run //:format:check
 
+  lint:
+    name: Lint
+    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup CI
+        uses: ./.github/actions/setup-ci
+
+      - name: Run lint
+        run: mise run //:lint
+
   typecheck:
     name: Typecheck
     if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"

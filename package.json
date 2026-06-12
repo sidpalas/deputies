@@ -11,13 +11,18 @@
     "prepare": "node -e \"const fs=require('fs'); if (fs.existsSync('.git') && process.env.NODE_ENV !== 'production') require('child_process').execFileSync('pnpm', ['exec', 'husky'], { stdio: 'inherit' })\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "lint": "eslint .",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
-    "check": "pnpm format:check && pnpm typecheck && pnpm test"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.4.1",
+    "globals": "^17.6.0",
     "husky": "^9.1.7",
     "prettier": "^3.7.4",
-    "prettier-plugin-astro": "^0.14.1"
+    "prettier-plugin-astro": "^0.14.1",
+    "typescript-eslint": "^8.61.0"
   }
 }
