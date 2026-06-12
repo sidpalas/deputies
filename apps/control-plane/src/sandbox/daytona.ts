@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Daytona } from '@daytona/sdk';
-import type { Sandbox as DaytonaSandbox } from '@daytona/sdk';
+import type { Resources, Sandbox as DaytonaSandbox } from '@daytona/sdk';
 import { sandboxBridgeSkipCookieNamesEnv } from './bridge-env.js';
 import type {
   ConnectSandboxInput,
@@ -69,6 +69,7 @@ export type DaytonaSandboxProviderOptions = {
   workspacePath?: string;
   createTimeoutSeconds?: number;
   idleTimeoutMs?: number;
+  resources?: Resources;
   envVars?: Record<string, string>;
   labels?: Record<string, string>;
   bridgeSkippedCookieNames?: string;
@@ -213,6 +214,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     };
     if (this.options.image) params.image = this.options.image;
     if (!this.options.image && this.options.snapshot) params.snapshot = this.options.snapshot;
+    if (this.options.resources) params.resources = this.options.resources;
     return params;
   }
 

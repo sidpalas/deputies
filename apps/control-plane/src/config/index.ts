@@ -97,6 +97,10 @@ export type AppConfig = {
   daytonaTarget?: string;
   daytonaImage?: string;
   daytonaSnapshot?: string;
+  daytonaSandboxCpu?: number;
+  daytonaSandboxGpu?: number;
+  daytonaSandboxMemoryGiB?: number;
+  daytonaSandboxDiskGiB?: number;
   slackApiBaseUrl: string;
   slackSigningSecret?: string;
   slackBotToken?: string;
@@ -287,6 +291,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.DAYTONA_TARGET) config.daytonaTarget = env.DAYTONA_TARGET;
   if (env.DAYTONA_IMAGE) config.daytonaImage = env.DAYTONA_IMAGE;
   if (env.DAYTONA_SNAPSHOT) config.daytonaSnapshot = env.DAYTONA_SNAPSHOT;
+  if (env.DAYTONA_SANDBOX_CPU)
+    config.daytonaSandboxCpu = parsePositiveNumber(env.DAYTONA_SANDBOX_CPU, 'DAYTONA_SANDBOX_CPU');
+  if (env.DAYTONA_SANDBOX_GPU)
+    config.daytonaSandboxGpu = parsePositiveNumber(env.DAYTONA_SANDBOX_GPU, 'DAYTONA_SANDBOX_GPU');
+  if (env.DAYTONA_SANDBOX_MEMORY_GIB)
+    config.daytonaSandboxMemoryGiB = parsePositiveNumber(env.DAYTONA_SANDBOX_MEMORY_GIB, 'DAYTONA_SANDBOX_MEMORY_GIB');
+  if (env.DAYTONA_SANDBOX_DISK_GIB)
+    config.daytonaSandboxDiskGiB = parsePositiveNumber(env.DAYTONA_SANDBOX_DISK_GIB, 'DAYTONA_SANDBOX_DISK_GIB');
   if (env.SLACK_SIGNING_SECRET) config.slackSigningSecret = env.SLACK_SIGNING_SECRET;
   if (env.SLACK_BOT_TOKEN) config.slackBotToken = env.SLACK_BOT_TOKEN;
   if (env.GITHUB_APP_ID) config.githubAppId = env.GITHUB_APP_ID;
@@ -526,6 +538,15 @@ function parseNonNegativeInteger(value: string | undefined, fallback: number, na
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new Error(`${name} must be a non-negative integer, received "${value}"`);
+  }
+
+  return parsed;
+}
+
+function parsePositiveNumber(value: string, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive number, received "${value}"`);
   }
 
   return parsed;

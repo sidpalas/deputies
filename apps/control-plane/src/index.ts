@@ -248,6 +248,7 @@ function createSandboxProvider(): SandboxProvider {
     return new DockerSandboxProvider({ orchestrator });
   }
   if (config.sandboxProvider === 'daytona') {
+    const resources = daytonaSandboxResources();
     const options = {
       apiKey: requireDaytonaApiKey(config),
       idleTimeoutMs: config.sandboxIdleTimeoutMs,
@@ -256,6 +257,7 @@ function createSandboxProvider(): SandboxProvider {
     if (config.daytonaTarget) Object.assign(options, { target: config.daytonaTarget });
     if (config.daytonaImage) Object.assign(options, { image: config.daytonaImage });
     if (config.daytonaSnapshot) Object.assign(options, { snapshot: config.daytonaSnapshot });
+    if (resources) Object.assign(options, { resources });
     Object.assign(options, {
       workspacePath: config.sandboxWorkspacePath,
       bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
@@ -289,6 +291,15 @@ function createSandboxProvider(): SandboxProvider {
 
 function optional<T extends Record<string, unknown>>(input: T): T {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T;
+}
+
+function daytonaSandboxResources(): { cpu?: number; gpu?: number; memory?: number; disk?: number } | undefined {
+  const resources: { cpu?: number; gpu?: number; memory?: number; disk?: number } = {};
+  if (config.daytonaSandboxCpu !== undefined) resources.cpu = config.daytonaSandboxCpu;
+  if (config.daytonaSandboxGpu !== undefined) resources.gpu = config.daytonaSandboxGpu;
+  if (config.daytonaSandboxMemoryGiB !== undefined) resources.memory = config.daytonaSandboxMemoryGiB;
+  if (config.daytonaSandboxDiskGiB !== undefined) resources.disk = config.daytonaSandboxDiskGiB;
+  return Object.keys(resources).length ? resources : undefined;
 }
 
 function postgresStoreOptions(): { sandboxSecretEncryptionKey?: string } {

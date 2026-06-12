@@ -151,6 +151,10 @@ describe('loadConfig', () => {
         DAYTONA_TARGET: 'eu',
         DAYTONA_IMAGE: 'ubuntu:latest',
         DAYTONA_SNAPSHOT: 'snap-1',
+        DAYTONA_SANDBOX_CPU: '2',
+        DAYTONA_SANDBOX_GPU: '1',
+        DAYTONA_SANDBOX_MEMORY_GIB: '4',
+        DAYTONA_SANDBOX_DISK_GIB: '10',
         SLACK_API_BASE_URL: 'https://slack.emulate.localhost/api',
         SLACK_SIGNING_SECRET: 'slack-secret',
         SLACK_BOT_TOKEN: 'xoxb-token',
@@ -249,6 +253,10 @@ describe('loadConfig', () => {
       daytonaTarget: 'eu',
       daytonaImage: 'ubuntu:latest',
       daytonaSnapshot: 'snap-1',
+      daytonaSandboxCpu: 2,
+      daytonaSandboxGpu: 1,
+      daytonaSandboxMemoryGiB: 4,
+      daytonaSandboxDiskGiB: 10,
       slackApiBaseUrl: 'https://slack.emulate.localhost/api',
       slackSigningSecret: 'slack-secret',
       slackBotToken: 'xoxb-token',
@@ -281,6 +289,15 @@ describe('loadConfig', () => {
       artifactCreateMaxBytes: 1024,
       unsafeAllowLocalHttpCallbacks: true,
     });
+  });
+
+  it('rejects invalid Daytona sandbox resource values', () => {
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', DAYTONA_SANDBOX_CPU: '0' })).toThrow(
+      'DAYTONA_SANDBOX_CPU must be a positive number',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', DAYTONA_SANDBOX_MEMORY_GIB: 'large' })).toThrow(
+      'DAYTONA_SANDBOX_MEMORY_GIB must be a positive number',
+    );
   });
 
   it.each(['docker', 'k8s-agent-sandbox'])(

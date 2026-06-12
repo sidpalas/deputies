@@ -94,7 +94,15 @@ Memory: 4 GiB+
 Disk: 8-10 GiB
 ```
 
-The repo currently exposes image, snapshot, API URL, API key, and target settings. If we want to request larger Daytona resources from Deputies itself, add resource fields to `DaytonaSandboxProviderOptions` and pass them through `createParams`.
+Request those resources from Deputies with deployment-level settings:
+
+```sh
+DAYTONA_SANDBOX_CPU=2
+DAYTONA_SANDBOX_MEMORY_GIB=4
+DAYTONA_SANDBOX_DISK_GIB=10
+```
+
+Leave them empty to use Daytona defaults. GPU is also available as `DAYTONA_SANDBOX_GPU` when needed.
 
 ## Full Sandbox Check
 
