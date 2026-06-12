@@ -305,6 +305,7 @@ export function App() {
   const autoScrolledSessionId = useRef('');
   const selectedSessionIdRef = useRef(selectedSessionId);
   const detailLoadedSessionIdRef = useRef(detailLoadedSessionId);
+  const pendingCreatedSessionIdRef = useRef('');
   const messagesRef = useRef(messages);
   const createSessionInFlightRef = useRef(false);
   const sendMessageInFlightRef = useRef(false);
@@ -793,8 +794,14 @@ export function App() {
               );
               if (
                 event.sessionId === activeSessionId &&
-                (detailLoadedSessionIdRef.current === activeSessionId || activeSessionHasMessages)
+                (detailLoadedSessionIdRef.current === activeSessionId ||
+                  activeSessionHasMessages ||
+                  pendingCreatedSessionIdRef.current === activeSessionId)
               ) {
+                const shouldResetPendingDetail =
+                  pendingCreatedSessionIdRef.current === activeSessionId &&
+                  detailLoadedSessionIdRef.current !== activeSessionId &&
+                  !activeSessionHasMessages;
                 eventCursor.current = Math.max(eventCursor.current, event.sequence);
                 if (shouldUseActiveProgressEvent(event, messagesRef.current)) {
                   queueActiveProgressEvent(event);
@@ -802,14 +809,17 @@ export function App() {
                   if (event.type === 'agent_response_final' && event.messageId) {
                     discardQueuedActiveProgress(event.messageId);
                   }
-                  setSessionDetail((current) => ({
-                    ...current,
-                    activeProgress:
-                      event.type === 'agent_response_final' && event.messageId
-                        ? omitActiveProgress(current.activeProgress, event.messageId)
-                        : current.activeProgress,
-                    events: upsertEvent(current.events, event),
-                  }));
+                  setSessionDetail((current) => {
+                    const base = shouldResetPendingDetail ? emptySessionDetail() : current;
+                    return {
+                      ...base,
+                      activeProgress:
+                        event.type === 'agent_response_final' && event.messageId
+                          ? omitActiveProgress(base.activeProgress, event.messageId)
+                          : base.activeProgress,
+                      events: upsertEvent(base.events, event),
+                    };
+                  });
                 }
                 if (
                   (event.type === 'sandbox_ready' &&
@@ -1170,12 +1180,20 @@ export function App() {
     setNewThreadRepository('');
     setLoading(true);
     setError('');
+    const previousSelectedSessionId = selectedSessionIdRef.current;
     try {
       const session = await createSession({
         title: titleFromPrompt(firstPrompt),
         token,
         ownerGroupId: newThreadGroupId,
       });
+      // Mark the new session as the active realtime target before enqueueing the
+      // first message. Fast deployments can emit completion events before React
+      // commits the selected-session state below; the pending ref lets the SSE
+      // handler accept only this new session without treating full detail as loaded.
+      selectedSessionIdRef.current = session.id;
+      pendingCreatedSessionIdRef.current = session.id;
+      eventCursor.current = 0;
       const message = await enqueueMessage({
         sessionId: session.id,
         prompt: firstPrompt,
@@ -1189,12 +1207,28 @@ export function App() {
         ...current,
       ]);
       selectSession(session.id);
-      setSessionDetail({ ...emptySessionDetail(), messages: [message] });
-      eventCursor.current = 0;
+      setSessionDetail((current) => {
+        const scopedMessages = current.messages.filter((candidate) => candidate.sessionId === session.id);
+        const nextMessages = scopedMessages.some((candidate) => candidate.id === message.id)
+          ? scopedMessages
+          : [...scopedMessages, message].sort((left, right) => left.sequence - right.sequence);
+        const nextEvents = current.events.filter((event) => event.sessionId === session.id);
+        return {
+          ...emptySessionDetail(),
+          messages: nextMessages,
+          events: nextEvents,
+          activeProgress: buildActiveProgress(nextEvents, nextMessages),
+        };
+      });
+      pendingCreatedSessionIdRef.current = '';
       detailLoadedSessionIdRef.current = session.id;
       setDetailLoadedSessionId(session.id);
       updateNavigation({ isCreatingThread: false });
     } catch (err) {
+      if (pendingCreatedSessionIdRef.current) {
+        pendingCreatedSessionIdRef.current = '';
+        selectedSessionIdRef.current = previousSelectedSessionId;
+      }
       setNewThreadPrompt(firstPrompt);
       setNewThreadRepository(firstRepository);
       handleApiError(err);

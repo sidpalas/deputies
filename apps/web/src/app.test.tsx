@@ -252,6 +252,34 @@ it('allows starting a session without repository options', async () => {
   expect(submittedMessageBodies[0]).not.toHaveProperty('repository');
 });
 
+it('clears previous session detail when creating a new session before detail refresh completes', async () => {
+  sessionStorage.setItem('deputies-selected-session-id', session.id);
+  mockApi({
+    hangMessagesForSessions: ['00000000-0000-4000-8000-000000000102'],
+    messages: [
+      {
+        id: '00000000-0000-4000-8000-000000000201',
+        sessionId: session.id,
+        sequence: 1,
+        status: 'completed',
+        prompt: 'old session prompt',
+        createdAt: '2026-05-05T12:00:00.000Z',
+      },
+    ],
+  });
+  render(<App />);
+
+  expect(await screen.findByText('old session prompt')).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  fireEvent.change(screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...'), {
+    target: { value: 'start work' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+  expect(await screen.findAllByText('start work')).not.toHaveLength(0);
+  expect(screen.queryByText('old session prompt')).not.toBeInTheDocument();
+});
+
 it('shows fast streamed responses for newly-created sessions before detail refresh completes', async () => {
   let pushGlobalEvent: StreamEventPusher | undefined;
   mockApi({
