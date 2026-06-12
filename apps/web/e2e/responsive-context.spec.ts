@@ -33,25 +33,14 @@ test('keeps context collapsed around tablet and small desktop widths', async ({ 
 });
 
 test('keeps the mobile sessions modal footer reachable on short screens', async ({ page }) => {
-  await page.route('http://localhost:3583/health', async (route) => {
-    await route.fulfill({
-      json: { status: 'ok', runMode: 'combined', apiAuthMode: 'session', authProvider: 'static' },
-    });
-  });
-  await page.route('http://localhost:3583/auth/me', async (route) => {
-    await route.fulfill({ json: { user: { id: 'operator', username: 'operator', displayName: 'Operator' } } });
-  });
-  await page.route('http://localhost:3583/auth/logout', async (route) => {
-    await route.fulfill({ json: { ok: true } });
-  });
   await page.setViewportSize({ width: 360, height: 480 });
   await page.goto('/');
 
   await page.getByRole('button', { name: 'Open sessions' }).click();
-  const signOut = page.getByRole('button', { name: 'Sign out' });
-  await expect(signOut).toBeVisible();
+  const setupTab = page.getByRole('button', { name: 'Setup' });
+  await expect(setupTab).toBeVisible();
 
-  const box = await signOut.boundingBox();
+  const box = await setupTab.boundingBox();
   expect(box).not.toBeNull();
   expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(480);
 });
@@ -70,70 +59,73 @@ test('shows context as a sidebar on wide screens', async ({ page }) => {
 });
 
 async function mockApi(page: Page): Promise<void> {
-  await page.route('http://localhost:3583/**', async (route) => {
+  await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
+    const apiPath = normalizeApiPath(url.pathname);
 
-    if (url.pathname === '/health') {
-      await route.fulfill({ json: { status: 'ok', runMode: 'combined', apiAuthMode: 'none', hideSetupPage: true } });
+    if (apiPath === '/health') {
+      await route.fulfill({
+        json: { status: 'ok', runMode: 'combined', apiAuthMode: 'none', hideSetupPage: true },
+      });
       return;
     }
 
-    if (url.pathname === '/models') {
+    if (apiPath === '/models') {
       await route.fulfill({ json: { models: [], modelChoices: [], defaultModel: null } });
       return;
     }
 
-    if (url.pathname === '/repositories') {
+    if (apiPath === '/repositories') {
       await route.fulfill({ json: { repositories: [] } });
       return;
     }
 
-    if (url.pathname === '/groups') {
+    if (apiPath === '/groups') {
       await route.fulfill({ json: { groups: [] } });
       return;
     }
 
-    if (url.pathname === '/automations') {
+    if (apiPath === '/automations') {
       await route.fulfill({ json: { automations: [] } });
       return;
     }
 
-    if (url.pathname === '/sessions') {
+    if (apiPath === '/sessions') {
       await route.fulfill({ json: { sessions: [session] } });
       return;
     }
 
-    if (url.pathname === `/sessions/${sessionId}/messages`) {
+    if (apiPath === `/sessions/${sessionId}/messages`) {
       await route.fulfill({ json: { messages } });
       return;
     }
 
-    if (url.pathname === `/sessions/${sessionId}/events`) {
+    if (apiPath === `/sessions/${sessionId}/events`) {
       await route.fulfill({ json: { events } });
       return;
     }
 
-    if (url.pathname === `/sessions/${sessionId}/artifacts`) {
+    if (apiPath === `/sessions/${sessionId}/artifacts`) {
       await route.fulfill({ json: { artifacts: [] } });
       return;
     }
 
-    if (url.pathname === `/sessions/${sessionId}/services`) {
+    if (apiPath === `/sessions/${sessionId}/services`) {
       await route.fulfill({ json: { services: [] } });
       return;
     }
 
-    if (url.pathname === `/sessions/${sessionId}/callbacks`) {
+    if (apiPath === `/sessions/${sessionId}/callbacks`) {
       await route.fulfill({ json: { callbacks } });
       return;
     }
 
-    if (url.pathname === `/sessions/${sessionId}/external-resources`) {
+    if (apiPath === `/sessions/${sessionId}/external-resources`) {
       await route.fulfill({ json: { externalResources: [] } });
       return;
     }
 
-    if (url.pathname === '/events/stream') {
+    if (apiPath === '/events/stream') {
       await route.fulfill({
         body: '',
         headers: { 'content-type': 'text/event-stream' },
@@ -141,8 +133,31 @@ async function mockApi(page: Page): Promise<void> {
       return;
     }
 
-    await route.fulfill({ status: 404, json: { error: 'not_found', message: 'Not found' } });
+    if (isApiPath(apiPath)) {
+      await route.fulfill({ status: 404, json: { error: 'not_found', message: 'Not found' } });
+      return;
+    }
+
+    await route.continue();
   });
+}
+
+function normalizeApiPath(pathname: string): string {
+  return pathname.startsWith('/api/') ? pathname.slice('/api'.length) : pathname;
+}
+
+function isApiPath(pathname: string): boolean {
+  return (
+    pathname === '/health' ||
+    pathname === '/models' ||
+    pathname === '/repositories' ||
+    pathname === '/groups' ||
+    pathname === '/automations' ||
+    pathname === '/sessions' ||
+    pathname.startsWith('/sessions/') ||
+    pathname === '/events/stream' ||
+    pathname.startsWith('/auth/')
+  );
 }
 
 const session = {
