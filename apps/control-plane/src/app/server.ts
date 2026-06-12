@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import { createAdaptorServer } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -9,7 +9,6 @@ import { ArtifactService, ArtifactServiceError } from '../artifacts/service.js';
 import type { ArtifactObjectStorage } from '../artifacts/storage.js';
 import {
   canCreateSessionInGroup,
-  canManageAllGroups,
   canManageGroup,
   canMoveSession,
   canReadSession,
@@ -19,44 +18,18 @@ import {
   readRequestAuthUser,
   type RequestAuthorization,
 } from '../auth/authorization.js';
-import { FetchGitHubOAuthClient, type GitHubOAuthClient } from '../auth/github.js';
-import { apiAuthMiddleware, apiUnsafeMethodAdminMiddleware, isTrustedCookieAuthRequest } from '../auth/middleware.js';
-import { oauthSuccessHtml } from '../auth/oauth-success-page.js';
-import {
-  clearSessionCookie,
-  createSessionCookie,
-  createSessionId,
-  readSessionId,
-  sessionMaxAgeSeconds,
-  signOAuthState,
-  verifyOAuthState,
-} from '../auth/session.js';
+import type { GitHubOAuthClient } from '../auth/github.js';
+import { apiAuthMiddleware, apiUnsafeMethodAdminMiddleware } from '../auth/middleware.js';
+import { readSessionId } from '../auth/session.js';
 import { CallbackService, CallbackServiceError } from '../callbacks/service.js';
-import {
-  requireApiBearerToken,
-  requireAuthSessionSecret,
-  requireGitHubOAuthCredentials,
-  requireSlackSigningSecret,
-  requireStaticCredentials,
-  type AppConfig,
-} from '../config/index.js';
+import { requireApiBearerToken, type AppConfig } from '../config/index.js';
 import { EventService } from '../events/service.js';
 import { ExternalResourceService } from '../external-resources/service.js';
-import { GenericWebhookError, GenericWebhookService } from '../integrations/generic-webhook/service.js';
+import { GenericWebhookService } from '../integrations/generic-webhook/service.js';
 import { type GitHubArchivedSessionNotifier } from '../integrations/github/archived-session-notifier.js';
-import {
-  GitHubRepositoryAccessError,
-  type GitHubRepositoryAccessService,
-} from '../integrations/github/repository-access.js';
-import { GitHubApiError } from '../integrations/github/client.js';
-import { verifyGitHubWebhookSignature } from '../integrations/github/webhook-auth.js';
-import { GitHubWebhookService } from '../integrations/github/webhook-service.js';
+import { type GitHubRepositoryAccessService } from '../integrations/github/repository-access.js';
 import { type GitHubIssueContextFetcher } from '../integrations/github/issue-context-fetcher.js';
 import { type GitHubReactionSender } from '../integrations/github/reaction-sender.js';
-import { SlackClient } from '../integrations/slack/client.js';
-import { verifySlackSignature } from '../integrations/slack/auth.js';
-import { SlackIntegrationError, SlackIntegrationService } from '../integrations/slack/service.js';
-import type { SlackEventEnvelope } from '../integrations/slack/types.js';
 import { MessageService, MessageServiceError } from '../messages/service.js';
 import { SandboxCleanupService, SandboxKeepaliveService, SandboxLifecycleService } from '../sandbox/service.js';
 import { sandboxRuntimeId } from '../sandbox/runtime.js';
@@ -64,33 +37,27 @@ import type { SandboxProvider } from '../sandbox/types.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
-import type { NormalizedEventType } from '../events/types.js';
-import { defaultGroupId } from '../store/types.js';
-import type {
-  AppStore,
-  AuthRole,
-  AuthUserRecord,
-  EventRecord,
-  GroupRole,
-  SandboxRecord,
-  SessionRecord,
-  SessionVisibility,
-  SessionWritePolicy,
-} from '../store/types.js';
+import type { AppStore, SandboxRecord, SessionRecord, SessionVisibility, SessionWritePolicy } from '../store/types.js';
 import {
   parseSessionVisibility,
   parseSessionWritePolicy,
   resolveSessionCreateGroup,
   sessionCreateDefaults,
 } from './access-policy.js';
+import { registerAuthRoutes, serializeBasicAuthUser } from './auth-routes.js';
 import { registerAutomationRoutes } from './automation-routes.js';
-import { writeGlobalEventStream, writeSessionEventStream } from './event-stream.js';
-import { registerGroupRoutes, serializeGroupMember } from './group-routes.js';
+import { registerEventRoutes } from './event-routes.js';
+import { writeSessionEventStream } from './event-stream.js';
+import { registerGroupRoutes } from './group-routes.js';
 import { writeError } from './http-error.js';
-import { configuredModels, ModelAvailabilityService, modelChoices } from './model-availability.js';
-import { buildSetupStatus } from './setup-status.js';
+import { ModelAvailabilityService } from './model-availability.js';
+import { registerModelRoutes } from './model-routes.js';
+import { registerRepositoryRoutes } from './repository-routes.js';
+import { registerSetupRoutes } from './setup-routes.js';
 import { routeTelemetryMiddleware } from './telemetry-middleware.js';
 import { registerTelemetryRoutes } from './telemetry-routes.js';
+import { registerUserRoutes } from './user-routes.js';
+import { registerWebhookRoutes } from './webhook-routes.js';
 import {
   appendPreviewCookie,
   authorizePreviewToken,
@@ -111,7 +78,6 @@ import {
   parseModelBody,
   parseRepositoryBody,
   readJsonBody,
-  readRawBody,
 } from './request.js';
 import {
   destroyedSandboxWorkspaceMessage,
@@ -228,125 +194,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     });
   });
 
-  app.get('/auth/config', (c) =>
-    c.json({
-      apiAuthMode: config.apiAuthMode,
-      provider: config.apiAuthMode === 'session' ? config.authProvider : undefined,
-    }),
-  );
-
-  app.post('/auth/login', async (c) => {
-    if (config.apiAuthMode !== 'session') return writeError(c, 404, 'not_found', 'Route not found');
-    if (config.authProvider !== 'static') return writeError(c, 404, 'not_found', 'Route not found');
-    const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const username = optionalString(body.username);
-    const password = optionalString(body.password);
-    if (!username || !password) return writeError(c, 400, 'invalid_request', 'Expected username and password');
-
-    const credentials = requireStaticCredentials(config);
-    if (!safeStringEqual(username, credentials.username) || !safeStringEqual(password, credentials.password)) {
-      return writeError(c, 401, 'unauthorized', 'Invalid username or password');
-    }
-
-    const user = await services.store.upsertAuthUserForAccount({
-      userId: randomUUID(),
-      accountId: randomUUID(),
-      provider: 'static',
-      providerAccountId: username,
-      username,
-      role: 'super_admin',
-      profile: {},
-      now: new Date(),
-    });
-    await ensureDefaultGroupMembership(services.store, user.id, 'admin');
-    await setAuthSessionCookie(c, config, services.store, user.id);
-    return c.json({ user: await serializeAuthUser(services.store, user) });
-  });
-
-  app.get('/auth/oauth/github/start', (c) => {
-    if (config.apiAuthMode !== 'session' || config.authProvider !== 'github')
-      return writeError(c, 404, 'not_found', 'Route not found');
-    const { clientId } = requireGitHubOAuthCredentials(config);
-    const redirectUri = githubOAuthCallbackUrl(c, config);
-    const state = signOAuthState(
-      { provider: 'github', exp: Math.floor(Date.now() / 1000) + 10 * 60 },
-      requireAuthSessionSecret(config),
-    );
-    const authorizeUrl = new URL('/login/oauth/authorize', config.githubOAuthBaseUrl);
-    authorizeUrl.searchParams.set('client_id', clientId);
-    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
-    authorizeUrl.searchParams.set('state', state);
-    authorizeUrl.searchParams.set('scope', 'read:user read:org');
-    return c.redirect(authorizeUrl.toString(), 302);
-  });
-
-  app.get('/auth/oauth/github/callback', async (c) => {
-    if (config.apiAuthMode !== 'session' || config.authProvider !== 'github')
-      return writeError(c, 404, 'not_found', 'Route not found');
-    const state = c.req.query('state');
-    const code = c.req.query('code');
-    if (!state || !verifyOAuthState(state, requireAuthSessionSecret(config)) || !code) {
-      return writeError(c, 400, 'invalid_request', 'Invalid GitHub OAuth callback');
-    }
-
-    const credentials = requireGitHubOAuthCredentials(config);
-    const client =
-      services.githubOAuthClient ??
-      new FetchGitHubOAuthClient({
-        clientId: credentials.clientId,
-        clientSecret: credentials.clientSecret,
-        oauthBaseUrl: config.githubOAuthBaseUrl,
-        apiBaseUrl: config.githubApiBaseUrl,
-      });
-    const accessToken = await client.exchangeCode({ code, redirectUri: githubOAuthCallbackUrl(c, config) });
-    const githubUser = await client.getUser(accessToken);
-    const organizations = hasGitHubOrganizationRoleAllowlist(config) ? await client.listOrganizations(accessToken) : [];
-    const authAssignment = githubAuthAssignment(githubUser.login, organizations, config);
-    if (!authAssignment) {
-      return writeError(c, 403, 'forbidden', 'GitHub user is not allowed');
-    }
-
-    const user = await services.store.upsertAuthUserForAccount({
-      userId: randomUUID(),
-      accountId: randomUUID(),
-      provider: 'github',
-      providerAccountId: String(githubUser.id),
-      username: githubUser.login,
-      role: authAssignment.role,
-      ...(githubUser.name ? { displayName: githubUser.name } : {}),
-      ...(githubUser.avatar_url ? { avatarUrl: githubUser.avatar_url } : {}),
-      profile: { login: githubUser.login, id: githubUser.id },
-      now: new Date(),
-    });
-    await ensureDefaultGroupMembership(services.store, user.id, authAssignment.defaultGroupRole);
-    await setAuthSessionCookie(c, config, services.store, user.id);
-    return c.html(oauthSuccessHtml(config.webBaseUrl ?? '/'));
-  });
-
-  app.post('/auth/logout', async (c) => {
-    if (config.apiAuthMode === 'session') {
-      const sessionId = readSessionId(config, c);
-      if (sessionId && !isTrustedCookieAuthRequest(c, config)) {
-        return writeError(c, 403, 'forbidden', 'Untrusted browser request');
-      }
-      if (sessionId) await services.store.deleteAuthSession(sessionId);
-      clearSessionCookies(c, config);
-    }
-    return c.json({ ok: true });
-  });
-
-  app.get('/auth/logout', async (c) => {
-    return c.redirect(config.webBaseUrl ?? '/', 302);
-  });
-
-  app.get('/auth/me', async (c) => {
-    if (config.apiAuthMode === 'none') return c.json({ user: null });
-    if (config.apiAuthMode === 'bearer') return c.json({ user: null });
-    const sessionId = readSessionId(config, c);
-    const user = sessionId ? await services.store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
-    if (!user) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    return c.json({ user: await serializeAuthUser(services.store, user) });
-  });
+  registerAuthRoutes(app, config, services);
 
   app.use('/sessions/*', apiAuthMiddleware(config, services.store));
   app.use('/sessions', apiAuthMiddleware(config, services.store));
@@ -436,222 +284,18 @@ export function createApp(config: AppConfig, services = createServices()) {
   });
   registerTelemetryRoutes(app, config);
 
-  app.get('/repositories', async (c) => {
-    let repositories = configuredRepositoryOptions(config);
-    if (services.githubRepositoryAccess) {
-      try {
-        const installedRepositories = await services.githubRepositoryAccess.listRepositories();
-        if (installedRepositories.length) {
-          repositories = installedRepositories.map((repository) => ({
-            fullName: repository.fullName,
-            owner: repository.owner,
-            name: repository.repo,
-            description: repository.description,
-            private: repository.private,
-            defaultBranch: repository.defaultBranch,
-          }));
-        }
-      } catch {
-        // Keep the picker useful when GitHub installation listing is temporarily unavailable.
-      }
-    }
-    return c.json({ repositories });
-  });
+  registerRepositoryRoutes(app, config, services);
 
-  app.get('/repositories/:owner/:repo/branches', async (c) => {
-    if (!services.githubRepositoryAccess) return c.json({ branches: [] });
-    try {
-      const branches = await services.githubRepositoryAccess.listBranches({
-        owner: c.req.param('owner'),
-        repo: c.req.param('repo'),
-      });
-      return c.json({ branches });
-    } catch (error) {
-      return writeGitHubRepositoryError(c, error);
-    }
-  });
-
-  app.get('/models', async (c) => {
-    const models = configuredModels(config);
-    return c.json({
-      models,
-      modelChoices: modelChoices(config, services.modelAvailability),
-      defaultModel: config.runnerModelDefault ?? models[0] ?? null,
-    });
-  });
-
-  app.get('/setup/status', async (c) => c.json(await buildSetupStatus(config, services)));
+  registerModelRoutes(app, config, services);
+  registerSetupRoutes(app, config, services);
 
   registerGroupRoutes(app, config, services, { serializeBasicAuthUser });
 
-  app.get('/users', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    if (!canManageAllGroups(auth) && !auth.memberships.some((membership) => membership.role === 'admin')) {
-      return writeError(c, 403, 'forbidden', 'Group admin access is required');
-    }
-    const users = await visibleUsersForGroupManager(services.store, auth, optionalString(c.req.query('query')));
-    return c.json({ users: users.map(serializeBasicAuthUser) });
-  });
+  registerUserRoutes(app, config, services);
 
-  app.patch('/users/:userId', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    if (!canManageAllGroups(auth)) return writeError(c, 403, 'forbidden', 'Super admin access is required');
+  registerEventRoutes(app, config, services);
 
-    const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const role = parseAuthRole(body.role);
-    if (!role) return writeError(c, 400, 'invalid_request', 'Expected valid user role');
-    const userId = c.req.param('userId');
-    if (!auth.bypass && role === 'user' && userId === auth.user.id) {
-      return writeError(c, 409, 'self_super_admin', 'Cannot remove your own super admin access');
-    }
-
-    const user = await services.store.updateAuthUserRole({
-      userId,
-      role,
-      updatedAt: new Date(),
-    });
-    if (!user) return writeError(c, 404, 'not_found', 'User not found');
-    return c.json({ user: serializeBasicAuthUser(user) });
-  });
-
-  app.get('/events', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const after = parseCursor(c.req.query('after') ?? null);
-    const limit = parseEventListLimit(c.req.query('limit'));
-    if (limit === null) return writeError(c, 400, 'invalid_request', 'Expected a positive integer limit');
-    const includeAll = c.req.query('include') === 'all';
-    const batch = await services.events.listAllBatch(after ?? 0, limit, includeAll);
-    const events = await readableEvents(services.store, auth, batch.events);
-    return c.json({ events, cursor: batch.cursor, hasMore: batch.hasMore });
-  });
-
-  app.get('/events/stream', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const after = parseCursor(c.req.query('after') ?? c.req.header('last-event-id') ?? null) ?? 0;
-    const includeAll = c.req.query('include') === 'all';
-    return writeGlobalEventStream(c, services.events, after, c.req.query('replay') !== 'false', includeAll, {
-      filter: createEventReadFilter(services.store, auth),
-    });
-  });
-
-  app.post('/webhooks/generic/:sourceKey', async (c) => {
-    const body = await readJsonBody(c, config.maxJsonBodyBytes);
-
-    try {
-      const result = await services.genericWebhooks.handle({
-        sourceKey: c.req.param('sourceKey'),
-        authorization: c.req.header('authorization'),
-        payload: body,
-      });
-      return c.json(result, 202);
-    } catch (error) {
-      if (error instanceof GenericWebhookError) {
-        const status = error.code === 'unauthorized' ? 401 : error.code === 'not_found' ? 404 : 400;
-        return writeError(c, status, error.code, error.message);
-      }
-      throw error;
-    }
-  });
-
-  app.post('/webhooks/slack/events', async (c) => {
-    const body = await readRawBody(c, config.maxJsonBodyBytes, 'Slack body');
-    const signingSecret = requireSlackSigningSecret(config);
-    const signatureValid = verifySlackSignature({
-      signature: c.req.header('x-slack-signature'),
-      timestamp: c.req.header('x-slack-request-timestamp'),
-      body,
-      signingSecret,
-    });
-    if (!signatureValid) return writeError(c, 401, 'unauthorized', 'Invalid Slack signature');
-
-    let payload: SlackEventEnvelope;
-    try {
-      payload = JSON.parse(body) as SlackEventEnvelope;
-    } catch {
-      return writeError(c, 400, 'invalid_json', 'Expected valid Slack JSON payload');
-    }
-
-    try {
-      const slackClient = config.slackBotToken
-        ? new SlackClient({ apiBaseUrl: config.slackApiBaseUrl, botToken: config.slackBotToken })
-        : null;
-      const slackOptions = config.slackBotToken
-        ? {
-            assistantThreadClient: slackClient!,
-            replyClient: slackClient!,
-            reactionClient: slackClient!,
-            threadClient: slackClient!,
-            infoClient: slackClient!,
-            allowedTeamIds: config.slackAllowedTeamIds,
-            allowedChannelIds: config.slackAllowedChannelIds,
-            allowedUserIds: config.slackAllowedUserIds,
-            ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
-          }
-        : {
-            allowedTeamIds: config.slackAllowedTeamIds,
-            allowedChannelIds: config.slackAllowedChannelIds,
-            allowedUserIds: config.slackAllowedUserIds,
-            ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
-          };
-      const result = await new SlackIntegrationService(
-        services.store,
-        services.sessions,
-        services.messages,
-        slackOptions,
-      ).handle(payload);
-      if (result.type === 'challenge') return c.json({ challenge: result.challenge });
-      return c.json({ ok: true, type: result.type });
-    } catch (error) {
-      if (error instanceof SlackIntegrationError) return writeError(c, 400, error.code, error.message);
-      throw error;
-    }
-  });
-
-  app.post('/webhooks/github/events', async (c) => {
-    const body = await readRawBody(c, config.maxJsonBodyBytes, 'GitHub body');
-    if (!config.githubWebhookSecret)
-      return writeError(c, 500, 'configuration_error', 'GITHUB_WEBHOOK_SECRET is required for GitHub webhooks');
-    const signatureValid = verifyGitHubWebhookSignature({
-      signature: c.req.header('x-hub-signature-256'),
-      body,
-      secret: config.githubWebhookSecret,
-    });
-    if (!signatureValid) return writeError(c, 401, 'unauthorized', 'Invalid GitHub signature');
-
-    let payload: Record<string, unknown>;
-    try {
-      payload = JSON.parse(body) as Record<string, unknown>;
-    } catch {
-      return writeError(c, 400, 'invalid_json', 'Expected valid GitHub JSON payload');
-    }
-
-    const headers: { deliveryId?: string; event?: string } = {};
-    const deliveryId = c.req.header('x-github-delivery');
-    const event = c.req.header('x-github-event');
-    if (deliveryId) headers.deliveryId = deliveryId;
-    if (event) headers.event = event;
-
-    const result = await new GitHubWebhookService(services.store, services.sessions, services.messages, {
-      allowedUsers: config.githubWebhookAllowedUsers,
-      allowedOrganizations: config.githubWebhookAllowedOrganizations,
-      allowedRepositories: config.githubAllowedRepositories,
-      triggerPhrases: config.githubWebhookTriggerPhrases,
-      ...(services.githubReactionSender ? { reactionSender: services.githubReactionSender } : {}),
-      ...(services.githubIssueContextFetcher ? { issueContextFetcher: services.githubIssueContextFetcher } : {}),
-      ...(services.githubArchivedSessionNotifier
-        ? { archivedSessionNotifier: services.githubArchivedSessionNotifier }
-        : {}),
-      ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
-    }).handle({ headers, payload });
-    return c.json(
-      { ok: true, type: result.type, ...('reason' in result ? { reason: result.reason } : {}) },
-      result.type === 'accepted' ? 202 : 200,
-    );
-  });
+  registerWebhookRoutes(app, config, services);
 
   app.get('/sessions/:sessionId', async (c) => {
     const session = getAuthorizedSession(c, c.req.param('sessionId'));
@@ -1219,22 +863,6 @@ function allowedCorsOrigin(config: AppConfig): (origin: string) => string | unde
   return (origin) => (allowed.has(origin) ? origin : undefined);
 }
 
-function writeGitHubRepositoryError(c: Context, error: unknown) {
-  if (error instanceof GitHubRepositoryAccessError) {
-    return writeError(c, 403, error.code, error.message);
-  }
-  if (error instanceof GitHubApiError) {
-    if (error.statusCode === 401 || error.statusCode === 403) {
-      return writeError(c, 403, 'github_authorization_failed', 'GitHub authorization failed for this repository');
-    }
-    if (error.statusCode === 404) {
-      return writeError(c, 404, 'github_repository_not_found', 'GitHub repository or installation was not found');
-    }
-    return writeError(c, 502, 'github_api_error', 'GitHub API request failed');
-  }
-  throw error;
-}
-
 // Proxies requests whose host is a sandbox service host (s-<port>-<session-id>)
 // into the sandbox. Registered before all product API routes so a service host
 // never reaches this instance's own API handlers. Non-service hosts fall through.
@@ -1305,15 +933,6 @@ async function requireRequestAuthorization(
 }
 
 const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-
-function configuredRepositoryOptions(config: AppConfig) {
-  return config.githubAllowedRepositories
-    .filter((repository) => repository.includes('/') && !repository.includes('*'))
-    .map((fullName) => {
-      const [owner, name] = fullName.split('/');
-      return { fullName, owner, name };
-    });
-}
 
 function parseKeepaliveSeconds(value: unknown): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
@@ -1423,10 +1042,6 @@ function serializeSandboxTiming(config: AppConfig, sandbox: SandboxRecord) {
   };
 }
 
-function clearSessionCookies(c: Context, config: AppConfig): void {
-  c.header('set-cookie', clearSessionCookie(config));
-}
-
 async function previewAuthTokenForRequest(
   c: Context,
   config: AppConfig,
@@ -1453,171 +1068,4 @@ async function messageAuthor(
   if (config.apiAuthMode !== 'session') return {};
   const user = await readRequestAuthUser(config, store, c);
   return user ? { authorUserId: user.id, authorName: user.username } : {};
-}
-
-async function setAuthSessionCookie(c: Context, config: AppConfig, store: AppStore, userId: string): Promise<void> {
-  const now = new Date();
-  const sessionId = createSessionId();
-  await store.createAuthSession({
-    id: sessionId,
-    userId,
-    createdAt: now,
-    expiresAt: new Date(now.getTime() + sessionMaxAgeSeconds * 1000),
-  });
-  c.header('set-cookie', createSessionCookie(config, sessionId));
-}
-
-async function serializeAuthUser(store: AppStore, user: AuthUserRecord) {
-  return {
-    ...serializeBasicAuthUser(user),
-    memberships: (await store.listUserGroupMemberships(user.id)).map(serializeGroupMember),
-  };
-}
-
-function serializeBasicAuthUser(user: AuthUserRecord) {
-  return {
-    id: user.id,
-    username: user.username,
-    role: user.role,
-    ...(user.displayName ? { displayName: user.displayName } : {}),
-    ...(user.avatarUrl ? { avatarUrl: user.avatarUrl } : {}),
-  };
-}
-
-async function visibleUsersForGroupManager(
-  store: AppStore,
-  auth: RequestAuthorization,
-  query: string | undefined,
-): Promise<AuthUserRecord[]> {
-  if (canManageAllGroups(auth)) return store.listAuthUsers(query ? { query } : {});
-  const normalized = query?.trim().toLowerCase();
-  if (normalized && normalized.length >= 2) return store.listAuthUsers({ query: normalized });
-
-  const managedGroupIds = auth.memberships
-    .filter((membership) => membership.role === 'admin')
-    .map((membership) => membership.groupId);
-  const users = new Map<string, AuthUserRecord>();
-  for (const groupId of managedGroupIds) {
-    for (const member of await store.listGroupMembers(groupId)) {
-      users.set(member.user.id, member.user);
-    }
-  }
-
-  return [...users.values()]
-    .filter(
-      (user) =>
-        !normalized ||
-        user.id.toLowerCase() === normalized ||
-        user.username.toLowerCase().includes(normalized) ||
-        user.displayName?.toLowerCase().includes(normalized),
-    )
-    .sort((a, b) => a.username.localeCompare(b.username));
-}
-
-async function readableEvents(
-  store: AppStore,
-  auth: RequestAuthorization,
-  events: EventRecord[],
-): Promise<EventRecord[]> {
-  const filter = createEventReadFilter(store, auth);
-  const readable: EventRecord[] = [];
-  for (const event of events) {
-    if (await filter(event)) readable.push(event);
-  }
-  return readable;
-}
-
-const eventListDefaultLimit = 1000;
-const eventListMaxLimit = 2000;
-
-function parseEventListLimit(value: string | undefined): number | null {
-  if (value === undefined) return eventListDefaultLimit;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) return null;
-  return Math.min(parsed, eventListMaxLimit);
-}
-
-const eventReadCacheTtlMs = 30_000;
-const eventReadCacheMaxSessions = 10_000;
-
-// Session access events change the outcome of canReadSession, so they bypass the
-// cache; they are ordered before any subsequent events for the same session, which
-// keeps the cached decision current from the moment access changes.
-const eventReadRefreshTypes = new Set<NormalizedEventType>(['session_created', 'session_updated']);
-
-function createEventReadFilter(store: AppStore, auth: RequestAuthorization): (event: EventRecord) => Promise<boolean> {
-  const decisions = new Map<string, { canRead: boolean; expiresAt: number }>();
-  return async (event) => {
-    const now = Date.now();
-    if (!eventReadRefreshTypes.has(event.type)) {
-      const cached = decisions.get(event.sessionId);
-      if (cached && cached.expiresAt > now) return cached.canRead;
-    }
-    const session = await store.getSession(event.sessionId);
-    const canRead = Boolean(session && canReadSession(auth, session));
-    if (decisions.size >= eventReadCacheMaxSessions) decisions.clear();
-    decisions.set(event.sessionId, { canRead, expiresAt: now + eventReadCacheTtlMs });
-    return canRead;
-  };
-}
-
-function parseAuthRole(value: unknown): AuthRole | null {
-  return value === 'user' || value === 'super_admin' ? value : null;
-}
-
-async function ensureDefaultGroupMembership(store: AppStore, userId: string, role: GroupRole): Promise<void> {
-  const now = new Date();
-  await store.upsertGroupMember({ groupId: defaultGroupId, userId, role, createdAt: now, updatedAt: now });
-}
-
-function githubOAuthCallbackUrl(c: Context, config: AppConfig): string {
-  if (config.githubOAuthCallbackUrl) return config.githubOAuthCallbackUrl;
-  return new URL('/auth/oauth/github/callback', c.req.url).toString();
-}
-
-function githubAuthAssignment(
-  username: string,
-  organizations: string[],
-  config: AppConfig,
-): { role: AuthRole; defaultGroupRole: GroupRole } | null {
-  if (matchesGitHubUserAllowlist(username, config.authGithubAdminUsers)) {
-    return { role: 'super_admin', defaultGroupRole: 'admin' };
-  }
-  if (
-    matchesGitHubAllowlist(
-      username,
-      organizations,
-      config.authGithubAllowedUsers,
-      config.authGithubAllowedOrganizations,
-    )
-  )
-    return { role: 'user', defaultGroupRole: config.authGithubDefaultGroupRole };
-  if (config.unsafeAuthGithubAllowAll) return { role: 'user', defaultGroupRole: 'member' };
-  return null;
-}
-
-function hasGitHubOrganizationRoleAllowlist(config: AppConfig): boolean {
-  return Boolean(config.authGithubAllowedOrganizations.length);
-}
-
-function matchesGitHubUserAllowlist(username: string, allowedUsers: string[]): boolean {
-  return new Set(allowedUsers.map((user) => user.toLowerCase())).has(username.toLowerCase());
-}
-
-function matchesGitHubAllowlist(
-  username: string,
-  organizations: string[],
-  allowedUsers: string[],
-  allowedOrganizations: string[],
-): boolean {
-  const users = new Set(allowedUsers.map((user) => user.toLowerCase()));
-  const orgs = new Set(allowedOrganizations.map((org) => org.toLowerCase()));
-  if (users.has(username.toLowerCase())) return true;
-  return organizations.some((org) => orgs.has(org.toLowerCase()));
-}
-
-function safeStringEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
 }
