@@ -30,6 +30,12 @@ import {
 const sessionCookieName = 'dev_deputies_session';
 const previewCookieName = 'deputies_preview';
 
+type EventListBody = {
+  events: Array<{ type: string; sequence: number }>;
+  cursor?: number;
+  hasMore?: boolean;
+};
+
 describe('core API', () => {
   let server: Server;
   let baseUrl: string;
@@ -817,17 +823,105 @@ describe('core API', () => {
     const eventsResponse = await fetch(`${baseUrl}/sessions/${session.id}/events`);
     expect(eventsResponse.status).toBe(200);
 
-    const eventsBody = await eventsResponse.json();
+    const eventsBody = (await eventsResponse.json()) as EventListBody;
     expectEventsResponse(eventsBody);
     const { events } = eventsBody;
     expect(events.map((event) => event.type)).toEqual(['session_created', 'message_created']);
     expect(events.map((event) => event.sequence)).toEqual([1, 2]);
+    expect(eventsBody.cursor).toBe(2);
+    expect(eventsBody.hasMore).toBe(false);
 
     const replayResponse = await fetch(`${baseUrl}/sessions/${session.id}/events?after=1`);
-    const replayBody = await replayResponse.json();
+    const replayBody = (await replayResponse.json()) as EventListBody;
     expectEventsResponse(replayBody);
     const { events: replayed } = replayBody;
     expect(replayed.map((event) => event.type)).toEqual(['message_created']);
+    expect(replayBody.cursor).toBe(2);
+    expect(replayBody.hasMore).toBe(false);
+  });
+
+  it('pages session event replay with cursor and limit', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Paged event replay' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'first' });
+    await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'second' });
+
+    const firstResponse = await fetch(`${baseUrl}/sessions/${session.id}/events?limit=2`);
+    expect(firstResponse.status).toBe(200);
+    const firstBody = (await firstResponse.json()) as EventListBody;
+    expectEventsResponse(firstBody);
+    expect(firstBody.events.map((event) => event.sequence)).toEqual([1, 2]);
+    expect(firstBody.cursor).toBe(2);
+    expect(firstBody.hasMore).toBe(true);
+
+    const secondResponse = await fetch(`${baseUrl}/sessions/${session.id}/events?after=${firstBody.cursor}&limit=2`);
+    expect(secondResponse.status).toBe(200);
+    const secondBody = (await secondResponse.json()) as EventListBody;
+    expectEventsResponse(secondBody);
+    expect(secondBody.events.map((event) => event.sequence)).toEqual([3]);
+    expect(secondBody.cursor).toBe(3);
+    expect(secondBody.hasMore).toBe(false);
+  });
+
+  it('rejects invalid session event limits', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Invalid event limit' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    for (const limit of ['-1', '0', 'abc']) {
+      const response = await fetch(`${baseUrl}/sessions/${session.id}/events?limit=${limit}`);
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expectErrorResponse(body);
+      expect(body).toMatchObject({ error: 'invalid_request', message: 'Expected a positive integer limit' });
+    }
+  });
+
+  it('defaults and clamps session event replay limits', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Event limit contract' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    for (let index = 0; index < 2000; index += 1) {
+      await services.events.append({
+        sessionId: session.id,
+        type: 'session_updated',
+        payload: { title: `Event limit contract ${index + 1}` },
+      });
+    }
+
+    const defaultResponse = await fetch(`${baseUrl}/sessions/${session.id}/events`);
+    expect(defaultResponse.status).toBe(200);
+    const defaultBody = (await defaultResponse.json()) as EventListBody;
+    expectEventsResponse(defaultBody);
+    expect(defaultBody.events).toHaveLength(1000);
+    expect(defaultBody.cursor).toBe(1000);
+    expect(defaultBody.hasMore).toBe(true);
+
+    const clampedResponse = await fetch(`${baseUrl}/sessions/${session.id}/events?limit=5000`);
+    expect(clampedResponse.status).toBe(200);
+    const clampedBody = (await clampedResponse.json()) as EventListBody;
+    expectEventsResponse(clampedBody);
+    expect(clampedBody.events).toHaveLength(2000);
+    expect(clampedBody.cursor).toBe(2000);
+    expect(clampedBody.hasMore).toBe(true);
+  });
+
+  it('protects paged event replay when bearer auth is enabled', async () => {
+    await closeServer(server);
+    server = createServer(loadConfig({ API_AUTH_MODE: 'bearer', API_BEARER_TOKEN: 'secret' }));
+    baseUrl = await listen(server);
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Private events' }, 'secret');
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const missingAuth = await fetch(`${baseUrl}/sessions/${session.id}/events?after=0&limit=1`);
+    expect(missingAuth.status).toBe(401);
+
+    const validAuth = await fetch(`${baseUrl}/sessions/${session.id}/events?after=0&limit=1`, {
+      headers: { authorization: 'Bearer secret' },
+    });
+    expect(validAuth.status).toBe(200);
+    const body = (await validAuth.json()) as EventListBody;
+    expectEventsResponse(body);
+    expect(body.events.map((event) => event.sequence)).toEqual([1]);
+    expect(body.cursor).toBe(1);
   });
 
   it('enqueues messages with validated repository context', async () => {

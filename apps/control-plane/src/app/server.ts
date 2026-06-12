@@ -873,8 +873,18 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const after = parseCursor(c.req.query('after') ?? null);
-    const events = await services.events.list(sessionId, after);
-    return c.json({ events });
+    const limitParam = c.req.query('limit');
+    let limit = 1000;
+    if (limitParam !== undefined) {
+      const parsedLimit = Number(limitParam);
+      if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
+        return writeError(c, 400, 'invalid_request', 'Expected a positive integer limit');
+      }
+      limit = Math.min(parsedLimit, 2000);
+    }
+
+    const batch = await services.events.listBatch(sessionId, after ?? 0, limit);
+    return c.json({ events: batch.events, cursor: batch.cursor, hasMore: batch.hasMore });
   });
 
   app.get('/sessions/:sessionId/artifacts', async (c) => {

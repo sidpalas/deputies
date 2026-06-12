@@ -342,7 +342,7 @@ async function mockApi(
       return;
     }
 
-    const sessionDetail = method === 'GET' ? detailForPath(path, fixture) : null;
+    const sessionDetail = method === 'GET' ? detailForPath(url, fixture) : null;
     if (sessionDetail) {
       await route.fulfill({ json: sessionDetail });
       return;
@@ -353,10 +353,10 @@ async function mockApi(
 }
 
 function detailForPath(
-  path: string,
+  url: URL,
   fixture: { light: SessionFixture; heavy: SessionFixture },
 ): Record<string, unknown> | null {
-  const match = path.match(/^\/sessions\/([^/]+)\/([^/]+)$/);
+  const match = url.pathname.match(/^\/sessions\/([^/]+)\/([^/]+)$/);
   if (!match) return null;
   const session = match[1] === lightSessionId ? fixture.light : match[1] === heavySessionId ? fixture.heavy : null;
   if (!session) return null;
@@ -365,7 +365,7 @@ function detailForPath(
     case 'messages':
       return { messages: session.messages };
     case 'events':
-      return { events: session.events };
+      return eventPage(session.events, url);
     case 'artifacts':
       return { artifacts: session.artifacts };
     case 'external-resources':
@@ -377,6 +377,29 @@ function detailForPath(
     default:
       return null;
   }
+}
+
+function eventPage(events: AgentEvent[], url: URL): Record<string, unknown> {
+  const after = readNonNegativeIntegerParam(url.searchParams.get('after'), 0);
+  const limit = Math.min(readPositiveIntegerParam(url.searchParams.get('limit'), 1000), 2000);
+  const page = events.filter((event) => event.sequence > after).slice(0, limit);
+  return {
+    events: page,
+    cursor: page.at(-1)?.sequence ?? after,
+    hasMore: page.length === limit,
+  };
+}
+
+function readPositiveIntegerParam(raw: string | null, fallback: number): number {
+  if (raw === null) return fallback;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function readNonNegativeIntegerParam(raw: string | null, fallback: number): number {
+  if (raw === null) return fallback;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 ? value : fallback;
 }
 
 async function waitForMilestones(

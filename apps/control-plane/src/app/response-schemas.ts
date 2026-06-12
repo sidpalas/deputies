@@ -4,6 +4,8 @@ export type PublicApiResponseField =
   | 'null'
   | 'number'
   | 'object'
+  | 'optional:boolean'
+  | 'optional:number'
   | 'optional:object'
   | 'record'
   | 'string'
@@ -108,7 +110,7 @@ export const publicApiResponseSchemas = {
   },
   events: {
     description: 'Normalized event list envelope.',
-    fields: { events: 'array' },
+    fields: { events: 'array', cursor: 'optional:number', hasMore: 'optional:boolean' },
   },
   artifacts: {
     description: 'Artifact list envelope.',

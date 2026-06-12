@@ -195,6 +195,14 @@ export type AgentEvent = {
   messageId?: string;
 };
 
+type AgentEventPage = {
+  events: AgentEvent[];
+  cursor?: number;
+  hasMore?: boolean;
+};
+
+const sessionEventPageLimit = 1000;
+
 export type Artifact = {
   id: string;
   sessionId: string;
@@ -722,11 +730,21 @@ export async function listEvents(
   after?: number,
   options: RequestOptions = {},
 ): Promise<AgentEvent[]> {
-  const body = await request<{ events: AgentEvent[] }>(
-    `/sessions/${sessionId}/events${after ? `?after=${after}` : ''}`,
-    { token, ...options },
-  );
-  return body.events;
+  const events: AgentEvent[] = [];
+  let cursor = after;
+
+  while (true) {
+    const params = new URLSearchParams({ limit: String(sessionEventPageLimit) });
+    if (cursor !== undefined) params.set('after', String(cursor));
+
+    const body = await request<AgentEventPage>(`/sessions/${sessionId}/events?${params}`, { token, ...options });
+    events.push(...body.events);
+
+    const nextCursor = body.cursor;
+    if (!body.hasMore || typeof nextCursor !== 'number' || body.events.length === 0) return events;
+    if (nextCursor <= (cursor ?? 0)) return events;
+    cursor = nextCursor;
+  }
 }
 
 export async function listArtifacts(

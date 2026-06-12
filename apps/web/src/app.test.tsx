@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './app.js';
+import { listEvents } from './api.js';
 
 const { codeToHtmlMock } = vi.hoisted(() => ({
   codeToHtmlMock: vi.fn((code: string) => `<pre class="shiki"><code>${code}</code></pre>`),
@@ -103,6 +104,95 @@ afterEach(() => {
   window.history.replaceState({}, '', '/');
   document.documentElement.classList.remove('dark');
   setVisibilityState('visible');
+});
+
+it('pages session event replay in the API client', async () => {
+  const requests: string[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+    requests.push(`${url.pathname}${url.search}`);
+
+    if (url.searchParams.get('after') === '2') {
+      return jsonResponse({
+        events: [eventFixture({ sequence: 3, type: 'message_completed', payload: { sequence: 1 } })],
+        cursor: 3,
+        hasMore: false,
+      });
+    }
+
+    return jsonResponse({
+      events: [
+        eventFixture({ sequence: 1, type: 'session_created', payload: { title: 'Existing session' } }),
+        eventFixture({ sequence: 2, type: 'message_created', payload: { sequence: 1, source: null } }),
+      ],
+      cursor: 2,
+      hasMore: true,
+    });
+  });
+
+  const events = await listEvents(session.id, 'secret');
+
+  expect(events.map((event) => event.sequence)).toEqual([1, 2, 3]);
+  expect(requests).toEqual([
+    `/sessions/${session.id}/events?limit=1000`,
+    `/sessions/${session.id}/events?limit=1000&after=2`,
+  ]);
+});
+
+it('stops API client event paging when a hasMore page has no events', async () => {
+  const requests: string[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+    requests.push(`${url.pathname}${url.search}`);
+
+    if (requests.length === 1) {
+      return jsonResponse({
+        events: [eventFixture({ sequence: 1, type: 'session_created', payload: { title: 'Existing session' } })],
+        cursor: 1,
+        hasMore: true,
+      });
+    }
+
+    return jsonResponse({ events: [], cursor: 1, hasMore: true });
+  });
+
+  const events = await listEvents(session.id, 'secret');
+
+  expect(events.map((event) => event.sequence)).toEqual([1]);
+  expect(requests).toEqual([
+    `/sessions/${session.id}/events?limit=1000`,
+    `/sessions/${session.id}/events?limit=1000&after=1`,
+  ]);
+});
+
+it('stops API client event paging when a hasMore cursor does not advance', async () => {
+  const requests: string[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+    requests.push(`${url.pathname}${url.search}`);
+
+    if (requests.length === 1) {
+      return jsonResponse({
+        events: [eventFixture({ sequence: 1, type: 'session_created', payload: { title: 'Existing session' } })],
+        cursor: 1,
+        hasMore: true,
+      });
+    }
+
+    return jsonResponse({
+      events: [eventFixture({ sequence: 2, type: 'message_created', payload: { sequence: 1, source: null } })],
+      cursor: 1,
+      hasMore: true,
+    });
+  });
+
+  const events = await listEvents(session.id, 'secret');
+
+  expect(events.map((event) => event.sequence)).toEqual([1, 2]);
+  expect(requests).toEqual([
+    `/sessions/${session.id}/events?limit=1000`,
+    `/sessions/${session.id}/events?limit=1000&after=1`,
+  ]);
 });
 
 it('submits composer text on Enter and preserves Shift Enter for newlines', async () => {
