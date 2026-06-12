@@ -9,5 +9,12 @@ allowBuilds:
   node-liblzma: false
   protobufjs: false
   sharp: true
+overrides:
+  '@daytona/sdk@0.185.0>shell-quote': 1.8.4
+  '@opentelemetry/exporter-logs-otlp-grpc@0.217.0>@grpc/grpc-js': 1.14.4
+  '@opentelemetry/exporter-metrics-otlp-grpc@0.217.0>@grpc/grpc-js': 1.14.4
+  '@opentelemetry/exporter-trace-otlp-grpc@0.217.0>@grpc/grpc-js': 1.14.4
+  '@opentelemetry/otlp-grpc-exporter-base@0.217.0>@grpc/grpc-js': 1.14.4
+  '@opentelemetry/otlp-transformer@0.217.0>protobufjs': 8.2.0
 patchedDependencies:
   '@flue/runtime@0.8.0': patches/@flue__runtime@0.8.0.patch
