@@ -651,15 +651,16 @@ export interface EventStore {
 export type EventRecord = NormalizedEvent & { id: number; sequence: number };
 export type EventDeltaCompactionInput = { finalizedBefore: Date; limit: number };
 
-export interface AppStore
-  extends SessionStore, MessageStore, RunStore, SandboxStore, CallbackStore, AutomationStore, EventStore {
+export interface AuthStore {
   upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord>;
   createAuthSession(record: AuthSessionRecord): Promise<AuthSessionRecord>;
   getAuthUserBySession(input: { sessionId: string; now: Date }): Promise<AuthUserRecord | null>;
   deleteAuthSession(sessionId: string): Promise<void>;
   listAuthUsers(input?: { query?: string }): Promise<AuthUserRecord[]>;
   updateAuthUserRole(input: { userId: string; role: AuthRole; updatedAt: Date }): Promise<AuthUserRecord | null>;
+}
 
+export interface GroupStore {
   createGroup(record: GroupRecord): Promise<GroupRecord>;
   getGroup(id: string): Promise<GroupRecord | null>;
   listGroups(): Promise<GroupRecord[]>;
@@ -669,13 +670,19 @@ export interface AppStore
   getGroupMember(input: { groupId: string; userId: string }): Promise<GroupMemberRecord | null>;
   listGroupMembers(groupId: string): Promise<GroupMemberWithUserRecord[]>;
   listUserGroupMemberships(userId: string): Promise<GroupMemberRecord[]>;
+}
 
+export interface ArtifactStore {
   createArtifact(record: CreateArtifactRecord): Promise<ArtifactRecord>;
   getArtifacts(sessionId: string): Promise<ArtifactRecord[]>;
+}
 
+export interface ExternalResourceStore {
   createExternalResource(record: CreateExternalResourceRecord): Promise<ExternalResourceRecord>;
   getExternalResources(sessionId: string): Promise<ExternalResourceRecord[]>;
+}
 
+export interface IntegrationStore {
   createWebhookSource(record: CreateWebhookSourceRecord): Promise<WebhookSourceRecord>;
   getWebhookSource(key: string): Promise<WebhookSourceRecord | null>;
   withExternalThreadLock?<T>(source: string, externalId: string, fn: () => Promise<T>): Promise<T>;
@@ -706,3 +713,18 @@ export interface AppStore
     error: string;
   }): Promise<boolean>;
 }
+
+export interface AppStore
+  extends
+    SessionStore,
+    MessageStore,
+    RunStore,
+    SandboxStore,
+    CallbackStore,
+    AutomationStore,
+    EventStore,
+    AuthStore,
+    GroupStore,
+    ArtifactStore,
+    ExternalResourceStore,
+    IntegrationStore {}

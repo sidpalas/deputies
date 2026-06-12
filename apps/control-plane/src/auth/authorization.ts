@@ -1,9 +1,10 @@
 import type { Context } from 'hono';
 import type { AppConfig } from '../config/index.js';
 import type {
-  AppStore,
+  AuthStore,
   AuthUserRecord,
   AutomationRecord,
+  GroupStore,
   GroupMemberRecord,
   GroupRecord,
   GroupRole,
@@ -26,7 +27,7 @@ const groupRoleRank: Record<GroupRole, number> = {
 const requestAuthUserCache = new WeakMap<Request, Promise<AuthUserRecord | null>>();
 const requestAuthorizationCache = new WeakMap<Request, Promise<RequestAuthorization | null>>();
 
-export function readRequestAuthUser(config: AppConfig, store: AppStore, c: Context): Promise<AuthUserRecord | null> {
+export function readRequestAuthUser(config: AppConfig, store: AuthStore, c: Context): Promise<AuthUserRecord | null> {
   const request = c.req.raw;
   let user = requestAuthUserCache.get(request);
   if (!user) {
@@ -39,7 +40,7 @@ export function readRequestAuthUser(config: AppConfig, store: AppStore, c: Conte
 
 export function readRequestAuthorization(
   config: AppConfig,
-  store: AppStore,
+  store: AuthStore & GroupStore,
   c: Context,
 ): Promise<RequestAuthorization | null> {
   if (config.apiAuthMode !== 'session') return Promise.resolve({ bypass: true, user: null, memberships: [] });

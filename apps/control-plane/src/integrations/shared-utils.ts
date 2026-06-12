@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../messages/service.js';
 import type { SessionService } from '../sessions/service.js';
-import type { AppStore, IntegrationDeliveryRecord, MessageRecord, SessionRecord } from '../store/types.js';
+import type { IntegrationDeliveryRecord, IntegrationStore, MessageRecord, SessionRecord } from '../store/types.js';
 import { defaultGroupId } from '../store/types.js';
 
 export type IntegrationDeliveryRef = {
@@ -53,7 +53,7 @@ export type IntegrationIngressResult = {
 };
 
 export async function receiveIntegrationDelivery(
-  store: AppStore,
+  store: IntegrationStore,
   input: IntegrationDeliveryRef & { metadata: Record<string, unknown> },
 ): Promise<IntegrationDeliveryRecord | null> {
   const receivedAt = new Date();
@@ -68,7 +68,7 @@ export async function receiveIntegrationDelivery(
 }
 
 export async function markIntegrationDeliveryProcessed(
-  store: AppStore,
+  store: IntegrationStore,
   input: IntegrationDeliveryLease,
 ): Promise<void> {
   const finalized = await store.markIntegrationDeliveryProcessed({ ...input, processedAt: new Date() });
@@ -77,7 +77,7 @@ export async function markIntegrationDeliveryProcessed(
 }
 
 export async function markIntegrationDeliveryFailed(
-  store: AppStore,
+  store: IntegrationStore,
   input: IntegrationDeliveryLease & { error: string },
 ): Promise<void> {
   const finalized = await store.markIntegrationDeliveryFailed({ ...input, failedAt: new Date() });
@@ -86,7 +86,7 @@ export async function markIntegrationDeliveryFailed(
 }
 
 export async function getOrCreateExternalThreadSession(
-  store: AppStore,
+  store: IntegrationStore,
   sessions: SessionService,
   input: {
     source: string;
@@ -105,7 +105,7 @@ export async function getOrCreateExternalThreadSession(
 }
 
 export async function enqueueIntegrationIngress(
-  store: AppStore,
+  store: IntegrationStore,
   sessions: SessionService,
   messages: MessageService,
   input: IntegrationIngress,
@@ -153,7 +153,7 @@ export function integrationMessageContext(input: IntegrationIngress): Record<str
 }
 
 async function getOrCreateExternalThreadSessionUnlocked(
-  store: AppStore,
+  store: IntegrationStore,
   sessions: SessionService,
   input: {
     source: string;

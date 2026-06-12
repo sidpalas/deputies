@@ -1,6 +1,6 @@
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
-import type { AppStore, MessageRecord, SessionRecord } from '../../store/types.js';
+import type { IntegrationStore, MessageRecord, MessageStore, SessionRecord } from '../../store/types.js';
 import {
   archivedIgnoredTranscriptPrompt,
   archivedRecoveryTranscriptPrompt,
@@ -133,7 +133,7 @@ type AcceptedGitHubEvent = {
 
 export class GitHubWebhookService {
   constructor(
-    private readonly store: AppStore,
+    private readonly store: IntegrationStore & MessageStore,
     private readonly sessions: SessionService,
     private readonly messages: MessageService,
     private readonly options: GitHubWebhookServiceOptions = {},

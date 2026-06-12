@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
-import type { AppStore, MessageRecord, SessionRecord, WebhookSourceRecord } from '../../store/types.js';
+import type { IntegrationStore, MessageRecord, SessionRecord, WebhookSourceRecord } from '../../store/types.js';
 import { parseHttpCallbackUrl } from '../../callbacks/service.js';
 import { parseStructuredGitHubRepository } from '../../repositories/extract.js';
 import {
@@ -29,7 +29,7 @@ export type HandleGenericWebhookResult = {
 
 export class GenericWebhookService {
   constructor(
-    private readonly store: AppStore,
+    private readonly store: IntegrationStore,
     private readonly sessions: SessionService,
     private readonly messages: MessageService,
     private readonly options: { unsafeAllowLocalHttpCallbacks?: boolean } = {},
