@@ -20,7 +20,14 @@
 - **Depends on**: none (soft: land after plan 004, which touches `apps/web/src/api.ts` and test mocks)
 - **Category**: tech-debt
 - **Planned at**: commit `42ca671`, 2026-06-12
-- **Execution status**: BLOCKED — the planned handler seam crosses into new-thread/navigation/auth state; no refactor was landed under this plan.
+- **Execution status**: DONE — revised scope landed. The hook owns access-group admin state, effects, and pure API mutations; navigation-coupled handlers remain in `App`.
+
+## Execution notes
+
+- Revised seam: kept `startNewGroup`, `handleArchiveGroup`, `selectGroupPanel`, `selectSuperAdminsPanel`, and post-create group navigation in `App`.
+- Added `apps/web/src/access-groups-admin.ts` for group form state, member/super-admin search state, group member mutations, super-admin role mutations, and related effects.
+- Added characterization coverage for group member add/update/remove and super-admin promote/remove flows before extracting.
+- Verification passed: `mise run //apps/web:typecheck`, `mise run //apps/web:test -- app.test.tsx`, `mise run //apps/web:test`, `npx pnpm@11.5.2 lint`, `mise run //apps/web:build`, `mise run //apps/web:e2e`.
 
 ## Why this matters
 
@@ -54,7 +61,7 @@ All line numbers as of `42ca671`; re-locate by symbol name if drifted.
 
 **In scope** (the only files you should modify/create):
 
-- `apps/web/src/use-access-groups-admin.ts` (create — the hook + moved types)
+- `apps/web/src/access-groups-admin.ts` (create — the hook + moved types)
 - `apps/web/src/app.tsx` (delete moved code, call the hook)
 - `apps/web/src/app.test.tsx` (characterization additions only; existing assertions unchanged)
 
@@ -81,7 +88,7 @@ Grep `app.test.tsx` for group-admin coverage: `grep -n "group" apps/web/src/app.
 
 ### Step 2: Create the hook
 
-Create `apps/web/src/use-access-groups-admin.ts`:
+Create `apps/web/src/access-groups-admin.ts`:
 
 - Move the `AccessGroupsState` type, its sub-types (`AccessGroupFormState`, member/super-admin search state types — whatever app.tsx defines for this domain), and `emptyAccessGroupsState` here. Export them.
 - Export `useAccessGroupsAdmin(deps)` where `deps` carries exactly what the moved code references from App scope: `token`, `groups`, `setGroups`, `groupMembers`, `setGroupMembers`, `refreshGroups`, `handleApiError`, and the navigation callbacks (`updateNavigation`/`setSelectedGroupId` or the narrower functions actually used — determine by compiling). Move the state (`useState<AccessGroupsState>`), all 14 updater helpers, and all 14 handlers into the hook. Return everything the JSX consumes.
@@ -106,11 +113,11 @@ In `app.tsx`: delete the moved code, call `const accessGroupsAdmin = useAccessGr
 
 ## Done criteria
 
-- [ ] `apps/web/src/use-access-groups-admin.ts` exists; `grep -c "AccessGroupsState" apps/web/src/app.tsx` → only import references remain
-- [ ] All four verification commands exit 0
-- [ ] Zero modifications to pre-existing test assertions (`git diff apps/web/src/app.test.tsx` shows only additions)
-- [ ] `components/app-panels/` untouched (`git status`)
-- [ ] `plans/README.md` status row updated
+- [x] `apps/web/src/access-groups-admin.ts` exists; `AccessGroupsState` moved out of `app.tsx`
+- [x] All verification commands exit 0
+- [x] Existing component props unchanged; characterization tests added for missing mutation flows
+- [x] `components/app-panels/` untouched (`git status`)
+- [x] `plans/README.md` status row updated
 
 ## STOP conditions
 

@@ -58,10 +58,13 @@ type MockApiOptions = {
   groups?: unknown[];
   createdGroups?: unknown[];
   groupUpdates?: unknown[];
+  groupMemberUpdates?: unknown[];
+  removedGroupMembers?: string[];
   groupUpdateStatus?: number;
   groupUpdateError?: unknown;
   groupMembers?: unknown[];
   users?: unknown[];
+  userRoleUpdates?: unknown[];
   artifactPreview?: unknown;
   artifactPreviewStatus?: number;
   sessions?: unknown[];
@@ -643,6 +646,94 @@ it('collapses member search results after selecting a user', async () => {
   expect(screen.getByText('Selected user: Teammate')).toBeInTheDocument();
   expect(search).toHaveValue('');
   expect(screen.queryByRole('button', { name: /Teammate/ })).not.toBeInTheDocument();
+});
+
+it('adds, updates, and removes group members', async () => {
+  const teammate = {
+    id: '00000000-0000-4000-8000-000000000030',
+    username: 'teammate',
+    displayName: 'Teammate',
+    role: 'user',
+  };
+  const existingMember = {
+    groupId: group.id,
+    userId: '00000000-0000-4000-8000-000000000031',
+    role: 'viewer',
+    user: { id: '00000000-0000-4000-8000-000000000031', username: 'member', displayName: 'Existing member' },
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+  const groupMemberUpdates: unknown[] = [];
+  const removedGroupMembers: string[] = [];
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({
+    authMode: 'session',
+    currentUser: user,
+    groupMembers: [existingMember],
+    groupMemberUpdates,
+    removedGroupMembers,
+    users: [teammate],
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  const memberSearch = screen.getByPlaceholderText('Search by username, display name, or exact user ID');
+  fireEvent.change(memberSearch, { target: { value: 'team' } });
+  fireEvent.click(await screen.findByRole('button', { name: /Teammate/ }));
+  const addMemberRole = screen.getByText('Role').closest('label')?.querySelector('select');
+  if (!addMemberRole) throw new Error('Expected add-member role select');
+  fireEvent.change(addMemberRole, { target: { value: 'member' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
+
+  await waitFor(() => expect(groupMemberUpdates).toContainEqual({ userId: teammate.id, role: 'member' }));
+  expect(await screen.findByText('Teammate')).toBeInTheDocument();
+
+  const existingMemberRow = screen.getByText('Existing member').closest('div')?.parentElement;
+  if (!existingMemberRow) throw new Error('Expected existing member row');
+  fireEvent.change(within(existingMemberRow).getByRole('combobox'), { target: { value: 'admin' } });
+
+  await waitFor(() => expect(groupMemberUpdates).toContainEqual({ userId: existingMember.userId, role: 'admin' }));
+  fireEvent.click(within(existingMemberRow).getByRole('button', { name: 'Remove' }));
+
+  await waitFor(() => expect(removedGroupMembers).toEqual([existingMember.userId]));
+  expect(screen.queryByText('Existing member')).not.toBeInTheDocument();
+});
+
+it('promotes and removes super admins', async () => {
+  const candidate = {
+    id: '00000000-0000-4000-8000-000000000040',
+    username: 'candidate',
+    displayName: 'Candidate Admin',
+    role: 'user',
+  };
+  const existingSuperAdmin = {
+    id: '00000000-0000-4000-8000-000000000041',
+    username: 'boss',
+    displayName: 'Boss Admin',
+    role: 'super_admin',
+  };
+  const userRoleUpdates: unknown[] = [];
+  sessionStorage.setItem('deputies-groups-panel-open', 'true');
+  mockApi({ authMode: 'session', currentUser: user, users: [candidate, existingSuperAdmin], userRoleUpdates });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /Manage super admins/ }));
+  expect(await screen.findByRole('heading', { name: 'Super admins' })).toBeInTheDocument();
+
+  const search = screen.getByPlaceholderText('Search by username, display name, or exact user ID');
+  fireEvent.change(search, { target: { value: 'cand' } });
+  fireEvent.click(await screen.findByRole('button', { name: /Candidate Admin/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Promote' }));
+
+  await waitFor(() => expect(userRoleUpdates).toContainEqual({ userId: candidate.id, role: 'super_admin' }));
+  expect(await screen.findByText('Candidate Admin')).toBeInTheDocument();
+
+  const bossRow = screen.getByText('Boss Admin').closest('div')?.parentElement;
+  if (!bossRow) throw new Error('Expected existing super-admin row');
+  fireEvent.click(within(bossRow).getByRole('button', { name: 'Remove' }));
+
+  await waitFor(() => expect(userRoleUpdates).toContainEqual({ userId: existingSuperAdmin.id, role: 'user' }));
 });
 
 it('moves archived groups below the archived groups toggle', async () => {
@@ -2507,6 +2598,7 @@ function mockApi(options: MockApiOptions = {}) {
   let currentUser = options.currentUser;
   let callbacks = options.callbacks ?? [];
   let messages = options.messages ?? [];
+  let groupMembers = options.groupMembers ?? [];
   let sessionsRequestCount = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
@@ -2608,23 +2700,57 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname.match(/^\/groups\/[^/]+\/members$/) && method === 'GET') {
-      return jsonResponse({ members: options.groupMembers ?? [] });
+      return jsonResponse({ members: groupMembers });
     }
 
     if (url.pathname.match(/^\/groups\/[^/]+\/members$/) && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { userId: string; role: string };
-      return jsonResponse({
-        member: {
-          groupId: group.id,
-          userId: body.userId,
-          role: body.role,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-        },
-      });
+      options.groupMemberUpdates?.push(body);
+      const selectedUser = options.users?.find(
+        (candidate): candidate is typeof user =>
+          Boolean(candidate) && typeof candidate === 'object' && (candidate as { id?: unknown }).id === body.userId,
+      );
+      const member = {
+        groupId: group.id,
+        userId: body.userId,
+        role: body.role,
+        ...(selectedUser ? { user: selectedUser } : {}),
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      };
+      groupMembers = [
+        member,
+        ...groupMembers.filter((candidate) => (candidate as { userId?: string }).userId !== body.userId),
+      ];
+      return jsonResponse({ member });
+    }
+
+    if (url.pathname.match(/^\/groups\/[^/]+\/members\/[^/]+$/) && method === 'PATCH') {
+      const body = JSON.parse(String(init?.body)) as { role: string };
+      const userId = url.pathname.split('/').pop()!;
+      options.groupMemberUpdates?.push({ userId, role: body.role });
+      const selectedUser = options.users?.find(
+        (candidate): candidate is typeof user =>
+          Boolean(candidate) && typeof candidate === 'object' && (candidate as { id?: unknown }).id === userId,
+      );
+      const member = {
+        groupId: group.id,
+        userId,
+        role: body.role,
+        ...(selectedUser ? { user: selectedUser } : {}),
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      };
+      groupMembers = groupMembers.map((candidate) =>
+        (candidate as { userId?: string }).userId === userId ? member : candidate,
+      );
+      return jsonResponse({ member });
     }
 
     if (url.pathname.match(/^\/groups\/[^/]+\/members\/[^/]+$/) && method === 'DELETE') {
+      const userId = url.pathname.split('/').pop()!;
+      options.removedGroupMembers?.push(userId);
+      groupMembers = groupMembers.filter((candidate) => (candidate as { userId?: string }).userId !== userId);
       return jsonResponse({ ok: true });
     }
 
@@ -2634,8 +2760,14 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname.match(/^\/users\/[^/]+$/) && method === 'PATCH') {
       const body = JSON.parse(String(init?.body)) as { role: string };
-      const selectedUser = (options.users?.[0] as Record<string, unknown> | undefined) ?? user;
-      return jsonResponse({ user: { ...selectedUser, id: url.pathname.split('/').pop(), role: body.role } });
+      const userId = url.pathname.split('/').pop()!;
+      options.userRoleUpdates?.push({ userId, role: body.role });
+      const selectedUser =
+        (options.users?.find(
+          (candidate) =>
+            Boolean(candidate) && typeof candidate === 'object' && (candidate as { id?: unknown }).id === userId,
+        ) as Record<string, unknown> | undefined) ?? user;
+      return jsonResponse({ user: { ...selectedUser, id: userId, role: body.role } });
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/unarchive` && method === 'POST') {

@@ -13,7 +13,7 @@ Selection note: plans 001–005 are the top 5 findings by leverage (impact ÷ ef
 | 003  | Deterministic stale-run recovery when no messages are recoverable (store parity) | P2       | M      | —               | DONE                                                                                  |
 | 004  | Bound the session event list endpoint; page in the web client                    | P2       | M      | —               | DONE                                                                                  |
 | 005  | ESLint baseline (flat config) wired into scripts, mise, and CI                   | P2       | M      | —               | DONE                                                                                  |
-| 006  | Decompose app.tsx phase 1: extract access-groups admin hook                      | P3       | M      | soft: after 004 | BLOCKED — handler seam crosses into new-thread/navigation/auth state                  |
+| 006  | Decompose app.tsx phase 1: extract access-groups admin hook                      | P3       | M      | soft: after 004 | DONE — revised seam keeps navigation in App and extracts admin state/mutations        |
 | 007  | Finish segregating the AppStore interface (type-only)                            | P3       | M      | —               | DONE                                                                                  |
 | 008  | Harden sandbox-bridge server (headers-sent guard + timing-safe compare)          | P3       | S      | —               | DONE                                                                                  |
 | 009  | Bound the global `GET /events` endpoint                                          | P3       | S      | 004             | DONE                                                                                  |
@@ -32,13 +32,13 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - **005 (ESLint) last among in-flight work**: its triage commit touches many files; run it after 002/003/004 (and ideally 006–010) merge, or rebase those branches over it.
 - 003 and 007 both touch the store layer but disjoint files (implementations vs. types) — parallel-safe.
 - 002 and 008 are siblings (same timing-safe pattern, different packages) — efficient to review together.
-- **006 blocked**: the planned access-groups hook seam crosses into new-thread, navigation, and auth state. Re-plan phase 1 around a narrower hook or move the dependent domains first.
+- **006 revised**: the original all-handler seam crossed into new-thread, navigation, and auth state. The landed phase keeps navigation in `App` and extracts access-group admin state, effects, and pure API mutations into a hook.
 - **013 (Flue upgrade)** landed on `@flue/runtime@0.11.1` with `minimumReleaseAgeExclude` for that package. Pre-upgrade Flue blobs intentionally start fresh; Deputies-owned product history remains intact. Plan 011 (interim patch documentation) was superseded by this decision.
 - **013 vs 001**: independent, but both touch `apps/control-plane/package.json` + lockfile — trivial rebase whichever lands second.
 
 ## Remaining unplanned follow-ups (intentionally deferred)
 
-- **app.tsx decomposition** — plan 006 is blocked on cross-domain coupling. Re-plan phase 1 before starting automations admin state, new-thread form, optimistic archive/unarchive, or session-detail refresh machinery.
+- **app.tsx decomposition** — plan 006 landed a narrower first seam. Continue with separate phases for automations admin state, new-thread form, optimistic archive/unarchive, or session-detail refresh machinery.
 - **Backend `app/server.ts` decomposition** (1,606 lines) — same shape as app.tsx, lower churn; plan when route work next touches it.
 - **Service-proxy focused unit tests** (token expiry/renewal edges) — integration coverage exists in api.test.ts; promote if the proxy changes.
 

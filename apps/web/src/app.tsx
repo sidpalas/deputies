@@ -16,7 +16,6 @@ import {
   archiveSession,
   cancelCurrentRun,
   cancelMessage,
-  createGroup,
   createSession,
   enqueueMessage,
   extendSandbox,
@@ -30,45 +29,35 @@ import {
   listArtifacts,
   listAutomations,
   listCallbacks,
-  listGroupMembers,
   listGroups,
   listExternalResources,
   listMessages,
   listRepositoryOptions,
   listServices,
   listSessions,
-  listUsers,
   logout,
   openWorkspaceTool,
   pauseQueue,
   replayCallback,
-  removeGroupMember,
   resumeQueue,
   retryMessage,
   streamGlobalEvents,
   unarchiveAutomation,
   unarchiveSession,
   updateMessage,
-  updateGroup,
   updateSession,
   updateSessionAccess,
-  updateUserRole,
-  upsertGroupMember,
   type Automation,
-  type AutomationCreateRequiredRole,
   type Health,
   type AuthUser,
   type BranchOption,
   type Group,
-  type GroupMember,
-  type GroupRole,
   type ModelChoice,
   type RepositoryOption,
   type SetupStatus,
-  type SessionVisibility,
-  type SessionWritePolicy,
   type WorkspaceToolId,
 } from './api.js';
+import { useAccessGroupsAdmin } from './access-groups-admin.js';
 import { isInlineDisplayableArtifact } from './artifact-display.js';
 import {
   startSessionMilestoneInteraction,
@@ -84,7 +73,6 @@ import {
   errorMessage,
   filterActiveProgressEvents,
   groupCanManage,
-  groupNameValidationError,
   isWorkspaceToolPreflightError,
   modelUnavailableReason,
   nextAccessGroupName,
@@ -97,7 +85,6 @@ import {
   shouldUseActiveProgressEvent,
   sortSessionsByLastActivity,
   titleFromPrompt,
-  upsertAuthUser,
   upsertEvent,
   waitForRealtimeReconnect,
   type ActiveProgressByMessageId,
@@ -161,9 +148,6 @@ import {
   StartupLoadingPanel,
   ThreadHeader,
   ThreadSidebar,
-  type AccessGroupFormState,
-  type AccessGroupMemberSearchState,
-  type AccessGroupUserSearchState,
 } from './components/app-panels.js';
 import { cn } from './lib/utils.js';
 import { ChatPanel, DesktopContextPanel, MobileContextPanel } from './components/thread/thread-content.js';
@@ -202,13 +186,6 @@ type SessionDetailState = {
   callbacks: CallbackDelivery[];
 };
 
-type AccessGroupsState = {
-  groupForm: AccessGroupFormState;
-  memberSearch: AccessGroupMemberSearchState;
-  superAdminSearch: AccessGroupUserSearchState;
-  roleManagementUsers: AuthUser[];
-};
-
 function resolveStateUpdate<T>(next: StateUpdate<T>, current: T): T {
   return typeof next === 'function' ? (next as (current: T) => T)(current) : next;
 }
@@ -222,32 +199,6 @@ function emptySessionDetail(): SessionDetailState {
     services: [],
     externalResources: [],
     callbacks: [],
-  };
-}
-
-function emptyAccessGroupsState(): AccessGroupsState {
-  return {
-    groupForm: {
-      name: '',
-      visibility: 'organization',
-      writePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      serverError: '',
-    },
-    memberSearch: {
-      query: '',
-      loading: false,
-      userId: '',
-      role: 'viewer',
-      options: [],
-    },
-    superAdminSearch: {
-      query: '',
-      loading: false,
-      userId: '',
-      options: [],
-    },
-    roleManagementUsers: [],
   };
 }
 
@@ -279,14 +230,12 @@ export function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState(loadStoredToken);
   const [groups, setGroups] = useState<Group[]>([]);
-  const [groupMembers, setGroupMembers] = useState<GroupMember[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [navigation, setNavigation] = useState<NavigationState>(loadInitialNavigationState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sessionDetail, setSessionDetail] = useState<SessionDetailState>(emptySessionDetail);
-  const [accessGroupsState, setAccessGroupsState] = useState<AccessGroupsState>(emptyAccessGroupsState);
   const [repositoryOptionsState, setRepositoryOptionsState] = useState<AsyncState<RepositoryOption[]>>({
     data: [],
     loading: false,
@@ -345,7 +294,6 @@ export function App() {
     selectedAutomationId,
   } = navigation;
   const { messages, events, activeProgress, artifacts, services, externalResources, callbacks } = sessionDetail;
-  const { groupForm, memberSearch, superAdminSearch, roleManagementUsers } = accessGroupsState;
   const eventCursor = useRef(0);
   const globalEventCursor = useRef(0);
   const lastBackgroundedAt = useRef<number | null>(null);
@@ -395,21 +343,50 @@ export function App() {
     ? activeGroups.filter((group) => group.canCreateAutomations)
     : activeGroups;
   const manageableGroups = groups.filter((group) => group.canManage);
-  const currentSuperAdminUsers = useMemo(() => {
-    const superAdmins = roleManagementUsers.filter((user) => user.role === 'super_admin');
-    if (currentUser?.role !== 'super_admin' || superAdmins.some((user) => user.id === currentUser.id))
-      return superAdmins;
-    return upsertAuthUser(superAdmins, currentUser);
-  }, [currentUser, roleManagementUsers]);
   const canManageAllGroups = canCallApi && (!sessionAuthRequired || currentUser?.role === 'super_admin');
+  const {
+    currentSuperAdminUsers,
+    groupForm,
+    groupFormError,
+    groupMembers,
+    memberSearch,
+    superAdminSearch,
+    addGroupMember,
+    createAccessGroup,
+    prepareNewGroupForm,
+    promoteSuperAdmin,
+    removeSelectedGroupMember,
+    removeSuperAdmin,
+    resetAccessGroupsAdmin,
+    saveSelectedGroup,
+    selectMemberUser,
+    selectSuperAdminUser,
+    setGroupFormAutomationCreateRequiredRole,
+    setGroupFormName,
+    setGroupFormVisibility,
+    setGroupFormWritePolicy,
+    setMemberRole,
+    setMemberSearchQuery,
+    setMemberUserId,
+    setSuperAdminSearchQuery,
+    setSuperAdminUserId,
+    updateGroupMemberRole,
+  } = useAccessGroupsAdmin({
+    canManageAllGroups,
+    currentUser,
+    groups,
+    groupsPanelOpen,
+    groupsPanelView,
+    selectedGroupId,
+    token,
+    handleApiError,
+    refreshGroups,
+    setCurrentUser,
+    setError,
+    setGroups,
+  });
   const canManageGroups = canManageAllGroups || (canCallApi && manageableGroups.length > 0);
   const canViewGroups = canManageGroups || (canCallApi && sessionAuthRequired && groups.length > 0);
-  const groupFormValidationError = groupNameValidationError(
-    groups,
-    groupsPanelView === 'group' ? selectedGroupId : '',
-    groupForm.name,
-  );
-  const groupFormError = groupFormValidationError || groupForm.serverError;
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) ?? null,
     [sessions, selectedSessionId],
@@ -490,80 +467,6 @@ export function App() {
     setNavigation((current) => ({
       ...current,
       selectedAutomationId: resolveStateUpdate(next, current.selectedAutomationId),
-    }));
-  }
-
-  function updateGroupForm(next: Partial<AccessGroupFormState>) {
-    setAccessGroupsState((current) => ({ ...current, groupForm: { ...current.groupForm, ...next } }));
-  }
-
-  function updateMemberSearch(next: Partial<AccessGroupMemberSearchState>) {
-    setAccessGroupsState((current) => ({ ...current, memberSearch: { ...current.memberSearch, ...next } }));
-  }
-
-  function updateSuperAdminSearch(next: Partial<AccessGroupUserSearchState>) {
-    setAccessGroupsState((current) => ({
-      ...current,
-      superAdminSearch: { ...current.superAdminSearch, ...next },
-    }));
-  }
-
-  function setGroupFormVisibility(visibility: SessionVisibility) {
-    updateGroupForm({ visibility });
-  }
-
-  function setGroupFormWritePolicy(writePolicy: SessionWritePolicy) {
-    updateGroupForm({ writePolicy });
-  }
-
-  function setGroupFormAutomationCreateRequiredRole(automationCreateRequiredRole: AutomationCreateRequiredRole) {
-    updateGroupForm({ automationCreateRequiredRole });
-  }
-
-  function setMemberSearchQuery(query: string) {
-    updateMemberSearch({ query });
-  }
-
-  function setMemberUserId(userId: string) {
-    updateMemberSearch({ userId });
-  }
-
-  function setMemberRole(role: GroupRole) {
-    updateMemberSearch({ role });
-  }
-
-  function setSuperAdminSearchQuery(query: string) {
-    updateSuperAdminSearch({ query });
-  }
-
-  function setSuperAdminUserId(userId: string) {
-    updateSuperAdminSearch({ userId });
-  }
-
-  function setUserOptions(next: StateUpdate<AuthUser[]>) {
-    setAccessGroupsState((current) => ({
-      ...current,
-      memberSearch: {
-        ...current.memberSearch,
-        options: resolveStateUpdate(next, current.memberSearch.options),
-      },
-    }));
-  }
-
-  function setSuperAdminUserOptions(next: StateUpdate<AuthUser[]>) {
-    setAccessGroupsState((current) => ({
-      ...current,
-      superAdminSearch: {
-        ...current.superAdminSearch,
-        options: resolveStateUpdate(next, current.superAdminSearch.options),
-      },
-    }));
-  }
-
-  function setRoleManagementUsers(next: StateUpdate<AuthUser[]>) {
-    setAccessGroupsState((current) => ({
-      ...current,
-      roleManagementUsers: resolveStateUpdate(next, current.roleManagementUsers),
     }));
   }
 
@@ -815,99 +718,6 @@ export function App() {
     if (!canViewAutomations || sidebarPanel !== 'automations') return;
     refreshAutomations().catch(() => undefined);
   }, [canViewAutomations, sidebarPanel, token]);
-
-  useEffect(() => {
-    const group = groupsPanelView === 'group' ? groups.find((candidate) => candidate.id === selectedGroupId) : null;
-    if (!group) {
-      setGroupMembers([]);
-      return;
-    }
-    updateGroupForm({
-      name: group.name,
-      visibility: group.defaultVisibility,
-      writePolicy: group.defaultWritePolicy,
-      automationCreateRequiredRole: group.automationCreateRequiredRole,
-      serverError: '',
-    });
-    if (!groupsPanelOpen || !group.canManage) return;
-    listGroupMembers({ groupId: group.id, token }).then(setGroupMembers).catch(handleApiError);
-  }, [groupsPanelOpen, groups, groupsPanelView, selectedGroupId, token]);
-
-  useEffect(() => {
-    if (!groupsPanelOpen || !canManageAllGroups) {
-      setRoleManagementUsers([]);
-      return;
-    }
-
-    let cancelled = false;
-    listUsers({ token })
-      .then((users) => {
-        if (!cancelled) setRoleManagementUsers(users);
-      })
-      .catch(() => {
-        if (!cancelled) setRoleManagementUsers([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [groupsPanelOpen, canManageAllGroups, token]);
-
-  useEffect(() => {
-    const query = memberSearch.query.trim();
-    const group = groups.find((candidate) => candidate.id === selectedGroupId);
-    if (groupsPanelView !== 'group' || !groupsPanelOpen || !group?.canManage) {
-      updateMemberSearch({ options: [], loading: false });
-      return;
-    }
-    if (query.length < 2) {
-      updateMemberSearch({ loading: false });
-      return;
-    }
-
-    let cancelled = false;
-    updateMemberSearch({ loading: true });
-    listUsers({ query, token })
-      .then((users) => {
-        if (!cancelled) updateMemberSearch({ options: users });
-      })
-      .catch(() => {
-        if (!cancelled) updateMemberSearch({ options: [] });
-      })
-      .finally(() => {
-        if (!cancelled) updateMemberSearch({ loading: false });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [groupsPanelOpen, groups, groupsPanelView, memberSearch.query, selectedGroupId, token]);
-
-  useEffect(() => {
-    const query = superAdminSearch.query.trim();
-    if (!groupsPanelOpen || !canManageAllGroups) {
-      updateSuperAdminSearch({ options: [], loading: false });
-      return;
-    }
-    if (query.length < 2) {
-      updateSuperAdminSearch({ loading: false });
-      return;
-    }
-
-    let cancelled = false;
-    updateSuperAdminSearch({ loading: true });
-    listUsers({ query, token })
-      .then((users) => {
-        if (!cancelled) updateSuperAdminSearch({ options: users });
-      })
-      .catch(() => {
-        if (!cancelled) updateSuperAdminSearch({ options: [] });
-      })
-      .finally(() => {
-        if (!cancelled) updateSuperAdminSearch({ loading: false });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [groupsPanelOpen, canManageAllGroups, superAdminSearch.query, token]);
 
   useEffect(() => {
     if (!pageVisible) {
@@ -1617,8 +1427,7 @@ export function App() {
     setAutomations([]);
     setAutomationsLoaded(false);
     setGroups([]);
-    setGroupMembers([]);
-    setAccessGroupsState(emptyAccessGroupsState());
+    resetAccessGroupsAdmin();
     setSessionsLoaded(false);
     updateNavigation({
       selectedSessionId: '',
@@ -1825,14 +1634,7 @@ export function App() {
     sessionStorage.setItem(sidebarPanelStorageKey, 'groups');
     sessionStorage.removeItem(groupsPanelViewStorageKey);
     clearResourceSearchParams();
-    updateGroupForm({
-      name: nextAccessGroupName(groups),
-      visibility: 'organization',
-      writePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      serverError: '',
-    });
-    setGroupMembers([]);
+    prepareNewGroupForm(nextAccessGroupName(groups));
     updateNavigation({
       setupGuideOpen: false,
       groupsPanelOpen: true,
@@ -1844,67 +1646,12 @@ export function App() {
   }
 
   async function handleCreateGroup() {
-    if (!canManageAllGroups) return;
-    const validationError = groupNameValidationError(groups, '', groupForm.name);
-    if (!groupForm.name.trim() || validationError) {
-      updateGroupForm({ serverError: validationError });
-      return;
-    }
-    setError('');
-    updateGroupForm({ serverError: '' });
-    try {
-      const group = await createGroup({
-        name: groupForm.name.trim(),
-        defaultVisibility: groupForm.visibility,
-        defaultWritePolicy: groupForm.writePolicy,
-        automationCreateRequiredRole: groupForm.automationCreateRequiredRole,
-        token,
-      });
-      await refreshGroups();
-      sessionStorage.setItem(groupsPanelViewStorageKey, 'group');
-      sessionStorage.setItem(groupsPanelSelectedGroupStorageKey, group.id);
-      setGroupSearchParam(group.id);
-      updateNavigation({ groupsPanelView: 'group', selectedGroupId: group.id });
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        updateGroupForm({ serverError: 'An access group with this name already exists.' });
-        return;
-      }
-      handleApiError(err);
-    }
-  }
-
-  function handleGroupFormNameChange(value: string) {
-    updateGroupForm({ name: value, serverError: '' });
-  }
-
-  async function handleSaveGroup() {
-    const group = groups.find((candidate) => candidate.id === selectedGroupId);
-    if (!group?.canManage || !groupForm.name.trim()) return;
-    const validationError = groupNameValidationError(groups, group.id, groupForm.name);
-    if (validationError) {
-      updateGroupForm({ serverError: validationError });
-      return;
-    }
-    setError('');
-    updateGroupForm({ serverError: '' });
-    try {
-      const updated = await updateGroup({
-        groupId: group.id,
-        name: groupForm.name.trim(),
-        defaultVisibility: groupForm.visibility,
-        defaultWritePolicy: groupForm.writePolicy,
-        automationCreateRequiredRole: groupForm.automationCreateRequiredRole,
-        token,
-      });
-      setGroups((current) => current.map((candidate) => (candidate.id === updated.id ? updated : candidate)));
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        updateGroupForm({ serverError: 'An access group with this name already exists.' });
-        return;
-      }
-      handleApiError(err);
-    }
+    const group = await createAccessGroup();
+    if (!group) return;
+    sessionStorage.setItem(groupsPanelViewStorageKey, 'group');
+    sessionStorage.setItem(groupsPanelSelectedGroupStorageKey, group.id);
+    setGroupSearchParam(group.id);
+    updateNavigation({ groupsPanelView: 'group', selectedGroupId: group.id });
   }
 
   async function handleArchiveGroup(groupId: string, archived: boolean) {
@@ -1921,92 +1668,6 @@ export function App() {
           )?.id ?? '',
         );
       }
-    } catch (err) {
-      handleApiError(err);
-    }
-  }
-
-  async function handleAddGroupMember() {
-    const group = groups.find((candidate) => candidate.id === selectedGroupId);
-    const userId = memberSearch.userId.trim();
-    if (!group?.canManage || !userId) return;
-    setError('');
-    try {
-      const member = await upsertGroupMember({ groupId: group.id, userId, role: memberSearch.role, token });
-      setGroupMembers((current) => [member, ...current.filter((candidate) => candidate.userId !== member.userId)]);
-      updateMemberSearch({ userId: '', query: '', options: [] });
-      await refreshGroups();
-    } catch (err) {
-      handleApiError(err);
-    }
-  }
-
-  async function handleUpdateGroupMemberRole(userId: string, role: GroupRole) {
-    const group = groups.find((candidate) => candidate.id === selectedGroupId);
-    if (!group?.canManage) return;
-    setError('');
-    try {
-      const member = await upsertGroupMember({ groupId: group.id, userId, role, token });
-      setGroupMembers((current) => current.map((candidate) => (candidate.userId === userId ? member : candidate)));
-      await refreshGroups();
-    } catch (err) {
-      handleApiError(err);
-    }
-  }
-
-  async function handleRemoveGroupMember(userId: string) {
-    const group = groups.find((candidate) => candidate.id === selectedGroupId);
-    if (!group?.canManage) return;
-    setError('');
-    try {
-      await removeGroupMember({ groupId: group.id, userId, token });
-      setGroupMembers((current) => current.filter((candidate) => candidate.userId !== userId));
-      await refreshGroups();
-    } catch (err) {
-      handleApiError(err);
-    }
-  }
-
-  function selectMemberUser(userId: string) {
-    updateMemberSearch({ userId, query: '' });
-  }
-
-  async function handlePromoteSuperAdmin() {
-    const userId = superAdminSearch.userId.trim();
-    if (!canManageAllGroups || !userId) return;
-    setError('');
-    try {
-      const promoted = await updateUserRole({ userId, role: 'super_admin', token });
-      if (currentUser?.id === promoted.id) setCurrentUser({ ...currentUser, role: promoted.role });
-      setRoleManagementUsers((current) => upsertAuthUser(current, promoted));
-      setSuperAdminUserOptions((current) =>
-        current.map((candidate) => (candidate.id === promoted.id ? { ...candidate, role: promoted.role } : candidate)),
-      );
-      setUserOptions((current) =>
-        current.map((candidate) => (candidate.id === promoted.id ? { ...candidate, role: promoted.role } : candidate)),
-      );
-      updateSuperAdminSearch({ userId: '', query: '', options: [] });
-    } catch (err) {
-      handleApiError(err);
-    }
-  }
-
-  function selectSuperAdminUser(userId: string) {
-    updateSuperAdminSearch({ userId, query: '' });
-  }
-
-  async function handleRemoveSuperAdmin(userId: string) {
-    if (!canManageAllGroups || userId === currentUser?.id) return;
-    setError('');
-    try {
-      const updated = await updateUserRole({ userId, role: 'user', token });
-      setRoleManagementUsers((current) => upsertAuthUser(current, updated));
-      setSuperAdminUserOptions((current) =>
-        current.map((candidate) => (candidate.id === updated.id ? { ...candidate, role: updated.role } : candidate)),
-      );
-      setUserOptions((current) =>
-        current.map((candidate) => (candidate.id === updated.id ? { ...candidate, role: updated.role } : candidate)),
-      );
     } catch (err) {
       handleApiError(err);
     }
@@ -2446,11 +2107,11 @@ export function App() {
                     superAdminSearch={superAdminSearch}
                     superAdminUsers={currentSuperAdminUsers}
                     showOpenSidebar={!sidebarOpen}
-                    onAddMember={fireAndForget(handleAddGroupMember)}
+                    onAddMember={fireAndForget(addGroupMember)}
                     onArchiveGroup={fireAndForget(handleArchiveGroup)}
                     onCreateGroup={fireAndForget(handleCreateGroup)}
                     onGroupFormAutomationCreateRequiredRoleChange={setGroupFormAutomationCreateRequiredRole}
-                    onGroupFormNameChange={handleGroupFormNameChange}
+                    onGroupFormNameChange={setGroupFormName}
                     onGroupFormVisibilityChange={setGroupFormVisibility}
                     onGroupFormWritePolicyChange={setGroupFormWritePolicy}
                     onMemberRoleChange={setMemberRole}
@@ -2458,16 +2119,16 @@ export function App() {
                     onMemberUserIdChange={setMemberUserId}
                     onOpenSidebar={expandSidebar}
                     onSelectMemberUser={selectMemberUser}
-                    onPromoteSuperAdmin={fireAndForget(handlePromoteSuperAdmin)}
-                    onRemoveMember={fireAndForget(handleRemoveGroupMember)}
-                    onRemoveSuperAdmin={fireAndForget(handleRemoveSuperAdmin)}
-                    onSaveGroup={fireAndForget(handleSaveGroup)}
+                    onPromoteSuperAdmin={fireAndForget(promoteSuperAdmin)}
+                    onRemoveMember={fireAndForget(removeSelectedGroupMember)}
+                    onRemoveSuperAdmin={fireAndForget(removeSuperAdmin)}
+                    onSaveGroup={fireAndForget(saveSelectedGroup)}
                     onSelectGroup={selectGroupPanel}
                     onSelectSuperAdminUser={selectSuperAdminUser}
                     onSelectSuperAdmins={selectSuperAdminsPanel}
                     onSuperAdminSearchQueryChange={setSuperAdminSearchQuery}
                     onSuperAdminUserIdChange={setSuperAdminUserId}
-                    onUpdateMemberRole={fireAndForget(handleUpdateGroupMemberRole)}
+                    onUpdateMemberRole={fireAndForget(updateGroupMemberRole)}
                   />
                 ) : showingSetupGuide ? (
                   <SetupGuidePanel
