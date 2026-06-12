@@ -7,6 +7,7 @@ import type { Runner, RunnerInput, RunnerResult } from '../../src/runner/types.j
 import { runSandboxReaperOnce } from '../../src/sandbox/reaper.js';
 import { SandboxCleanupService } from '../../src/sandbox/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
+import type { MessageRecord } from '../../src/store/types.js';
 import { startWorkerLoop, WorkerService } from '../../src/worker/service.js';
 
 describe('WorkerService', () => {
@@ -139,6 +140,91 @@ describe('WorkerService', () => {
       { status: 'pending' },
     ]);
     await expect(services.sessions.get(session.id)).resolves.toMatchObject({ status: 'queued' });
+  });
+
+  it('finalizes a stale run whose messages were already finalized', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Stale finalized message' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'already done' });
+
+    const claimedAt = new Date('2026-05-06T00:00:00.000Z');
+    const claimed = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000035',
+      runnerType: 'fake',
+      leaseOwner: 'crashed-worker',
+      leaseExpiresAt: new Date(claimedAt.getTime() - 1_000),
+      now: claimedAt,
+    });
+    expect(claimed?.messages).toHaveLength(1);
+
+    // No public flow currently creates this edge state, so mutate the test store directly.
+    const messageStore = store as unknown as { messages: Map<string, MessageRecord[]> };
+    const messages = messageStore.messages.get(session.id);
+    expect(messages).toBeDefined();
+    messages![0] = { ...messages![0]!, status: 'cancelled' };
+
+    const recovered = await store.recoverStaleRuns({ now: new Date(claimedAt.getTime() + 1_000), limit: 10 });
+
+    expect(recovered).toEqual([]);
+    const runAfterFirst = await store.getRun(claimed!.run.id);
+    expect(runAfterFirst).toMatchObject({ status: 'stale', error: 'Run lease expired' });
+    expect(runAfterFirst?.leaseOwner).toBeUndefined();
+    expect(runAfterFirst?.leaseExpiresAt).toBeUndefined();
+    await expect(services.messages.list(session.id)).resolves.toMatchObject([{ status: 'cancelled' }]);
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({ status: 'idle' });
+
+    await expect(store.recoverStaleRuns({ now: new Date(claimedAt.getTime() + 2_000), limit: 10 })).resolves.toEqual(
+      [],
+    );
+    await expect(store.getRun(claimed!.run.id)).resolves.toEqual(runAfterFirst);
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({ status: 'idle' });
+  });
+
+  it('applies the stale run limit before skipping zero-message recoveries', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const finalizedSession = await services.sessions.create({ title: 'Limit finalized first' });
+    await services.messages.enqueue({ sessionId: finalizedSession.id, prompt: 'already done' });
+    const recoverableSession = await services.sessions.create({ title: 'Limit recoverable second' });
+    await services.messages.enqueue({ sessionId: recoverableSession.id, prompt: 'retry later' });
+
+    const claimedAt = new Date('2026-05-06T00:00:00.000Z');
+    const finalizedClaim = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000036',
+      runnerType: 'fake',
+      leaseOwner: 'crashed-worker-1',
+      leaseExpiresAt: new Date(claimedAt.getTime() - 2_000),
+      now: claimedAt,
+    });
+    const recoverableClaim = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000037',
+      runnerType: 'fake',
+      leaseOwner: 'crashed-worker-2',
+      leaseExpiresAt: new Date(claimedAt.getTime() - 1_000),
+      now: claimedAt,
+    });
+    expect(finalizedClaim?.messages).toHaveLength(1);
+    expect(recoverableClaim?.messages).toHaveLength(1);
+
+    const messageStore = store as unknown as { messages: Map<string, MessageRecord[]> };
+    const messages = messageStore.messages.get(finalizedSession.id);
+    expect(messages).toBeDefined();
+    messages![0] = { ...messages![0]!, status: 'cancelled' };
+
+    const recoveredFirst = await store.recoverStaleRuns({ now: new Date(claimedAt.getTime() + 1_000), limit: 1 });
+
+    expect(recoveredFirst).toEqual([]);
+    await expect(store.getRun(finalizedClaim!.run.id)).resolves.toMatchObject({ status: 'stale' });
+    await expect(store.getRun(recoverableClaim!.run.id)).resolves.toMatchObject({ status: 'running' });
+    await expect(services.messages.list(recoverableSession.id)).resolves.toMatchObject([{ status: 'processing' }]);
+
+    const recoveredSecond = await store.recoverStaleRuns({ now: new Date(claimedAt.getTime() + 2_000), limit: 1 });
+
+    expect(recoveredSecond).toHaveLength(1);
+    expect(recoveredSecond[0]!.run.id).toBe(recoverableClaim!.run.id);
+    expect(recoveredSecond[0]!.message.id).toBe(recoverableClaim!.messages[0]!.id);
+    await expect(services.messages.list(recoverableSession.id)).resolves.toMatchObject([{ status: 'pending' }]);
   });
 
   it('does not let a stale worker complete a recovered run', async () => {

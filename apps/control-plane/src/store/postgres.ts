@@ -1294,7 +1294,6 @@ export class PostgresStore implements AppStore {
         );
 
         const messages = messageResult.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence);
-        if (!messages[0]) continue;
 
         await client.query(
           `UPDATE sessions
@@ -1307,6 +1306,8 @@ export class PostgresStore implements AppStore {
            WHERE id = $1`,
           [staleRun.session_id, input.now],
         );
+
+        if (!messages[0]) continue;
 
         recovered.push({ message: messages[0], messages, run: toRun(runResult.rows[0]!) });
       }

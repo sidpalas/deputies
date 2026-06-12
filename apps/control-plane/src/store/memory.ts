@@ -691,11 +691,13 @@ export class MemoryStore implements AppStore {
 
   async recoverStaleRuns(input: { now: Date; limit: number }): Promise<RecoveredRun[]> {
     const recovered: RecoveredRun[] = [];
+    let selected = 0;
 
     for (const run of this.runs.values()) {
-      if (recovered.length >= input.limit) break;
+      if (selected >= input.limit) break;
       if (run.status !== 'running' && run.status !== 'starting' && run.status !== 'cancelling') continue;
       if (!run.leaseExpiresAt || run.leaseExpiresAt > input.now) continue;
+      selected += 1;
 
       const sessionMessages = this.messages.get(run.sessionId) ?? [];
       const pendingMessages: MessageRecord[] = [];
@@ -709,7 +711,6 @@ export class MemoryStore implements AppStore {
         sessionMessages[sessionMessages.indexOf(message)] = pendingMessage;
         pendingMessages.push(pendingMessage);
       }
-      if (!pendingMessages.length) continue;
 
       const { leaseExpiresAt: _leaseExpiresAt, leaseOwner: _leaseOwner, ...runWithoutLease } = run;
       const staleRun: RunRecord = {
@@ -734,6 +735,8 @@ export class MemoryStore implements AppStore {
           updatedAt: input.now,
         });
       }
+
+      if (!pendingMessages.length) continue;
 
       recovered.push({ message: pendingMessages[0]!, messages: pendingMessages, run: staleRun });
     }
