@@ -72,6 +72,33 @@ describe('GenericWebhookService', () => {
     await expect(services.messages.list(first.session!.id)).resolves.toHaveLength(1);
   });
 
+  it.each<[string, string | undefined]>([
+    ['same-length wrong token', 'Bearer secreX'],
+    ['different-length wrong token', 'Bearer wrong-secret'],
+    ['missing authorization', undefined],
+  ])('rejects %s', async (_label, authorization) => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const now = new Date();
+    await store.createWebhookSource({
+      id: '00000000-0000-4000-8000-000000000108',
+      key: 'foo',
+      name: 'Foo',
+      enabled: true,
+      bearerToken: 'secret',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await expect(
+      services.genericWebhooks.handle({
+        sourceKey: 'foo',
+        authorization,
+        payload: { thread: { externalId: 'thread-1' }, dedupeKey: 'delivery-1', prompt: 'do work' },
+      }),
+    ).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
   it('does not reclaim received deliveries and keeps failed retries and processed deliveries idempotent', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
