@@ -8,7 +8,9 @@ const portlessUrl = process.env.VITE_PORTLESS_URL ?? 'https://deputies.localhost
 // Set SERVICE_HOST_REGEX=^$ when this instance runs only as an app preview
 // behind another Deputies service host and should not route service hosts itself.
 // Keep this aligned with apps/web/Caddyfile and apps/web/Caddyfile.local.
-const serviceHostRegex = new RegExp(process.env.SERVICE_HOST_REGEX ?? '^s-');
+// An empty value falls back to the default: an empty regex matches every host,
+// which would misroute the whole app to the service proxy.
+const serviceHostRegex = new RegExp(process.env.SERVICE_HOST_REGEX || '^s-');
 const allowedHosts = process.env.VITE_DEV_ALLOWED_HOSTS
   ? process.env.VITE_DEV_ALLOWED_HOSTS.split(',')
       .map((host) => host.trim())

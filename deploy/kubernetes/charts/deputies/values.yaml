@@ -56,6 +56,10 @@ web:
   podAnnotations: {}
   podLabels: {}
   trustForwardedServiceHosts: false
+  # Regex Caddy matches request hosts against to route sandbox service previews.
+  # Empty uses the built-in default (^s-). Set to ^$ to disable service routing,
+  # e.g. for an instance running behind another Deputies service preview.
+  serviceHostRegex: ''
 
 imagePullSecrets: []
 nameOverride: ''

@@ -105,6 +105,8 @@ The outer instance must keep service-host routing enabled, usually with the defa
 SERVICE_HOST_REGEX=^$
 ```
 
+Disable with `^$`, never an empty string: an empty regex matches every host, which routes the entire app to the service proxy.
+
 Use distinct inner cookie names so the outer service proxy and sandbox bridge do not strip the inner app's auth cookies:
 
 ```sh
