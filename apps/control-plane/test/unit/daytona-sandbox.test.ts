@@ -18,6 +18,7 @@ describe('DaytonaSandboxProvider', () => {
       client,
       image: 'ubuntu:latest',
       idleTimeoutMs: 900_000,
+      resources: { cpu: 2, gpu: 1, memory: 4, disk: 10 },
       envVars: { NODE_ENV: 'test' },
       labels: { app: 'flue-bg-agents' },
     });
@@ -27,6 +28,7 @@ describe('DaytonaSandboxProvider', () => {
     expect(createCalls[0]).toMatchObject({
       image: 'ubuntu:latest',
       autoStopInterval: 15,
+      resources: { cpu: 2, gpu: 1, memory: 4, disk: 10 },
       labels: { app: 'flue-bg-agents', 'flue-session-id': 'session-1' },
     });
     const envVars = (createCalls[0] as { envVars: Record<string, string> }).envVars;

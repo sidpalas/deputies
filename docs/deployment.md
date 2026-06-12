@@ -405,6 +405,17 @@ DAYTONA_SNAPSHOT=<optional>
 SANDBOX_WORKSPACE_PATH=/workspace
 ```
 
+Optional Daytona resource request:
+
+```sh
+DAYTONA_SANDBOX_CPU=2
+DAYTONA_SANDBOX_GPU=
+DAYTONA_SANDBOX_MEMORY_GIB=4
+DAYTONA_SANDBOX_DISK_GIB=10
+```
+
+Leave these empty to use Daytona defaults. These are deployment-level controls because resource sizing affects cost and capacity. If per-session sizing is needed later, expose an allowlisted resource profile in the session API rather than accepting raw CPU, memory, or disk values from clients.
+
 `DAYTONA_API_KEY` is required when `SANDBOX_PROVIDER=daytona`.
 
 Use pinned image tags or digests instead of `latest`. For private registries, configure registry credentials in Daytona.
