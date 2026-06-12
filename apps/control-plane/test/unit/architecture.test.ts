@@ -142,6 +142,7 @@ describe('architecture boundaries', () => {
         'error',
         'events',
         'genericWebhook',
+        'globalEvents',
         'health',
         'message',
         'messages',

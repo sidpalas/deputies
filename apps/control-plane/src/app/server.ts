@@ -525,13 +525,12 @@ export function createApp(config: AppConfig, services = createServices()) {
     const auth = await requireRequestAuthorization(config, services.store, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const after = parseCursor(c.req.query('after') ?? null);
+    const limit = parseEventListLimit(c.req.query('limit'));
+    if (limit === null) return writeError(c, 400, 'invalid_request', 'Expected a positive integer limit');
     const includeAll = c.req.query('include') === 'all';
-    const events = await readableEvents(
-      services.store,
-      auth,
-      includeAll ? await services.events.listAllEvents(after) : await services.events.listAll(after),
-    );
-    return c.json({ events });
+    const batch = await services.events.listAllBatch(after ?? 0, limit, includeAll);
+    const events = await readableEvents(services.store, auth, batch.events);
+    return c.json({ events, cursor: batch.cursor, hasMore: batch.hasMore });
   });
 
   app.get('/events/stream', async (c) => {
@@ -1528,6 +1527,16 @@ async function readableEvents(
     if (await filter(event)) readable.push(event);
   }
   return readable;
+}
+
+const eventListDefaultLimit = 1000;
+const eventListMaxLimit = 2000;
+
+function parseEventListLimit(value: string | undefined): number | null {
+  if (value === undefined) return eventListDefaultLimit;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return Math.min(parsed, eventListMaxLimit);
 }
 
 const eventReadCacheTtlMs = 30_000;

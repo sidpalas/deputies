@@ -112,6 +112,10 @@ export const publicApiResponseSchemas = {
     description: 'Normalized event list envelope.',
     fields: { events: 'array', cursor: 'optional:number', hasMore: 'optional:boolean' },
   },
+  globalEvents: {
+    description: 'Paged global event list envelope.',
+    fields: { events: 'array', cursor: 'number', hasMore: 'boolean' },
+  },
   artifacts: {
     description: 'Artifact list envelope.',
     fields: { artifacts: 'array' },

@@ -97,6 +97,22 @@ export function expectEventsResponse(
   value: unknown,
 ): asserts value is { events: Array<{ type: string; sequence: number }> } {
   expectResponseSchemaField('events', 'events');
+  expectEventListEnvelope(value);
+}
+
+export function expectGlobalEventsResponse(
+  value: unknown,
+): asserts value is { events: Array<{ type: string; sequence: number }>; cursor: number; hasMore: boolean } {
+  expectResponseSchemaField('globalEvents', 'events');
+  expectResponseSchemaField('globalEvents', 'cursor', 'number');
+  expectResponseSchemaField('globalEvents', 'hasMore', 'boolean');
+  expectEventListEnvelope(value);
+  if (!isRecord(value)) return;
+  expect(typeof value.cursor).toBe('number');
+  expect(typeof value.hasMore).toBe('boolean');
+}
+
+function expectEventListEnvelope(value: unknown): void {
   expect(isRecord(value)).toBe(true);
   const events = isRecord(value) ? value.events : undefined;
   expect(Array.isArray(events)).toBe(true);

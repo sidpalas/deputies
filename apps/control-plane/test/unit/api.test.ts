@@ -20,6 +20,7 @@ import {
   expectCallbacksResponse,
   expectErrorResponse,
   expectEventsResponse,
+  expectGlobalEventsResponse,
   expectMessageResponse,
   expectMessagesResponse,
   expectSessionResponse,
@@ -2096,6 +2097,204 @@ describe('core API', () => {
     await expect(nextEvent).resolves.toMatchObject({ type: 'message_created', sequence: 2 });
   });
 
+  it('lists global events with cursor metadata under the default limit', async () => {
+    const first = await services.sessions.create({ title: 'First global event' });
+    const second = await services.sessions.create({ title: 'Second global event' });
+
+    const response = await fetch(`${baseUrl}/events`);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      events: Array<{ id: number; sessionId: string; type: string }>;
+      cursor: number;
+      hasMore: boolean;
+    };
+    expectGlobalEventsResponse(body);
+    expect(body.events).toMatchObject([
+      { id: 1, sessionId: first.id, type: 'session_created' },
+      { id: 2, sessionId: second.id, type: 'session_created' },
+    ]);
+    expect(body.cursor).toBe(2);
+    expect(body.hasMore).toBe(false);
+  });
+
+  it('pages global events by cursor when the limit is smaller than history', async () => {
+    const first = await services.sessions.create({ title: 'First page global event' });
+    const second = await services.sessions.create({ title: 'Second page global event' });
+    const third = await services.sessions.create({ title: 'Third page global event' });
+
+    const firstPage = await fetch(`${baseUrl}/events?limit=2`);
+
+    expect(firstPage.status).toBe(200);
+    const firstBody = (await firstPage.json()) as {
+      events: Array<{ id: number; sessionId: string; type: string }>;
+      cursor: number;
+      hasMore: boolean;
+    };
+    expectGlobalEventsResponse(firstBody);
+    expect(firstBody.events).toMatchObject([
+      { id: 1, sessionId: first.id, type: 'session_created' },
+      { id: 2, sessionId: second.id, type: 'session_created' },
+    ]);
+    expect(firstBody.cursor).toBe(2);
+    expect(firstBody.hasMore).toBe(true);
+
+    const secondPage = await fetch(`${baseUrl}/events?after=${firstBody.cursor}&limit=2`);
+    expect(secondPage.status).toBe(200);
+    const secondBody = (await secondPage.json()) as {
+      events: Array<{ id: number; sessionId: string; type: string }>;
+      cursor: number;
+      hasMore: boolean;
+    };
+    expectGlobalEventsResponse(secondBody);
+    expect(secondBody.events).toMatchObject([{ id: 3, sessionId: third.id, type: 'session_created' }]);
+    expect(secondBody.cursor).toBe(3);
+    expect(secondBody.hasMore).toBe(false);
+  });
+
+  it('uses the default global event limit and clamps oversized limits', async () => {
+    const session = await services.sessions.create({ title: 'Global event limit bounds' });
+    for (let sequence = 1; sequence <= 2000; sequence += 1) {
+      await services.events.append({
+        sessionId: session.id,
+        type: 'message_created',
+        payload: { sequence, source: null },
+      });
+    }
+
+    const defaultLimitResponse = await fetch(`${baseUrl}/events`);
+
+    expect(defaultLimitResponse.status).toBe(200);
+    const defaultLimitBody = await defaultLimitResponse.json();
+    expectGlobalEventsResponse(defaultLimitBody);
+    expect(defaultLimitBody.events).toHaveLength(1000);
+    expect(defaultLimitBody.cursor).toBe(1000);
+    expect(defaultLimitBody.hasMore).toBe(true);
+
+    const overMaxResponse = await fetch(`${baseUrl}/events?limit=9999`);
+
+    expect(overMaxResponse.status).toBe(200);
+    const overMaxBody = await overMaxResponse.json();
+    expectGlobalEventsResponse(overMaxBody);
+    expect(overMaxBody.events).toHaveLength(2000);
+    expect(overMaxBody.cursor).toBe(2000);
+    expect(overMaxBody.hasMore).toBe(true);
+  });
+
+  it('advances global event cursors past events filtered by authorization', async () => {
+    await closeServer(server);
+    store = new MemoryStore();
+    services = createServices(store);
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_SESSION_SECRET: 'test-secret',
+        AUTH_STATIC_USERNAME: 'admin',
+        AUTH_STATIC_PASSWORD: 'password',
+      }),
+      services,
+    );
+    baseUrl = await listen(server);
+
+    const now = new Date();
+    const user = await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000040',
+      accountId: '00000000-0000-4000-8000-000000000041',
+      provider: 'test',
+      providerAccountId: 'limited-reader',
+      username: 'limited-reader',
+      role: 'user',
+      profile: {},
+      now,
+    });
+    await store.createAuthSession({
+      id: 'limited-reader-session',
+      userId: user.id,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    const privateGroup = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000042',
+      name: 'Private global events',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await services.sessions.create({
+      title: 'Hidden first',
+      ownerGroupId: privateGroup.id,
+      visibility: 'group',
+      writePolicy: 'group_members',
+    });
+    const visibleFirst = await services.sessions.create({ title: 'Visible first' });
+    await services.sessions.create({
+      title: 'Hidden second',
+      ownerGroupId: privateGroup.id,
+      visibility: 'group',
+      writePolicy: 'group_members',
+    });
+    const visibleSecond = await services.sessions.create({ title: 'Visible second' });
+
+    const cookie = 'dev_deputies_session=limited-reader-session';
+    const firstPage = await fetch(`${baseUrl}/events?limit=2`, { headers: { cookie } });
+
+    expect(firstPage.status).toBe(200);
+    const firstBody = (await firstPage.json()) as {
+      events: Array<{ id: number; sessionId: string }>;
+      cursor: number;
+      hasMore: boolean;
+    };
+    expectGlobalEventsResponse(firstBody);
+    expect(firstBody.events).toMatchObject([{ id: 2, sessionId: visibleFirst.id }]);
+    expect(firstBody.events).toHaveLength(1);
+    expect(firstBody.cursor).toBe(2);
+    expect(firstBody.hasMore).toBe(true);
+
+    const secondPage = await fetch(`${baseUrl}/events?after=${firstBody.cursor}&limit=2`, { headers: { cookie } });
+    expect(secondPage.status).toBe(200);
+    const secondBody = (await secondPage.json()) as {
+      events: Array<{ id: number; sessionId: string }>;
+      cursor: number;
+      hasMore: boolean;
+    };
+    expectGlobalEventsResponse(secondBody);
+    expect(secondBody.events).toMatchObject([{ id: 4, sessionId: visibleSecond.id }]);
+    expect(secondBody.events).toHaveLength(1);
+    expect(secondBody.cursor).toBe(4);
+    expect(secondBody.hasMore).toBe(true);
+
+    const lastPage = await fetch(`${baseUrl}/events?after=${secondBody.cursor}&limit=2`, { headers: { cookie } });
+    expect(lastPage.status).toBe(200);
+    const lastBody = (await lastPage.json()) as { events: unknown[]; cursor: number; hasMore: boolean };
+    expectGlobalEventsResponse(lastBody);
+    expect(lastBody.events).toEqual([]);
+    expect(lastBody.cursor).toBe(4);
+    expect(lastBody.hasMore).toBe(false);
+  });
+
+  it('rejects invalid global event limits', async () => {
+    const response = await fetch(`${baseUrl}/events?limit=abc`);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'invalid_request',
+      message: 'Expected a positive integer limit',
+    });
+  });
+
+  it('rejects zero global event limits', async () => {
+    const response = await fetch(`${baseUrl}/events?limit=0`);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'invalid_request',
+      message: 'Expected a positive integer limit',
+    });
+  });
+
   it('lists and streams global events for cross-session discovery', async () => {
     const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Global stream session' });
     expect(createSession.status).toBe(201);
@@ -2104,7 +2303,7 @@ describe('core API', () => {
     const globalEventsResponse = await fetch(`${baseUrl}/events`);
     expect(globalEventsResponse.status).toBe(200);
     const globalEventsBody = await globalEventsResponse.json();
-    expectEventsResponse(globalEventsBody);
+    expectGlobalEventsResponse(globalEventsBody);
     expect(globalEventsBody.events).toMatchObject([{ type: 'session_created', sessionId: session.id, id: 1 }]);
 
     const abort = new AbortController();
