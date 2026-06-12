@@ -20,6 +20,7 @@
 - **Depends on**: none (soft: land after plan 004, which touches `apps/web/src/api.ts` and test mocks)
 - **Category**: tech-debt
 - **Planned at**: commit `42ca671`, 2026-06-12
+- **Execution status**: BLOCKED — the planned handler seam crosses into new-thread/navigation/auth state; no refactor was landed under this plan.
 
 ## Why this matters
 

@@ -19,6 +19,7 @@
 - **Depends on**: none
 - **Category**: dx
 - **Planned at**: commit `42ca671`, 2026-06-12
+- **Execution status**: DONE on `main` — ESLint flat config, scripts, mise task, CI job, and mechanical baseline fixes are landed.
 
 ## Why this matters
 

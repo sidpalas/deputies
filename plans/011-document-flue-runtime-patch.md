@@ -27,6 +27,7 @@
 - **Depends on**: none (related: plan 013 performs the upgrade that retires the patch)
 - **Category**: docs / deps
 - **Planned at**: commit `42ca671`, 2026-06-12 (revised same day with upstream resolution facts)
+- **Execution status**: REJECTED — superseded by plan 013, which upgraded Flue and removed the patch instead of documenting it in place.
 
 ## Why this matters
 

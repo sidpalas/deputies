@@ -20,6 +20,7 @@
 - **Depends on**: none
 - **Category**: security
 - **Planned at**: commit `42ca671`, 2026-06-12
+- **Execution status**: DONE on `main` — generic-webhook bearer comparison is timing-safe and same-length/different-length/missing-token regressions are covered.
 
 ## Why this matters
 

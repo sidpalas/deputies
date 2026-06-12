@@ -32,12 +32,13 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - **005 (ESLint) last among in-flight work**: its triage commit touches many files; run it after 002/003/004 (and ideally 006–010) merge, or rebase those branches over it.
 - 003 and 007 both touch the store layer but disjoint files (implementations vs. types) — parallel-safe.
 - 002 and 008 are siblings (same timing-safe pattern, different packages) — efficient to review together.
-- **013 (Flue upgrade)** is the riskiest plan in the set (L effort, HIGH risk, hard STOP conditions). It carries recorded maintainer decisions: pre-upgrade Flue sessions need not be resumable (fresh-start fallback instead), minimal store port (`@flue/postgres` evaluation deferred), target = newest installable ≥0.10.1. Background: the affinity-key issue the local patch addresses was fixed upstream in 0.10.0 (withastro/flue#183, commit `a783a7c`), but 0.10.0 also removes the `@flue/runtime/app` subpath `runner-flue/agent-factory.ts` imports, changes the persistence contract `runner-flue/session-store.ts` implements, and rejects version-4 session state. Plan 011 (interim patch documentation) was superseded by this decision.
+- **006 blocked**: the planned access-groups hook seam crosses into new-thread, navigation, and auth state. Re-plan phase 1 around a narrower hook or move the dependent domains first.
+- **013 (Flue upgrade)** landed on `@flue/runtime@0.11.1` with `minimumReleaseAgeExclude` for that package. Pre-upgrade Flue blobs intentionally start fresh; Deputies-owned product history remains intact. Plan 011 (interim patch documentation) was superseded by this decision.
 - **013 vs 001**: independent, but both touch `apps/control-plane/package.json` + lockfile — trivial rebase whichever lands second.
 
 ## Remaining unplanned follow-ups (intentionally deferred)
 
-- **app.tsx phases 2+** — automations admin state, new-thread form, optimistic archive/unarchive, session-detail refresh machinery. Plan each after phase 1 (plan 006) proves the pattern; the suggested order is in 006's maintenance notes.
+- **app.tsx decomposition** — plan 006 is blocked on cross-domain coupling. Re-plan phase 1 before starting automations admin state, new-thread form, optimistic archive/unarchive, or session-detail refresh machinery.
 - **Backend `app/server.ts` decomposition** (1,606 lines) — same shape as app.tsx, lower churn; plan when route work next touches it.
 - **Service-proxy focused unit tests** (token expiry/renewal edges) — integration coverage exists in api.test.ts; promote if the proxy changes.
 

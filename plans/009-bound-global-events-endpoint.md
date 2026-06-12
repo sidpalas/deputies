@@ -19,6 +19,7 @@
 - **Depends on**: 004 (contract precedent; execute 004 first)
 - **Category**: perf
 - **Planned at**: commit `42ca671`, 2026-06-12
+- **Execution status**: DONE on `main` — global event listing is paged with pre-filter cursor semantics and a separate response contract from unpaged session events.
 
 ## Why this matters
 

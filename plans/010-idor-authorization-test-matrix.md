@@ -19,6 +19,7 @@
 - **Depends on**: none
 - **Category**: tests (security)
 - **Planned at**: commit `42ca671`, 2026-06-12
+- **Execution status**: DONE on `main` — cross-group API authorization matrix covers read, write, stream, callback replay, queue, message, run, workspace-tool, and group-management paths.
 
 ## Why this matters
 

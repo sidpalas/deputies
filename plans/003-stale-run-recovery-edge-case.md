@@ -20,6 +20,7 @@
 - **Depends on**: none
 - **Category**: bug (correctness hardening)
 - **Planned at**: commit `42ca671`, 2026-06-12
+- **Execution status**: DONE on `main` — memory and Postgres recovery now finalize zero-message stale runs, recompute session status, preserve `recovered` semantics, and keep limit parity.
 
 ## Why this matters
 

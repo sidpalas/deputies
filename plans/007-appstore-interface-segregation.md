@@ -20,6 +20,7 @@
 - **Depends on**: none (soft: coordinate with plan 003, which edits store implementations — types-only here, so conflicts are unlikely)
 - **Category**: tech-debt
 - **Planned at**: commit `42ca671`, 2026-06-12
+- **Execution status**: DONE on `main` — remaining `AppStore` methods were split into domain interfaces and clean consumers were narrowed type-only.
 
 ## Why this matters
 

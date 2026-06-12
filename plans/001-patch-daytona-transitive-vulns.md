@@ -20,6 +20,7 @@
 - **Depends on**: none
 - **Category**: security (dependencies)
 - **Planned at**: commit `42ca671`, 2026-06-12
+- **Execution status**: DONE on `main` — revised scope also cleared drifted non-Daytona high advisories; `pnpm audit --prod --audit-level high` passes with one moderate remaining.
 
 ## Why this matters
 
