@@ -842,8 +842,8 @@ describe('createSandboxPiToolDefinitions', () => {
     expect(textResult(findResult)).toContain('src/app.ts');
     expect(textResult(findResult)).not.toContain('src/notes.md');
 
-    const cappedFindResult = await executeTool(tools, 'find', { pattern: '*.ts', limit: 999_999 });
-    expect(cappedFindResult.details).toMatchObject({ limitCapped: 5000 });
+    const highLimitFindResult = await executeTool(tools, 'find', { pattern: '*.ts', limit: 999_999 });
+    expect(textResult(highLimitFindResult)).toContain('src/app.ts');
 
     const lsResult = await executeTool(tools, 'ls', { path: 'src' });
     expect(textResult(lsResult)).toContain('app.ts');
@@ -871,6 +871,25 @@ describe('createSandboxPiToolDefinitions', () => {
       cwd: '/workspace',
       timeoutMs: 30_000,
     });
+  });
+
+  it('passes find cancellation to the sandbox exec call', async () => {
+    const sandbox = createMemorySandbox();
+    const controller = new AbortController();
+    const exec = vi.fn(async () => {
+      const now = new Date();
+      return { exitCode: 0, stdout: '/workspace/src/app.ts\n', stderr: '', startedAt: now, completedAt: now };
+    });
+    sandbox.exec = exec;
+
+    await executeTool(
+      createSandboxPiToolDefinitions(sandbox, sandbox.workspacePath),
+      'find',
+      { pattern: '*.ts' },
+      controller.signal,
+    );
+
+    expect(exec).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
   });
 
   it('does not pass Pi worker environment to sandbox bash commands', async () => {
@@ -949,10 +968,11 @@ async function executeTool(
   tools: ReturnType<typeof createSandboxPiToolDefinitions>,
   name: string,
   params: unknown,
+  signal?: AbortSignal,
 ): Promise<SandboxPiToolResult> {
   const tool = tools.find((candidate) => candidate.name === name);
   if (!tool) throw new Error(`Missing tool: ${name}`);
-  return tool.execute('tool-call', params, undefined, undefined, undefined as never);
+  return tool.execute('tool-call', params, signal, undefined, undefined as never);
 }
 
 function textResult(result: SandboxPiToolResult): string {

@@ -1,12 +1,15 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import {
   createBashToolDefinition,
   createEditToolDefinition,
+  createFindToolDefinition,
   createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
   type BashOperations,
   type EditOperations,
+  type FindOperations,
   type LsOperations,
   type ReadOperations,
   type ToolDefinition,
@@ -26,15 +29,7 @@ type GrepInput = {
   requestedLimit?: number;
 };
 
-type FindInput = {
-  pattern: string;
-  path?: string;
-  limit: number;
-  requestedLimit?: number;
-};
-
 const defaultGrepLimit = 100;
-const defaultFindLimit = 1000;
 const maxGrepLimit = 200;
 const maxGrepContext = 10;
 const maxFindLimit = 5000;
@@ -68,22 +63,7 @@ const grepToolParameters = {
 } as const;
 
 const piGrepToolParameters = grepToolParameters as unknown as ToolDefinition['parameters'];
-
-const findToolParameters = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['pattern'],
-  properties: {
-    pattern: {
-      type: 'string',
-      description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
-    },
-    path: { type: 'string', description: 'Directory to search in (default: current directory)' },
-    limit: { type: 'number', description: `Maximum number of results (default: ${defaultFindLimit})` },
-  },
-} as const;
-
-const piFindToolParameters = findToolParameters as unknown as ToolDefinition['parameters'];
+const findSignalStorage = new AsyncLocalStorage<AbortSignal | undefined>();
 
 export function createSandboxPiToolDefinitions(sandbox: SandboxHandle, cwd: string): ToolDefinition[] {
   return [
@@ -141,6 +121,9 @@ function createEditOperations(sandbox: SandboxHandle): EditOperations {
 function createBashOperations(sandbox: SandboxHandle): BashOperations {
   return {
     async exec(command, cwd, options) {
+      // Deliberately do not forward options.env. The Pi process environment may
+      // contain credentials; sandbox commands should receive only the provider's
+      // controlled base environment.
       const result = await sandbox.exec({
         command,
         cwd,
@@ -165,6 +148,34 @@ function createLsOperations(sandbox: SandboxHandle): LsOperations {
     },
     async readdir(absolutePath) {
       return requireFs(sandbox).readdir(absolutePath);
+    },
+  };
+}
+
+function createFindOperations(sandbox: SandboxHandle): FindOperations {
+  return {
+    async exists(absolutePath) {
+      return requireFs(sandbox).exists(absolutePath);
+    },
+    async glob(pattern, cwd, options) {
+      const command = sandboxFindCommandFromPiOptions(pattern, cwd, options);
+      const signal = findSignalStorage.getStore();
+      const result = await sandbox.exec({ command, cwd, timeoutMs: findExecTimeoutMs, ...(signal ? { signal } : {}) });
+      if (result.exitCode !== 0) throw new Error(findErrorMessage(result));
+      return result.stdout
+        .split('\n')
+        .map((line) => line.replace(/\r$/, '').trim())
+        .filter(Boolean);
+    },
+  };
+}
+
+function createSandboxFindToolDefinition(sandbox: SandboxHandle, cwd: string): ToolDefinition {
+  const tool = createFindToolDefinition(cwd, { operations: createFindOperations(sandbox) }) as ToolDefinition;
+  return {
+    ...tool,
+    execute(toolCallId, params, signal, onUpdate, ctx) {
+      return findSignalStorage.run(signal, () => tool.execute(toolCallId, params, signal, onUpdate, ctx));
     },
   };
 }
@@ -266,47 +277,6 @@ function createSandboxGrepToolDefinition(sandbox: SandboxHandle, cwd: string): T
   };
 }
 
-function createSandboxFindToolDefinition(sandbox: SandboxHandle, cwd: string): ToolDefinition {
-  return {
-    name: 'find',
-    label: 'find',
-    description: `Search for sandbox files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is capped to ${defaultFindLimit} results by default.`,
-    promptSnippet: 'Find sandbox files by glob pattern',
-    parameters: piFindToolParameters,
-    async execute(_toolCallId, params, signal) {
-      const input = readFindInput(params as Record<string, unknown>);
-      const searchPath = resolveSandboxPath(cwd, input.path ?? '.');
-      if (!(await requireFs(sandbox).exists(searchPath))) throw new Error(`Path not found: ${searchPath}`);
-      const command = sandboxFindCommand(input, searchPath);
-      const result = await sandbox.exec({ command, cwd, timeoutMs: findExecTimeoutMs, ...(signal ? { signal } : {}) });
-      if (result.exitCode !== 0) throw new Error(findErrorMessage(result));
-      const lines = result.stdout
-        .split('\n')
-        .map((line) => line.replace(/\r$/, '').trim())
-        .filter(Boolean);
-      if (lines.length === 0)
-        return { content: [{ type: 'text', text: 'No files found matching pattern' }], details: undefined };
-
-      const relativized = lines.map((line) => relativeSandboxPath(searchPath, line));
-      const resultLimitReached = relativized.length >= input.limit;
-      const outputLines = [...relativized];
-      const details: Record<string, unknown> = {};
-      if (input.requestedLimit !== undefined && input.requestedLimit > input.limit) {
-        outputLines.push('', `[Requested limit capped to ${input.limit} results]`);
-        details.limitCapped = input.limit;
-      }
-      if (resultLimitReached) {
-        outputLines.push('', `[${input.limit} results limit reached. Increase limit or refine pattern]`);
-        details.resultLimitReached = input.limit;
-      }
-      return {
-        content: [{ type: 'text', text: outputLines.join('\n') }],
-        details: Object.keys(details).length > 0 ? details : undefined,
-      };
-    },
-  };
-}
-
 async function statExistingPath(fs: SandboxFileSystem, absolutePath: string) {
   try {
     return await fs.stat(absolutePath);
@@ -331,16 +301,6 @@ function readGrepInput(params: Record<string, unknown>): GrepInput {
     input.requestedLimit = Math.floor(params.limit);
   if (typeof params.path === 'string' && params.path.trim()) input.path = params.path;
   if (typeof params.glob === 'string' && params.glob.trim()) input.glob = params.glob;
-  return input;
-}
-
-function readFindInput(params: Record<string, unknown>): FindInput {
-  const pattern = typeof params.pattern === 'string' ? params.pattern : '';
-  if (!pattern) throw new Error('find pattern must be a non-empty string');
-  const input: FindInput = { pattern, limit: readBoundedPositiveInteger(params.limit, defaultFindLimit, maxFindLimit) };
-  if (typeof params.limit === 'number' && Number.isFinite(params.limit))
-    input.requestedLimit = Math.floor(params.limit);
-  if (typeof params.path === 'string' && params.path.trim()) input.path = params.path;
   return input;
 }
 
@@ -435,16 +395,24 @@ function sandboxGrepCommand(input: GrepInput, searchPath: string): string {
   return joinShellArgs(args);
 }
 
-function sandboxFindCommand(input: FindInput, searchPath: string): string {
-  const args = ['--glob', '--color=never', '--hidden', '--no-require-git', '--max-results', String(input.limit)];
-  let effectivePattern = input.pattern;
-  if (input.pattern.includes('/')) {
+function sandboxFindCommandFromPiOptions(
+  pattern: string,
+  cwd: string,
+  options: { ignore: string[]; limit: number },
+): string {
+  const requestedLimit = Number.isFinite(options.limit) ? Math.floor(options.limit) : maxFindLimit;
+  const limit = Math.min(maxFindLimit, Math.max(1, requestedLimit));
+  const args = ['--glob', '--color=never', '--hidden', '--no-require-git', '--max-results', String(limit)];
+  for (const ignored of options.ignore) args.push('--exclude', ignored);
+
+  let effectivePattern = pattern;
+  if (pattern.includes('/')) {
     args.push('--full-path');
-    if (!input.pattern.startsWith('/') && !input.pattern.startsWith('**/') && input.pattern !== '**') {
-      effectivePattern = `**/${input.pattern}`;
+    if (!pattern.startsWith('/') && !pattern.startsWith('**/') && pattern !== '**') {
+      effectivePattern = `**/${pattern}`;
     }
   }
-  args.push('--', effectivePattern, searchPath);
+  args.push('--', effectivePattern, cwd);
   const quotedArgs = joinShellArgs(args);
   return `(command -v fd >/dev/null 2>&1 && exec fd ${quotedArgs}; command -v fdfind >/dev/null 2>&1 && exec fdfind ${quotedArgs}; echo 'fd is not available in the sandbox' >&2; exit 127)`;
 }
