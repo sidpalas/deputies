@@ -95,6 +95,8 @@ The 100% compute cost is a useful input, but it does not tell the whole story. B
 
 The ability to stop a sandbox while retaining its filesystem state is one of the main cost-saving levers. The agent should be able to keep the working tree, dependency cache, generated files, logs, and other useful context without paying for active compute the whole time it waits on a human.
 
+There are a few versions of this same general pattern. Some platforms charge only for CPU and memory actually being used, which can be effective when the agent is truly idle. Other platforms have persistent volumes or snapshot/restore capabilities. Volumes and snapshots usually require more lifecycle management, but the goal is the same: keep useful state without keeping active compute running.
+
 Using Daytona's listed storage price of `$0.000108/GiB-hour`, the difference is large even for a one-day session with 10 GiB of workspace state:
 
 {/* table:body-width */}
