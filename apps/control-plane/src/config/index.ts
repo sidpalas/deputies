@@ -2,7 +2,14 @@ import { getModels, type KnownProvider } from '@earendil-works/pi-ai';
 
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue' | 'pi';
-export type SandboxProviderKind = 'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'k8s-agent-sandbox' | 'ecs';
+export type SandboxProviderKind =
+  | 'fake'
+  | 'unsafe-local'
+  | 'docker'
+  | 'daytona'
+  | 'k8s-agent-sandbox'
+  | 'modal'
+  | 'ecs';
 export type DockerOrchestratorMode = 'in-process' | 'http';
 export type AgentSandboxOrchestratorMode = 'in-process' | 'http';
 export type AppStoreKind = 'memory' | 'postgres';
@@ -101,6 +108,20 @@ export type AppConfig = {
   daytonaSandboxGpu?: number;
   daytonaSandboxMemoryGiB?: number;
   daytonaSandboxDiskGiB?: number;
+  modalTokenId?: string;
+  modalTokenSecret?: string;
+  modalEnvironment?: string;
+  modalEndpoint?: string;
+  modalAppName: string;
+  modalImage: string;
+  modalSandboxTimeoutMs: number;
+  modalSandboxCpu?: number;
+  modalSandboxCpuLimit?: number;
+  modalSandboxMemoryMiB?: number;
+  modalSandboxMemoryLimitMiB?: number;
+  modalSandboxGpu?: string;
+  modalSandboxCloud?: string;
+  modalSandboxRegions: string[];
   slackApiBaseUrl: string;
   slackSigningSecret?: string;
   slackBotToken?: string;
@@ -178,7 +199,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'unsafe-local', 'docker', 'daytona', 'k8s-agent-sandbox', 'ecs'],
+      ['fake', 'unsafe-local', 'docker', 'daytona', 'k8s-agent-sandbox', 'modal', 'ecs'],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
@@ -213,6 +234,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       'WEB_SEARCH_CONTENT_MAX_CHARS',
     ),
     webSearchTimeoutMs: parsePositiveInteger(env.WEB_SEARCH_TIMEOUT_MS, 10_000, 'WEB_SEARCH_TIMEOUT_MS'),
+    modalAppName: env.MODAL_APP_NAME ?? 'deputies-sandboxes',
+    modalImage: env.MODAL_IMAGE ?? 'ghcr.io/sidpalas/deputies-daytona-sandbox:latest',
+    modalSandboxTimeoutMs:
+      parsePositiveInteger(env.MODAL_SANDBOX_TIMEOUT_SECONDS, 24 * 60 * 60, 'MODAL_SANDBOX_TIMEOUT_SECONDS') * 1000,
+    modalSandboxRegions: parseStringList(env.MODAL_SANDBOX_REGIONS),
     slackApiBaseUrl: env.SLACK_API_BASE_URL ?? 'https://slack.com/api',
     unsafeSlackWebhookAllowAllIds: parseBoolean(
       env.UNSAFE_SLACK_WEBHOOK_ALLOW_ALL_IDS,
@@ -299,6 +325,23 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     config.daytonaSandboxMemoryGiB = parsePositiveNumber(env.DAYTONA_SANDBOX_MEMORY_GIB, 'DAYTONA_SANDBOX_MEMORY_GIB');
   if (env.DAYTONA_SANDBOX_DISK_GIB)
     config.daytonaSandboxDiskGiB = parsePositiveNumber(env.DAYTONA_SANDBOX_DISK_GIB, 'DAYTONA_SANDBOX_DISK_GIB');
+  if (env.MODAL_TOKEN_ID) config.modalTokenId = env.MODAL_TOKEN_ID;
+  if (env.MODAL_TOKEN_SECRET) config.modalTokenSecret = env.MODAL_TOKEN_SECRET;
+  if (env.MODAL_ENVIRONMENT) config.modalEnvironment = env.MODAL_ENVIRONMENT;
+  if (env.MODAL_ENDPOINT) config.modalEndpoint = env.MODAL_ENDPOINT;
+  if (env.MODAL_SANDBOX_CPU) config.modalSandboxCpu = parsePositiveNumber(env.MODAL_SANDBOX_CPU, 'MODAL_SANDBOX_CPU');
+  if (env.MODAL_SANDBOX_CPU_LIMIT)
+    config.modalSandboxCpuLimit = parsePositiveNumber(env.MODAL_SANDBOX_CPU_LIMIT, 'MODAL_SANDBOX_CPU_LIMIT');
+  if (env.MODAL_SANDBOX_MEMORY_MIB)
+    config.modalSandboxMemoryMiB = parsePositiveInteger(env.MODAL_SANDBOX_MEMORY_MIB, 1, 'MODAL_SANDBOX_MEMORY_MIB');
+  if (env.MODAL_SANDBOX_MEMORY_LIMIT_MIB)
+    config.modalSandboxMemoryLimitMiB = parsePositiveInteger(
+      env.MODAL_SANDBOX_MEMORY_LIMIT_MIB,
+      1,
+      'MODAL_SANDBOX_MEMORY_LIMIT_MIB',
+    );
+  if (env.MODAL_SANDBOX_GPU) config.modalSandboxGpu = env.MODAL_SANDBOX_GPU;
+  if (env.MODAL_SANDBOX_CLOUD) config.modalSandboxCloud = env.MODAL_SANDBOX_CLOUD;
   if (env.SLACK_SIGNING_SECRET) config.slackSigningSecret = env.SLACK_SIGNING_SECRET;
   if (env.SLACK_BOT_TOKEN) config.slackBotToken = env.SLACK_BOT_TOKEN;
   if (env.GITHUB_APP_ID) config.githubAppId = env.GITHUB_APP_ID;
@@ -319,6 +362,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   validateWebSearchConfig(config);
   validateSandboxSecretConfig(config, env);
   validateAgentSandboxOrchestratorConfig(config);
+  validateModalConfig(config);
 
   if (config.slackSigningSecret && !config.unsafeSlackWebhookAllowAllIds && !hasAnySlackAllowlist(config)) {
     throw new Error(
@@ -349,8 +393,16 @@ function validateAgentSandboxOrchestratorConfig(config: AppConfig): void {
   requireAgentSandboxOrchestratorToken(config);
 }
 
+function validateModalConfig(config: AppConfig): void {
+  if (config.sandboxProvider !== 'modal') return;
+  requireModalTokenCredentials(config);
+}
+
 function validateSandboxSecretConfig(config: AppConfig, env: NodeJS.ProcessEnv): void {
-  const sandboxSecretsRequired = config.sandboxProvider === 'docker' || config.sandboxProvider === 'k8s-agent-sandbox';
+  const sandboxSecretsRequired =
+    config.sandboxProvider === 'docker' ||
+    config.sandboxProvider === 'k8s-agent-sandbox' ||
+    config.sandboxProvider === 'modal';
   if (config.appDataStore === 'postgres' && sandboxSecretsRequired && !config.sandboxSecretEncryptionKey) {
     throw new Error(
       `SANDBOX_SECRET_ENCRYPTION_KEY is required when APP_DATA_STORE=postgres and SANDBOX_PROVIDER=${config.sandboxProvider}`,
@@ -452,6 +504,14 @@ export function requireDaytonaApiKey(config: AppConfig): string {
   }
 
   return config.daytonaApiKey;
+}
+
+export function requireModalTokenCredentials(config: AppConfig): { tokenId: string; tokenSecret: string } {
+  if (!config.modalTokenId || !config.modalTokenSecret) {
+    throw new Error('MODAL_TOKEN_ID and MODAL_TOKEN_SECRET are required when SANDBOX_PROVIDER=modal');
+  }
+
+  return { tokenId: config.modalTokenId, tokenSecret: config.modalTokenSecret };
 }
 
 export function requireDockerOrchestratorUrl(config: AppConfig): string {

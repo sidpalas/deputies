@@ -13,6 +13,7 @@ import {
   requireDaytonaApiKey,
   requireDockerOrchestratorUrl,
   requireGitHubAppCredentials,
+  requireModalTokenCredentials,
   requireRunnerModelDefault,
 } from './config/index.js';
 import { startEventCompactor } from './events/compaction.js';
@@ -43,6 +44,7 @@ import {
   InProcessAgentSandboxOrchestrator,
 } from './sandbox/k8s-agent-sandbox.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
+import { ModalSandboxProvider, type ModalSandboxProviderOptions } from './sandbox/modal.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
 import type { SandboxProvider } from './sandbox/types.js';
 import { MemoryStore } from './store/memory.js';
@@ -284,6 +286,28 @@ function createSandboxProvider(): SandboxProvider {
             }),
           );
     return new AgentSandboxProvider({ orchestrator });
+  }
+  if (config.sandboxProvider === 'modal') {
+    const credentials = requireModalTokenCredentials(config);
+    const options: ModalSandboxProviderOptions = {
+      ...credentials,
+      appName: config.modalAppName,
+      image: config.modalImage,
+      workspacePath: config.sandboxWorkspacePath,
+      idleTimeoutMs: config.sandboxIdleTimeoutMs,
+      timeoutMs: config.modalSandboxTimeoutMs,
+      bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
+    };
+    if (config.modalEnvironment) options.environment = config.modalEnvironment;
+    if (config.modalEndpoint) options.endpoint = config.modalEndpoint;
+    if (config.modalSandboxCpu !== undefined) options.cpu = config.modalSandboxCpu;
+    if (config.modalSandboxCpuLimit !== undefined) options.cpuLimit = config.modalSandboxCpuLimit;
+    if (config.modalSandboxMemoryMiB !== undefined) options.memoryMiB = config.modalSandboxMemoryMiB;
+    if (config.modalSandboxMemoryLimitMiB !== undefined) options.memoryLimitMiB = config.modalSandboxMemoryLimitMiB;
+    if (config.modalSandboxGpu) options.gpu = config.modalSandboxGpu;
+    if (config.modalSandboxCloud) options.cloud = config.modalSandboxCloud;
+    if (config.modalSandboxRegions.length) options.regions = config.modalSandboxRegions;
+    return new ModalSandboxProvider(options);
   }
 
   throw new Error(`SANDBOX_PROVIDER=${config.sandboxProvider} is not wired yet`);

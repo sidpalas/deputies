@@ -52,6 +52,10 @@ describe('loadConfig', () => {
       webSearchMaxResults: 10,
       webSearchContentMaxChars: 5000,
       webSearchTimeoutMs: 10000,
+      modalAppName: 'deputies-sandboxes',
+      modalImage: 'ghcr.io/sidpalas/deputies-daytona-sandbox:latest',
+      modalSandboxTimeoutMs: 86_400_000,
+      modalSandboxRegions: [],
       slackApiBaseUrl: 'https://slack.com/api',
       unsafeSlackWebhookAllowAllIds: false,
       slackAllowedTeamIds: [],
@@ -155,6 +159,20 @@ describe('loadConfig', () => {
         DAYTONA_SANDBOX_GPU: '1',
         DAYTONA_SANDBOX_MEMORY_GIB: '4',
         DAYTONA_SANDBOX_DISK_GIB: '10',
+        MODAL_TOKEN_ID: 'modal-token-id',
+        MODAL_TOKEN_SECRET: 'modal-token-secret',
+        MODAL_ENVIRONMENT: 'main',
+        MODAL_ENDPOINT: 'https://modal.example',
+        MODAL_APP_NAME: 'deputies-modal',
+        MODAL_IMAGE: 'ghcr.io/example/modal-sandbox:test',
+        MODAL_SANDBOX_TIMEOUT_SECONDS: '3600',
+        MODAL_SANDBOX_CPU: '2',
+        MODAL_SANDBOX_CPU_LIMIT: '4',
+        MODAL_SANDBOX_MEMORY_MIB: '4096',
+        MODAL_SANDBOX_MEMORY_LIMIT_MIB: '8192',
+        MODAL_SANDBOX_GPU: 'A10G',
+        MODAL_SANDBOX_CLOUD: 'aws',
+        MODAL_SANDBOX_REGIONS: 'us-east-1, us-west-2',
         SLACK_API_BASE_URL: 'https://slack.emulate.localhost/api',
         SLACK_SIGNING_SECRET: 'slack-secret',
         SLACK_BOT_TOKEN: 'xoxb-token',
@@ -257,6 +275,20 @@ describe('loadConfig', () => {
       daytonaSandboxGpu: 1,
       daytonaSandboxMemoryGiB: 4,
       daytonaSandboxDiskGiB: 10,
+      modalTokenId: 'modal-token-id',
+      modalTokenSecret: 'modal-token-secret',
+      modalEnvironment: 'main',
+      modalEndpoint: 'https://modal.example',
+      modalAppName: 'deputies-modal',
+      modalImage: 'ghcr.io/example/modal-sandbox:test',
+      modalSandboxTimeoutMs: 3_600_000,
+      modalSandboxCpu: 2,
+      modalSandboxCpuLimit: 4,
+      modalSandboxMemoryMiB: 4096,
+      modalSandboxMemoryLimitMiB: 8192,
+      modalSandboxGpu: 'A10G',
+      modalSandboxCloud: 'aws',
+      modalSandboxRegions: ['us-east-1', 'us-west-2'],
       slackApiBaseUrl: 'https://slack.emulate.localhost/api',
       slackSigningSecret: 'slack-secret',
       slackBotToken: 'xoxb-token',
@@ -300,7 +332,7 @@ describe('loadConfig', () => {
     );
   });
 
-  it.each(['docker', 'k8s-agent-sandbox'])(
+  it.each(['docker', 'k8s-agent-sandbox', 'modal'])(
     'requires an app secret encryption key for postgres-backed %s sandboxes',
     (provider) => {
       expect(() =>
@@ -312,6 +344,16 @@ describe('loadConfig', () => {
       ).toThrow('SANDBOX_SECRET_ENCRYPTION_KEY is required');
     },
   );
+
+  it('requires Modal token credentials when the Modal provider is enabled', () => {
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        SANDBOX_PROVIDER: 'modal',
+        SANDBOX_SECRET_ENCRYPTION_KEY: 'secret',
+      }),
+    ).toThrow('MODAL_TOKEN_ID and MODAL_TOKEN_SECRET are required when SANDBOX_PROVIDER=modal');
+  });
 
   it('requires URL and token for k8s-agent-sandbox HTTP orchestrator mode', () => {
     expect(() =>
@@ -579,7 +621,7 @@ describe('loadConfig', () => {
   it('rejects invalid enum values', () => {
     expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of combined, all, api, worker');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'local' })).toThrow(
-      'Expected one of fake, unsafe-local, docker, daytona, k8s-agent-sandbox, ecs',
+      'Expected one of fake, unsafe-local, docker, daytona, k8s-agent-sandbox, modal, ecs',
     );
     expect(loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi' }).runner).toBe('pi');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_COOKIE_SAME_SITE: 'strict' })).toThrow(
