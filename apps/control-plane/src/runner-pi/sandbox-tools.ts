@@ -175,9 +175,21 @@ function createSandboxFindToolDefinition(sandbox: SandboxHandle, cwd: string): T
   return {
     ...tool,
     execute(toolCallId, params, signal, onUpdate, ctx) {
-      return findSignalStorage.run(signal, () => tool.execute(toolCallId, params, signal, onUpdate, ctx));
+      return findSignalStorage.run(signal, () =>
+        tool.execute(toolCallId, normalizeSandboxFindParams(params), signal, onUpdate, ctx),
+      );
     },
   };
+}
+
+function normalizeSandboxFindParams(params: unknown): unknown {
+  if (typeof params !== 'object' || params === null) return params;
+  const input = params as Record<string, unknown>;
+  if (typeof input.limit !== 'number' || !Number.isFinite(input.limit)) return params;
+
+  const limit = Math.min(maxFindLimit, Math.max(1, Math.floor(input.limit)));
+  if (limit === input.limit) return params;
+  return { ...input, limit };
 }
 
 function createSandboxGrepToolDefinition(sandbox: SandboxHandle, cwd: string): ToolDefinition {

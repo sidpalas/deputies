@@ -892,6 +892,29 @@ describe('createSandboxPiToolDefinitions', () => {
     expect(exec).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
   });
 
+  it('reports sandbox find truncation when the requested limit exceeds the remote cap', async () => {
+    const sandbox = createMemorySandbox();
+    const now = new Date();
+    sandbox.exec = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: Array.from({ length: 5000 }, (_, index) => `/workspace/f${index}.ts`).join('\n'),
+      stderr: '',
+      startedAt: now,
+      completedAt: now,
+    }));
+
+    const result = await executeTool(createSandboxPiToolDefinitions(sandbox, sandbox.workspacePath), 'find', {
+      pattern: '*.ts',
+      limit: 999_999,
+    });
+
+    expect(result.details).toMatchObject({ resultLimitReached: 5000 });
+    expect(textResult(result)).toContain('[5000 results limit reached]');
+    expect(sandbox.exec).toHaveBeenCalledWith(
+      expect.objectContaining({ command: expect.stringContaining('--max-results 5000') }),
+    );
+  });
+
   it('does not pass Pi worker environment to sandbox bash commands', async () => {
     const originalSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET;
     process.env.GITHUB_OAUTH_CLIENT_SECRET = 'worker-secret';
