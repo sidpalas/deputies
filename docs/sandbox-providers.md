@@ -12,7 +12,7 @@ Initial providers may include:
 - `daytona`: hosted persistent development sandboxes.
 - `kubernetes`: pods/jobs inside a cluster.
 - `ecs`: Fargate tasks in AWS.
-- `modal` or others later, if desired.
+- `modal`: hosted Modal Sandboxes using Modal's native exec/filesystem APIs.
 
 Some sandbox providers create sandboxes from OCI/container images without supporting nested Docker or Docker Compose inside the sandbox. For those providers, Postgres-backed tests should start Postgres directly in the sandbox. The repo-owned Daytona image and scripts in `deploy/sandboxes/daytona/` install Postgres directly and expose `./deploy/sandboxes/daytona/start-postgres.sh` for this path.
 
@@ -473,6 +473,73 @@ Current provider implementation:
 - `DOCKER_ORCHESTRATOR_MODE=in-process` runs Docker orchestration inside the control-plane process for single-service operation.
 - `DOCKER_ORCHESTRATOR_MODE=http` makes the control-plane call an external Docker orchestrator service.
 - `pnpm --dir apps/control-plane docker-orchestrator:dev` starts the orchestrator service from source for development.
+
+### Modal Provider
+
+Purpose:
+
+- Hosted sandbox execution on Modal without running a separate orchestrator service.
+- Fast first-pass support for real Flue/Pi agent work using Modal's native Sandbox exec and filesystem APIs.
+
+Behavior:
+
+- Creates one Modal Sandbox per session under `MODAL_APP_NAME`.
+- Uses `MODAL_IMAGE` as an OCI image reference. The default is the Daytona-style Deputies image because Modal supplies exec and filesystem APIs outside the container.
+- Runs a long-lived entrypoint and starts the Deputies sandbox bridge on port 8080 when the image contains `/opt/deputies/sandbox-bridge`.
+- Uses Modal's native `exec`, `filesystem`, `poll`, and `terminate` APIs for product sandbox operations.
+- Uses Modal Sandbox Connect Tokens plus the Deputies sandbox bridge for service previews.
+- Treats terminated sandboxes as stopped/missing and recreates on later work. Modal does not currently expose a pause/resume lifecycle equivalent to Docker/Kubernetes stop/start for this provider.
+
+Provider capabilities:
+
+```ts
+export const modalCapabilities: SandboxCapabilities = {
+  persistentFilesystem: false,
+  snapshots: true,
+  stopStart: false,
+  exec: true,
+  filesystem: true,
+  streamingLogs: false,
+  portForwarding: true,
+  previewUrls: true,
+  objectStorageArtifacts: false,
+};
+```
+
+Configuration:
+
+```txt
+SANDBOX_PROVIDER=modal
+MODAL_TOKEN_ID=...
+MODAL_TOKEN_SECRET=...
+MODAL_APP_NAME=deputies-sandboxes
+MODAL_IMAGE=ghcr.io/sidpalas/deputies-daytona-sandbox:latest
+MODAL_SANDBOX_TIMEOUT_SECONDS=86400
+SANDBOX_WORKSPACE_PATH=/workspace
+```
+
+Optional resource and placement settings:
+
+```txt
+MODAL_ENVIRONMENT=main
+MODAL_SANDBOX_CPU=2
+MODAL_SANDBOX_CPU_LIMIT=4
+MODAL_SANDBOX_MEMORY_MIB=4096
+MODAL_SANDBOX_MEMORY_LIMIT_MIB=8192
+MODAL_SANDBOX_GPU=A10G
+MODAL_SANDBOX_CLOUD=aws
+MODAL_SANDBOX_REGIONS=us-east-1,us-west-2
+```
+
+For Postgres-backed deployments, `SANDBOX_SECRET_ENCRYPTION_KEY` is required because the provider stores a per-sandbox bridge token for preview proxying.
+
+Current state and merge blocker:
+
+- The current Modal provider is a working first pass for live sandbox creation, native exec/filesystem operations, service previews through the Deputies sandbox bridge, reconnect by Modal sandbox ID, health checks, and teardown.
+- Modal does not expose a native stop/start lifecycle that suspends compute while preserving the same sandbox instance and mutable state. For that reason, `stopStart` is intentionally `false`.
+- A stopped or terminated Modal sandbox cannot be resumed by Deputies. Without an additional persistence mechanism, idle cleanup would discard repository checkout state, installed dependencies, generated files, and other workspace mutations.
+- Merging the Modal provider for production use is blocked on adding a Deputies persistence lifecycle for providers without native state-preserving stop/start. The likely implementation should persist either a provider snapshot or a provider volume reference, restore a new sandbox from that artifact on the next session interaction, and clean up superseded or expired artifacts.
+- Modal's likely first persistence primitive is a Directory Snapshot for `SANDBOX_WORKSPACE_PATH` or a Filesystem Snapshot for the whole sandbox filesystem. Both are checkpoint/restore primitives that create a new sandbox later; they are not equivalent to resuming the same running sandbox.
 
 #### Docker Persistence
 

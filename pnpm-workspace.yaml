@@ -7,6 +7,7 @@ minimumReleaseAgeExclude:
 allowBuilds:
   '@google/genai': false
   '@mongodb-js/zstd': false
+  cbor-extract: false
   esbuild: true
   node-liblzma: false
   protobufjs: false
