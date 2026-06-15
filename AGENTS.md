@@ -99,6 +99,12 @@ If a route works in Vite dev but fails after deployment, check these Caddy match
 
 Do not claim Postgres-backed tests could not run until you have tried `./deploy/sandboxes/daytona/start-postgres.sh` or confirmed the current sandbox image does not include the direct-Postgres helper scripts from `deploy/sandboxes/daytona/`.
 
-## Commits
+## Commits and Pull Requests
 
-Commit messages should follow Conventional Commits style.
+Commit messages and pull request titles should follow Conventional Commits style, for example:
+
+```text
+feat: add sandbox preview keepalive
+fix: avoid forwarding worker env to sandbox bash
+refactor: reuse Pi find tool for sandbox operations
+```
