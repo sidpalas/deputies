@@ -43,6 +43,7 @@ import {
   InProcessAgentSandboxOrchestrator,
 } from './sandbox/k8s-agent-sandbox.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
+import { NamespaceSandboxProvider } from './sandbox/namespace.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
 import type { SandboxProvider } from './sandbox/types.js';
 import { MemoryStore } from './store/memory.js';
@@ -263,6 +264,22 @@ function createSandboxProvider(): SandboxProvider {
       bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
     });
     return new DaytonaSandboxProvider(options);
+  }
+  if (config.sandboxProvider === 'namespace') {
+    return new NamespaceSandboxProvider(
+      optional({
+        image: config.namespaceSandboxImage,
+        workspacePath: config.sandboxWorkspacePath,
+        duration: config.namespaceSandboxDuration,
+        namePrefix: config.namespaceNamePrefix,
+        region: config.namespaceRegion,
+        apiBaseUrl: config.namespaceApiUrl,
+        machineType: config.namespaceMachineType,
+        cliTimeoutMs: config.namespaceCliTimeoutMs,
+        createTimeoutMs: config.namespaceCreateTimeoutMs,
+        bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
+      }),
+    );
   }
   if (config.sandboxProvider === 'k8s-agent-sandbox') {
     const orchestrator =

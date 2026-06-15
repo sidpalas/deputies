@@ -2,7 +2,14 @@ import { getModels, type KnownProvider } from '@earendil-works/pi-ai';
 
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue' | 'pi';
-export type SandboxProviderKind = 'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'k8s-agent-sandbox' | 'ecs';
+export type SandboxProviderKind =
+  | 'fake'
+  | 'unsafe-local'
+  | 'docker'
+  | 'daytona'
+  | 'namespace'
+  | 'k8s-agent-sandbox'
+  | 'ecs';
 export type DockerOrchestratorMode = 'in-process' | 'http';
 export type AgentSandboxOrchestratorMode = 'in-process' | 'http';
 export type AppStoreKind = 'memory' | 'postgres';
@@ -101,6 +108,14 @@ export type AppConfig = {
   daytonaSandboxGpu?: number;
   daytonaSandboxMemoryGiB?: number;
   daytonaSandboxDiskGiB?: number;
+  namespaceSandboxImage: string;
+  namespaceRegion?: string;
+  namespaceApiUrl?: string;
+  namespaceMachineType?: string;
+  namespaceSandboxDuration: string;
+  namespaceNamePrefix: string;
+  namespaceCliTimeoutMs: number;
+  namespaceCreateTimeoutMs: number;
   slackApiBaseUrl: string;
   slackSigningSecret?: string;
   slackBotToken?: string;
@@ -178,7 +193,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'unsafe-local', 'docker', 'daytona', 'k8s-agent-sandbox', 'ecs'],
+      ['fake', 'unsafe-local', 'docker', 'daytona', 'namespace', 'k8s-agent-sandbox', 'ecs'],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
@@ -213,6 +228,15 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       'WEB_SEARCH_CONTENT_MAX_CHARS',
     ),
     webSearchTimeoutMs: parsePositiveInteger(env.WEB_SEARCH_TIMEOUT_MS, 10_000, 'WEB_SEARCH_TIMEOUT_MS'),
+    namespaceSandboxImage: env.NAMESPACE_SANDBOX_IMAGE ?? 'ghcr.io/sidpalas/deputies-docker-sandbox:latest',
+    namespaceSandboxDuration: env.NAMESPACE_SANDBOX_DURATION ?? '6h',
+    namespaceNamePrefix: env.NAMESPACE_NAME_PREFIX ?? 'deputies',
+    namespaceCliTimeoutMs: parsePositiveInteger(env.NAMESPACE_CLI_TIMEOUT_MS, 30_000, 'NAMESPACE_CLI_TIMEOUT_MS'),
+    namespaceCreateTimeoutMs: parsePositiveInteger(
+      env.NAMESPACE_CREATE_TIMEOUT_MS,
+      120_000,
+      'NAMESPACE_CREATE_TIMEOUT_MS',
+    ),
     slackApiBaseUrl: env.SLACK_API_BASE_URL ?? 'https://slack.com/api',
     unsafeSlackWebhookAllowAllIds: parseBoolean(
       env.UNSAFE_SLACK_WEBHOOK_ALLOW_ALL_IDS,
@@ -299,6 +323,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     config.daytonaSandboxMemoryGiB = parsePositiveNumber(env.DAYTONA_SANDBOX_MEMORY_GIB, 'DAYTONA_SANDBOX_MEMORY_GIB');
   if (env.DAYTONA_SANDBOX_DISK_GIB)
     config.daytonaSandboxDiskGiB = parsePositiveNumber(env.DAYTONA_SANDBOX_DISK_GIB, 'DAYTONA_SANDBOX_DISK_GIB');
+  if (env.NAMESPACE_REGION) config.namespaceRegion = env.NAMESPACE_REGION;
+  if (env.NAMESPACE_API_URL) config.namespaceApiUrl = env.NAMESPACE_API_URL;
+  if (env.NAMESPACE_MACHINE_TYPE) config.namespaceMachineType = env.NAMESPACE_MACHINE_TYPE;
   if (env.SLACK_SIGNING_SECRET) config.slackSigningSecret = env.SLACK_SIGNING_SECRET;
   if (env.SLACK_BOT_TOKEN) config.slackBotToken = env.SLACK_BOT_TOKEN;
   if (env.GITHUB_APP_ID) config.githubAppId = env.GITHUB_APP_ID;
@@ -350,7 +377,10 @@ function validateAgentSandboxOrchestratorConfig(config: AppConfig): void {
 }
 
 function validateSandboxSecretConfig(config: AppConfig, env: NodeJS.ProcessEnv): void {
-  const sandboxSecretsRequired = config.sandboxProvider === 'docker' || config.sandboxProvider === 'k8s-agent-sandbox';
+  const sandboxSecretsRequired =
+    config.sandboxProvider === 'docker' ||
+    config.sandboxProvider === 'namespace' ||
+    config.sandboxProvider === 'k8s-agent-sandbox';
   if (config.appDataStore === 'postgres' && sandboxSecretsRequired && !config.sandboxSecretEncryptionKey) {
     throw new Error(
       `SANDBOX_SECRET_ENCRYPTION_KEY is required when APP_DATA_STORE=postgres and SANDBOX_PROVIDER=${config.sandboxProvider}`,

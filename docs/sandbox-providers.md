@@ -10,6 +10,7 @@ Initial providers may include:
 - `unsafe-local`: local development with host subprocess execution in a temp workspace. This is convenient for getting started but is not a security sandbox. Commands inherit a minimal environment and discover executables through an allowlisted `.deputies-bin` path; configure `LOCAL_SANDBOX_ALLOWED_COMMANDS` to replace the built-in development allowlist.
 - `docker`: planned Docker Engine backed sandboxes. This can use a local or remote Docker daemon depending on deployment configuration.
 - `daytona`: hosted persistent development sandboxes.
+- `namespace`: Namespace instances started with `nsc run`.
 - `kubernetes`: pods/jobs inside a cluster.
 - `ecs`: Fargate tasks in AWS.
 - `modal` or others later, if desired.
@@ -554,6 +555,85 @@ Current implementation:
 - Follow-up messages reconnect to the latest active sandbox for the session/provider when health is ready. Stopped sandboxes are restarted before reconnect so filesystem state can be reused. Unhealthy or missing sandboxes are marked unhealthy and replaced.
 - `apps/control-plane/test/uat/real-daytona-flue.test.ts` provides an opt-in built-artifact UAT path for `RUNNER=flue` plus `SANDBOX_PROVIDER=daytona`; it is skipped unless `RUN_REAL_DAYTONA_FLUE_UAT=true` and required credentials are present.
 
+### Namespace Provider
+
+Purpose:
+
+- Hosted ephemeral Namespace instances with product-managed lifecycle and previews.
+
+Behavior:
+
+- Creates one Namespace instance per Deputies session with `nsc run --image ... --wait -o json`.
+- `nsc run` creates a Namespace instance VM/environment and starts the configured image as a container inside it.
+- Runs the Deputies sandbox bridge on port `3584` inside the container image.
+- Publishes only the bridge port through Namespace ingress; user app previews are proxied through the bridge at `/preview/<port>`.
+- Uses `nsc ssh --container_name` for command execution and `nsc instance upload/download --container_name` plus in-container Node probes for filesystem operations.
+- Extends instance lifetime during product keepalive with `nsc instance extend-duration --ensure_minimum`.
+- Destroys instances with `nsc instance destroy --force`.
+
+Current implementation:
+
+- `apps/control-plane/src/sandbox/namespace.ts` implements `NamespaceSandboxProvider` backed by the `nsc` CLI.
+- `SANDBOX_PROVIDER=namespace` is wired in control-plane startup.
+- The default image is `ghcr.io/sidpalas/deputies-docker-sandbox:latest`, because that image starts the bridge as its container command.
+- `NAMESPACE_SANDBOX_DURATION` is the Namespace-side instance lifetime. Deputies still owns product keepalive and retention policy, but Namespace can expire abandoned instances independently.
+- Stop/start is intentionally not advertised yet (`stopStart: false`). Namespace instances support richer suspend/resume primitives, but this provider currently ships the create/connect/preview/destroy path first.
+
+Preview authentication:
+
+- Namespace ingresses are left authenticated.
+- When `NSC_TOKEN_FILE` is set, the provider reads the token file's `bearer_token` and sends it as `x-nsc-ingress-auth: Bearer <token>` when proxying to the Namespace ingress.
+- If no token file is configured, the provider falls back to `nsc ingress generate-access-token --instance <instance-id>`.
+- Deputies also includes the sandbox bridge `Authorization: Bearer <bridge-token>` header, so Namespace access and bridge access are both required.
+
+Configuration:
+
+```txt
+RUNNER=flue
+SANDBOX_PROVIDER=namespace
+NSC_TOKEN_FILE=/path/to/namespace-token.json
+NAMESPACE_SANDBOX_IMAGE=ghcr.io/sidpalas/deputies-docker-sandbox:latest
+NAMESPACE_SANDBOX_DURATION=6h
+NAMESPACE_REGION=us
+NAMESPACE_MACHINE_TYPE=2x4
+SANDBOX_WORKSPACE_PATH=/workspace
+```
+
+For low-cost smoke testing, use `NAMESPACE_MACHINE_TYPE=2x4`, the smallest documented Linux shape. Leave `NAMESPACE_REGION` empty for Namespace's default placement unless you specifically need high-level regional routing such as `us` or `eu`.
+
+Token grants:
+
+- If your token was created only with `resource_type:"devbox"` grants, create a new token for direct instances.
+- If your existing token already has the instance and ingress grants below, you can keep using it.
+
+Example token for this provider:
+
+```sh
+nsc token create \
+  --user \
+  --name deputies-namespace-sandbox \
+  --description "Deputies Namespace instance provider" \
+  --expires_in 30d \
+  --grant '{"resource_type":"instance","resource_id":"*","actions":["create","get","list","destroy","wait","ssh","exec","refresh","dial_host"]}' \
+  --grant '{"resource_type":"instance/ingress","resource_id":"*","actions":["register","list"]}' \
+  --grant '{"resource_type":"ingress","resource_id":"*","actions":["access"]}' \
+  --token_file namespace-token.json
+```
+
+If `--user` rejects one of the grants, create the token from a workspace admin login without `--user`, or narrow the grant to the action Namespace reports as allowed for your user.
+
+Then run Deputies with:
+
+```sh
+export NSC_TOKEN_FILE="$(pwd)/namespace-token.json"
+```
+
+Security notes:
+
+- Do not commit `namespace-token.json`; it is ignored by the repo.
+- `NSC_TOKEN_FILE` expects a path to the token JSON file, not the raw token value.
+- For Postgres-backed deployments, configure `SANDBOX_SECRET_ENCRYPTION_KEY` because the provider stores the per-sandbox bridge token and ingress access token as sandbox secrets.
+
 ### Kubernetes Provider
 
 Purpose:
@@ -678,7 +758,7 @@ Rules:
 
 ## MVP Recommendation
 
-Current implemented providers are `fake`, `unsafe-local`, `docker`, and `daytona`. Future provider work should add Kubernetes or ECS depending on deployment needs. Docker is named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
+Current implemented providers are `fake`, `unsafe-local`, `docker`, `daytona`, `namespace`, and `k8s-agent-sandbox`. Future provider work should add ECS depending on deployment needs. Docker is named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
 
 Docker MVP order:
 

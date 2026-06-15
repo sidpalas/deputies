@@ -52,6 +52,11 @@ describe('loadConfig', () => {
       webSearchMaxResults: 10,
       webSearchContentMaxChars: 5000,
       webSearchTimeoutMs: 10000,
+      namespaceSandboxImage: 'ghcr.io/sidpalas/deputies-docker-sandbox:latest',
+      namespaceSandboxDuration: '6h',
+      namespaceNamePrefix: 'deputies',
+      namespaceCliTimeoutMs: 30_000,
+      namespaceCreateTimeoutMs: 120_000,
       slackApiBaseUrl: 'https://slack.com/api',
       unsafeSlackWebhookAllowAllIds: false,
       slackAllowedTeamIds: [],
@@ -155,6 +160,14 @@ describe('loadConfig', () => {
         DAYTONA_SANDBOX_GPU: '1',
         DAYTONA_SANDBOX_MEMORY_GIB: '4',
         DAYTONA_SANDBOX_DISK_GIB: '10',
+        NAMESPACE_SANDBOX_IMAGE: 'ghcr.io/acme/deputies-namespace:sha-test',
+        NAMESPACE_REGION: 'eu',
+        NAMESPACE_API_URL: 'https://namespace.example',
+        NAMESPACE_MACHINE_TYPE: '16x32',
+        NAMESPACE_SANDBOX_DURATION: '8h',
+        NAMESPACE_NAME_PREFIX: 'acme-deputies',
+        NAMESPACE_CLI_TIMEOUT_MS: '40000',
+        NAMESPACE_CREATE_TIMEOUT_MS: '180000',
         SLACK_API_BASE_URL: 'https://slack.emulate.localhost/api',
         SLACK_SIGNING_SECRET: 'slack-secret',
         SLACK_BOT_TOKEN: 'xoxb-token',
@@ -257,6 +270,14 @@ describe('loadConfig', () => {
       daytonaSandboxGpu: 1,
       daytonaSandboxMemoryGiB: 4,
       daytonaSandboxDiskGiB: 10,
+      namespaceSandboxImage: 'ghcr.io/acme/deputies-namespace:sha-test',
+      namespaceRegion: 'eu',
+      namespaceApiUrl: 'https://namespace.example',
+      namespaceMachineType: '16x32',
+      namespaceSandboxDuration: '8h',
+      namespaceNamePrefix: 'acme-deputies',
+      namespaceCliTimeoutMs: 40_000,
+      namespaceCreateTimeoutMs: 180_000,
       slackApiBaseUrl: 'https://slack.emulate.localhost/api',
       slackSigningSecret: 'slack-secret',
       slackBotToken: 'xoxb-token',
@@ -300,7 +321,7 @@ describe('loadConfig', () => {
     );
   });
 
-  it.each(['docker', 'k8s-agent-sandbox'])(
+  it.each(['docker', 'namespace', 'k8s-agent-sandbox'])(
     'requires an app secret encryption key for postgres-backed %s sandboxes',
     (provider) => {
       expect(() =>
@@ -579,7 +600,7 @@ describe('loadConfig', () => {
   it('rejects invalid enum values', () => {
     expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of combined, all, api, worker');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'local' })).toThrow(
-      'Expected one of fake, unsafe-local, docker, daytona, k8s-agent-sandbox, ecs',
+      'Expected one of fake, unsafe-local, docker, daytona, namespace, k8s-agent-sandbox, ecs',
     );
     expect(loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi' }).runner).toBe('pi');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_COOKIE_SAME_SITE: 'strict' })).toThrow(
