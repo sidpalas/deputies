@@ -56,6 +56,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Provider conformance test suite.
 - Sandbox metrics for create/connect/start/stop/destroy latency.
 - Repository-aware, auto-refreshing sandbox images/snapshots for common repos that keep up with main, preinstall dependencies, precompile the app, and still use Flue startup refresh for stale or missing worktrees.
+- Remote Docker host bridge reachability: the current Docker provider publishes each sandbox bridge on the Docker host loopback (`127.0.0.1::3584`). In in-process mode with a remote Docker daemon, the control plane needs bridge reachability for exec, filesystem, and previews. In split mode, exec/filesystem can flow through the orchestrator, but previews still require direct bridge reachability today. Add orchestrator-side preview proxying, or make bridge bind/private-network configuration explicit and safe.
 
 ## Scale And Operations
 
