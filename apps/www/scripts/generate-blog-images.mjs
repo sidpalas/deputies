@@ -4,14 +4,19 @@ import { fileURLToPath } from 'node:url';
 
 import sharp from 'sharp';
 
-const width = 1500;
-const height = 600;
+const defaultImageWidth = 1500;
+const defaultImageHeight = 600;
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const siteRoot = resolve(scriptDir, '..');
 const outputDir = resolve(siteRoot, 'generated/blog-images');
 const assetCacheDir = resolve(siteRoot, 'generated/blog-image-assets');
 
 const logoSources = {
+  daytona: {
+    url: 'https://www.daytona.io/favicon.svg',
+    fileName: 'daytona.svg',
+    mimeType: 'image/svg+xml',
+  },
   docker: {
     url: 'https://icon.icepanel.io/Technology/svg/Docker.svg',
     fileName: 'docker.svg',
@@ -20,6 +25,21 @@ const logoSources = {
   kubernetes: {
     url: 'https://raw.githubusercontent.com/kubernetes/kubernetes/master/logo/logo.svg',
     fileName: 'kubernetes-logo.svg',
+    mimeType: 'image/svg+xml',
+  },
+  modal: {
+    url: 'https://modal.com/assets/favicon.svg',
+    fileName: 'modal.svg',
+    mimeType: 'image/svg+xml',
+  },
+  namespace: {
+    url: 'https://namespace.so/favicon.svg',
+    fileName: 'namespace.svg',
+    mimeType: 'image/svg+xml',
+  },
+  opencomputer: {
+    url: 'https://mintcdn.com/opensandbox/aaniDSrU3bGw3tVF/images/logo-light.svg?fit=max&auto=format&n=aaniDSrU3bGw3tVF&q=85&s=9c78bb2fa07583fc6ecde5be51f5aa28',
+    fileName: 'opencomputer.svg',
     mimeType: 'image/svg+xml',
   },
 };
@@ -70,6 +90,48 @@ const blogImages = [
       },
     ],
   },
+  {
+    slug: 'what-makes-a-good-sandbox-for-background-agents',
+    name: 'Sandbox provider criteria blog header',
+    outputBase: 'what-makes-a-good-sandbox-for-background-agents-header',
+    variants: [
+      { outputBase: 'what-makes-a-good-sandbox-for-background-agents-header', width: 1500, height: 600 },
+      {
+        outputBase: 'what-makes-a-good-sandbox-for-background-agents-linkedin',
+        width: 1200,
+        height: 800,
+        layout: 'linkedin-card',
+      },
+    ],
+    kind: 'provider-landscape',
+    eyebrow: 'Sandbox infrastructure',
+    titleLines: ['What makes', 'a good sandbox', 'for agents'],
+    ledeLines: ['Real workloads, controlled ingress, resumable state, and economics built for background work.'],
+    pills: ['Workloads', 'Ingress', 'Lifecycle', 'Cost'],
+    providers: [
+      { name: 'Daytona', subtitle: 'Managed dev sandboxes', status: 'Current', logo: 'daytona', x: 670, y: 74 },
+      { name: 'Modal', subtitle: 'Serverless sandboxes', status: 'Draft', logo: 'modal', x: 1030, y: 74 },
+      { name: 'Namespace', subtitle: 'Cloud dev environments', status: 'Draft', logo: 'namespace', x: 670, y: 238 },
+      {
+        name: 'OpenComputer',
+        subtitle: 'Persistent VMs for agents',
+        status: 'Draft',
+        logo: 'opencomputer',
+        logoCrop: 'left-square',
+        x: 1030,
+        y: 238,
+      },
+      {
+        name: 'Kubernetes',
+        subtitle: 'Team-controlled clusters',
+        status: 'Current',
+        logo: 'kubernetes',
+        x: 670,
+        y: 402,
+      },
+      { name: 'Docker', subtitle: 'Local/self-hosted runtime', status: 'Current', logo: 'docker', x: 1030, y: 402 },
+    ],
+  },
 ];
 
 const controlPlaneBox = { x: 820, y: 226, width: 330, height: 160 };
@@ -96,19 +158,30 @@ mkdirSync(outputDir, { recursive: true });
 imageAssets = await loadImageAssets();
 
 for (const image of selectedImages) {
-  const svg = renderBlogHeaderImage(image);
-  const svgPath = resolve(outputDir, `${image.outputBase}.svg`);
-  const pngPath = resolve(outputDir, `${image.outputBase}.png`);
+  const variants = image.variants ?? [defaultImageVariant(image.outputBase)];
 
-  writeFileSync(svgPath, svg);
-  await sharp(Buffer.from(svg), { density: 192 }).resize(width, height).png().toFile(pngPath);
+  for (const variant of variants) {
+    const svg = renderBlogHeaderImage(image, variant);
+    const svgPath = resolve(outputDir, `${variant.outputBase}.svg`);
+    const pngPath = resolve(outputDir, `${variant.outputBase}.png`);
 
-  console.log(`Generated ${image.name}:`);
-  console.log(`  ${relative(siteRoot, svgPath)}`);
-  console.log(`  ${relative(siteRoot, pngPath)}`);
+    writeFileSync(svgPath, svg);
+    await sharp(Buffer.from(svg), { density: 192 }).resize(variant.width, variant.height).png().toFile(pngPath);
+
+    console.log(`Generated ${image.name}:`);
+    console.log(`  ${relative(siteRoot, svgPath)}`);
+    console.log(`  ${relative(siteRoot, pngPath)}`);
+  }
 }
 
-function renderBlogHeaderImage(image) {
+function defaultImageVariant(outputBase) {
+  return { outputBase, width: defaultImageWidth, height: defaultImageHeight };
+}
+
+function renderBlogHeaderImage(image, variant) {
+  const width = variant.width;
+  const height = variant.height;
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(image.name)}">
   <defs>
@@ -143,12 +216,18 @@ function renderBlogHeaderImage(image) {
       .eyebrow { fill: #93c5fd; font-size: 22px; font-weight: 780; letter-spacing: 0.09em; text-transform: uppercase; }
       .title { fill: #f8fafc; font-size: 55px; font-weight: 850; letter-spacing: -0.034em; }
       .lede { fill: #cbd5e1; font-size: 24px; font-weight: 560; letter-spacing: -0.022em; }
+      .linkedin-title { fill: #f8fafc; font-size: 44px; font-weight: 850; letter-spacing: -0.034em; }
+      .linkedin-lede { fill: #cbd5e1; font-size: 20px; font-weight: 560; letter-spacing: -0.022em; }
+      .linkedin-eyebrow { fill: #93c5fd; font-size: 18px; font-weight: 780; letter-spacing: 0.09em; text-transform: uppercase; }
       .pill { fill: #bfdbfe; font-size: 16px; font-weight: 760; }
       .node-title { fill: #f8fafc; font-size: 21px; font-weight: 820; letter-spacing: -0.025em; }
       .node-subtitle { fill: #cbd5e1; font-size: 15px; font-weight: 620; }
       .node-label { fill: #93c5fd; font-size: 12px; font-weight: 820; letter-spacing: 0.08em; text-transform: uppercase; }
       .chip { fill: #dbeafe; font-size: 13px; font-weight: 760; }
       .caption { fill: #94a3b8; font-size: 13px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
+      .provider-name { fill: #f8fafc; font-size: 22px; font-weight: 820; letter-spacing: -0.024em; }
+      .provider-subtitle { fill: #cbd5e1; font-size: 13px; font-weight: 620; }
+      .provider-status { font-size: 11px; font-weight: 790; letter-spacing: 0.045em; text-transform: uppercase; }
     </style>
   </defs>
   <rect width="${width}" height="${height}" fill="url(#bg)" />
@@ -158,14 +237,22 @@ function renderBlogHeaderImage(image) {
   <path d="M520 92 C670 52 810 86 922 142" fill="none" stroke="#60a5fa" stroke-opacity="0.11" stroke-width="1.5" />
   <path d="M520 548 C710 520 846 570 1040 520" fill="none" stroke="#60a5fa" stroke-opacity="0.1" stroke-width="1.5" />
 
-  ${renderBrand()}
-  ${renderCopy(image)}
-  ${renderDeployabilityMap(image)}
+  ${variant.layout === 'linkedin-card' ? renderLinkedInHeader(image) : renderDefaultHeaderLayout(image)}
 </svg>`;
 }
 
+function renderDefaultHeaderLayout(image) {
+  return `${renderBrand()}
+  ${renderCopy(image)}
+  ${image.kind === 'provider-landscape' ? renderProviderLandscape(image) : renderDeployabilityMap(image)}`;
+}
+
 function renderBrand() {
-  return `<g class="text" transform="translate(72 64)">
+  return renderBrandAt(72, 64);
+}
+
+function renderBrandAt(x, y) {
+  return `<g class="text" transform="translate(${x} ${y})">
     <rect width="52" height="52" rx="14" fill="#3b82f6" stroke="#bfdbfe" stroke-opacity="0.38" />
     <text x="26" y="35" text-anchor="middle" fill="#ffffff" font-size="25" font-weight="830">D</text>
     <text class="brand" x="66" y="35">Deputies</text>
@@ -185,6 +272,32 @@ function renderCopy(image) {
   </g>`;
 }
 
+function renderLinkedInHeader(image) {
+  const yOffset = 86;
+  const columns = [500, 840];
+  const rows = [86, 246, 406].map((y) => y + yOffset);
+  const providers = image.providers
+    .map((provider, index) => ({
+      ...provider,
+      x: columns[index % columns.length],
+      y: rows[Math.floor(index / columns.length)],
+    }))
+    .map(renderProviderCard)
+    .join('\n');
+
+  return `<g class="text">
+    ${renderBrandAt(56, 86 + yOffset)}
+    <text class="linkedin-eyebrow" x="56" y="${174 + yOffset}">${escapeHtml(image.eyebrow.toUpperCase())}</text>
+    ${renderTextLines(image.titleLines, 56, 221 + yOffset, 'linkedin-title', 48)}
+    ${renderWrappedLines(image.ledeLines, 56, 388 + yOffset, 'linkedin-lede', 25, 35)}
+    ${renderPills(image.pills, 56, 506 + yOffset)}
+  </g>
+  <g>
+    <text class="text caption" x="500" y="${80 + yOffset}">Sandbox platforms and adapters</text>
+    ${providers}
+  </g>`;
+}
+
 function renderDeployabilityMap(image) {
   const connectors = image.environments.map((target) => renderConnector(controlPlaneBox, target)).join('\n');
   const nodes = image.environments.map(renderEnvironmentNode).join('\n');
@@ -193,6 +306,82 @@ function renderDeployabilityMap(image) {
     ${connectors}
     ${nodes}
     ${renderControlPlane()}
+  </g>`;
+}
+
+function renderProviderLandscape(image) {
+  const cards = image.providers.map(renderProviderCard).join('\n');
+
+  return `<g>
+    <path d="M664 72 C758 28 858 28 948 78" fill="none" stroke="#60a5fa" stroke-opacity="0.11" stroke-width="1.5" />
+    <path d="M742 552 C904 508 1070 560 1266 516" fill="none" stroke="#60a5fa" stroke-opacity="0.1" stroke-width="1.5" />
+    <text class="text caption" x="670" y="52">Sandbox platforms and adapters</text>
+    ${cards}
+  </g>`;
+}
+
+function renderProviderCard(provider) {
+  const width = 340;
+  const height = 132;
+  const logo = renderProviderLogo(provider, provider.x + 22, provider.y + 28);
+  const status = renderProviderStatus(provider, provider.x + 92, provider.y + 88);
+
+  return `<g filter="url(#soft-shadow)">
+    <rect x="${provider.x}" y="${provider.y}" width="${width}" height="${height}" rx="24" fill="#020617" fill-opacity="0.64" stroke="#93c5fd" stroke-opacity="0.34" />
+    <rect x="${provider.x + 12}" y="${provider.y + 12}" width="${width - 24}" height="${height - 24}" rx="18" fill="#0f172a" stroke="#60a5fa" stroke-opacity="0.24" />
+    ${logo}
+    <text class="text provider-name" x="${provider.x + 92}" y="${provider.y + 52}">${escapeHtml(provider.name)}</text>
+    <text class="text provider-subtitle" x="${provider.x + 92}" y="${provider.y + 76}">${escapeHtml(provider.subtitle)}</text>
+    ${status}
+  </g>`;
+}
+
+function renderProviderStatus(provider, x, y) {
+  if (!provider.status) return '';
+
+  const isCurrent = provider.status === 'Current';
+  const width = provider.status.length * 7.5 + 22;
+  const fill = isCurrent ? '#0f3a4a' : '#312e81';
+  const stroke = isCurrent ? '#67e8f9' : '#a5b4fc';
+  const text = isCurrent ? '#a7f3d0' : '#c7d2fe';
+
+  return `<g class="text">
+    <rect x="${x}" y="${y}" width="${width}" height="22" rx="11" fill="${fill}" fill-opacity="0.72" stroke="${stroke}" stroke-opacity="0.42" />
+    <text class="provider-status" x="${x + 11}" y="${y + 15}" fill="${text}">${escapeHtml(provider.status)}</text>
+  </g>`;
+}
+
+function renderProviderLogo(provider, x, y) {
+  const href = imageAssets[provider.logo];
+  const logoWell = `<rect x="${x - 5}" y="${y - 8}" width="58" height="58" rx="16" fill="#e0f2fe" stroke="#bfdbfe" stroke-opacity="0.55" />`;
+
+  if (href && provider.logoCrop === 'left-square') {
+    const logoX = x + 5;
+    const logoY = y + 1;
+    const logoSize = 38;
+    const clipId = `logo-crop-${provider.logo}-${x}-${y}`;
+
+    return `<g>
+      ${logoWell}
+      <clipPath id="${clipId}"><rect x="${logoX}" y="${logoY}" width="${logoSize}" height="${logoSize}" /></clipPath>
+      <g clip-path="url(#${clipId})">
+        ${renderLogoImage(href, logoX, logoY, (logoSize * 180) / 32, logoSize, 'xMinYMin meet')}
+      </g>
+    </g>`;
+  }
+
+  if (href) {
+    return `<g>
+      ${logoWell}
+      ${renderLogoImage(href, x + 5, y + 1, 38, 38)}
+    </g>`;
+  }
+
+  return `<g>
+    ${logoWell}
+    <text class="text" x="${x + 24}" y="${y + 29}" text-anchor="middle" fill="#0f172a" font-size="18" font-weight="850">${escapeHtml(
+      provider.name.slice(0, 2).toUpperCase(),
+    )}</text>
   </g>`;
 }
 
@@ -326,8 +515,8 @@ function renderEnvironmentIcon(icon, x, y) {
   </g>`;
 }
 
-function renderLogoImage(href, x, y, width, height) {
-  return `<image href="${href}" x="${x}" y="${y}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" />`;
+function renderLogoImage(href, x, y, width, height, preserveAspectRatio = 'xMidYMid meet') {
+  return `<image href="${href}" x="${x}" y="${y}" width="${width}" height="${height}" preserveAspectRatio="${preserveAspectRatio}" />`;
 }
 
 function renderChip(chip) {
@@ -345,9 +534,9 @@ function renderTextLines(lines, x, y, className, lineHeight) {
     .join('\n');
 }
 
-function renderWrappedLines(lines, x, y, className, lineHeight) {
+function renderWrappedLines(lines, x, y, className, lineHeight, maxLength = 44) {
   return lines
-    .flatMap((line) => wrapLine(line, 44))
+    .flatMap((line) => wrapLine(line, maxLength))
     .map(
       (line, index) => `<text class="${className}" x="${x}" y="${y + index * lineHeight}">${escapeHtml(line)}</text>`,
     )
