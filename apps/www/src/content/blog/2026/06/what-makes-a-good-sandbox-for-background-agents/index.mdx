@@ -1,0 +1,159 @@
+---
+title: 'What Makes a Good Sandbox for Background Agents'
+description: 'What Deputies looks for when evaluating agent sandbox providers'
+pubDate: 2026-06-12
+author: 'Sid Palas'
+draft: false
+---
+
+import TwitterEmbed from '../../../../../components/TwitterEmbed.astro';
+
+Over the course of building and operating Deputies, I have evaluated many sandbox platforms and implemented providers for several of them.
+
+For Deputies, a good sandbox is a resumable execution environment: it can run real repos, expose at least one controlled ingress path, preserve state across pauses, and reconnect reliably.
+
+The [ComputeSDK benchmarks](https://www.computesdk.com/benchmarks/) are a useful broader reference for comparing sandbox platforms. This post is the narrower Deputies-specific version: what matters when deciding whether a sandbox platform is a good fit for background agents.
+
+## The Shape Deputies Expects
+
+In code, these requirements collapse into a small Deputies sandbox-provider adapter interface. The adapter is Deputies' wrapper around the underlying sandbox platform. It needs to create, reconnect to, health-check, and destroy sandboxes. The handle it returns needs a workspace path, command execution, filesystem access, and capability flags.
+
+Simplified, the interface looks like this:
+
+```js
+const provider = {
+  async create(input) {},
+  async connect(input) {},
+  async health(ref) {},
+  async destroy(ref) {},
+
+  // Optional when the provider supports them.
+  async start(ref) {},
+  async stop(ref) {},
+  async getServiceEndpoint(ref) {},
+  async refreshKeepalive(ref) {},
+};
+
+const sandbox = await provider.create(input);
+
+// These may map to native platform APIs or to the Deputies bridge process.
+await sandbox.exec({ command: 'pnpm test' });
+await sandbox.fs.readFile('/workspace/package.json');
+
+// Later, reconnect to the same sandbox after a process restart or follow-up message.
+const reconnected = await provider.connect({
+  providerSandboxId: sandbox.providerSandboxId,
+  sessionId: sandbox.sessionId,
+});
+```
+
+That small interface hides most of the complexity, but it only works well when the underlying sandbox has the following properties.
+
+## Runs Real Workloads
+
+The most important thing is that the sandbox can run the kind of projects people actually have.
+
+For a general-purpose provider, ideally that means a real VM. At minimum, it needs to be able to run containers. A useful background agent should not fall over the moment a repo expects Docker Compose, a local database, Playwright browsers, or a nested development service. For ML or GPU-heavy workloads, GPU-capable sandboxes matter too. If a user asks an agent to debug a failing integration test or reproduce an ML workload, the sandbox should be capable of running the same shape of workload the developer would run locally.
+
+Isolation matters too, even though Deputies is generally meant to be deployed inside a team's trusted environment. Standard containers may be enough for that deployment model, while gVisor or microVM-backed isolation adds useful defense in depth.
+
+> **Note:** Exceptions exist. The container-based Docker and Kubernetes providers in Deputies are not trying to be universal hosted sandbox products; they unlock specific deployment scenarios for teams that want the agent execution path inside infrastructure they already control.
+
+## Provides Control-Plane-Reachable Ingress
+
+The Deputies control plane needs a network path to a process inside the sandbox.
+
+Technically, that means the control plane can make HTTP requests, WebSocket upgrades, and long-lived connections to a process listening inside the sandbox. A private network route is ideal; a provider-managed public URL can also work when it has authentication.
+
+Preview environments were one of the most requested Deputies features, and are now one of the most used. The control plane proxies traffic from the end user into the sandbox, and the user gets a Deputies URL.
+
+The provider does not need to expose every preview service directly. One controlled path to a sandbox entrypoint is enough because Deputies can then proxy through the bridge process, the helper it runs inside the sandbox, to whatever local port the agent starts.
+
+> **Note:** Direct provider URLs for every preview service can sound convenient, but they make the preview experience provider-dependent. Applications that validate trusted hosts, allowed origins, callback URLs, or cookie domains would need to account for each sandbox provider's URL shape. By proxying previews through Deputies, those applications only need to trust the Deputies host.
+
+## Has Agent-Friendly Economics
+
+Cost matters, but not just as a cheap hourly VM price.
+
+Background agents may run intensely for a few minutes, wait on human input for hours, then resume later. A provider is much more attractive when pricing matches that shape: active compute can stop, state can persist, and lightly-used sessions do not cost the same as busy ones.
+
+[Sandbox Prices](https://sandboxprices.swerdlow.dev/) is useful for comparing baseline provider pricing. For illustration, here is the cost of a sandbox-sized compute environment if run for a full 24 hours:
+
+{/* table:wide-middle */}
+| Option | Assumption | 24h cost |
+| --- | --- | --- |
+| Daytona | [Daytona pricing](https://www.daytona.io/pricing) lists `$0.0504/vCPU-hour` + `$0.0162/GiB-hour`, billed for the full duration | ~$3.97 |
+| EC2 | AWS [EC2 On-Demand Pricing](https://aws.amazon.com/ec2/pricing/on-demand/) for a standard shared-tenancy `c7i.large`, 2 vCPU / 4 GiB | ~$2.04 |
+| Hetzner | Hetzner [Cloud pricing](https://www.hetzner.com/cloud/) for `CPX22`, 2 shared vCPU / 4 GiB at `€0.0320/hour` | ~$0.90 |
+| Owned bare metal | ~$2,000 server amortized over three years, 32 vCPU / 64 GiB, packed as sixteen 2 vCPU / 4 GiB sandboxes, before power, networking, and ops | ~$0.11 per sandbox |
+
+The exact numbers move, but the tradeoff is stable. Modern managed sandbox providers cost more because they handle more of the sandbox product for you. Raw compute can be cheaper, but then you own image preparation, isolation, networking, state retention, cleanup, and capacity management.
+
+The 100% compute cost is a useful input, but it does not tell the whole story. Background-agent sessions often include long idle periods while the agent waits for a human to review, respond, or give the next instruction.
+
+### Preserve State, Stop Compute
+
+The ability to stop a sandbox while retaining its filesystem state is one of the main cost-saving levers. The agent should be able to keep the working tree, dependency cache, generated files, logs, and other useful context without paying for active compute the whole time it waits on a human.
+
+Using Daytona's listed storage price of `$0.000108/GiB-hour`, the difference is large even for a one-day session with 10 GiB of workspace state:
+
+{/* table:body-width */}
+| Compute active for | Assumption | Rough cost for one day |
+| --- | --- | --- |
+| 100% | 2 vCPU / 4 GiB compute for 24h + 10 GiB storage for 24h | ~$4.00 |
+| 25% | 2 vCPU / 4 GiB compute active for 6h + 10 GiB storage for 24h | ~$1.02 |
+| 10% | 2 vCPU / 4 GiB compute active for 2.4h + 10 GiB storage for 24h | ~$0.42 |
+| 0% | 10 GiB storage for 24h | ~$0.03 |
+
+If the economics are bad, the product gets pushed toward aggressive cleanup, short retention windows, or other policies that make the user experience worse.
+
+Also, sandbox compute is not always the largest line item. For many agent workloads, model inference can cost more than the environment the agent runs in, so sandbox pricing needs to be evaluated as part of the total cost per useful session.
+
+## Is Operationally Stable
+
+This should be table stakes, but it is worth saying explicitly: sandboxes need to be reliable.
+
+They should start predictably, reconnect cleanly, report useful health, and make rare failures explicit enough for the control plane to recover. The provider also needs real available capacity when sandboxes are requested. If sessions randomly disappear, hang during startup, fail because capacity is unavailable, lose track of their state, or become impossible to clean up, every product feature built on top becomes flaky.
+
+For Deputies, this includes predictable create/connect/destroy behavior, stable provider IDs, health states that distinguish starting from stopped from missing, and cleanup semantics that do not require manual provider-console click-ops.
+
+## Uses Standard Image/Template Definition
+
+The environment definition should use standard artifacts.
+
+For Deputies, the strong preference is a Dockerfile or OCI image. That lets Deputies own the sandbox image like any other piece of infrastructure, use standard build tooling, and share the same base environment across providers.
+
+This preference seems to resonate with a lot of people evaluating sandboxes too; this post has 179 likes and 21.5k views as of this writing:
+
+<TwitterEmbed url="https://x.com/sidpalas/status/2063784895135006983" reserveHeight="min(720px, 135vw)" />
+
+The provider does not need to literally run that image as a container. A VM-based provider might convert the image into its native format, or run the container inside the VM while making it feel like the host environment. What matters is that the environment definition starts from the standard artifact.
+
+Provider-specific templates are not automatically bad, but every custom template language, build hook, and image format becomes one more thing to maintain. A sandbox provider is more attractive when the setup path looks like the container workflows teams already understand.
+
+## Starts Fast (Enough)
+
+Fast startup is not the most fundamental requirement, but it has an outsized effect on perceived quality.
+
+Even for work that will take minutes, waiting longer than about five seconds for the sandbox itself to appear feels bad. That threshold is subjective, and some people will reasonably say five seconds is already too slow. For Deputies, the key is that the product should show visible progress within a few seconds so the user can move on while the agent keeps working.
+
+Past that point, the product starts needing mitigation strategies like warm pools, pre-created environments, or provider-specific caching.
+
+Those strategies can work, and Deputies may end up implementing them for some providers, but the best version is still simple: create a sandbox, get a usable environment quickly, and let the agent start doing useful work.
+
+## Useful, Not Required
+
+These are useful provider features, but not requirements for Deputies support.
+
+- **Native exec and filesystem APIs.** Useful when they are good, especially for simple integrations. Not required because Deputies can run its bridge process inside the sandbox.
+- **Provider-managed autostop and keepalive.** Useful as an extra layer of protection against orphaned resources. Deputies manages lifecycle policy itself, but provider-side idle timers are a useful backstop.
+- **Built-in preview auth.** Great when present. Not mandatory because Deputies can put its own authentication layer in front of preview traffic.
+- **Streaming logs.** Operationally useful, but agent command output already flows through the runner, so this is not the first thing Deputies optimizes for.
+
+## Conclusion
+
+There is no universal "best" sandbox provider.
+
+The right answer depends on the workload, the trust boundary, the expected session lifetime, and how much infrastructure the product wants to own. A hosted provider with great ergonomics can be the right choice for one deployment. A container-based provider inside a team's own Kubernetes cluster can be the right choice for another. A cheaper raw-compute option can make sense if the cost savings justify the extra operational surface area.
+
+That is why Deputies treats sandbox providers as an interface, not a bet on one runtime. The important part is keeping the product expectations stable while allowing the execution backend to change as the tradeoffs change.

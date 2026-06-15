@@ -835,6 +835,11 @@ h1 {
   min-height: 0;
 }
 
+.post-body .twitter-embed[data-twitter-loaded],
+.post-body .twitter-embed[data-twitter-failed] {
+  min-height: 0;
+}
+
 .post-body .twitter-embed[data-align='left'] {
   justify-items: start;
 }
@@ -1026,6 +1031,16 @@ h1 {
 .post-body .table-scroll--compact-leading table {
   width: max-content;
   table-layout: auto;
+}
+
+.post-body .table-scroll--wide-middle th:first-child,
+.post-body .table-scroll--wide-middle td:first-child {
+  width: 8rem;
+}
+
+.post-body .table-scroll--wide-middle th:last-child,
+.post-body .table-scroll--wide-middle td:last-child {
+  width: 9rem;
 }
 
 @media (min-width: 900px) {

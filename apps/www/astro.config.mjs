@@ -148,6 +148,9 @@ function getTableClassNamesFromComment(node) {
   if (node.type === 'mdxFlowExpression' && value === '/* table:body-width */') {
     return ['table-scroll--body-width'];
   }
+  if (node.type === 'mdxFlowExpression' && value === '/* table:wide-middle */') {
+    return ['table-scroll--wide-middle'];
+  }
   if (node.type === 'comment' && value === 'table:compact-leading') return ['table-scroll--compact-leading'];
   if (node.type === 'raw' && value === '<!-- table:compact-leading -->') return ['table-scroll--compact-leading'];
   if (node.type === 'mdxFlowExpression' && value === '/* table:compact-leading */') {
