@@ -14,3 +14,4 @@ test-results/
 !.env.example
 .DS_Store
 deploy/kubernetes/charts/**/charts/*.tgz
+namespace-token.json
