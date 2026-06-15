@@ -242,7 +242,7 @@ Acceptance tests:
 - Product API auth rejects unauthenticated session routes while leaving health public, including bearer and session-cookie modes.
 - Follow-up messages reuse the same active sandbox and expose `sandbox_ready.created=false`.
 - Generic webhook auth remains independent from product API auth.
-- Real Docker sandbox UAT starts a tiny server inside the sandbox and fetches it through the provider preview URL.
+- Real Docker sandbox UAT starts a tiny server inside the sandbox and fetches it through the provider service endpoint.
 - Real Daytona/Flue follow-up UAT validates persistent sandbox filesystem and Flue tool events.
 - Generic webhook UAT validates HTTP completion callbacks and artifact events using a local callback server.
 - Invalid auth returns stable JSON error.

@@ -202,7 +202,7 @@ describe('DaytonaSandboxProvider', () => {
     });
 
     await expect(
-      provider.getPreviewUrl({
+      provider.getServiceEndpoint({
         providerSandboxId: 'sandbox-1',
         sessionId: 'session-1',
         port: 3000,
@@ -251,7 +251,7 @@ describe('DaytonaSandboxProvider', () => {
       bridgeSkippedCookieNames: 'inner_deputies_preview,inner_deputies_session',
     });
 
-    await provider.getPreviewUrl({
+    await provider.getServiceEndpoint({
       providerSandboxId: 'sandbox-1',
       sessionId: 'session-1',
       port: 3000,
@@ -288,7 +288,7 @@ describe('DaytonaSandboxProvider', () => {
     });
 
     await expect(
-      provider.getPreviewUrl({
+      provider.getServiceEndpoint({
         providerSandboxId: 'sandbox-1',
         sessionId: 'session-1',
         port: 3000,

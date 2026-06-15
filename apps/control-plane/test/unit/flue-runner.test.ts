@@ -598,7 +598,7 @@ function createFilesystemSandbox(sessionId: string): SandboxHandle {
       filesystem: true,
       streamingLogs: false,
       portForwarding: false,
-      previewUrls: false,
+      serviceEndpoints: false,
       objectStorageArtifacts: false,
     },
     fs,

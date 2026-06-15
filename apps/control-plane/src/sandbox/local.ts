@@ -89,7 +89,7 @@ export const localCapabilities: SandboxCapabilities = {
   filesystem: true,
   streamingLogs: false,
   portForwarding: false,
-  previewUrls: false,
+  serviceEndpoints: false,
   objectStorageArtifacts: false,
 };
 

@@ -55,6 +55,7 @@ export type SandboxCapabilities = {
   filesystem: boolean;
   streamingLogs: boolean;
   portForwarding: boolean;
+  serviceEndpoints: boolean;
   objectStorageArtifacts: boolean;
 };
 
@@ -226,15 +227,16 @@ Provider-specific differences should be expressed through capabilities, not `if 
 
 Examples:
 
-| Capability             | Meaning                                                 |
-| ---------------------- | ------------------------------------------------------- |
-| `persistentFilesystem` | Files survive between runs without snapshot restore.    |
-| `snapshots`            | Provider can save and restore filesystem state.         |
-| `stopStart`            | Provider can stop and later restart the same sandbox.   |
-| `exec`                 | Provider supports direct command execution.             |
-| `filesystem`           | Provider supports file operations without shelling out. |
-| `streamingLogs`        | Provider can stream runtime logs.                       |
-| `portForwarding`       | Provider can expose dev server ports.                   |
+| Capability             | Meaning                                                     |
+| ---------------------- | ----------------------------------------------------------- |
+| `persistentFilesystem` | Files survive between runs without snapshot restore.        |
+| `snapshots`            | Provider can save and restore filesystem state.             |
+| `stopStart`            | Provider can stop and later restart the same sandbox.       |
+| `exec`                 | Provider supports direct command execution.                 |
+| `filesystem`           | Provider supports file operations without shelling out.     |
+| `streamingLogs`        | Provider can stream runtime logs.                           |
+| `portForwarding`       | Provider can expose dev server ports.                       |
+| `serviceEndpoints`     | Provider can return controlled endpoints for sandbox ports. |
 
 The lifecycle manager should select behavior based on capabilities.
 
@@ -311,6 +313,7 @@ export const dockerCapabilities: SandboxCapabilities = {
   filesystem: true,
   streamingLogs: false,
   portForwarding: false,
+  serviceEndpoints: true,
   objectStorageArtifacts: false,
 };
 ```
@@ -350,6 +353,7 @@ export interface DockerOrchestrator {
   exists(input: DockerFileInput): Promise<boolean>;
   mkdir(input: DockerMkdirInput): Promise<void>;
   rm(input: DockerRmInput): Promise<void>;
+  getServiceEndpoint(input: DockerServiceEndpointInput): Promise<SandboxServiceEndpoint | null>;
 }
 ```
 

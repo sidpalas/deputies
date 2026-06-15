@@ -6,7 +6,7 @@ export type SandboxCapabilities = {
   filesystem: boolean;
   streamingLogs: boolean;
   portForwarding: boolean;
-  previewUrls: boolean;
+  serviceEndpoints: boolean;
   objectStorageArtifacts: boolean;
 };
 
@@ -56,7 +56,7 @@ export type SandboxExecResult = {
   completedAt: Date;
 };
 
-export type SandboxPreviewUrlInput = SandboxRef & {
+export type SandboxServiceEndpointInput = SandboxRef & {
   port: number;
   secrets?: Record<string, string>;
 };
@@ -65,7 +65,7 @@ export type SandboxKeepaliveInput = SandboxRef & {
   durationMs: number;
 };
 
-export type SandboxPreviewUrl = {
+export type SandboxServiceEndpoint = {
   port: number;
   targetUrl: string;
   targetHeaders?: Record<string, string>;
@@ -113,6 +113,6 @@ export interface SandboxProvider {
   stop?(input: SandboxRef): Promise<void>;
   destroy(input: SandboxRef): Promise<void>;
   health(input: SandboxRef): Promise<SandboxHealth>;
-  getPreviewUrl?(input: SandboxPreviewUrlInput): Promise<SandboxPreviewUrl | null>;
+  getServiceEndpoint?(input: SandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null>;
   refreshKeepalive?(input: SandboxKeepaliveInput): Promise<void>;
 }

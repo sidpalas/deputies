@@ -11,8 +11,8 @@ import type {
   SandboxFileSystem,
   SandboxHandle,
   SandboxHealth,
-  SandboxPreviewUrl,
-  SandboxPreviewUrlInput,
+  SandboxServiceEndpoint,
+  SandboxServiceEndpointInput,
   SandboxProvider,
   SandboxProviderCheck,
   SandboxRef,
@@ -29,7 +29,7 @@ export const dockerCapabilities: SandboxCapabilities = {
   filesystem: true,
   streamingLogs: false,
   portForwarding: false,
-  previewUrls: true,
+  serviceEndpoints: true,
   objectStorageArtifacts: false,
 };
 
@@ -71,7 +71,7 @@ export type DockerFileInput = DockerSandboxRef & { path: string };
 export type DockerWriteFileInput = DockerFileInput & { content: string | Uint8Array };
 export type DockerMkdirInput = DockerFileInput & { recursive?: boolean };
 export type DockerRmInput = DockerFileInput & { recursive?: boolean; force?: boolean };
-export type DockerPreviewUrlInput = DockerSandboxRef & { port: number };
+export type DockerServiceEndpointInput = DockerSandboxRef & { port: number };
 
 export interface DockerOrchestrator {
   check?(): Promise<SandboxProviderCheck>;
@@ -89,7 +89,7 @@ export interface DockerOrchestrator {
   exists(input: DockerFileInput): Promise<boolean>;
   mkdir(input: DockerMkdirInput): Promise<void>;
   rm(input: DockerRmInput): Promise<void>;
-  getPreviewUrl?(input: DockerPreviewUrlInput): Promise<SandboxPreviewUrl | null>;
+  getServiceEndpoint?(input: DockerServiceEndpointInput): Promise<SandboxServiceEndpoint | null>;
 }
 
 export class DockerSandboxProvider implements SandboxProvider {
@@ -127,8 +127,8 @@ export class DockerSandboxProvider implements SandboxProvider {
     return this.options.orchestrator.health(input);
   }
 
-  async getPreviewUrl(input: SandboxPreviewUrlInput): Promise<SandboxPreviewUrl | null> {
-    return this.options.orchestrator.getPreviewUrl?.(input) ?? null;
+  async getServiceEndpoint(input: SandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {
+    return this.options.orchestrator.getServiceEndpoint?.(input) ?? null;
   }
 
   private toHandle(descriptor: DockerSandboxDescriptor): SandboxHandle {
@@ -321,7 +321,7 @@ export class InProcessDockerOrchestrator implements DockerOrchestrator {
     });
   }
 
-  async getPreviewUrl(input: DockerPreviewUrlInput): Promise<SandboxPreviewUrl | null> {
+  async getServiceEndpoint(input: DockerServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {
     const descriptor = await this.connectedDescriptor(input);
     return {
       port: input.port,
@@ -491,9 +491,9 @@ export class HttpDockerOrchestratorClient implements DockerOrchestrator {
     await this.post(`/sandboxes/${encodeURIComponent(input.providerSandboxId)}/fs/rm`, input);
   }
 
-  async getPreviewUrl(input: DockerPreviewUrlInput): Promise<SandboxPreviewUrl | null> {
+  async getServiceEndpoint(input: DockerServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {
     const body = readObject(
-      await this.post(`/sandboxes/${encodeURIComponent(input.providerSandboxId)}/preview-url`, input),
+      await this.post(`/sandboxes/${encodeURIComponent(input.providerSandboxId)}/service-endpoint`, input),
     );
     if (body.targetUrl === null) return null;
     const headers =
@@ -612,10 +612,10 @@ export function createDockerOrchestratorHttpHandler(
             force: body.force === true,
           });
           return jsonResponse(200, { ok: true });
-        case 'preview-url': {
+        case 'service-endpoint': {
           const port = readNumber(body.port, 'port');
-          const preview = (await orchestrator.getPreviewUrl?.({ ...refWithSecrets, port })) ?? null;
-          return jsonResponse(200, preview ?? { port, targetUrl: null });
+          const endpoint = (await orchestrator.getServiceEndpoint?.({ ...refWithSecrets, port })) ?? null;
+          return jsonResponse(200, endpoint ?? { port, targetUrl: null });
         }
         default:
           return jsonResponse(404, { error: 'not_found' });

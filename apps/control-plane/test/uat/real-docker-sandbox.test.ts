@@ -64,7 +64,7 @@ describe.skipIf(!enabled)('real Docker sandbox UAT', () => {
     });
     expect(startServer.exitCode).toBe(0);
 
-    const preview = await provider.getPreviewUrl?.({
+    const preview = await provider.getServiceEndpoint?.({
       providerSandboxId: sandbox.providerSandboxId,
       sessionId,
       port: 4534,

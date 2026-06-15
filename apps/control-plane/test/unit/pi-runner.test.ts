@@ -999,7 +999,7 @@ function createMemorySandbox(options: { execCalls?: ExecCall[] } = {}): SandboxH
       filesystem: true,
       streamingLogs: false,
       portForwarding: false,
-      previewUrls: false,
+      serviceEndpoints: false,
       objectStorageArtifacts: false,
     },
     fs,

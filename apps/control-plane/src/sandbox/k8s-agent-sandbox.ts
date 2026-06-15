@@ -13,8 +13,8 @@ import type {
   SandboxFileSystem,
   SandboxHandle,
   SandboxHealth,
-  SandboxPreviewUrl,
-  SandboxPreviewUrlInput,
+  SandboxServiceEndpoint,
+  SandboxServiceEndpointInput,
   SandboxProvider,
   SandboxProviderCheck,
   SandboxRef,
@@ -34,7 +34,7 @@ export const agentSandboxCapabilities: SandboxCapabilities = {
   filesystem: true,
   streamingLogs: false,
   portForwarding: false,
-  previewUrls: true,
+  serviceEndpoints: true,
   objectStorageArtifacts: false,
 };
 
@@ -73,7 +73,7 @@ export type AgentSandboxFileInput = AgentSandboxRef & { path: string };
 export type AgentSandboxWriteFileInput = AgentSandboxFileInput & { content: string | Uint8Array };
 export type AgentSandboxMkdirInput = AgentSandboxFileInput & { recursive?: boolean };
 export type AgentSandboxRmInput = AgentSandboxFileInput & { recursive?: boolean; force?: boolean };
-export type AgentSandboxPreviewUrlInput = AgentSandboxRef & { port: number };
+export type AgentSandboxServiceEndpointInput = AgentSandboxRef & { port: number };
 
 export interface AgentSandboxOrchestrator {
   check?(): Promise<SandboxProviderCheck>;
@@ -91,7 +91,7 @@ export interface AgentSandboxOrchestrator {
   exists(input: AgentSandboxFileInput): Promise<boolean>;
   mkdir(input: AgentSandboxMkdirInput): Promise<void>;
   rm(input: AgentSandboxRmInput): Promise<void>;
-  getPreviewUrl?(input: AgentSandboxPreviewUrlInput): Promise<SandboxPreviewUrl | null>;
+  getServiceEndpoint?(input: AgentSandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null>;
 }
 
 export class AgentSandboxProvider implements SandboxProvider {
@@ -129,8 +129,8 @@ export class AgentSandboxProvider implements SandboxProvider {
     return this.options.orchestrator.health(input);
   }
 
-  async getPreviewUrl(input: SandboxPreviewUrlInput): Promise<SandboxPreviewUrl | null> {
-    return this.options.orchestrator.getPreviewUrl?.(input) ?? null;
+  async getServiceEndpoint(input: SandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {
+    return this.options.orchestrator.getServiceEndpoint?.(input) ?? null;
   }
 
   private toHandle(descriptor: AgentSandboxDescriptor): SandboxHandle {
@@ -314,7 +314,7 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
     });
   }
 
-  async getPreviewUrl(input: AgentSandboxPreviewUrlInput): Promise<SandboxPreviewUrl | null> {
+  async getServiceEndpoint(input: AgentSandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {
     const descriptor = await this.connectedDescriptor(input);
     return {
       port: input.port,
@@ -548,9 +548,9 @@ export class HttpAgentSandboxOrchestratorClient implements AgentSandboxOrchestra
     await this.request('POST', `/sandboxes/${encodeURIComponent(input.providerSandboxId)}/fs/rm`, input);
   }
 
-  async getPreviewUrl(input: AgentSandboxPreviewUrlInput): Promise<SandboxPreviewUrl | null> {
+  async getServiceEndpoint(input: AgentSandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {
     const body = readObject(
-      await this.request('POST', `/sandboxes/${encodeURIComponent(input.providerSandboxId)}/preview-url`, input),
+      await this.request('POST', `/sandboxes/${encodeURIComponent(input.providerSandboxId)}/service-endpoint`, input),
     );
     if (body.targetUrl === null) return null;
     const headers =
@@ -679,10 +679,10 @@ export function createAgentSandboxOrchestratorHttpHandler(
             force: body.force === true,
           });
           return jsonResponse(200, { ok: true });
-        case 'preview-url': {
+        case 'service-endpoint': {
           const port = readNumber(body.port, 'port');
-          const preview = (await orchestrator.getPreviewUrl?.({ ...refWithSecrets, port })) ?? null;
-          return jsonResponse(200, preview ?? { port, targetUrl: null });
+          const endpoint = (await orchestrator.getServiceEndpoint?.({ ...refWithSecrets, port })) ?? null;
+          return jsonResponse(200, endpoint ?? { port, targetUrl: null });
         }
         default:
           return jsonResponse(404, { error: 'not_found' });

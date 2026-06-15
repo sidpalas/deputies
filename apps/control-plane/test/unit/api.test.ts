@@ -10,7 +10,12 @@ import { previewCookieMaxAgeSeconds, signPreviewAuthToken } from '../../src/auth
 import { loadConfig } from '../../src/config/index.js';
 import { GitHubApiError } from '../../src/integrations/github/client.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
-import type { CreateSandboxInput, SandboxHealth, SandboxPreviewUrlInput, SandboxRef } from '../../src/sandbox/types.js';
+import type {
+  CreateSandboxInput,
+  SandboxHealth,
+  SandboxRef,
+  SandboxServiceEndpointInput,
+} from '../../src/sandbox/types.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import { defaultGroupId } from '../../src/store/types.js';
 import {
@@ -2862,7 +2867,7 @@ class ServiceSandboxProvider extends FakeSandboxProvider {
     filesystem: false,
     streamingLogs: false,
     portForwarding: false,
-    previewUrls: true,
+    serviceEndpoints: true,
     objectStorageArtifacts: false,
   };
 
@@ -2870,7 +2875,7 @@ class ServiceSandboxProvider extends FakeSandboxProvider {
     super();
   }
 
-  async getPreviewUrl(input: SandboxPreviewUrlInput) {
+  async getServiceEndpoint(input: SandboxServiceEndpointInput) {
     return { port: input.port, targetUrl: this.upstreamBaseUrl };
   }
 

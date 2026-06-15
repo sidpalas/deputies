@@ -17,7 +17,7 @@ import {
   verifyPreviewAuthToken,
 } from '../auth/session.js';
 import { requireApiBearerToken, requireAuthSessionSecret, type AppConfig } from '../config/index.js';
-import type { SandboxPreviewUrl, SandboxProvider } from '../sandbox/types.js';
+import type { SandboxProvider, SandboxServiceEndpoint } from '../sandbox/types.js';
 import type { AppStore, AuthUserRecord } from '../store/types.js';
 
 type ServiceProxyServices = {
@@ -59,15 +59,15 @@ export async function getSessionService(
   services: ServiceProxyServices,
   sessionId: string,
   port: number,
-): Promise<SandboxPreviewUrl | null> {
+): Promise<SandboxServiceEndpoint | null> {
   const provider = services.sandboxProvider;
-  if (!provider?.getPreviewUrl || !provider.capabilities.previewUrls) return null;
+  if (!provider?.getServiceEndpoint || !provider.capabilities.serviceEndpoints) return null;
   const sandbox = await services.store.getActiveSandbox(sessionId, provider.name);
   if (!sandbox) return null;
   const health = await provider.health(sandbox);
   if (health.status !== 'ready') return null;
   const secrets = await services.store.getSandboxSecrets(sandbox.id);
-  const preview = await provider.getPreviewUrl({
+  const preview = await provider.getServiceEndpoint({
     providerSandboxId: sandbox.providerSandboxId,
     sessionId,
     port,
@@ -82,7 +82,7 @@ export function serializeService(
   c: Context,
   config: AppConfig,
   sessionId: string,
-  preview: SandboxPreviewUrl,
+  preview: SandboxServiceEndpoint,
   metadata: { label?: string; path?: string } = {},
   sandboxTiming: { shutdownAt?: Date; keepaliveUntil?: Date; maxKeepaliveUntil?: Date } = {},
   previewAuthToken?: string,
@@ -100,7 +100,7 @@ export function serializeService(
   };
 }
 
-export async function proxyService(c: Context, config: AppConfig, preview: SandboxPreviewUrl): Promise<Response> {
+export async function proxyService(c: Context, config: AppConfig, preview: SandboxServiceEndpoint): Promise<Response> {
   const target = previewTargetUrl(c, preview.targetUrl);
   const request = c.req.raw;
   const body = await previewRequestBody(request);
@@ -346,7 +346,7 @@ export async function handleServiceUpgrade(
   proxyPreviewUpgrade(config, upgradeInput);
 }
 
-function previewTargetHeaders(preview: SandboxPreviewUrl, host: string | undefined): Record<string, string> {
+function previewTargetHeaders(preview: SandboxServiceEndpoint, host: string | undefined): Record<string, string> {
   const headers = { ...(preview.targetHeaders ?? {}) };
   if (!host) return headers;
   headers['x-forwarded-host'] = host;

@@ -12,8 +12,8 @@ import type {
   SandboxFileSystem,
   SandboxHandle,
   SandboxHealth,
-  SandboxPreviewUrl,
-  SandboxPreviewUrlInput,
+  SandboxServiceEndpoint,
+  SandboxServiceEndpointInput,
   SandboxProvider,
   SandboxProviderCheck,
   SandboxRef,
@@ -83,7 +83,7 @@ export const daytonaCapabilities: SandboxCapabilities = {
   filesystem: true,
   streamingLogs: false,
   portForwarding: true,
-  previewUrls: true,
+  serviceEndpoints: true,
   objectStorageArtifacts: false,
 };
 
@@ -166,7 +166,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     }
   }
 
-  async getPreviewUrl(input: SandboxPreviewUrlInput): Promise<SandboxPreviewUrl | null> {
+  async getServiceEndpoint(input: SandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {
     const sandbox = await this.client.get(input.providerSandboxId);
     const bridgeToken = input.secrets?.bridgeToken ?? randomUUID();
     const workspacePath = this.options.workspacePath ?? (await sandbox.getWorkDir()) ?? '/workspace';

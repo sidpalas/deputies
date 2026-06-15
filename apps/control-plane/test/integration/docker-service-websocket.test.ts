@@ -193,7 +193,7 @@ class BridgeDockerOrchestrator implements DockerOrchestrator {
 
   async rm(): Promise<void> {}
 
-  async getPreviewUrl(input: { port: number }) {
+  async getServiceEndpoint(input: { port: number }) {
     return {
       port: input.port,
       targetUrl: `${this.options.bridgeUrl}/preview/${input.port}`,
