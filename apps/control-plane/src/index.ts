@@ -14,6 +14,8 @@ import {
   requireDockerOrchestratorUrl,
   requireGitHubAppCredentials,
   requireRunnerModelDefault,
+  requireTensorlakeApiKey,
+  requireTensorlakeRegisteredImage,
 } from './config/index.js';
 import { startEventCompactor } from './events/compaction.js';
 import { GitHubArchivedSessionNotifier } from './integrations/github/archived-session-notifier.js';
@@ -44,6 +46,7 @@ import {
 } from './sandbox/k8s-agent-sandbox.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
+import { TensorlakeSandboxProvider } from './sandbox/tensorlake.js';
 import type { SandboxProvider } from './sandbox/types.js';
 import { MemoryStore } from './store/memory.js';
 import { PostgresStore } from './store/postgres.js';
@@ -263,6 +266,22 @@ function createSandboxProvider(): SandboxProvider {
       bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
     });
     return new DaytonaSandboxProvider(options);
+  }
+  if (config.sandboxProvider === 'tensorlake') {
+    const options = {
+      apiKey: requireTensorlakeApiKey(config),
+      image: requireTensorlakeRegisteredImage(config),
+      idleTimeoutMs: Math.max(config.sandboxIdleTimeoutMs, config.sandboxKeepaliveMaxExtensionMs),
+      workspacePath: config.sandboxWorkspacePath,
+    };
+    if (config.tensorlakeSandboxCpu !== undefined) Object.assign(options, { cpus: config.tensorlakeSandboxCpu });
+    if (config.tensorlakeSandboxMemoryMb !== undefined)
+      Object.assign(options, { memoryMb: config.tensorlakeSandboxMemoryMb });
+    if (config.tensorlakeSandboxDiskMb !== undefined)
+      Object.assign(options, { diskMb: config.tensorlakeSandboxDiskMb });
+    if (config.tensorlakeAllowInternetAccess !== undefined)
+      Object.assign(options, { allowInternetAccess: config.tensorlakeAllowInternetAccess });
+    return new TensorlakeSandboxProvider(options);
   }
   if (config.sandboxProvider === 'k8s-agent-sandbox') {
     const orchestrator =

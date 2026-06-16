@@ -10,11 +10,14 @@ Initial providers may include:
 - `unsafe-local`: local development with host subprocess execution in a temp workspace. This is convenient for getting started but is not a security sandbox. Commands inherit a minimal environment and discover executables through an allowlisted `.deputies-bin` path; configure `LOCAL_SANDBOX_ALLOWED_COMMANDS` to replace the built-in development allowlist.
 - `docker`: planned Docker Engine backed sandboxes. This can use a local or remote Docker daemon depending on deployment configuration.
 - `daytona`: hosted persistent development sandboxes.
+- `tensorlake`: hosted MicroVM sandboxes with direct exec, file operations, suspend/resume, snapshots, and exposed service ports.
 - `kubernetes`: pods/jobs inside a cluster.
 - `ecs`: Fargate tasks in AWS.
 - `modal` or others later, if desired.
 
 Some sandbox providers create sandboxes from OCI/container images without supporting nested Docker or Docker Compose inside the sandbox. For those providers, Postgres-backed tests should start Postgres directly in the sandbox. The repo-owned Daytona image and scripts in `deploy/sandboxes/daytona/` install Postgres directly and expose `./deploy/sandboxes/daytona/start-postgres.sh` for this path.
+
+Tensorlake sandboxes require `TENSORLAKE_REGISTERED_IMAGE` to name a registered Tensorlake sandbox image, such as `deputies`. Raw registry references like `ghcr.io/org/image:tag` cannot be passed directly to `Sandbox.create`; put the registry reference in `deploy/sandboxes/tensorlake/Dockerfile`, set `TENSORLAKE_REGISTERED_IMAGE` to the stable registered name/id, then run `mise run //deploy/sandboxes/tensorlake:image:create` before using the provider.
 
 > **Warning:** `SANDBOX_PROVIDER=unsafe-local` is for trusted local development only. It is not a security boundary; agent commands run on the API/worker host runtime in a temporary workspace.
 

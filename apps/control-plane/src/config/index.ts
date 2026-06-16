@@ -2,7 +2,14 @@ import { getModels, type KnownProvider } from '@earendil-works/pi-ai';
 
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue' | 'pi';
-export type SandboxProviderKind = 'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'k8s-agent-sandbox' | 'ecs';
+export type SandboxProviderKind =
+  | 'fake'
+  | 'unsafe-local'
+  | 'docker'
+  | 'daytona'
+  | 'tensorlake'
+  | 'k8s-agent-sandbox'
+  | 'ecs';
 export type DockerOrchestratorMode = 'in-process' | 'http';
 export type AgentSandboxOrchestratorMode = 'in-process' | 'http';
 export type AppStoreKind = 'memory' | 'postgres';
@@ -101,6 +108,12 @@ export type AppConfig = {
   daytonaSandboxGpu?: number;
   daytonaSandboxMemoryGiB?: number;
   daytonaSandboxDiskGiB?: number;
+  tensorlakeApiKey?: string;
+  tensorlakeRegisteredImage?: string;
+  tensorlakeSandboxCpu?: number;
+  tensorlakeSandboxMemoryMb?: number;
+  tensorlakeSandboxDiskMb?: number;
+  tensorlakeAllowInternetAccess?: boolean;
   slackApiBaseUrl: string;
   slackSigningSecret?: string;
   slackBotToken?: string;
@@ -178,7 +191,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'unsafe-local', 'docker', 'daytona', 'k8s-agent-sandbox', 'ecs'],
+      ['fake', 'unsafe-local', 'docker', 'daytona', 'tensorlake', 'k8s-agent-sandbox', 'ecs'],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
@@ -299,6 +312,29 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     config.daytonaSandboxMemoryGiB = parsePositiveNumber(env.DAYTONA_SANDBOX_MEMORY_GIB, 'DAYTONA_SANDBOX_MEMORY_GIB');
   if (env.DAYTONA_SANDBOX_DISK_GIB)
     config.daytonaSandboxDiskGiB = parsePositiveNumber(env.DAYTONA_SANDBOX_DISK_GIB, 'DAYTONA_SANDBOX_DISK_GIB');
+  if (env.TENSORLAKE_API_KEY) config.tensorlakeApiKey = env.TENSORLAKE_API_KEY;
+  if (env.TENSORLAKE_REGISTERED_IMAGE) config.tensorlakeRegisteredImage = env.TENSORLAKE_REGISTERED_IMAGE;
+  if (env.TENSORLAKE_SANDBOX_CPU)
+    config.tensorlakeSandboxCpu = parsePositiveNumber(env.TENSORLAKE_SANDBOX_CPU, 'TENSORLAKE_SANDBOX_CPU');
+  if (env.TENSORLAKE_SANDBOX_MEMORY_MB)
+    config.tensorlakeSandboxMemoryMb = parsePositiveInteger(
+      env.TENSORLAKE_SANDBOX_MEMORY_MB,
+      1024,
+      'TENSORLAKE_SANDBOX_MEMORY_MB',
+    );
+  if (env.TENSORLAKE_SANDBOX_DISK_MB)
+    config.tensorlakeSandboxDiskMb = parsePositiveInteger(
+      env.TENSORLAKE_SANDBOX_DISK_MB,
+      10240,
+      'TENSORLAKE_SANDBOX_DISK_MB',
+    );
+  if (env.TENSORLAKE_ALLOW_INTERNET_ACCESS) {
+    config.tensorlakeAllowInternetAccess = parseBoolean(
+      env.TENSORLAKE_ALLOW_INTERNET_ACCESS,
+      true,
+      'TENSORLAKE_ALLOW_INTERNET_ACCESS',
+    );
+  }
   if (env.SLACK_SIGNING_SECRET) config.slackSigningSecret = env.SLACK_SIGNING_SECRET;
   if (env.SLACK_BOT_TOKEN) config.slackBotToken = env.SLACK_BOT_TOKEN;
   if (env.GITHUB_APP_ID) config.githubAppId = env.GITHUB_APP_ID;
@@ -454,6 +490,27 @@ export function requireDaytonaApiKey(config: AppConfig): string {
   return config.daytonaApiKey;
 }
 
+export function requireTensorlakeApiKey(config: AppConfig): string {
+  if (!config.tensorlakeApiKey) {
+    throw new Error('TENSORLAKE_API_KEY is required when SANDBOX_PROVIDER=tensorlake');
+  }
+
+  return config.tensorlakeApiKey;
+}
+
+export function requireTensorlakeRegisteredImage(config: AppConfig): string {
+  if (!config.tensorlakeRegisteredImage) {
+    throw new Error('TENSORLAKE_REGISTERED_IMAGE is required when SANDBOX_PROVIDER=tensorlake');
+  }
+  if (isTensorlakeRegistryReference(config.tensorlakeRegisteredImage)) {
+    throw new Error(
+      'TENSORLAKE_REGISTERED_IMAGE must be a registered Tensorlake image name/id, not a registry reference',
+    );
+  }
+
+  return config.tensorlakeRegisteredImage;
+}
+
 export function requireDockerOrchestratorUrl(config: AppConfig): string {
   if (!config.dockerOrchestratorUrl) {
     throw new Error('DOCKER_ORCHESTRATOR_URL is required when DOCKER_ORCHESTRATOR_MODE=http');
@@ -606,6 +663,10 @@ function dedupeStrings(values: string[]): string[] {
 
 function normalizePrivateKey(value: string): string {
   return value.replace(/\\n/g, '\n');
+}
+
+function isTensorlakeRegistryReference(value: string): boolean {
+  return value.includes('/') || value.includes(':') || value.includes('@');
 }
 
 function parseEnum<const T extends readonly string[]>(

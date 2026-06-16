@@ -1,0 +1,28 @@
+[tools]
+"npm:tensorlake" = "0.5.40"
+
+[tasks."image:create"]
+description = "Create a registered Tensorlake sandbox image from a Dockerfile"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+TENSORLAKE_DOCKERFILE=${TENSORLAKE_DOCKERFILE:-Dockerfile}
+TENSORLAKE_REGISTERED_IMAGE=${TENSORLAKE_REGISTERED_IMAGE:-deputies}
+
+# Tensorlake free-tier builder limits.
+TENSORLAKE_IMAGE_BUILD_CPUS=${TENSORLAKE_IMAGE_BUILD_CPUS:-1}
+TENSORLAKE_IMAGE_BUILD_MEMORY_MB=${TENSORLAKE_IMAGE_BUILD_MEMORY_MB:-1024}
+
+if [[ "$TENSORLAKE_REGISTERED_IMAGE" == *"/"* || "$TENSORLAKE_REGISTERED_IMAGE" == *":"* || "$TENSORLAKE_REGISTERED_IMAGE" == *"@"* ]]; then
+  echo "TENSORLAKE_REGISTERED_IMAGE must be the registered Tensorlake image name/id, not a registry reference." >&2
+  echo "Put the registry reference in the Tensorlake Dockerfile FROM line instead." >&2
+  exit 1
+fi
+
+tl sbx image create \
+  "$TENSORLAKE_DOCKERFILE" \
+  --registered-name "$TENSORLAKE_REGISTERED_IMAGE" \
+  --cpus "$TENSORLAKE_IMAGE_BUILD_CPUS" \
+  --memory "$TENSORLAKE_IMAGE_BUILD_MEMORY_MB"
+'''
