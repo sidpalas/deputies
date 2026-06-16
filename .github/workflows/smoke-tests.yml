@@ -26,7 +26,8 @@ permissions:
 
 concurrency:
   group: smoke-tests-${{ github.ref }}
-  cancel-in-progress: true
+  # Release commits skip these jobs, so they must not cancel the non-release run they follow.
+  cancel-in-progress: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"
 
 jobs:
   docker-compose:
