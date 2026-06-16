@@ -109,12 +109,9 @@ describe.skipIf(!testDatabaseUrl)('Postgres API and worker integration', () => {
     let listener: PostgresEventListener | undefined;
     let loop: WorkerLoopHandle | undefined;
     let processNextCalls = 0;
-    let deliveryAttempts = 0;
     const sender: CompletionCallbackSender = {
       type: 'http',
-      async deliver() {
-        deliveryAttempts += 1;
-      },
+      async deliver() {},
     };
 
     try {
