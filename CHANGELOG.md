@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.1](https://github.com/sidpalas/deputies/compare/v0.11.0...v0.11.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* preserve test runs during releases ([dae52e7](https://github.com/sidpalas/deputies/commit/dae52e7829ac273213c08200fd2246935ddd6d35))
+* use trixie node images ([4f86a99](https://github.com/sidpalas/deputies/commit/4f86a9981af108fad5feed0177a9566a14e3738e))
+
+
+### Tests
+
+* remove unused callback counter ([ef7e7c6](https://github.com/sidpalas/deputies/commit/ef7e7c6c567f29f0bb41d44ac4f57cf949a8bc95))
+* wait for callback delivery persistence ([6777695](https://github.com/sidpalas/deputies/commit/6777695570437ac1ab41b2e117af8e8f9f25634b))
+
 ## [0.11.0](https://github.com/sidpalas/deputies/compare/v0.10.0...v0.11.0) (2026-06-16)
 
 
