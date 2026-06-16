@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.11.0](https://github.com/sidpalas/deputies/compare/v0.10.0...v0.11.0) (2026-06-16)
+
+
+### Features
+
+* add tensorlake sandbox provider ([#70](https://github.com/sidpalas/deputies/issues/70)) ([05e78e8](https://github.com/sidpalas/deputies/commit/05e78e896899761695f16ca927b40151bad48b68))
+
+
+### Chores
+
+* remove completed plans ([cfea6e8](https://github.com/sidpalas/deputies/commit/cfea6e8bf38efc9e0b3907ee739cc24fbc8d2c2a))
+
+
+### Documentation
+
+* add remote docker bridge backlog note ([92068fa](https://github.com/sidpalas/deputies/commit/92068fa80c86ad2d303857ff93a3e4000d4b86ff))
+* **www:** add sandbox blog image variants ([0f21266](https://github.com/sidpalas/deputies/commit/0f21266500c304aaf6f73a7d14e8cbf00f7ebede))
+* **www:** add sandbox provider article ([f3b08b1](https://github.com/sidpalas/deputies/commit/f3b08b16b10dfb4eeef4d296e6204ad52dd506b0))
+* **www:** clarify sandbox state preservation patterns ([fbc68e2](https://github.com/sidpalas/deputies/commit/fbc68e26e9b198b6a967d7e6e662357af9b1e99e))
+
+
+### Code Refactoring
+
+* **control-plane:** extract app route modules ([c662d68](https://github.com/sidpalas/deputies/commit/c662d687824106d846425c4ddc669ecb388f5577))
+* **control-plane:** rename sandbox service endpoint API ([6aabdfc](https://github.com/sidpalas/deputies/commit/6aabdfc70aa7315e51dd6b4e3864e2ea11470a06))
+* reuse Pi find tool for sandbox operations ([#67](https://github.com/sidpalas/deputies/issues/67)) ([cf9bf48](https://github.com/sidpalas/deputies/commit/cf9bf483ba1cb8611263f53c7ca4a7dc8ab2c61d))
+
 ## [0.10.0](https://github.com/sidpalas/deputies/compare/v0.9.0...v0.10.0) (2026-06-12)
 
 
