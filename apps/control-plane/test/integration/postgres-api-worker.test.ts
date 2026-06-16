@@ -175,7 +175,11 @@ describe.skipIf(!testDatabaseUrl)('Postgres API and worker integration', () => {
         },
       });
 
-      await waitFor(async () => deliveryAttempts === 1, 3_000);
+      await waitFor(async () => {
+        const deliveries = await apiStore.listCallbackDeliveries({ sessionId: session.id });
+        const storedDelivery = deliveries.find((candidate) => candidate.id === delivery.id);
+        return storedDelivery?.status === 'sent' && storedDelivery.attempts === 1;
+      }, 3_000);
       await expect(apiStore.listCallbackDeliveries({ sessionId: session.id })).resolves.toMatchObject([
         { id: delivery.id, status: 'sent', attempts: 1 },
       ]);
