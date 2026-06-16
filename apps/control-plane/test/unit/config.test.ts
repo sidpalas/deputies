@@ -1,4 +1,4 @@
-import { loadConfig } from '../../src/config/index.js';
+import { loadConfig, requireTensorlakeRegisteredImage } from '../../src/config/index.js';
 
 describe('loadConfig', () => {
   it('requires API_AUTH_MODE to be explicit', () => {
@@ -155,6 +155,12 @@ describe('loadConfig', () => {
         DAYTONA_SANDBOX_GPU: '1',
         DAYTONA_SANDBOX_MEMORY_GIB: '4',
         DAYTONA_SANDBOX_DISK_GIB: '10',
+        TENSORLAKE_API_KEY: 'tensorlake-key',
+        TENSORLAKE_REGISTERED_IMAGE: 'deputies-daytona-sandbox-ubuntu24-node24',
+        TENSORLAKE_SANDBOX_CPU: '2',
+        TENSORLAKE_SANDBOX_MEMORY_MB: '4096',
+        TENSORLAKE_SANDBOX_DISK_MB: '20480',
+        TENSORLAKE_ALLOW_INTERNET_ACCESS: 'false',
         SLACK_API_BASE_URL: 'https://slack.emulate.localhost/api',
         SLACK_SIGNING_SECRET: 'slack-secret',
         SLACK_BOT_TOKEN: 'xoxb-token',
@@ -257,6 +263,12 @@ describe('loadConfig', () => {
       daytonaSandboxGpu: 1,
       daytonaSandboxMemoryGiB: 4,
       daytonaSandboxDiskGiB: 10,
+      tensorlakeApiKey: 'tensorlake-key',
+      tensorlakeRegisteredImage: 'deputies-daytona-sandbox-ubuntu24-node24',
+      tensorlakeSandboxCpu: 2,
+      tensorlakeSandboxMemoryMb: 4096,
+      tensorlakeSandboxDiskMb: 20480,
+      tensorlakeAllowInternetAccess: false,
       slackApiBaseUrl: 'https://slack.emulate.localhost/api',
       slackSigningSecret: 'slack-secret',
       slackBotToken: 'xoxb-token',
@@ -298,6 +310,48 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ API_AUTH_MODE: 'none', DAYTONA_SANDBOX_MEMORY_GIB: 'large' })).toThrow(
       'DAYTONA_SANDBOX_MEMORY_GIB must be a positive number',
     );
+  });
+
+  it('rejects invalid Tensorlake sandbox resource values', () => {
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', TENSORLAKE_SANDBOX_CPU: '0' })).toThrow(
+      'TENSORLAKE_SANDBOX_CPU must be a positive number',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', TENSORLAKE_SANDBOX_MEMORY_MB: 'large' })).toThrow(
+      'TENSORLAKE_SANDBOX_MEMORY_MB must be a positive integer',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', TENSORLAKE_ALLOW_INTERNET_ACCESS: 'sometimes' })).toThrow(
+      'TENSORLAKE_ALLOW_INTERNET_ACCESS must be true or false',
+    );
+  });
+
+  it('requires a registered Tensorlake image name for the Tensorlake provider', () => {
+    expect(() =>
+      requireTensorlakeRegisteredImage(
+        loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'tensorlake', TENSORLAKE_API_KEY: 'key' }),
+      ),
+    ).toThrow('TENSORLAKE_REGISTERED_IMAGE is required when SANDBOX_PROVIDER=tensorlake');
+
+    expect(() =>
+      requireTensorlakeRegisteredImage(
+        loadConfig({
+          API_AUTH_MODE: 'none',
+          SANDBOX_PROVIDER: 'tensorlake',
+          TENSORLAKE_API_KEY: 'key',
+          TENSORLAKE_REGISTERED_IMAGE: 'ghcr.io/acme/image:tag',
+        }),
+      ),
+    ).toThrow('TENSORLAKE_REGISTERED_IMAGE must be a registered Tensorlake image name/id');
+
+    expect(
+      requireTensorlakeRegisteredImage(
+        loadConfig({
+          API_AUTH_MODE: 'none',
+          SANDBOX_PROVIDER: 'tensorlake',
+          TENSORLAKE_API_KEY: 'key',
+          TENSORLAKE_REGISTERED_IMAGE: 'deputies-sandbox',
+        }),
+      ),
+    ).toBe('deputies-sandbox');
   });
 
   it.each(['docker', 'k8s-agent-sandbox'])(
@@ -579,7 +633,7 @@ describe('loadConfig', () => {
   it('rejects invalid enum values', () => {
     expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of combined, all, api, worker');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'local' })).toThrow(
-      'Expected one of fake, unsafe-local, docker, daytona, k8s-agent-sandbox, ecs',
+      'Expected one of fake, unsafe-local, docker, daytona, tensorlake, k8s-agent-sandbox, ecs',
     );
     expect(loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi' }).runner).toBe('pi');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_COOKIE_SAME_SITE: 'strict' })).toThrow(

@@ -123,8 +123,8 @@ describe('architecture boundaries', () => {
   it('installs CLIs required by authenticated repository tools in the runtime image', async () => {
     const text = await readFile(join(root, 'Dockerfile'), 'utf8');
 
-    expect(text).toMatch(/apk add --no-cache[^\n]*\bdocker-cli\b/);
-    expect(text).toMatch(/apk add --no-cache[^\n]*\bgithub-cli\b/);
+    expect(text).toMatch(/(?:apk add --no-cache[^\n]*\bdocker-cli\b|apt-get install[^\n]*\bdocker\.io\b)/);
+    expect(text).toMatch(/(?:apk add --no-cache[^\n]*\bgithub-cli\b|apt-get install[^\n]*\bgh\b)/);
   });
 
   it('declares source-owned schemas for public API response envelopes', async () => {
