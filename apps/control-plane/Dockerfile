@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS build
+FROM node:24-trixie-slim AS build
 
 WORKDIR /app
 RUN corepack enable
@@ -14,7 +14,7 @@ COPY apps/control-plane apps/control-plane
 RUN pnpm --dir apps/control-plane build \
   && cp -R apps/control-plane/src/db/migrations apps/control-plane/dist/db/migrations
 
-FROM node:24-bookworm-slim AS prod-deps
+FROM node:24-trixie-slim AS prod-deps
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -27,7 +27,7 @@ COPY packages/browser-milestones packages/browser-milestones
 
 RUN pnpm install --prod --frozen-lockfile --filter deputies-control-plane
 
-FROM node:24-bookworm-slim AS runtime
+FROM node:24-trixie-slim AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production

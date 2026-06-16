@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-bookworm-slim AS bridge-build
+FROM node:24-trixie-slim AS bridge-build
 
 WORKDIR /app
 
