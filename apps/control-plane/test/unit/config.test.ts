@@ -3,6 +3,41 @@ import { loadConfig, requireTensorlakeRegisteredImage } from '../../src/config/i
 describe('loadConfig', () => {
   it('requires API_AUTH_MODE to be explicit', () => {
     expect(() => loadConfig({})).toThrow('API_AUTH_MODE is required');
+    expect(() => loadConfig({ RUN_MODE: 'api' })).toThrow('API_AUTH_MODE is required');
+  });
+
+  it('does not require API auth config in worker-only mode', () => {
+    expect(loadConfig({ RUN_MODE: 'worker' })).toMatchObject({
+      runMode: 'worker',
+      apiAuthMode: 'none',
+    });
+    expect(
+      loadConfig({
+        RUN_MODE: 'worker',
+        API_AUTH_MODE: 'session',
+        AUTH_PROVIDER: 'github',
+        AUTH_SESSION_SECRET: 'session-secret',
+      }),
+    ).toMatchObject({
+      runMode: 'worker',
+      apiAuthMode: 'session',
+      authProvider: 'github',
+      authSessionSecret: 'session-secret',
+    });
+  });
+
+  it('does not require inbound webhook allowlists in worker-only mode', () => {
+    expect(
+      loadConfig({
+        RUN_MODE: 'worker',
+        SLACK_SIGNING_SECRET: 'slack-secret',
+        GITHUB_WEBHOOK_SECRET: 'github-secret',
+      }),
+    ).toMatchObject({
+      runMode: 'worker',
+      slackSigningSecret: 'slack-secret',
+      githubWebhookSecret: 'github-secret',
+    });
   });
 
   it('uses portable defaults when auth is explicitly disabled for local development and tests', () => {
@@ -439,6 +474,13 @@ describe('loadConfig', () => {
     });
     expect(loadConfig({ API_AUTH_MODE: 'none', WEB_SEARCH_MAX_RESULTS: '50' }).webSearchMaxResults).toBe(20);
     expect(() => loadConfig({ API_AUTH_MODE: 'none', WEB_SEARCH_PROVIDER: 'brave' })).toThrow(
+      'WEB_SEARCH_BRAVE_API_KEY or BRAVE_API_KEY is required',
+    );
+    expect(loadConfig({ RUN_MODE: 'api', API_AUTH_MODE: 'none', WEB_SEARCH_PROVIDER: 'brave' })).toMatchObject({
+      runMode: 'api',
+      webSearchProvider: 'brave',
+    });
+    expect(() => loadConfig({ RUN_MODE: 'worker', WEB_SEARCH_PROVIDER: 'brave' })).toThrow(
       'WEB_SEARCH_BRAVE_API_KEY or BRAVE_API_KEY is required',
     );
   });

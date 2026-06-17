@@ -146,6 +146,7 @@ export type AppConfig = {
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
+  const runMode = parseEnum(env.RUN_MODE, ['combined', 'all', 'api', 'worker'], 'combined');
   const config: AppConfig = {
     port: parsePort(env.PORT),
     maxJsonBodyBytes: parsePositiveInteger(env.MAX_JSON_BODY_BYTES, 1_048_576, 'MAX_JSON_BODY_BYTES'),
@@ -187,7 +188,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       5_000,
       'EVENT_DELTA_COMPACTION_BATCH_SIZE',
     ),
-    runMode: parseEnum(env.RUN_MODE, ['combined', 'all', 'api', 'worker'], 'combined'),
+    runMode,
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
@@ -203,7 +204,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     agentSandboxImage: env.AGENT_SANDBOX_IMAGE ?? 'ghcr.io/sidpalas/deputies-docker-sandbox:sha-ac8a459',
     agentSandboxStorageSize: env.AGENT_SANDBOX_STORAGE_SIZE ?? '1Gi',
     appDataStore: parseEnum(env.APP_DATA_STORE, ['memory', 'postgres'], 'memory'),
-    apiAuthMode: parseRequiredEnum(env.API_AUTH_MODE, ['none', 'bearer', 'session'], 'API_AUTH_MODE'),
+    apiAuthMode: runModeStartsApi(runMode)
+      ? parseRequiredEnum(env.API_AUTH_MODE, ['none', 'bearer', 'session'], 'API_AUTH_MODE')
+      : parseEnum(env.API_AUTH_MODE, ['none', 'bearer', 'session'], 'none'),
     authProvider: parseEnum(env.AUTH_PROVIDER, ['static', 'github'], 'static'),
     authCookieSecure: parseBoolean(env.AUTH_COOKIE_SECURE, false, 'AUTH_COOKIE_SECURE'),
     authCookieSameSite: parseEnum(env.AUTH_COOKIE_SAME_SITE, ['lax', 'none'], 'lax'),
@@ -350,12 +353,27 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
 
   config.runnerModelChoices = deriveRunnerModelChoices(env, config.runnerModelChoices, config.runnerModelDefault);
 
-  validateProductAuthConfig(config);
+  if (runModeStartsApi(config.runMode)) {
+    validateProductAuthConfig(config);
+    validateInboundWebhookConfig(config);
+  }
   validateArtifactStorageConfig(config);
-  validateWebSearchConfig(config);
+  if (runModeStartsWorker(config.runMode)) validateWebSearchConfig(config);
   validateSandboxSecretConfig(config, env);
   validateAgentSandboxOrchestratorConfig(config);
 
+  return config;
+}
+
+function runModeStartsApi(runMode: RunMode): boolean {
+  return runMode === 'combined' || runMode === 'all' || runMode === 'api';
+}
+
+function runModeStartsWorker(runMode: RunMode): boolean {
+  return runMode === 'combined' || runMode === 'all' || runMode === 'worker';
+}
+
+function validateInboundWebhookConfig(config: AppConfig): void {
   if (config.slackSigningSecret && !config.unsafeSlackWebhookAllowAllIds && !hasAnySlackAllowlist(config)) {
     throw new Error(
       'Slack allowlists are required when SLACK_SIGNING_SECRET is set. Configure SLACK_ALLOWED_TEAM_IDS, SLACK_ALLOWED_CHANNEL_IDS, or SLACK_ALLOWED_USER_IDS, or set UNSAFE_SLACK_WEBHOOK_ALLOW_ALL_IDS=true for unrestricted Slack access.',
@@ -375,8 +393,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       'GITHUB_WEBHOOK_TRIGGER_PHRASES is required when GITHUB_WEBHOOK_SECRET is set so GitHub webhooks only process explicitly triggered requests.',
     );
   }
-
-  return config;
 }
 
 function validateAgentSandboxOrchestratorConfig(config: AppConfig): void {
