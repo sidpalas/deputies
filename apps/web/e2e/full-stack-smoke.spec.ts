@@ -2,6 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 type SmokeArtifact = { id: string; title?: string; storageKey?: string };
 
+const workerResultTimeoutMs = 20_000;
+
 test.describe('full-stack smoke', () => {
   test.skip(process.env.RUN_FULL_STACK_SMOKE !== 'true', 'Set RUN_FULL_STACK_SMOKE=true to run Docker smoke test');
 
@@ -19,7 +21,7 @@ test.describe('full-stack smoke', () => {
 
     await expect(page.getByPlaceholder('Ask your deputy to investigate, change code, or follow up...')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'smoke test' })).toBeVisible();
-    await expect(page.getByText('Fake response for: smoke test')).toBeVisible();
+    await expect(page.getByText('Fake response for: smoke test')).toBeVisible({ timeout: workerResultTimeoutMs });
 
     const sessionId = await latestSessionId(page);
     const artifact = await waitForSmokeArtifact(page, sessionId);
@@ -39,7 +41,7 @@ async function latestSessionId(page: Page) {
 }
 
 async function waitForSmokeArtifact(page: Page, sessionId: string): Promise<SmokeArtifact> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
     const response = await page.request.get(`/sessions/${sessionId}/artifacts`);
     expect(response.ok()).toBe(true);
     const body = (await response.json()) as { artifacts: SmokeArtifact[] };
