@@ -124,10 +124,11 @@ async function sandboxStatus(
   const missingDaytona = config.sandboxProvider === 'daytona' && !config.daytonaApiKey;
   const missingTensorlake =
     config.sandboxProvider === 'tensorlake' && (!config.tensorlakeApiKey || !config.tensorlakeRegisteredImage);
+  const missingCreateos = config.sandboxProvider === 'createos' && !config.createosApiKey;
   const missingDockerOrchestrator =
     config.sandboxProvider === 'docker' && config.dockerOrchestratorMode === 'http' && !config.dockerOrchestratorUrl;
   const state =
-    missingDaytona || missingTensorlake || missingDockerOrchestrator
+    missingDaytona || missingTensorlake || missingCreateos || missingDockerOrchestrator
       ? 'missing'
       : config.sandboxProvider === 'fake'
         ? 'warning'

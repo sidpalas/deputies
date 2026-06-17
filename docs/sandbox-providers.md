@@ -557,6 +557,30 @@ Current implementation:
 - Follow-up messages reconnect to the latest active sandbox for the session/provider when health is ready. Stopped sandboxes are restarted before reconnect so filesystem state can be reused. Unhealthy or missing sandboxes are marked unhealthy and replaced.
 - `apps/control-plane/test/uat/real-daytona-flue.test.ts` provides an opt-in built-artifact UAT path for `RUNNER=flue` plus `SANDBOX_PROVIDER=daytona`; it is skipped unless `RUN_REAL_DAYTONA_FLUE_UAT=true` and required credentials are present.
 
+### CreateOS Provider
+
+Purpose:
+
+- Hosted persistent VM sandboxes from NodeOps' CreateOS control plane.
+
+Behavior:
+
+- Creates one CreateOS VM per session, sized by a catalog shape.
+- Reconnects by provider sandbox ID.
+- Executes commands through the SDK's native exec API; no in-sandbox bridge process is required.
+- The VM disk persists across pause/resume, so the workspace survives stops.
+
+Current implementation:
+
+- `apps/control-plane/src/sandbox/createos.ts` wraps the `@nodeops-createos/sandbox` SDK behind the product `SandboxProvider` interface.
+- Creation requires `CREATEOS_API_KEY`. `CREATEOS_SHAPE` (a VM shape id from the CreateOS catalog) defaults to `s-2vcpu-4gb`; `CREATEOS_BASE_URL` defaults to the production control plane; `CREATEOS_ROOTFS` optionally pins a rootfs catalog name or template id/name.
+- `exec` maps to `Sandbox.runCommand('bash', ['-lc', script])`. CreateOS exec has no per-command env, cwd, or stdin, so `cwd` and `env` are emulated inside the `bash -lc` script and `stdin` is rejected. Non-zero exit codes are returned, not thrown; agent-level start failures throw.
+- Filesystem read/write use the SDK file transfer API (`Sandbox.files.upload` / `download`); `stat`, `readdir`, `exists`, `mkdir`, and `rm` are shell-based through `runCommand`. All paths are jailed to the configured workspace.
+- `stop`/`start` map to `Sandbox.pause()` / `Sandbox.resume()`. `destroy` is idempotent — a missing sandbox is treated as success.
+- `getServiceEndpoint` enables HTTP ingress (`Sandbox.setIngress(true)`) and resolves the per-port public URL from the sandbox's ingress URL template.
+- Snapshots are reported as unsupported: the SDK's `fork()` branches a new sandbox rather than providing save/restore of a named checkpoint.
+- `apps/control-plane/test/unit/createos-sandbox.test.ts` covers create/exec/filesystem, lifecycle health mapping, idempotent destroy, service endpoints, and readiness checks against a mocked client.
+
 ### Kubernetes Provider
 
 Purpose:
