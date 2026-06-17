@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { dirname, isAbsolute, join, normalize, relative } from 'node:path/posix';
 import {
   CreateosSandboxClient,
   CreateosSandboxNotFoundError,
@@ -7,14 +6,11 @@ import {
   type Sandbox as CreateosSandbox,
   type SandboxStatus as CreateosSandboxStatus,
 } from '@nodeops-createos/sandbox';
+import { createRemoteShellFileSystem, execRemoteShell, quoteShell, type RemoteShellDriver } from './remote-shell-fs.js';
 import type {
   ConnectSandboxInput,
   CreateSandboxInput,
-  FileStat,
   SandboxCapabilities,
-  SandboxExecInput,
-  SandboxExecResult,
-  SandboxFileSystem,
   SandboxHandle,
   SandboxHealth,
   SandboxProvider,
@@ -182,6 +178,7 @@ export class CreateosSandboxProvider implements SandboxProvider {
   }
 
   private toHandle(sandbox: CreateosSandboxLike, sessionId: string, metadata: Record<string, unknown>): SandboxHandle {
+    const driver = createosShellDriver(sandbox);
     return {
       provider: this.name,
       providerSandboxId: sandbox.id,
@@ -189,10 +186,20 @@ export class CreateosSandboxProvider implements SandboxProvider {
       workspacePath: this.workspacePath,
       metadata,
       capabilities: this.capabilities,
-      fs: createCreateosFileSystem(sandbox, this.workspacePath),
-      exec: (execInput) => execCreateosCommand(sandbox, execInput, this.workspacePath),
+      fs: createRemoteShellFileSystem(driver, this.workspacePath),
+      exec: (execInput) => execRemoteShell(driver, execInput, this.workspacePath),
     };
   }
+}
+
+function createosShellDriver(sandbox: CreateosSandboxLike): RemoteShellDriver {
+  return {
+    label: 'CreateOS',
+    runShell: (command, options) => sandbox.runCommand(command, options),
+    uploadFile: (path, data) => sandbox.uploadFile(path, data),
+    downloadFile: (path) => sandbox.downloadFile(path),
+    isNotFoundError: isCreateosNotFoundError,
+  };
 }
 
 function createCreateosClient(options: CreateosSandboxProviderOptions): CreateosClientLike {
@@ -256,127 +263,6 @@ function wrapCreateosSandbox(sandbox: CreateosSandbox): CreateosSandboxLike {
   };
 }
 
-// CreateOS exec has no per-command env, cwd, or stdin (the control plane
-// overwrites the proto env with the sandbox's persistent envs and exposes no
-// stdin field), so cwd and env are emulated inside the bash -lc script.
-async function execCreateosCommand(
-  sandbox: CreateosSandboxLike,
-  input: SandboxExecInput,
-  workspacePath: string,
-): Promise<SandboxExecResult> {
-  if (input.stdin !== undefined) throw new Error('CreateOS exec does not support stdin');
-  if (input.signal?.aborted) throw abortError();
-  const startedAt = new Date();
-  const response = await sandbox.runCommand(buildExecScript(input, workspacePath), {
-    ...(input.signal ? { signal: input.signal } : {}),
-    ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
-  });
-  const completedAt = new Date();
-  if (response.error) throw new Error(response.error);
-  return {
-    exitCode: response.exitCode,
-    stdout: response.stdout,
-    stderr: response.stderr,
-    startedAt,
-    completedAt,
-  };
-}
-
-function buildExecScript(input: SandboxExecInput, workspacePath: string): string {
-  const segments: string[] = [];
-  const cwd = input.cwd ? resolveCreateosPath(input.cwd, workspacePath) : workspacePath;
-  segments.push(`cd ${quoteShell(cwd)}`);
-  for (const [key, value] of Object.entries(input.env ?? {})) {
-    segments.push(`export ${key}=${quoteShell(value)}`);
-  }
-  segments.push(input.command);
-  return segments.join(' && ');
-}
-
-function createCreateosFileSystem(sandbox: CreateosSandboxLike, workspacePath: string): SandboxFileSystem {
-  return {
-    async readFile(path) {
-      return Buffer.from(await readCreateosFile(sandbox, path, workspacePath)).toString('utf8');
-    },
-    async readFileBuffer(path) {
-      return readCreateosFile(sandbox, path, workspacePath);
-    },
-    async writeFile(path, content) {
-      const resolved = resolveCreateosPath(path, workspacePath);
-      await ensureParentDirectory(sandbox, resolved);
-      await sandbox.uploadFile(resolved, toUint8Array(content));
-    },
-    async stat(path) {
-      return statCreateosPath(sandbox, resolveCreateosPath(path, workspacePath));
-    },
-    async readdir(path) {
-      const resolved = resolveCreateosPath(path, workspacePath);
-      const result = await sandbox.runCommand(`ls -1A ${quoteShell(resolved)}`);
-      if (result.exitCode !== 0) {
-        throw Object.assign(new Error(`CreateOS directory not found: ${path}`), { statusCode: 404 });
-      }
-      return result.stdout.split('\n').filter((entry) => entry.length > 0);
-    },
-    async exists(path) {
-      const resolved = resolveCreateosPath(path, workspacePath);
-      const result = await sandbox.runCommand(`test -e ${quoteShell(resolved)}`);
-      return result.exitCode === 0;
-    },
-    async mkdir(path, mkdirOptions) {
-      const resolved = resolveCreateosPath(path, workspacePath);
-      const flag = mkdirOptions?.recursive ? '-p ' : '';
-      const result = await sandbox.runCommand(`mkdir ${flag}${quoteShell(resolved)}`);
-      if (result.exitCode !== 0) throw new Error(result.stderr || `CreateOS mkdir failed: ${path}`);
-    },
-    async rm(path, rmOptions) {
-      const resolved = resolveCreateosPath(path, workspacePath);
-      const flags = `${rmOptions?.recursive ? 'r' : ''}${rmOptions?.force ? 'f' : ''}`;
-      const flagArg = flags ? `-${flags} ` : '';
-      const result = await sandbox.runCommand(`rm ${flagArg}${quoteShell(resolved)}`);
-      if (result.exitCode !== 0 && !rmOptions?.force) {
-        throw new Error(result.stderr || `CreateOS rm failed: ${path}`);
-      }
-    },
-  };
-}
-
-async function readCreateosFile(
-  sandbox: CreateosSandboxLike,
-  path: string,
-  workspacePath: string,
-): Promise<Uint8Array> {
-  try {
-    return await sandbox.downloadFile(resolveCreateosPath(path, workspacePath));
-  } catch (error) {
-    if (isCreateosNotFoundError(error)) {
-      throw Object.assign(new Error(`CreateOS file not found: ${path}`), { statusCode: 404 });
-    }
-    throw error;
-  }
-}
-
-async function statCreateosPath(sandbox: CreateosSandboxLike, resolved: string): Promise<FileStat> {
-  const result = await sandbox.runCommand(`stat -c '%F|%s|%Y' ${quoteShell(resolved)}`);
-  if (result.exitCode !== 0) {
-    throw Object.assign(new Error(`CreateOS file not found: ${resolved}`), { statusCode: 404 });
-  }
-  const [kind = '', size = '0', mtime = '0'] = result.stdout.trim().split('|');
-  return {
-    isFile: kind === 'regular file' || kind === 'regular empty file',
-    isDirectory: kind === 'directory',
-    isSymbolicLink: kind === 'symbolic link',
-    size: Number.parseInt(size, 10) || 0,
-    mtime: new Date((Number.parseInt(mtime, 10) || 0) * 1000),
-  };
-}
-
-async function ensureParentDirectory(sandbox: CreateosSandboxLike, resolvedPath: string): Promise<void> {
-  const parent = dirname(resolvedPath);
-  if (!parent || parent === '.' || parent === '/') return;
-  const result = await sandbox.runCommand(`mkdir -p ${quoteShell(parent)}`);
-  if (result.exitCode !== 0) throw new Error(result.stderr || `CreateOS mkdir failed: ${parent}`);
-}
-
 function createosHealth(status: CreateosSandboxStatus): SandboxHealth {
   const checkedAt = new Date();
   switch (status) {
@@ -395,26 +281,6 @@ function createosHealth(status: CreateosSandboxStatus): SandboxHealth {
     default:
       return { status: 'unhealthy', message: `CreateOS sandbox state: ${String(status)}`, checkedAt };
   }
-}
-
-function resolveCreateosPath(path: string, workspacePath: string): string {
-  if (isAbsolute(path)) return normalize(path);
-  const workspace = normalizeAbsolutePath(workspacePath);
-  const resolved = normalize(join(workspace, path));
-  const workspaceRelative = relative(workspace, resolved);
-  if (workspaceRelative === '..' || workspaceRelative.startsWith('../') || isAbsolute(workspaceRelative)) {
-    throw new Error(`CreateOS path escapes workspace: ${path}`);
-  }
-  return resolved;
-}
-
-function normalizeAbsolutePath(path: string): string {
-  const normalized = normalize(path);
-  return isAbsolute(normalized) ? normalized : `/${normalized}`;
-}
-
-function quoteShell(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 // CreateOS caps sandbox names at 22 characters. Keep a short session hint plus
@@ -443,12 +309,4 @@ function isCreateosNotFoundError(error: unknown): boolean {
   return (
     named.name.includes('NotFound') || named.statusCode === 404 || named.status === 404 || named.code === 'not_found'
   );
-}
-
-function toUint8Array(content: string | Uint8Array): Uint8Array {
-  return typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
-}
-
-function abortError(): DOMException {
-  return new DOMException('Operation aborted', 'AbortError');
 }

@@ -66,6 +66,16 @@ describe('CreateosSandboxProvider', () => {
     await expect(handle.exec({ command: 'cat', stdin: 'input' })).rejects.toThrow(
       'CreateOS exec does not support stdin',
     );
+    // cwd is jailed to the workspace.
+    await expect(handle.exec({ command: 'ls', cwd: '/tmp/outside' })).rejects.toThrow(
+      'CreateOS path escapes workspace',
+    );
+    await expect(handle.exec({ command: 'ls', cwd: '../escape' })).rejects.toThrow('CreateOS path escapes workspace');
+    // env var names must be valid shell identifiers.
+    await expect(handle.exec({ command: 'echo hi', env: { 'BAD NAME': 'x' } })).rejects.toThrow('invalid env var name');
+    await expect(handle.exec({ command: 'echo hi', env: { 'X=Y; rm -rf /': '1' } })).rejects.toThrow(
+      'invalid env var name',
+    );
 
     // filesystem: write/read roundtrip via upload/download, metadata via shell.
     await handle.fs?.writeFile('/workspace/custom/file.txt', 'hello');
@@ -80,7 +90,11 @@ describe('CreateosSandboxProvider', () => {
     });
     await expect(handle.fs?.exists('/workspace/custom/missing.txt')).resolves.toBe(false);
     await expect(handle.fs?.readFile('/workspace/custom/missing.txt')).rejects.toMatchObject({ statusCode: 404 });
+    // absolute and relative paths outside the workspace are both rejected.
     await expect(handle.fs?.readFile('../outside.txt')).rejects.toThrow('CreateOS path escapes workspace');
+    await expect(handle.fs?.readFile('/etc/passwd')).rejects.toThrow('CreateOS path escapes workspace');
+    await expect(handle.fs?.writeFile('/tmp/outside.txt', 'x')).rejects.toThrow('CreateOS path escapes workspace');
+    await expect(handle.fs?.readdir('/tmp')).rejects.toThrow('CreateOS path escapes workspace');
   });
 
   it('connects, maps lifecycle health, and treats missing destroy as idempotent', async () => {
