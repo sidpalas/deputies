@@ -14,7 +14,74 @@ fi
 cleanup() {
   "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
 }
-trap cleanup EXIT
+
+show_section() {
+  printf '\n--- %s ---\n' "$1"
+}
+
+curl_smoke_api() {
+  local path="$1"
+  show_section "GET $path"
+  curl -fsS "$BASE_URL$path" || true
+  printf '\n'
+}
+
+latest_session_id() {
+  node -e '
+let input = "";
+process.stdin.on("data", (chunk) => (input += chunk));
+process.stdin.on("end", () => {
+  try {
+    const sessions = (JSON.parse(input).sessions ?? []).sort((a, b) =>
+      String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")),
+    );
+    if (sessions[0]?.id) process.stdout.write(sessions[0].id);
+  } catch {}
+});
+'
+}
+
+show_diagnostics() {
+  local status="$1"
+  set +e
+
+  show_section "Docker Compose smoke failed with exit $status"
+  show_section "Docker Compose ps"
+  "${COMPOSE[@]}" ps
+
+  show_section "Docker Compose config"
+  "${COMPOSE[@]}" config
+
+  show_section "Docker Compose logs"
+  "${COMPOSE[@]}" logs --no-color --tail=400 control-plane-migrate control-plane web postgres seaweedfs
+
+  curl_smoke_api /health
+  curl_smoke_api /repositories
+  curl_smoke_api /models
+
+  show_section "GET /sessions"
+  local sessions_json
+  sessions_json="$(curl -fsS "$BASE_URL/sessions" 2>/dev/null)"
+  printf '%s\n' "$sessions_json"
+
+  local session_id
+  session_id="$(printf '%s' "$sessions_json" | latest_session_id)"
+  if [[ -n "$session_id" ]]; then
+    curl_smoke_api "/sessions/$session_id/messages"
+    curl_smoke_api "/sessions/$session_id/events?limit=200"
+    curl_smoke_api "/sessions/$session_id/artifacts"
+  fi
+}
+
+on_exit() {
+  local status="$?"
+  if [[ "$status" -ne 0 ]]; then
+    show_diagnostics "$status"
+  fi
+  cleanup
+  exit "$status"
+}
+trap on_exit EXIT
 
 cleanup
 "${COMPOSE[@]}" up -d --build postgres seaweedfs control-plane-migrate control-plane web

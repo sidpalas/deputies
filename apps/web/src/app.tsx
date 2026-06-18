@@ -175,6 +175,8 @@ type NavigationState = {
 };
 
 const activeProgressBatchDelayMs = 100;
+const createdSessionBackfillAttempts = 20;
+const createdSessionBackfillDelayMs = 250;
 
 type SessionDetailState = {
   messages: Message[];
@@ -210,6 +212,22 @@ function countInlineArtifacts(artifacts: Artifact[], messages: Message[], events
     if (artifact.runId && runIds.has(artifact.runId)) return true;
     return Boolean(artifact.messageId && messageIds.has(artifact.messageId));
   }).length;
+}
+
+function isTerminalMessageStatus(status: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+function isTerminalMessageEvent(event: AgentEvent, messageId: string): boolean {
+  return (
+    event.messageId === messageId &&
+    (event.type === 'agent_response_final' ||
+      event.type === 'message_completed' ||
+      event.type === 'message_failed' ||
+      event.type === 'message_cancelled' ||
+      event.type === 'run_failed' ||
+      event.type === 'run_cancelled')
+  );
 }
 
 function loadInitialNavigationState(): NavigationState {
@@ -1013,9 +1031,13 @@ export function App() {
   }
 
   async function refreshSessionDetailWithoutMilestones(sessionId: string) {
+    await loadAndApplySessionDetail(sessionId, true);
+  }
+
+  async function loadAndApplySessionDetail(sessionId: string, handleErrors = false) {
     try {
       const loaded = await loadSessionDetailPhases({ sessionId, token }).allReady;
-      if (selectedSessionIdRef.current !== sessionId) return;
+      if (selectedSessionIdRef.current !== sessionId) return null;
       eventCursor.current = loaded.events.at(-1)?.sequence ?? 0;
       setSessionDetail({
         messages: loaded.messages,
@@ -1027,8 +1049,21 @@ export function App() {
         callbacks: loaded.callbacks,
       });
       setDetailLoadedSessionId(sessionId);
+      return loaded;
     } catch (err) {
-      handleApiError(err);
+      if (handleErrors) handleApiError(err);
+      return null;
+    }
+  }
+
+  async function backfillCreatedSessionUntilSettled(sessionId: string, messageId: string) {
+    for (let attempt = 0; attempt < createdSessionBackfillAttempts; attempt += 1) {
+      if (selectedSessionIdRef.current !== sessionId) return;
+      const loaded = await loadAndApplySessionDetail(sessionId);
+      const message = loaded?.messages.find((candidate) => candidate.id === messageId);
+      if (message && isTerminalMessageStatus(message.status)) return;
+      if (loaded?.events.some((event) => isTerminalMessageEvent(event, messageId))) return;
+      await new Promise((resolve) => window.setTimeout(resolve, createdSessionBackfillDelayMs));
     }
   }
 
@@ -1223,6 +1258,7 @@ export function App() {
       pendingCreatedSessionIdRef.current = '';
       detailLoadedSessionIdRef.current = session.id;
       setDetailLoadedSessionId(session.id);
+      backfillCreatedSessionUntilSettled(session.id, message.id).catch(() => undefined);
       updateNavigation({ isCreatingThread: false });
     } catch (err) {
       if (pendingCreatedSessionIdRef.current) {
