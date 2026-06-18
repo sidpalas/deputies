@@ -1,5 +1,19 @@
 experimental_monorepo_root = true
 
+[monorepo]
+config_roots = [
+  "apps/control-plane",
+  "apps/web",
+  "apps/www",
+  "deploy/docker-compose",
+  "deploy/kubernetes",
+  "deploy/local",
+  "deploy/railway",
+  "deploy/sandboxes/daytona",
+  "deploy/sandboxes/tensorlake",
+  "packages/sandbox-bridge",
+]
+
 [tools]
 fzf = "0.66"
 node = "24"
