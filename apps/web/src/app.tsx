@@ -341,6 +341,7 @@ export function App() {
   const defaultSetupGuideOpenedRef = useRef(false);
   const activeProgressTimerRef = useRef<number | null>(null);
   const queuedActiveProgressRef = useRef<AgentEvent[]>([]);
+  const createdSessionBackfillAbortRef = useRef<AbortController | null>(null);
   const initialResourceDeepLinkRef = useRef(hasResourceSearchParam());
   const initialAutomationDeepLinkRef = useRef(new URLSearchParams(window.location.search).has('automation'));
 
@@ -500,6 +501,7 @@ export function App() {
   useEffect(() => {
     return () => {
       if (sessionsRefreshTimerRef.current !== null) window.clearTimeout(sessionsRefreshTimerRef.current);
+      abortCreatedSessionBackfill();
       sessionMilestoneInteractionRef.current?.abort('unmount');
       sessionMilestoneInteractionRef.current = null;
     };
@@ -881,6 +883,25 @@ export function App() {
     sessionsRefreshTimerRef.current = null;
   }
 
+  function abortCreatedSessionBackfill() {
+    createdSessionBackfillAbortRef.current?.abort();
+    createdSessionBackfillAbortRef.current = null;
+  }
+
+  function waitForCreatedSessionBackfillDelay(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      let timeout: number | undefined;
+      const finish = () => {
+        if (timeout !== undefined) window.clearTimeout(timeout);
+        signal.removeEventListener('abort', finish);
+        resolve();
+      };
+      timeout = window.setTimeout(finish, createdSessionBackfillDelayMs);
+      signal.addEventListener('abort', finish, { once: true });
+    });
+  }
+
   function scheduleSessionsRefresh(delayMs = 300) {
     clearScheduledSessionsRefresh();
     sessionsRefreshTimerRef.current = window.setTimeout(() => {
@@ -1034,9 +1055,10 @@ export function App() {
     await loadAndApplySessionDetail(sessionId, true);
   }
 
-  async function loadAndApplySessionDetail(sessionId: string, handleErrors = false) {
+  async function loadAndApplySessionDetail(sessionId: string, handleErrors = false, signal?: AbortSignal) {
     try {
-      const loaded = await loadSessionDetailPhases({ sessionId, token }).allReady;
+      const loaded = await loadSessionDetailPhases({ sessionId, token, ...(signal ? { signal } : {}) }).allReady;
+      if (signal?.aborted) return null;
       if (selectedSessionIdRef.current !== sessionId) return null;
       eventCursor.current = loaded.events.at(-1)?.sequence ?? 0;
       setSessionDetail({
@@ -1051,19 +1073,20 @@ export function App() {
       setDetailLoadedSessionId(sessionId);
       return loaded;
     } catch (err) {
-      if (handleErrors) handleApiError(err);
+      if (handleErrors && !signal?.aborted) handleApiError(err);
       return null;
     }
   }
 
-  async function backfillCreatedSessionUntilSettled(sessionId: string, messageId: string) {
+  async function backfillCreatedSessionUntilSettled(sessionId: string, messageId: string, signal: AbortSignal) {
     for (let attempt = 0; attempt < createdSessionBackfillAttempts; attempt += 1) {
-      if (selectedSessionIdRef.current !== sessionId) return;
-      const loaded = await loadAndApplySessionDetail(sessionId);
+      if (signal.aborted || selectedSessionIdRef.current !== sessionId) return;
+      const loaded = await loadAndApplySessionDetail(sessionId, false, signal);
+      if (signal.aborted) return;
       const message = loaded?.messages.find((candidate) => candidate.id === messageId);
       if (message && isTerminalMessageStatus(message.status)) return;
       if (loaded?.events.some((event) => isTerminalMessageEvent(event, messageId))) return;
-      await new Promise((resolve) => window.setTimeout(resolve, createdSessionBackfillDelayMs));
+      await waitForCreatedSessionBackfillDelay(signal);
     }
   }
 
@@ -1209,6 +1232,7 @@ export function App() {
     const firstPrompt = newThreadPrompt.trim();
     if (createSessionInFlightRef.current || !canCreateThread || !firstPrompt) return;
     createSessionInFlightRef.current = true;
+    abortCreatedSessionBackfill();
     const firstRepository = newThreadRepository.trim();
     blurFocusedTextControl();
     setNewThreadPrompt('');
@@ -1258,7 +1282,13 @@ export function App() {
       pendingCreatedSessionIdRef.current = '';
       detailLoadedSessionIdRef.current = session.id;
       setDetailLoadedSessionId(session.id);
-      backfillCreatedSessionUntilSettled(session.id, message.id).catch(() => undefined);
+      const backfillAbort = new AbortController();
+      createdSessionBackfillAbortRef.current = backfillAbort;
+      backfillCreatedSessionUntilSettled(session.id, message.id, backfillAbort.signal)
+        .catch(() => undefined)
+        .finally(() => {
+          if (createdSessionBackfillAbortRef.current === backfillAbort) createdSessionBackfillAbortRef.current = null;
+        });
       updateNavigation({ isCreatingThread: false });
     } catch (err) {
       if (pendingCreatedSessionIdRef.current) {
@@ -1474,6 +1504,11 @@ export function App() {
   }
 
   function signOut() {
+    abortCreatedSessionBackfill();
+    selectedSessionIdRef.current = '';
+    detailLoadedSessionIdRef.current = '';
+    pendingCreatedSessionIdRef.current = '';
+    eventCursor.current = 0;
     if (sessionAuthRequired) {
       void logout().catch(() => undefined);
       setCurrentUser(null);
@@ -1499,6 +1534,7 @@ export function App() {
     setGroups([]);
     resetAccessGroupsAdmin();
     setSessionsLoaded(false);
+    setDetailLoadedSessionId('');
     updateNavigation({
       selectedSessionId: '',
       selectedAutomationId: '',
@@ -1515,6 +1551,7 @@ export function App() {
 
   function startNewThread() {
     if (!canCreateThread) return;
+    abortCreatedSessionBackfill();
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     setSidebarOpen(false);
@@ -1537,6 +1574,7 @@ export function App() {
   }
 
   function selectSession(sessionId: string) {
+    if (selectedSessionIdRef.current !== sessionId) abortCreatedSessionBackfill();
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     autoScrolledSessionId.current = '';

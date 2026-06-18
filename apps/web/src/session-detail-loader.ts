@@ -58,31 +58,32 @@ export type SessionLoadedData = SessionDetailData &
 export function loadSessionDetailPhases(input: {
   sessionId: string;
   token: string;
+  signal?: AbortSignal;
   traceparents?: SessionDetailPhaseTraceparents;
 }): SessionDetailPhaseHandle {
   const messagesPromise = withComponent(
     'messages',
-    listMessages(input.sessionId, input.token, requestOptions(input.traceparents?.detail)),
+    listMessages(input.sessionId, input.token, requestOptions(input.traceparents?.detail, input.signal)),
   );
   const eventsPromise = withComponent(
     'events',
-    listEvents(input.sessionId, input.token, undefined, requestOptions(input.traceparents?.detail)),
+    listEvents(input.sessionId, input.token, undefined, requestOptions(input.traceparents?.detail, input.signal)),
   );
   const artifactsPromise = withComponent(
     'artifacts',
-    listArtifacts(input.sessionId, input.token, requestOptions(input.traceparents?.detail)),
+    listArtifacts(input.sessionId, input.token, requestOptions(input.traceparents?.detail, input.signal)),
   );
   const externalResourcesPromise = withComponent(
     'external_resources',
-    listExternalResources(input.sessionId, input.token, requestOptions(input.traceparents?.outputs)),
+    listExternalResources(input.sessionId, input.token, requestOptions(input.traceparents?.outputs, input.signal)),
   );
   const callbacksPromise = withComponent(
     'callbacks',
-    listCallbacks(input.sessionId, input.token, requestOptions(input.traceparents?.outputs)),
+    listCallbacks(input.sessionId, input.token, requestOptions(input.traceparents?.outputs, input.signal)),
   );
   const servicesReady = withComponent(
     'services',
-    listServices(input.sessionId, input.token, requestOptions(input.traceparents?.services)),
+    listServices(input.sessionId, input.token, requestOptions(input.traceparents?.services, input.signal)),
   );
 
   const detailReady = Promise.all([messagesPromise, eventsPromise]).then(([messages, events]) => ({
@@ -125,7 +126,13 @@ function isComponentError(value: unknown): value is SessionDetailComponentError 
   return Boolean(value && typeof value === 'object' && 'component' in value && 'cause' in value);
 }
 
-function requestOptions(source: TraceparentSource | undefined): { traceparent: string } | undefined {
-  if (!source) return undefined;
-  return { traceparent: typeof source === 'function' ? source() : source };
+function requestOptions(
+  source: TraceparentSource | undefined,
+  signal: AbortSignal | undefined,
+): { traceparent?: string; signal?: AbortSignal } | undefined {
+  if (!source && !signal) return undefined;
+  return {
+    ...(source ? { traceparent: typeof source === 'function' ? source() : source } : {}),
+    ...(signal ? { signal } : {}),
+  };
 }

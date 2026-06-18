@@ -6,7 +6,7 @@ const streamIdleTimeoutMs = 45_000;
 export const apiConnectionOkEvent = 'deputies:api-connection-ok';
 export const apiConnectionDelayedEvent = 'deputies:api-connection-delayed';
 
-export type RequestOptions = { traceparent?: string };
+export type RequestOptions = { traceparent?: string; signal?: AbortSignal };
 
 export class ApiError extends Error {
   constructor(
@@ -28,6 +28,7 @@ export async function request<T>(
     token?: string;
     body?: unknown;
     traceparent?: string;
+    signal?: AbortSignal;
     expectJson?: boolean;
     keepalive?: boolean;
   } = {},
@@ -134,12 +135,20 @@ async function requestOnce<T>(
     token?: string;
     body?: unknown;
     traceparent?: string;
+    signal?: AbortSignal;
     expectJson?: boolean;
     keepalive?: boolean;
   },
 ): Promise<T> {
   const abort = new AbortController();
-  const timeout = window.setTimeout(() => abort.abort(), requestTimeoutMs);
+  let timedOut = false;
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    abort.abort();
+  }, requestTimeoutMs);
+  const abortRequest = () => abort.abort();
+  if (options.signal?.aborted) abort.abort();
+  else options.signal?.addEventListener('abort', abortRequest, { once: true });
   const requestInit: RequestInit = {
     method: options.method,
     credentials: 'include',
@@ -154,28 +163,28 @@ async function requestOnce<T>(
   if (options.keepalive !== undefined) requestInit.keepalive = options.keepalive;
   if (options.body) requestInit.body = JSON.stringify(options.body);
 
-  let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl}${path}`, requestInit);
+    const response = await fetch(`${apiBaseUrl}${path}`, requestInit);
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => undefined);
+      const message = isErrorBody(body) ? body.message : `Request failed with ${response.status}`;
+      throw new ApiError(response.status, message);
+    }
+
+    dispatchApiConnectionOk('request');
+    if (options.expectJson === false) return undefined as T;
+    return (await response.json()) as T;
   } catch (error) {
-    if (abort.signal.aborted) {
+    if (timedOut) {
       dispatchApiConnectionDelayed(`Request timed out: ${path}`);
       throw new ApiError(0, `Request timed out: ${path}`);
     }
     throw error;
   } finally {
     window.clearTimeout(timeout);
+    options.signal?.removeEventListener('abort', abortRequest);
   }
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => undefined);
-    const message = isErrorBody(body) ? body.message : `Request failed with ${response.status}`;
-    throw new ApiError(response.status, message);
-  }
-
-  dispatchApiConnectionOk('request');
-  if (options.expectJson === false) return undefined as T;
-  return (await response.json()) as T;
 }
 
 function dispatchApiConnectionOk(source: 'request' | 'stream') {

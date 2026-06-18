@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './app.js';
 import { listEvents } from './api.js';
+import { request } from './api-request.js';
 
 const { codeToHtmlMock } = vi.hoisted(() => ({
   codeToHtmlMock: vi.fn((code: string) => `<pre class="shiki"><code>${code}</code></pre>`),
@@ -96,6 +97,7 @@ type MockApiOptions = {
   currentUser?: (typeof user & { memberships?: unknown[] }) | null;
   notices?: unknown[];
   logins?: Array<{ username: string; password: string }>;
+  abortedRequests?: string[];
 };
 
 afterEach(() => {
@@ -197,6 +199,31 @@ it('stops API client event paging when a hasMore cursor does not advance', async
     `/sessions/${session.id}/events?limit=1000`,
     `/sessions/${session.id}/events?limit=1000&after=1`,
   ]);
+});
+
+it('aborts API response body reads after headers arrive', async () => {
+  const abort = new AbortController();
+  let bodyAborted = false;
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener('abort', () => {
+            bodyAborted = true;
+            controller.error(new DOMException('Aborted', 'AbortError'));
+          });
+        },
+      }),
+      { headers: { 'content-type': 'application/json' } },
+    );
+  });
+
+  const response = request('/slow', { signal: abort.signal });
+  await Promise.resolve();
+  abort.abort();
+
+  await expect(response).rejects.toMatchObject({ name: 'AbortError' });
+  expect(bodyAborted).toBe(true);
 });
 
 it('submits composer text on Enter and preserves Shift Enter for newlines', async () => {
@@ -352,7 +379,31 @@ it('backfills fast responses for newly-created sessions when the global stream m
   fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
 
   expect(await screen.findAllByText('start work')).not.toHaveLength(0);
-  expect(await screen.findByText('missed fast provider response')).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByText('missed fast provider response')).toBeInTheDocument());
+});
+
+it('aborts newly-created session backfill when signing out', async () => {
+  const newSessionId = '00000000-0000-4000-8000-000000000102';
+  const abortedRequests: string[] = [];
+  mockApi({
+    abortedRequests,
+    authMode: 'session',
+    currentUser: user,
+    hangMessagesForSessions: [newSessionId],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  fireEvent.change(screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...'), {
+    target: { value: 'start work' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+  expect(await screen.findAllByText('start work')).not.toHaveLength(0);
+  fireEvent.click(screen.getAllByRole('button', { name: 'Sign out' })[0]!);
+
+  await waitFor(() => expect(abortedRequests).toContain(`GET /sessions/${newSessionId}/messages`));
+  expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument();
 });
 
 it('keeps only one context picker open at a time', async () => {
@@ -2705,8 +2756,8 @@ function mockApi(options: MockApiOptions = {}) {
     if (url.pathname === '/sessions' && method === 'GET') {
       sessionsRequestCount += 1;
       options.onListSessions?.(sessionsRequestCount);
-      if (options.hangSessions) return new Promise<Response>(() => undefined);
-      if (options.hangSessionsAfterFirst && sessionsRequestCount > 1) return new Promise<Response>(() => undefined);
+      if (options.hangSessions) return hangingResponse(init);
+      if (options.hangSessionsAfterFirst && sessionsRequestCount > 1) return hangingResponse(init);
       return jsonResponse({ sessions: options.sessions ?? [currentSession] });
     }
 
@@ -2840,13 +2891,13 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/unarchive` && method === 'POST') {
-      if (options.hangUnarchive) return new Promise<Response>(() => undefined);
+      if (options.hangUnarchive) return hangingResponse(init);
       currentSession = { ...currentSession, status: 'idle' };
       return jsonResponse({ session: currentSession });
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/archive` && method === 'POST') {
-      if (options.hangArchive) return new Promise<Response>(() => undefined);
+      if (options.hangArchive) return hangingResponse(init);
       currentSession = { ...currentSession, status: 'archived' };
       return jsonResponse({ session: currentSession });
     }
@@ -2867,7 +2918,9 @@ function mockApi(options: MockApiOptions = {}) {
     const messagesListMatch = url.pathname.match(/^\/sessions\/([^/]+)\/messages$/);
     if (messagesListMatch && method === 'GET') {
       const sessionId = messagesListMatch[1]!;
-      if (options.hangMessagesForSessions?.includes(sessionId)) return new Promise<Response>(() => undefined);
+      if (options.hangMessagesForSessions?.includes(sessionId)) {
+        return hangingResponse(init, () => options.abortedRequests?.push(`${method} ${url.pathname}`));
+      }
       return jsonResponse({ messages: options.messagesBySession?.[sessionId] ?? messages });
     }
 
@@ -2924,7 +2977,7 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname.match(/^\/sessions\/[^/]+\/artifacts$/)) {
-      if (options.hangArtifacts) return new Promise<Response>(() => undefined);
+      if (options.hangArtifacts) return hangingResponse(init);
       return jsonResponse({ artifacts: options.artifacts ?? [] });
     }
 
@@ -3117,5 +3170,23 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json' },
+  });
+}
+
+function hangingResponse(init: RequestInit | undefined, onAbort?: () => void): Promise<Response> {
+  return new Promise((_, reject) => {
+    if (init?.signal?.aborted) {
+      onAbort?.();
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    init?.signal?.addEventListener(
+      'abort',
+      () => {
+        onAbort?.();
+        reject(new DOMException('Aborted', 'AbortError'));
+      },
+      { once: true },
+    );
   });
 }
