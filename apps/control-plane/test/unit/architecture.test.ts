@@ -13,6 +13,7 @@ describe('architecture boundaries', () => {
     const rules = [
       { sdk: '@flue/runtime', allowed: (path: string) => path.startsWith('runner-flue/') },
       { sdk: '@daytona/sdk', allowed: (path: string) => path === 'sandbox/daytona.ts' },
+      { sdk: '@nodeops-createos/sandbox', allowed: (path: string) => path === 'sandbox/createos.ts' },
     ];
 
     for (const file of files) {

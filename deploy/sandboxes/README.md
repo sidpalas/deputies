@@ -7,6 +7,7 @@ This directory contains sandbox runtime image assets. These images are not full 
 - `base/`: provider-neutral base toolchain for Deputies-compatible sandboxes.
 - `docker/`: Docker-provider image. It uses the base toolchain and starts the Deputies sandbox bridge as its command.
 - `daytona/`: Daytona-provider image. It uses the base toolchain, adds helper scripts for Daytona/no-nested-virtualization verification, and uses a long-running command.
+- `createos/`: CreateOS-provider rootfs. It uses the base toolchain only — CreateOS runs commands through its native in-VM agent, so it starts no bridge and needs no long-running command.
 
 ## Custom Repository Images
 

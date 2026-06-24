@@ -8,6 +8,7 @@ export type SandboxProviderKind =
   | 'docker'
   | 'daytona'
   | 'tensorlake'
+  | 'createos'
   | 'k8s-agent-sandbox'
   | 'ecs';
 export type DockerOrchestratorMode = 'in-process' | 'http';
@@ -114,6 +115,10 @@ export type AppConfig = {
   tensorlakeSandboxMemoryMb?: number;
   tensorlakeSandboxDiskMb?: number;
   tensorlakeAllowInternetAccess?: boolean;
+  createosApiKey?: string;
+  createosBaseUrl?: string;
+  createosShape?: string;
+  createosRootfs?: string;
   slackApiBaseUrl: string;
   slackSigningSecret?: string;
   slackBotToken?: string;
@@ -192,7 +197,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'unsafe-local', 'docker', 'daytona', 'tensorlake', 'k8s-agent-sandbox', 'ecs'],
+      ['fake', 'unsafe-local', 'docker', 'daytona', 'tensorlake', 'createos', 'k8s-agent-sandbox', 'ecs'],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
@@ -338,6 +343,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       'TENSORLAKE_ALLOW_INTERNET_ACCESS',
     );
   }
+  if (env.CREATEOS_API_KEY) config.createosApiKey = env.CREATEOS_API_KEY;
+  if (env.CREATEOS_BASE_URL) config.createosBaseUrl = env.CREATEOS_BASE_URL;
+  if (env.CREATEOS_SHAPE) config.createosShape = env.CREATEOS_SHAPE;
+  if (env.CREATEOS_ROOTFS) config.createosRootfs = env.CREATEOS_ROOTFS;
   if (env.SLACK_SIGNING_SECRET) config.slackSigningSecret = env.SLACK_SIGNING_SECRET;
   if (env.SLACK_BOT_TOKEN) config.slackBotToken = env.SLACK_BOT_TOKEN;
   if (env.GITHUB_APP_ID) config.githubAppId = env.GITHUB_APP_ID;
@@ -525,6 +534,14 @@ export function requireTensorlakeRegisteredImage(config: AppConfig): string {
   }
 
   return config.tensorlakeRegisteredImage;
+}
+
+export function requireCreateosApiKey(config: AppConfig): string {
+  if (!config.createosApiKey) {
+    throw new Error('CREATEOS_API_KEY is required when SANDBOX_PROVIDER=createos');
+  }
+
+  return config.createosApiKey;
 }
 
 export function requireDockerOrchestratorUrl(config: AppConfig): string {

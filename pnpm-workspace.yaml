@@ -4,6 +4,7 @@ packages:
 minimumReleaseAge: 4320
 minimumReleaseAgeExclude:
   - '@flue/runtime'
+  - '@nodeops-createos/sandbox'
 allowBuilds:
   '@google/genai': false
   '@mongodb-js/zstd': false

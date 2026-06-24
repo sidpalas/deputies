@@ -9,6 +9,7 @@ import {
   loadConfig,
   requireAgentSandboxOrchestratorToken,
   requireAgentSandboxOrchestratorUrl,
+  requireCreateosApiKey,
   requireDatabaseUrl,
   requireDaytonaApiKey,
   requireDockerOrchestratorUrl,
@@ -36,6 +37,7 @@ import { PostgresFlueSessionStore } from './runner-flue/session-store.js';
 import { PiRunner, type PiRunnerOptions } from './runner-pi/runner.js';
 import { PostgresPiSessionStore } from './runner-pi/session-store.js';
 import { sandboxBridgeSkippedCookieNames } from './sandbox/bridge-env.js';
+import { CreateosSandboxProvider, type CreateosSandboxProviderOptions } from './sandbox/createos.js';
 import { DaytonaSandboxProvider } from './sandbox/daytona.js';
 import { DockerSandboxProvider, HttpDockerOrchestratorClient, InProcessDockerOrchestrator } from './sandbox/docker.js';
 import { FakeSandboxProvider } from './sandbox/fake.js';
@@ -282,6 +284,16 @@ function createSandboxProvider(): SandboxProvider {
     if (config.tensorlakeAllowInternetAccess !== undefined)
       Object.assign(options, { allowInternetAccess: config.tensorlakeAllowInternetAccess });
     return new TensorlakeSandboxProvider(options);
+  }
+  if (config.sandboxProvider === 'createos') {
+    const options: CreateosSandboxProviderOptions = {
+      apiKey: requireCreateosApiKey(config),
+      workspacePath: config.sandboxWorkspacePath,
+    };
+    if (config.createosShape !== undefined) options.shape = config.createosShape;
+    if (config.createosBaseUrl !== undefined) options.baseUrl = config.createosBaseUrl;
+    if (config.createosRootfs !== undefined) options.rootfs = config.createosRootfs;
+    return new CreateosSandboxProvider(options);
   }
   if (config.sandboxProvider === 'k8s-agent-sandbox') {
     const orchestrator =
