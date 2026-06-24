@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.11.2](https://github.com/sidpalas/deputies/compare/v0.11.1...v0.11.2) (2026-06-24)
+
+
+### Continuous Integration
+
+* upgrade mise from 2026.6.2 to 2026.6.13 and mise-action from v4.1.0 to v4.2.0 ([1c0dc17](https://github.com/sidpalas/deputies/commit/1c0dc1753539ef04702cf1ed7d5bd37e1b6522c0))
+
+
+### Bug Fixes
+
+* backfill fast new-session responses ([#76](https://github.com/sidpalas/deputies/issues/76)) ([628776f](https://github.com/sidpalas/deputies/commit/628776fd955379f1b9558760e4f245ba5b967512))
+* cancel new-session backfill requests ([bc71e41](https://github.com/sidpalas/deputies/commit/bc71e41d700e997d9ba83148d1ba832cf1502e0f))
+* configure mise monorepo roots ([#75](https://github.com/sidpalas/deputies/issues/75)) ([9161a0b](https://github.com/sidpalas/deputies/commit/9161a0b82d8bde774395b39e5e1c626f98af5caf))
+* scope config validation by run mode ([8b84a24](https://github.com/sidpalas/deputies/commit/8b84a24bf37f2c01114820868872a49b27e57de1))
+* use stable mise monorepo root ([9b8d641](https://github.com/sidpalas/deputies/commit/9b8d641c9ab2b5475fa88f044e687c241be6daa0))
+
+
+### Tests
+
+* stabilize full-stack smoke test ([7ae44d7](https://github.com/sidpalas/deputies/commit/7ae44d72fdbceb5531e715a6f69810f57de29e2e))
+
 ## [0.11.1](https://github.com/sidpalas/deputies/compare/v0.11.0...v0.11.1) (2026-06-16)
 
 
