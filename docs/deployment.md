@@ -116,6 +116,8 @@ Recommended topologies:
 
 Scheduled automations are claimed by worker-capable processes. API-only deployments can create and edit automations, but automatic scheduled invocation requires at least one `combined` or `worker` process.
 
+The AWS reference Terraform supports this with `topology_mode=combined` or `topology_mode=split`. Combined mode creates one ECS service that runs web, API, worker, and migrations in one task. Split mode creates an API ECS service that runs web, API, and migrations plus a separate worker ECS service that runs worker and migrations. Each service gates its main container on the migration container completing successfully.
+
 ## Base Environment
 
 Every control-plane process needs:

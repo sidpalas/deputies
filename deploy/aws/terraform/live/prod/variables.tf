@@ -93,32 +93,79 @@ variable "image_tag" {
 }
 
 variable "run_mode" {
-  description = "Control-plane run mode for the single ECS service in this reference deployment. Use combined or all; split api/worker topologies require separate services."
+  description = "Control-plane run mode for combined topology. Split topology uses api and worker run modes automatically."
   type        = string
   default     = "combined"
 
   validation {
     condition     = contains(["combined", "all"], var.run_mode)
-    error_message = "The AWS reference deployment creates one ECS service, so run_mode must be combined or all."
+    error_message = "Allowed values for run_mode are combined or all."
+  }
+}
+
+variable "topology_mode" {
+  description = "Control-plane topology mode. combined creates one ECS service with web and control-plane containers. split creates separate API and worker ECS services."
+  type        = string
+  default     = "combined"
+
+  validation {
+    condition     = contains(["combined", "split"], var.topology_mode)
+    error_message = "Allowed values for topology_mode are combined or split."
   }
 }
 
 variable "desired_count" {
-  description = "Desired ECS service task count."
+  description = "Desired ECS service task count for combined topology."
+  type        = number
+  default     = 1
+}
+
+variable "api_desired_count" {
+  description = "Desired ECS task count for the API service when topology_mode is split."
+  type        = number
+  default     = 1
+}
+
+variable "worker_desired_count" {
+  description = "Desired ECS task count for the worker service when topology_mode is split."
   type        = number
   default     = 1
 }
 
 variable "task_cpu" {
-  description = "Fargate task CPU units."
+  description = "Fargate task CPU units for combined topology and the default for split topology."
   type        = number
   default     = 512
 }
 
 variable "task_memory" {
-  description = "Fargate task memory MiB."
+  description = "Fargate task memory MiB for combined topology and the default for split topology."
   type        = number
   default     = 1024
+}
+
+variable "api_task_cpu" {
+  description = "Optional Fargate task CPU units for the split API service. Defaults to task_cpu."
+  type        = number
+  default     = null
+}
+
+variable "api_task_memory" {
+  description = "Optional Fargate task memory MiB for the split API service. Defaults to task_memory."
+  type        = number
+  default     = null
+}
+
+variable "worker_task_cpu" {
+  description = "Optional Fargate task CPU units for the split worker service. Defaults to task_cpu."
+  type        = number
+  default     = null
+}
+
+variable "worker_task_memory" {
+  description = "Optional Fargate task memory MiB for the split worker service. Defaults to task_memory."
+  type        = number
+  default     = null
 }
 
 variable "cpu_architecture" {

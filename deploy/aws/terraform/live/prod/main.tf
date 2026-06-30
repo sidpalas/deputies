@@ -77,14 +77,21 @@ module "app" {
   service_base_domain = var.service_base_domain
   alb_certificate_arn = local.app_alb_certificate_arn
 
-  control_plane_image = var.control_plane_image
-  web_image           = var.web_image
-  image_tag           = var.image_tag
-  run_mode            = var.run_mode
-  desired_count       = var.desired_count
-  task_cpu            = var.task_cpu
-  task_memory         = var.task_memory
-  cpu_architecture    = var.cpu_architecture
+  control_plane_image  = var.control_plane_image
+  web_image            = var.web_image
+  image_tag            = var.image_tag
+  topology_mode        = var.topology_mode
+  run_mode             = var.run_mode
+  desired_count        = var.desired_count
+  api_desired_count    = var.api_desired_count
+  worker_desired_count = var.worker_desired_count
+  task_cpu             = var.task_cpu
+  task_memory          = var.task_memory
+  api_task_cpu         = var.api_task_cpu
+  api_task_memory      = var.api_task_memory
+  worker_task_cpu      = var.worker_task_cpu
+  worker_task_memory   = var.worker_task_memory
+  cpu_architecture     = var.cpu_architecture
 
   api_auth_mode        = var.api_auth_mode
   auth_provider        = var.auth_provider

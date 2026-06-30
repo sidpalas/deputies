@@ -46,7 +46,7 @@ locals {
   base_image_arn       = var.base_image_arn != "" ? var.base_image_arn : "arn:aws:lambda:${var.aws_region}:aws:microvm-image:al2023-1"
   image_arn            = "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:microvm-image:${var.image_name}"
 
-  all_ingress_connector    = "arn:aws:lambda:${var.aws_region}:aws:network-connector:aws-network-connector:ALL_INGRESS"
+  all_ingress_connector     = "arn:aws:lambda:${var.aws_region}:aws:network-connector:aws-network-connector:ALL_INGRESS"
   internet_egress_connector = "arn:aws:lambda:${var.aws_region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"
 }
 

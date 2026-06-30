@@ -21,12 +21,17 @@ alb_certificate_arn             = ""
 create_managed_acm_certificate  = true
 managed_acm_https_enabled       = false
 
-# The reference stack creates one ECS service, so use combined/all. Split
-# api/worker deployments need separate services outside this root.
-run_mode      = "combined"
-desired_count = 1
-task_cpu      = 512
-task_memory   = 1024
+# Use combined for one ECS service that runs API, worker, and web together.
+# Use split for separate API and worker ECS services; web runs beside API.
+topology_mode        = "combined"
+run_mode             = "combined"
+desired_count        = 1
+api_desired_count    = 1
+worker_desired_count = 1
+task_cpu             = 512
+task_memory          = 1024
+# api_task_cpu / api_task_memory / worker_task_cpu / worker_task_memory default
+# to task_cpu / task_memory when unset.
 # AWS Fargate Graviton is materially cheaper than x86 for this reference stack.
 # The published app images are multi-arch manifests with linux/arm64 support.
 cpu_architecture = "ARM64"

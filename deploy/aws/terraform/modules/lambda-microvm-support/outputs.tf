@@ -46,11 +46,11 @@ output "internet_egress_connector_arn" {
 output "mise_environment" {
   description = "Environment values consumed by deploy/sandboxes/lambda-microvm mise tasks."
   value = {
-    MICROVM_ARTIFACT_BUCKET = module.artifact.s3_bucket_id
-    MICROVM_IMAGE_NAME      = var.image_name
+    MICROVM_ARTIFACT_BUCKET  = module.artifact.s3_bucket_id
+    MICROVM_IMAGE_NAME       = var.image_name
     MICROVM_IMAGE_IDENTIFIER = local.image_arn
-    MICROVM_BASE_IMAGE_ARN  = local.base_image_arn
-    MICROVM_BUILD_ROLE_ARN  = aws_iam_role.build.arn
-    MICROVM_LOG_GROUP       = aws_cloudwatch_log_group.microvm.name
+    MICROVM_BASE_IMAGE_ARN   = local.base_image_arn
+    MICROVM_BUILD_ROLE_ARN   = aws_iam_role.build.arn
+    MICROVM_LOG_GROUP        = aws_cloudwatch_log_group.microvm.name
   }
 }

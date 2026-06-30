@@ -45,8 +45,13 @@ output "ecs_cluster_name" {
 }
 
 output "ecs_service_name" {
-  description = "ECS service name."
+  description = "Primary ECS service name. Combined topology returns the app service; split topology returns the API service."
   value       = module.app.ecs_service_name
+}
+
+output "ecs_service_names" {
+  description = "ECS service names by topology service key."
+  value       = module.app.ecs_service_names
 }
 
 output "app_secret_arn" {

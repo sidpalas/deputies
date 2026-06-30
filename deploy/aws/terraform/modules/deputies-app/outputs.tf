@@ -24,13 +24,23 @@ output "ecs_cluster_name" {
 }
 
 output "ecs_service_name" {
-  description = "ECS service name."
-  value       = module.ecs.services["app"].name
+  description = "Primary ECS service name. Combined topology returns the app service; split topology returns the API service."
+  value       = var.topology_mode == "combined" ? module.ecs.services["app"].name : module.ecs.services["api"].name
+}
+
+output "ecs_service_names" {
+  description = "ECS service names by topology service key."
+  value       = { for key, service in module.ecs.services : key => service.name }
 }
 
 output "task_role_arn" {
-  description = "ECS task role ARN."
-  value       = module.ecs.services["app"].tasks_iam_role_arn
+  description = "Primary ECS task role ARN. Combined topology returns the app role; split topology returns the API role."
+  value       = var.topology_mode == "combined" ? module.ecs.services["app"].tasks_iam_role_arn : module.ecs.services["api"].tasks_iam_role_arn
+}
+
+output "task_role_arns" {
+  description = "ECS task role ARNs by topology service key."
+  value       = { for key, service in module.ecs.services : key => service.tasks_iam_role_arn }
 }
 
 output "artifact_bucket_name" {
