@@ -24,6 +24,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@aws-sdk/client-lambda-microvms": "^3.1075.0",
     "@aws-sdk/client-s3": "^3.1045.0",
     "@daytona/sdk": "^0.185.0",
     "@deputies/browser-milestones": "workspace:*",

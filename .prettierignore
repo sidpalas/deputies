@@ -10,3 +10,7 @@ CHANGELOG.md
 .env*
 !.env.example
 deploy/kubernetes/charts/**/templates/*.yaml
+**/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/terraform.tfvars

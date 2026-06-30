@@ -11,7 +11,7 @@ A production-like deployment usually includes:
 - One or more worker processes, either combined with the API or split out.
 - Postgres for durable product state and Flue state.
 - Optional S3-compatible object storage for artifact blobs.
-- A sandbox provider for real agent work: Daytona or Docker are the current options
+- A sandbox provider for real agent work: Daytona, Docker, Tensorlake, Kubernetes Agent Sandbox, or AWS Lambda MicroVM.
 
 The diagrams below show the three intended deployment modes, from the smallest useful setup to a horizontally scalable split topology.
 
@@ -46,6 +46,20 @@ Use the published GHCR images for standard deployments, or use the in-repo Docke
 | Daytona sandbox | `ghcr.io/sidpalas/deputies-daytona-sandbox:<tag-or-digest>` | `deploy/sandboxes/daytona/Dockerfile` |
 
 The web image serves the built `apps/web/dist` assets behind Caddy and proxies browser-facing API routes. The control-plane image runs `apps/control-plane/dist/index.js` and uses `RUN_MODE` to choose API, worker, or combined process responsibilities.
+
+The published web and control-plane images are multi-arch manifests for `linux/amd64` and `linux/arm64`. AWS Fargate deployments should prefer `ARM64`/Graviton unless a dependency forces x86. The sandbox provider images are currently published as `linux/amd64`; Lambda MicroVM images are built by AWS from the dedicated `deploy/sandboxes/lambda-microvm` package instead of GHCR OCI images.
+
+Local app image helpers:
+
+```sh
+mise run images:app:build:local
+
+CONTROL_PLANE_IMAGE=ghcr.io/<owner>/deputies-control-plane:<tag> \
+WEB_IMAGE=ghcr.io/<owner>/deputies-web:<tag> \
+mise run images:app:push:multiarch
+```
+
+`images:app:push:multiarch` uses the active Docker Buildx builder and defaults to `DEPUTIES_APP_IMAGE_PLATFORMS=linux/amd64,linux/arm64`. Use QEMU/binfmt for local emulation, or select a remote Buildx builder such as Namespace, Depot, or another Docker Build Cloud/remote builder before running the task.
 
 Use the published sandbox images as the base/reference images for deployments:
 
@@ -219,6 +233,7 @@ The web entrypoint should proxy these paths to the control-plane API:
 /repositories*
 /models*
 /setup*
+/telemetry*
 /users*
 /webhooks*
 ```
@@ -283,6 +298,16 @@ ANTHROPIC_API_KEY=<secret>
 OPENAI_API_KEY=<secret>
 OPENCODE_API_KEY=<secret>
 ```
+
+Amazon Bedrock through the Pi runner:
+
+```sh
+RUNNER=pi
+RUNNER_MODEL_DEFAULT=amazon-bedrock/us.amazon.nova-micro-v1:0
+BEDROCK_REGION=us-east-2
+```
+
+Bedrock uses the default AWS SDK credential chain, such as an ECS task role in the AWS reference deployment. If `BEDROCK_REGION` is unset, Deputies falls back to `AWS_REGION`, then `AWS_DEFAULT_REGION`, then `us-east-1`. Nova and Claude models commonly require inference-profile IDs with the regional prefix, for example `us.amazon.nova-micro-v1:0` or `us.anthropic.claude-haiku-4-5-20251001-v1:0`; direct base model IDs can fail when on-demand throughput is unsupported.
 
 Optional model picker choices override:
 
@@ -361,7 +386,7 @@ DOCKER_SANDBOX_MEMORY=
 DOCKER_SANDBOX_CPUS=
 ```
 
-Required for Postgres-backed Docker sandboxes:
+Required for Postgres-backed Docker, Kubernetes Agent Sandbox, and Lambda MicroVM sandboxes:
 
 ```sh
 SANDBOX_SECRET_ENCRYPTION_KEY=<stable-high-entropy-secret>
@@ -420,9 +445,25 @@ Leave these empty to use Daytona defaults. These are deployment-level controls b
 
 Use pinned image tags or digests instead of `latest`. For private registries, configure registry credentials in Daytona.
 
-### Reserved Providers
+### AWS Lambda MicroVM
 
-`kubernetes` and `ecs` are accepted config enum values but are not wired yet. Do not use them for deployments until provider adapters exist.
+```sh
+SANDBOX_PROVIDER=lambda-microvm
+LAMBDA_MICROVM_IMAGE_IDENTIFIER=<image-name-or-arn>
+LAMBDA_MICROVM_IMAGE_VERSION=<optional-version>
+LAMBDA_MICROVM_EXECUTION_ROLE_ARN=<optional-runtime-role-arn>
+LAMBDA_MICROVM_INGRESS_NETWORK_CONNECTORS=arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:ALL_INGRESS
+LAMBDA_MICROVM_EGRESS_NETWORK_CONNECTORS=arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:INTERNET_EGRESS
+LAMBDA_MICROVM_MAXIMUM_DURATION_SECONDS=28800
+LAMBDA_MICROVM_AUTH_TOKEN_TTL_MINUTES=30
+LAMBDA_MICROVM_BRIDGE_PORT=3584
+```
+
+Lambda MicroVM images are built/updated outside the app process with `deploy/sandboxes/lambda-microvm` tasks. The AWS reference Terraform in `deploy/aws` creates the supporting artifact bucket, build role, runtime role, log group, and ECS task-role permissions, then passes the selected image identifier into the app.
+
+MicroVM inbound traffic uses the AWS-managed MicroVM HTTPS endpoint with `X-aws-proxy-auth` and `X-aws-proxy-port` headers. VPC network connectors configure MicroVM egress, such as public internet or private VPC access; they do not replace the inbound endpoint.
+
+`SANDBOX_SECRET_ENCRYPTION_KEY` must be stable across restarts so encrypted Lambda MicroVM bridge credentials can be decrypted for resume, preview, and cleanup flows.
 
 ## Sandbox Lifecycle Tuning
 
@@ -466,6 +507,8 @@ ARTIFACT_STORAGE_S3_FORCE_PATH_STYLE=false
 ARTIFACT_STORAGE_S3_CREATE_BUCKET=false
 ARTIFACT_CREATE_MAX_BYTES=26214400
 ```
+
+Native AWS deployments can omit `ARTIFACT_STORAGE_S3_ACCESS_KEY_ID` and `ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY` to use the default AWS SDK credential chain, such as an ECS task role. Custom S3-compatible endpoints still require explicit access keys.
 
 Keep downloads going through the API so product auth is enforced. Do not expose object storage credentials to browsers.
 

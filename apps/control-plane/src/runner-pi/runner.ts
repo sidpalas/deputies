@@ -19,7 +19,14 @@ import {
 import type { ArtifactService } from '../artifacts/service.js';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
+import { getModels, type Api, type Model } from '@earendil-works/pi-ai';
 import { prepareRepositoryShellSetup, type RepositoryAccessProvider } from '../repositories/setup.js';
+import {
+  AMAZON_BEDROCK_INFERENCE_PROFILE_MODELS,
+  AMAZON_BEDROCK_PROVIDER,
+  BEDROCK_CONVERSE_STREAM_API,
+  resolveBedrockRuntimeBaseUrl,
+} from '../runner/bedrock.js';
 import type { RepositoryShell, RepositoryToolServices, RepositoryToolState } from '../repositories/tool.js';
 import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
@@ -51,6 +58,8 @@ const DEPUTIES_SYSTEM_PROMPT = [
 // Deputies' same-name custom tools so filesystem and shell access goes through SandboxHandle.
 const PI_NO_TOOLS: NonNullable<CreateAgentSessionOptions['noTools']> = 'builtin';
 const PI_SUBAGENT_MAX_DEPTH = 4;
+const PI_THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+const BEDROCK_AUTHENTICATED_SENTINEL = '<authenticated>';
 
 export type PiRunnerOptions = {
   model: string;
@@ -114,6 +123,7 @@ export class PiRunner implements Runner {
     const cwd = repositorySetup?.workspacePath ?? input.sandbox.workspacePath;
     const lease = await this.getSessionLease(input.sessionId, cwd);
     const modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.agentDir, 'models.json'));
+    registerAmazonBedrockInferenceProfiles(modelRegistry, modelName);
     const modelSelection = parseModelSelection(modelName);
     const model = modelRegistry.find(modelSelection.provider, modelSelection.modelId);
     if (!model) throw new Error(`Pi model is not available: ${modelName}`);
@@ -439,6 +449,61 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
   }
 }
 
+function registerAmazonBedrockInferenceProfiles(modelRegistry: ModelRegistry, modelName: string): void {
+  if (!modelName.startsWith(`${AMAZON_BEDROCK_PROVIDER}/`)) return;
+  const models = modelRegistry
+    .getAll()
+    .filter((model) => model.provider === AMAZON_BEDROCK_PROVIDER)
+    .map((model) => ({
+      id: model.id,
+      name: model.name,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      reasoning: model.reasoning,
+      ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+      input: model.input,
+      cost: model.cost,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      ...(model.headers ? { headers: model.headers } : {}),
+      ...(model.compat ? { compat: model.compat } : {}),
+    }));
+  const modelIds = new Set(models.map((model) => model.id));
+  for (const model of amazonBedrockInferenceProfileModels()) {
+    if (!modelIds.has(model.id)) models.push(model);
+  }
+  modelRegistry.registerProvider(AMAZON_BEDROCK_PROVIDER, {
+    api: BEDROCK_CONVERSE_STREAM_API,
+    baseUrl: resolveBedrockRuntimeBaseUrl(),
+    apiKey: BEDROCK_AUTHENTICATED_SENTINEL,
+    models,
+  });
+}
+
+function amazonBedrockInferenceProfileModels() {
+  const catalog = getModels(AMAZON_BEDROCK_PROVIDER);
+  return AMAZON_BEDROCK_INFERENCE_PROFILE_MODELS.flatMap((profile) => {
+    const base = catalog.find((model) => model.id === profile.baseModelId);
+    return base ? [amazonBedrockInferenceProfileModel(profile.id, base)] : [];
+  });
+}
+
+function amazonBedrockInferenceProfileModel(id: string, base: Model<Api>) {
+  return {
+    id,
+    name: id,
+    api: base.api,
+    baseUrl: base.baseUrl,
+    reasoning: base.reasoning,
+    input: base.input,
+    cost: base.cost,
+    contextWindow: base.contextWindow,
+    maxTokens: base.maxTokens,
+    ...(base.headers ? { headers: base.headers } : {}),
+    ...(base.compat ? { compat: base.compat } : {}),
+  };
+}
+
 function createPiResourceLoader(cwd: string, agentDir: string, systemPrompt: string): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
@@ -561,11 +626,13 @@ function parseModelSelection(model: string): PiModelSelection {
   const modelAndThinking = model.slice(slash + 1);
   const colon = modelAndThinking.lastIndexOf(':');
   if (colon <= 0) return { provider, modelId: modelAndThinking };
+  const suffix = modelAndThinking.slice(colon + 1);
+  if (!PI_THINKING_LEVELS.has(suffix)) return { provider, modelId: modelAndThinking };
 
   return {
     provider,
     modelId: modelAndThinking.slice(0, colon),
-    thinkingLevel: modelAndThinking.slice(colon + 1) as PiModelSelection['thinkingLevel'],
+    thinkingLevel: suffix as PiModelSelection['thinkingLevel'],
   };
 }
 

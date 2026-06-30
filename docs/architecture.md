@@ -526,7 +526,7 @@ interface SandboxProvider {
 Provider choices should be config-driven:
 
 ```txt
-SANDBOX_PROVIDER=fake|unsafe-local|docker|daytona|k8s-agent-sandbox|ecs
+SANDBOX_PROVIDER=fake|unsafe-local|docker|daytona|tensorlake|k8s-agent-sandbox|lambda-microvm
 ```
 
 MVP should include `fake` for tests and one real provider.

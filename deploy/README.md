@@ -11,6 +11,7 @@ Deployment target docs:
 
 - `docker-compose/`: full app Docker Compose stacks for local production-style combined and split API/worker/orchestrator deployments.
 - `kubernetes/`: Helm charts for Kubernetes deployments.
+- `aws/`: Terraform reference deployment for ECS Fargate, RDS, S3, and Lambda MicroVM sandboxes.
 - `railway/`: Railway template notes and post-deploy variable setup.
 
 Contributor local support services:
@@ -23,6 +24,7 @@ Sandbox provider deployment assets live under `sandboxes/`. These build and veri
 
 - `sandboxes/docker/`: Docker sandbox image and runtime notes.
 - `sandboxes/daytona/`: Daytona image and sandbox verification notes.
+- `sandboxes/lambda-microvm/`: AWS Lambda MicroVM sandbox image package and image-management tasks.
 
 Add one subdirectory per deployment target or infrastructure provider, for example:
 

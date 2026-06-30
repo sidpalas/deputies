@@ -11,11 +11,13 @@ Initial providers may include:
 - `docker`: planned Docker Engine backed sandboxes. This can use a local or remote Docker daemon depending on deployment configuration.
 - `daytona`: hosted persistent development sandboxes.
 - `tensorlake`: hosted MicroVM sandboxes with direct exec, file operations, suspend/resume, snapshots, and exposed service ports.
+- `lambda-microvm`: AWS Lambda MicroVM sandboxes launched from a prebuilt MicroVM image through the AWS Lambda MicroVM APIs.
 - `kubernetes`: pods/jobs inside a cluster.
-- `ecs`: Fargate tasks in AWS.
 - `modal` or others later, if desired.
 
 Some sandbox providers create sandboxes from OCI/container images without supporting nested Docker or Docker Compose inside the sandbox. For those providers, Postgres-backed tests should start Postgres directly in the sandbox. The repo-owned Daytona image and scripts in `deploy/sandboxes/daytona/` install Postgres directly and expose `./deploy/sandboxes/daytona/start-postgres.sh` for this path.
+
+Lambda MicroVM images are managed separately from app Terraform with `deploy/sandboxes/lambda-microvm` tasks. Terraform should manage supporting IAM, S3, logs, and app configuration, while the control plane manages individual MicroVM lifecycle at runtime.
 
 Tensorlake sandboxes require `TENSORLAKE_REGISTERED_IMAGE` to name a registered Tensorlake sandbox image, such as `deputies`. Raw registry references like `ghcr.io/org/image:tag` cannot be passed directly to `Sandbox.create`; put the registry reference in `deploy/sandboxes/tensorlake/Dockerfile`, set `TENSORLAKE_REGISTERED_IMAGE` to the stable registered name/id, then run `mise run //deploy/sandboxes/tensorlake:image:create` before using the provider.
 
@@ -25,7 +27,7 @@ Tensorlake sandboxes require `TENSORLAKE_REGISTERED_IMAGE` to name a registered 
 
 The worker coordinates product sandbox lifecycle through the provider interface. The Flue runner receives a Flue-compatible sandbox connector derived from the provider handle.
 
-No module outside `sandbox` and provider-specific adapters should know whether a session is running on Docker, Daytona, Kubernetes, ECS, or a fake test provider.
+No module outside `sandbox` and provider-specific adapters should know whether a session is running on Docker, Daytona, Kubernetes, Lambda MicroVMs, or a fake test provider.
 
 Flue already defines the runtime sandbox shape through `SandboxFactory` and `SessionEnv`. Our provider interface should not become a second agent filesystem/tool runtime. It should own lifecycle concerns that Flue intentionally does not own for our product: create, reconnect, health, destroy, stop/start when supported, persisted provider IDs, and provider capabilities.
 
@@ -571,20 +573,6 @@ Behavior:
 - Health checks pod phase and optional exec probe.
 - Destroy deletes pod/job and optional PVC depending on retention policy.
 
-### ECS Provider
-
-Purpose:
-
-- AWS-native Fargate deployments.
-
-Behavior:
-
-- Starts task per session.
-- Uses EFS for persistent workspace if needed.
-- Requires a bridge or sidecar API for exec/filesystem operations, since ECS Exec is not ideal as a high-level filesystem API.
-- Health checks task status and bridge readiness.
-- Destroy stops task.
-
 ## Bridge Pattern
 
 Some providers cannot provide convenient filesystem and exec APIs directly. Those providers should run a sandbox bridge inside the environment.
@@ -599,9 +587,9 @@ Bridge responsibilities:
 
 The provider adapter then talks to the bridge instead of provider-native exec APIs.
 
-This is especially useful for Docker, ECS, Kubernetes, and any provider with awkward remote exec semantics.
+This is especially useful for Docker, Kubernetes, Lambda MicroVMs, and any provider with awkward remote exec semantics.
 
-Docker should use the bridge pattern from the first implementation rather than using `docker exec` as the product runtime API. `docker exec` is acceptable for diagnostics or bootstrapping, but the provider-grade runtime should use the bridge so Docker, Kubernetes, ECS, and future providers can converge on one exec/filesystem contract.
+Docker should use the bridge pattern from the first implementation rather than using `docker exec` as the product runtime API. `docker exec` is acceptable for diagnostics or bootstrapping, but the provider-grade runtime should use the bridge so Docker, Kubernetes, Lambda MicroVMs, and future providers can converge on one exec/filesystem contract.
 
 ## Planned Conformance Tests
 
@@ -681,7 +669,7 @@ Rules:
 
 ## MVP Recommendation
 
-Current implemented providers are `fake`, `unsafe-local`, `docker`, and `daytona`. Future provider work should add Kubernetes or ECS depending on deployment needs. Docker is named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
+Current implemented providers are `fake`, `unsafe-local`, `docker`, `daytona`, `tensorlake`, `k8s-agent-sandbox`, and `lambda-microvm`. Docker is named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
 
 Docker MVP order:
 

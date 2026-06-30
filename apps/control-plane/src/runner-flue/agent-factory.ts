@@ -6,11 +6,18 @@ import {
   type FlueHarness,
   type FlueSession,
   type ModelConfig,
+  registerProvider,
   type SessionData,
   type SessionStore,
   type ShellOptions,
 } from '@flue/runtime';
 import { createFlueContext, InMemorySessionStore, resolveModel } from '@flue/runtime/internal';
+import {
+  AMAZON_BEDROCK_INFERENCE_PROFILE_MODELS,
+  AMAZON_BEDROCK_PROVIDER,
+  BEDROCK_CONVERSE_STREAM_API,
+  resolveBedrockRuntimeBaseUrl,
+} from '../runner/bedrock.js';
 import type { FlueAgentFactory, FlueAgentPort, FlueSessionPort } from './types.js';
 import { sandboxHandleToFlueFactory } from './sandbox-factory.js';
 
@@ -40,6 +47,7 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
   constructor(private readonly options: RealFlueAgentFactoryOptions) {
     this.sessionStore = new FreshStartUnsupportedSessionStore(options.sessionStore ?? new InMemorySessionStore());
     this.env = options.env ?? {};
+    registerAmazonBedrockInferenceProfiles(options.model, Object.keys(options.providers ?? {}));
     for (const [provider, settings] of Object.entries(options.providers ?? {})) {
       configureProvider(provider, settings);
     }
@@ -86,6 +94,24 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
   async deleteSession(id: string): Promise<void> {
     await Promise.all(flueSessionStorageKeys(id, id).map((key) => this.sessionStore.delete(key)));
   }
+}
+
+function registerAmazonBedrockInferenceProfiles(model: ModelConfig, providers: string[]): void {
+  if (!usesAmazonBedrock(model) && !providers.includes(AMAZON_BEDROCK_PROVIDER)) return;
+  registerProvider(AMAZON_BEDROCK_PROVIDER, {
+    api: BEDROCK_CONVERSE_STREAM_API,
+    baseUrl: resolveBedrockRuntimeBaseUrl(),
+    models: Object.fromEntries(
+      AMAZON_BEDROCK_INFERENCE_PROFILE_MODELS.map((model) => [
+        model.id,
+        { contextWindow: model.contextWindow, maxTokens: model.maxTokens },
+      ]),
+    ),
+  });
+}
+
+function usesAmazonBedrock(model: ModelConfig): boolean {
+  return typeof model === 'string' && model.startsWith(`${AMAZON_BEDROCK_PROVIDER}/`);
 }
 
 class FreshStartUnsupportedSessionStore implements SessionStore {

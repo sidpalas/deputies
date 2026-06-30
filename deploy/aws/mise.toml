@@ -1,0 +1,48 @@
+[tools]
+terraform = "1.13"
+
+[tasks.fmt]
+description = "Format AWS Terraform"
+run = "terraform -chdir=terraform/live/prod fmt -recursive"
+
+[tasks.init]
+description = "Initialize AWS Terraform"
+run = "terraform -chdir=terraform/live/prod init"
+
+[tasks.validate]
+description = "Validate AWS Terraform"
+run = "terraform -chdir=terraform/live/prod validate"
+
+[tasks."validate:ci"]
+description = "Initialize and validate AWS Terraform without a backend"
+run = "terraform -chdir=terraform/live/prod init -backend=false && terraform -chdir=terraform/live/prod fmt -check -recursive && terraform -chdir=terraform/live/prod validate"
+
+[tasks.plan]
+description = "Plan AWS reference deployment"
+run = "terraform -chdir=terraform/live/prod plan"
+
+[tasks.apply]
+description = "Apply AWS reference deployment"
+run = "terraform -chdir=terraform/live/prod apply"
+
+[tasks.outputs]
+description = "Show AWS Terraform outputs"
+run = "terraform -chdir=terraform/live/prod output"
+
+[tasks."microvm-support:plan"]
+description = "Plan only Lambda MicroVM support resources"
+depends = ["init"]
+run = """
+set -euo pipefail
+app_hostname="${TF_VAR_app_hostname:-deputies.invalid}"
+terraform -chdir=terraform/live/prod plan -target=module.lambda_microvm_support -var "app_hostname=$app_hostname"
+"""
+
+[tasks."microvm-support:apply"]
+description = "Apply only Lambda MicroVM support resources"
+depends = ["init"]
+run = """
+set -euo pipefail
+app_hostname="${TF_VAR_app_hostname:-deputies.invalid}"
+terraform -chdir=terraform/live/prod apply -auto-approve -target=module.lambda_microvm_support -var "app_hostname=$app_hostname"
+"""

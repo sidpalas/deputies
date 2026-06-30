@@ -115,7 +115,7 @@ describe('core API', () => {
       loadConfig({
         API_AUTH_MODE: 'none',
         RUNNER_MODEL_DEFAULT: 'anthropic/claude-sonnet',
-        RUNNER_MODEL_CHOICES: 'anthropic/claude-sonnet,openai-codex/gpt-5.5',
+        RUNNER_MODEL_CHOICES: 'anthropic/claude-sonnet,amazon-bedrock/us.amazon.nova-micro-v1:0,openai-codex/gpt-5.5',
       }),
       services,
     );
@@ -131,9 +131,14 @@ describe('core API', () => {
     const models = await fetch(`${baseUrl}/models`);
     expect(models.status).toBe(200);
     await expect(models.json()).resolves.toMatchObject({
-      models: ['anthropic/claude-sonnet', 'openai-codex/gpt-5.5'],
+      models: ['anthropic/claude-sonnet', 'amazon-bedrock/us.amazon.nova-micro-v1:0', 'openai-codex/gpt-5.5'],
       modelChoices: [
         { value: 'anthropic/claude-sonnet', label: 'claude sonnet (Anthropic)', available: true },
+        {
+          value: 'amazon-bedrock/us.amazon.nova-micro-v1:0',
+          label: 'us.amazon.nova micro v1:0 (Amazon Bedrock)',
+          available: true,
+        },
         {
           value: 'openai-codex/gpt-5.5',
           label: 'gpt 5.5 (OpenAI Codex)',

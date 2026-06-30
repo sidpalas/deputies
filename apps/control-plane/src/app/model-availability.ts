@@ -89,6 +89,7 @@ export function modelLabel(model: string): string {
 
 function modelProviderLabel(prefix: string): string {
   const provider = prefix.replace(/\/$/, '');
+  if (provider === 'amazon-bedrock') return 'Amazon Bedrock';
   if (provider === 'anthropic') return 'Anthropic';
   if (provider === 'openai') return 'OpenAI';
   if (provider === 'openai-codex') return 'OpenAI Codex';

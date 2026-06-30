@@ -1,0 +1,113 @@
+[tasks.package]
+description = "Package the Deputies Lambda MicroVM image artifact"
+run = """
+set -euo pipefail
+mise run //packages/sandbox-bridge:build
+rm -rf .build/package
+mkdir -p .build/package/sandbox-bridge
+rm -f .build/deputies-lambda-microvm.zip
+cp Dockerfile lambda-microvm-runtime.mjs ../docker/start-bridge.sh .build/package/
+cp -R ../../../packages/sandbox-bridge/dist .build/package/sandbox-bridge/dist
+cp ../../../packages/sandbox-bridge/package.json .build/package/sandbox-bridge/package.json
+(cd .build/package && zip -qr ../deputies-lambda-microvm.zip .)
+"""
+
+[tasks."cli:check"]
+description = "Verify the installed AWS CLI supports Lambda MicroVM commands"
+run = """
+set -euo pipefail
+if ! aws lambda-microvms help >/dev/null 2>&1; then
+  echo "The installed AWS CLI does not support 'aws lambda-microvms'." >&2
+  echo "Install an AWS CLI build/version with Lambda MicroVM support before running image tasks." >&2
+  exit 1
+fi
+"""
+
+[tasks.test]
+description = "Run Lambda MicroVM packaging/runtime unit checks"
+run = "node --test runtime-config.test.mjs"
+
+[tasks.upload]
+description = "Upload the Lambda MicroVM image artifact to S3"
+depends = ["package"]
+run = """
+set -euo pipefail
+: "${MICROVM_ARTIFACT_BUCKET:?Set MICROVM_ARTIFACT_BUCKET to the S3 bucket used for MicroVM image artifacts}"
+artifact_key="${MICROVM_ARTIFACT_KEY:-lambda-microvm/${MICROVM_ARTIFACT_VERSION:-${GITHUB_SHA:-local}}/deputies-lambda-microvm.zip}"
+aws s3 cp .build/deputies-lambda-microvm.zip "s3://${MICROVM_ARTIFACT_BUCKET}/${artifact_key}"
+"""
+
+[tasks."render:create"]
+description = "Render aws lambda-microvms create-microvm-image CLI input"
+run = "node render-cli-input.mjs create"
+
+[tasks."render:update"]
+description = "Render aws lambda-microvms update-microvm-image CLI input"
+run = "node render-cli-input.mjs update"
+
+[tasks."image:create"]
+description = "Create a Lambda MicroVM image from the uploaded artifact"
+depends = ["cli:check", "upload", "render:create"]
+run = "aws lambda-microvms create-microvm-image --cli-input-json file://.build/create-microvm-image.json"
+
+[tasks."image:update"]
+description = "Update an existing Lambda MicroVM image from the uploaded artifact"
+depends = ["cli:check", "upload", "render:update"]
+run = "aws lambda-microvms update-microvm-image --cli-input-json file://.build/update-microvm-image.json"
+
+[tasks."image:get"]
+description = "Get the configured Lambda MicroVM image"
+run = """
+set -euo pipefail
+: "${MICROVM_IMAGE_IDENTIFIER:?Set MICROVM_IMAGE_IDENTIFIER to the Lambda MicroVM image ARN}"
+aws lambda-microvms get-microvm-image --image-identifier "$MICROVM_IMAGE_IDENTIFIER"
+"""
+
+[tasks."image:versions"]
+description = "List versions for the configured Lambda MicroVM image"
+run = """
+set -euo pipefail
+: "${MICROVM_IMAGE_IDENTIFIER:?Set MICROVM_IMAGE_IDENTIFIER to the Lambda MicroVM image ARN}"
+aws lambda-microvms list-microvm-image-versions --image-identifier "$MICROVM_IMAGE_IDENTIFIER"
+"""
+
+[tasks."image:builds"]
+description = "List builds for the configured Lambda MicroVM image"
+run = """
+set -euo pipefail
+: "${MICROVM_IMAGE_IDENTIFIER:?Set MICROVM_IMAGE_IDENTIFIER to the Lambda MicroVM image ARN}"
+: "${MICROVM_IMAGE_VERSION:?Set MICROVM_IMAGE_VERSION to the image version, for example 1.0}"
+aws lambda-microvms list-microvm-image-builds --image-identifier "$MICROVM_IMAGE_IDENTIFIER" --image-version "$MICROVM_IMAGE_VERSION"
+"""
+
+[tasks."image:build:get"]
+description = "Get one Lambda MicroVM image build by MICROVM_BUILD_ID"
+run = """
+set -euo pipefail
+: "${MICROVM_IMAGE_IDENTIFIER:?Set MICROVM_IMAGE_IDENTIFIER to the Lambda MicroVM image ARN}"
+: "${MICROVM_IMAGE_VERSION:?Set MICROVM_IMAGE_VERSION to the image version, for example 1.0}"
+: "${MICROVM_BUILD_ID:?Set MICROVM_BUILD_ID from image:builds output}"
+aws lambda-microvms get-microvm-image-build --image-identifier "$MICROVM_IMAGE_IDENTIFIER" --image-version "$MICROVM_IMAGE_VERSION" --build-id "$MICROVM_BUILD_ID"
+"""
+
+[tasks."image:version:delete"]
+description = "Delete one Lambda MicroVM image version"
+run = """
+set -euo pipefail
+: "${MICROVM_IMAGE_IDENTIFIER:?Set MICROVM_IMAGE_IDENTIFIER to the Lambda MicroVM image ARN}"
+: "${MICROVM_IMAGE_VERSION:?Set MICROVM_IMAGE_VERSION to the image version to delete}"
+aws lambda-microvms delete-microvm-image-version --image-identifier "$MICROVM_IMAGE_IDENTIFIER" --image-version "$MICROVM_IMAGE_VERSION"
+"""
+
+[tasks."managed:list"]
+description = "List AWS-managed Lambda MicroVM base images"
+depends = ["cli:check"]
+run = "aws lambda-microvms list-managed-microvm-images"
+
+[tasks."managed:versions"]
+description = "List versions for MICROVM_BASE_IMAGE_ARN"
+run = """
+set -euo pipefail
+: "${MICROVM_BASE_IMAGE_ARN:?Set MICROVM_BASE_IMAGE_ARN}"
+aws lambda-microvms list-managed-microvm-image-versions --image-identifier "$MICROVM_BASE_IMAGE_ARN"
+"""

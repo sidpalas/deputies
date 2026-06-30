@@ -3,7 +3,28 @@ packages:
   - packages/*
 minimumReleaseAge: 4320
 minimumReleaseAgeExclude:
+  # Temporary: Lambda MicroVMs are a new AWS API and the first SDK release plus
+  # its fresh Smithy/AWS transitive packages are inside the release-age window.
+  # Remove these once the packages age past the workspace quarantine period.
+  - '@aws-sdk/client-lambda-microvms'
+  - '@aws-sdk/core'
+  - '@aws-sdk/credential-provider-env'
+  - '@aws-sdk/credential-provider-http'
+  - '@aws-sdk/credential-provider-ini'
+  - '@aws-sdk/credential-provider-login'
+  - '@aws-sdk/credential-provider-node'
+  - '@aws-sdk/credential-provider-process'
+  - '@aws-sdk/credential-provider-sso'
+  - '@aws-sdk/credential-provider-web-identity'
+  - '@aws-sdk/nested-clients'
+  - '@aws-sdk/token-providers'
+  - '@aws-sdk/xml-builder'
   - '@flue/runtime'
+  - '@smithy/core'
+  - '@smithy/credential-provider-imds'
+  - '@smithy/fetch-http-handler'
+  - '@smithy/node-http-handler'
+  - '@smithy/signature-v4'
 allowBuilds:
   '@google/genai': false
   '@mongodb-js/zstd': false

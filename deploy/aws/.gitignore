@@ -1,0 +1,5 @@
+terraform/live/prod/.terraform/
+terraform/live/prod/*.tfstate
+terraform/live/prod/*.tfstate.*
+terraform/live/prod/*.tfvars
+!terraform/live/prod/terraform.tfvars.example

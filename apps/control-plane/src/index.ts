@@ -13,6 +13,7 @@ import {
   requireDaytonaApiKey,
   requireDockerOrchestratorUrl,
   requireGitHubAppCredentials,
+  requireLambdaMicrovmImageIdentifier,
   requireRunnerModelDefault,
   requireTensorlakeApiKey,
   requireTensorlakeRegisteredImage,
@@ -44,6 +45,7 @@ import {
   HttpAgentSandboxOrchestratorClient,
   InProcessAgentSandboxOrchestrator,
 } from './sandbox/k8s-agent-sandbox.js';
+import { LambdaMicrovmSandboxProvider } from './sandbox/lambda-microvm.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
 import { TensorlakeSandboxProvider } from './sandbox/tensorlake.js';
@@ -282,6 +284,26 @@ function createSandboxProvider(): SandboxProvider {
     if (config.tensorlakeAllowInternetAccess !== undefined)
       Object.assign(options, { allowInternetAccess: config.tensorlakeAllowInternetAccess });
     return new TensorlakeSandboxProvider(options);
+  }
+  if (config.sandboxProvider === 'lambda-microvm') {
+    return new LambdaMicrovmSandboxProvider(
+      optional({
+        region: config.lambdaMicrovmRegion,
+        imageIdentifier: requireLambdaMicrovmImageIdentifier(config),
+        imageVersion: config.lambdaMicrovmImageVersion,
+        executionRoleArn: config.lambdaMicrovmExecutionRoleArn,
+        ingressNetworkConnectors: config.lambdaMicrovmIngressNetworkConnectors,
+        egressNetworkConnectors: config.lambdaMicrovmEgressNetworkConnectors,
+        idleTimeoutMs: Math.max(config.sandboxIdleTimeoutMs, config.sandboxKeepaliveMaxExtensionMs),
+        suspendedDurationMs: config.sandboxRetentionMs,
+        maximumDurationSeconds: config.lambdaMicrovmMaximumDurationSeconds,
+        authTokenTtlMinutes: config.lambdaMicrovmAuthTokenTtlMinutes,
+        workspacePath: config.sandboxWorkspacePath,
+        bridgePort: config.lambdaMicrovmBridgePort,
+        logGroup: config.lambdaMicrovmLogGroup,
+        bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
+      }),
+    );
   }
   if (config.sandboxProvider === 'k8s-agent-sandbox') {
     const orchestrator =
