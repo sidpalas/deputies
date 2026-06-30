@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { LambdaMicrovmSandboxProvider, type LambdaMicrovmClientLike } from '../../src/sandbox/lambda-microvm.js';
 
@@ -90,6 +91,10 @@ describe('LambdaMicrovmSandboxProvider', () => {
         stdout: 'ran: echo ok',
         stderr: '',
       });
+      await expect(handle.fs?.readFileBuffer('image.bin')).resolves.toEqual(new Uint8Array([0, 1, 2, 127, 128, 255]));
+      await expect(handle.fs?.readFileBuffer('corrupt.bin')).rejects.toThrow(
+        'Lambda MicroVM bridge read checksum mismatch for corrupt.bin',
+      );
       const execRequest = bridgeRequests.find((request) => request.url === '/exec');
       expect(execRequest?.headers.authorization).toMatch(/^Bearer /);
       expect(execRequest?.headers['x-aws-proxy-auth']).toBe('proxy-token-3584');
@@ -148,6 +153,17 @@ function handleBridgeRequest(request: IncomingMessage, response: ServerResponse)
         completedAt: new Date(1).toISOString(),
       });
     }
+    if (request.url?.startsWith('/fs/read?')) {
+      const body = Buffer.from([0, 1, 2, 127, 128, 255]);
+      const checksumBody = request.url.includes('corrupt.bin') ? Buffer.from('changed') : body;
+      response.writeHead(200, {
+        'content-length': String(body.byteLength),
+        'content-type': 'application/octet-stream',
+        'x-deputies-sha256': checksumSha256(checksumBody),
+      });
+      response.end(body);
+      return;
+    }
     json(response, 404, { error: 'not_found' });
   })().catch((error: unknown) => {
     response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
@@ -167,4 +183,8 @@ function readBody(request: IncomingMessage): Promise<string> {
 function json(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body));
+}
+
+function checksumSha256(body: Uint8Array): string {
+  return createHash('sha256').update(body).digest('hex');
 }

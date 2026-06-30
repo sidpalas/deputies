@@ -94,7 +94,16 @@ function numberEnv(name, fallback) {
 }
 
 function listEnv(name) {
-  return (process.env[name] ?? '')
+  const raw = (process.env[name] ?? '').trim();
+  if (!raw) return [];
+  if (raw.startsWith('[')) {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== 'string')) {
+      throw new Error(`${name} must be a comma-separated list or JSON string array`);
+    }
+    return parsed.map((value) => value.trim()).filter(Boolean);
+  }
+  return raw
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);

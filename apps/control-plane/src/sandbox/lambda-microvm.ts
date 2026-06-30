@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   CreateMicrovmAuthTokenCommand,
   GetMicrovmCommand,
@@ -234,7 +234,9 @@ export class LambdaMicrovmSandboxProvider implements SandboxProvider {
       await this.connectedDescriptor(input),
       `/fs/read?path=${encodeURIComponent(input.path)}`,
     );
-    return new Uint8Array(await response.arrayBuffer());
+    const body = new Uint8Array(await response.arrayBuffer());
+    validateFileReadResponse(input.path, response, body);
+    return body;
   }
 
   async writeFile(input: LambdaMicrovmWriteFileInput): Promise<void> {
@@ -583,6 +585,28 @@ function readMicrovmInfo(value: {
     ...(value.imageVersion ? { imageVersion: value.imageVersion } : {}),
     ...(value.stateReason ? { stateReason: value.stateReason } : {}),
   };
+}
+
+function validateFileReadResponse(path: string, response: Response, body: Uint8Array): void {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength !== null) {
+    const expectedLength = Number(contentLength);
+    if (!Number.isSafeInteger(expectedLength) || expectedLength < 0) {
+      throw new Error(`Lambda MicroVM bridge read returned invalid content-length for ${path}: ${contentLength}`);
+    }
+    if (body.byteLength !== expectedLength) {
+      throw new Error(
+        `Lambda MicroVM bridge read length mismatch for ${path}: expected ${expectedLength} bytes, received ${body.byteLength}`,
+      );
+    }
+  }
+
+  const expectedChecksum = response.headers.get('x-deputies-sha256');
+  if (!expectedChecksum) return;
+  const actualChecksum = createHash('sha256').update(body).digest('hex');
+  if (actualChecksum !== expectedChecksum) {
+    throw new Error(`Lambda MicroVM bridge read checksum mismatch for ${path}`);
+  }
 }
 
 function execRequestBody<T extends SandboxExecInput>(input: T): Omit<T, 'signal'> {

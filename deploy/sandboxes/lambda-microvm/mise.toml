@@ -6,7 +6,7 @@ mise run //packages/sandbox-bridge:build
 rm -rf .build/package
 mkdir -p .build/package/sandbox-bridge
 rm -f .build/deputies-lambda-microvm.zip
-cp Dockerfile lambda-microvm-runtime.mjs ../docker/start-bridge.sh .build/package/
+cp Dockerfile lambda-microvm-runtime.mjs runtime-config.mjs ../docker/start-bridge.sh .build/package/
 cp -R ../../../packages/sandbox-bridge/dist .build/package/sandbox-bridge/dist
 cp ../../../packages/sandbox-bridge/package.json .build/package/sandbox-bridge/package.json
 (cd .build/package && zip -qr ../deputies-lambda-microvm.zip .)

@@ -75,6 +75,8 @@ export MICROVM_IMAGE_EGRESS_NETWORK_CONNECTORS=
 export MICROVM_ADDITIONAL_OS_CAPABILITIES=
 ```
 
+Set `MICROVM_ADDITIONAL_OS_CAPABILITIES=ALL` when the image must run nested containers. The renderer also accepts the raw AWS CLI JSON-array shape, for example `MICROVM_ADDITIONAL_OS_CAPABILITIES='["ALL"]'`.
+
 ## Commands
 
 First-time image creation:
@@ -123,7 +125,9 @@ LAMBDA_MICROVM_BRIDGE_PORT=3584
 
 Inbound traffic to a MicroVM uses the AWS-managed MicroVM HTTPS endpoint. VPC network connectors are for MicroVM egress into the VPC or public internet; they do not replace the inbound endpoint.
 
-The `Dockerfile` duplicates the sandbox runtime package set used by the Docker sandbox image so AWS can build it natively for Lambda MicroVM ARM64. If the Docker sandbox image becomes reliably multi-arch, this can converge back to deriving from the published image.
+The `Dockerfile` duplicates the sandbox runtime package set used by the Docker sandbox image so AWS can build it natively for Lambda MicroVM ARM64. Lambda MicroVM sandboxes intentionally run the hook server, bridge, and agent commands as `root`; the MicroVM is the isolation boundary, and running non-root with `sudo` is incompatible with Lambda MicroVM `no_new_privs` behavior. The image includes `ffmpeg` and Docker packages. For nested Docker, build the image with `MICROVM_ADDITIONAL_OS_CAPABILITIES=ALL`; this enables the cgroup/mount capabilities `dockerd` needs. The image installs a `/usr/local/bin/docker` wrapper that lazily starts `dockerd` on the first Docker command with the `vfs` storage driver and the AWS resolver `169.254.169.253` for default bridge container DNS. Smoke test `docker info` and `docker run --rm hello-world` after each image update before relying on Docker-in-sandbox workflows.
+
+If the Docker sandbox image becomes reliably multi-arch, this can converge back to deriving from the published image.
 
 If `cli:check` fails, install an AWS CLI build/version with Lambda MicroVM support before running image lifecycle tasks.
 

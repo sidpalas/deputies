@@ -463,6 +463,8 @@ Lambda MicroVM images are built/updated outside the app process with `deploy/san
 
 MicroVM inbound traffic uses the AWS-managed MicroVM HTTPS endpoint with `X-aws-proxy-auth` and `X-aws-proxy-port` headers. VPC network connectors configure MicroVM egress, such as public internet or private VPC access; they do not replace the inbound endpoint.
 
+The repo-owned Lambda MicroVM image runs the hook server, bridge, and agent commands as `root`. That is intentional for this sandbox boundary: Lambda MicroVM may set `no_new_privs`, which prevents `sudo` from elevating a non-root command user. The image includes `ffmpeg` and Docker packages. For nested Docker, build/update the MicroVM image with `MICROVM_ADDITIONAL_OS_CAPABILITIES=ALL`; this maps to AWS `additionalOsCapabilities: ["ALL"]` and enables the cgroup/mount capabilities required by `dockerd`. The image lazily starts `dockerd` on the first `docker` command rather than during sandbox startup. Verify `docker info` and `docker run --rm hello-world` against a rebuilt image before relying on Docker-in-sandbox workflows.
+
 `SANDBOX_SECRET_ENCRYPTION_KEY` must be stable across restarts so encrypted Lambda MicroVM bridge credentials can be decrypted for resume, preview, and cleanup flows.
 
 ## Sandbox Lifecycle Tuning

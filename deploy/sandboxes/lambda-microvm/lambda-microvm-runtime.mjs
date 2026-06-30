@@ -101,9 +101,9 @@ async function startBridge(config) {
   bridge = spawn('/opt/deputies/start-bridge.sh', {
     stdio: 'inherit',
     env: {
-      HOME: '/home/sandbox',
-      USER: 'sandbox',
-      LOGNAME: 'sandbox',
+      HOME: '/root',
+      USER: 'root',
+      LOGNAME: 'root',
       SHELL: '/bin/bash',
       PATH: '/usr/lib/postgresql/16/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
       DEPUTIES_SANDBOX_TOKEN: bridgeToken,
@@ -111,7 +111,7 @@ async function startBridge(config) {
       DEPUTIES_SANDBOX_BRIDGE_HOST: '0.0.0.0',
       DEPUTIES_SANDBOX_BRIDGE_PORT: String(bridgePort),
       DEBIAN_FRONTEND: 'noninteractive',
-      PGDATA: '/home/sandbox/.deputies/postgres',
+      PGDATA: '/root/.deputies/postgres',
       PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright',
       ...(typeof config.bridgeSkippedCookieNames === 'string'
         ? { DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES: config.bridgeSkippedCookieNames }

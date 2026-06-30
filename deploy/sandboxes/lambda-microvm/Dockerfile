@@ -51,7 +51,7 @@ ARG TTYD_VERSION
 ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PGDATA=/home/sandbox/.deputies/postgres
+ENV PGDATA=/root/.deputies/postgres
 ENV PATH=/usr/lib/postgresql/16/bin:$PATH
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV DEPUTIES_WORKSPACE=/workspace
@@ -64,19 +64,24 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    docker-cli \
+    docker.io \
     fd-find \
+    ffmpeg \
     git \
     git-lfs \
+    iptables \
     jq \
     openssh-client \
     postgresql \
     postgresql-contrib \
     ripgrep \
     rsync \
-    sudo \
     unzip \
     vim \
-    zsh
+    zsh \
+  && command -v docker \
+  && command -v dockerd
 
 RUN curl -fsSL https://code-server.dev/install.sh | sh -s -- --version "${CODE_SERVER_VERSION}"
 
@@ -105,19 +110,91 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN curl -fsSL https://mise.run | sh \
   && mv /root/.local/bin/mise /usr/local/bin/mise
 
-RUN useradd -m -s /bin/bash sandbox \
-  && usermod -aG sudo sandbox \
-  && printf 'sandbox ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/sandbox \
-  && chmod 0440 /etc/sudoers.d/sandbox \
-  && mkdir -p /workspace /opt/deputies \
-  && chown -R sandbox:sandbox /workspace /home/sandbox /opt/deputies
+RUN <<'EOF'
+set -eux
+mkdir -p /workspace /opt/deputies /root/.deputies
+cat > /usr/local/bin/sudo <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$(id -u)" -eq 0 ]; then
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --) shift; break ;;
+      -A|-b|-E|-H|-h|-K|-k|-n|-P|-S|-v) shift ;;
+      -C|-D|-g|-p|-R|-r|-t|-T|-u) shift 2 ;;
+      -*) shift ;;
+      *) break ;;
+    esac
+  done
+  if [ "$#" -eq 0 ]; then exit 0; fi
+  exec "$@"
+fi
+exec /usr/bin/sudo "$@"
+SCRIPT
+chmod 0755 /usr/local/bin/sudo
+cat > /usr/local/bin/docker <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
 
-COPY --chown=sandbox:sandbox sandbox-bridge /opt/deputies/sandbox-bridge
+real_docker=/usr/bin/docker
+docker_host="${DOCKER_HOST:-unix:///var/run/docker.sock}"
+export DOCKER_HOST="$docker_host"
+
+dockerd_is_running() {
+  local comm
+  for comm in /proc/[0-9]*/comm; do
+    if [ "$(cat "$comm" 2>/dev/null || true)" = dockerd ]; then return 0; fi
+  done
+  return 1
+}
+
+if [ "${DEPUTIES_START_DOCKER:-1}" = "0" ]; then
+  exec "$real_docker" "$@"
+fi
+
+if "$real_docker" info >/dev/null 2>&1; then
+  exec "$real_docker" "$@"
+fi
+
+lock_dir=/var/run/deputies-docker-start.lock
+lock_acquired=0
+if mkdir "$lock_dir" 2>/dev/null; then
+  lock_acquired=1
+  if ! "$real_docker" info >/dev/null 2>&1 && ! dockerd_is_running; then
+    mkdir -p /var/run /var/lib/docker /var/log
+    docker_dns="${DEPUTIES_DOCKER_DNS:-169.254.169.253}"
+    dockerd_args=(--host="$docker_host" --storage-driver=vfs)
+    if [ -n "$docker_dns" ]; then dockerd_args+=(--dns="$docker_dns"); fi
+    /usr/sbin/dockerd "${dockerd_args[@]}" >/var/log/deputies-dockerd.log 2>&1 &
+  fi
+fi
+
+timeout_seconds="${DEPUTIES_DOCKER_READY_TIMEOUT_SECONDS:-45}"
+deadline=$((SECONDS + timeout_seconds))
+until "$real_docker" info >/dev/null 2>&1; do
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    echo "dockerd did not become ready within ${timeout_seconds}s" >&2
+    if [ -f /var/log/deputies-dockerd.log ]; then
+      echo "--- dockerd log ---" >&2
+      tail -n 120 /var/log/deputies-dockerd.log >&2 || true
+    fi
+    if [ "$lock_acquired" -eq 1 ]; then rmdir "$lock_dir" 2>/dev/null || true; fi
+    exit 1
+  fi
+  sleep 0.5
+done
+
+if [ "$lock_acquired" -eq 1 ]; then rmdir "$lock_dir" 2>/dev/null || true; fi
+exec "$real_docker" "$@"
+SCRIPT
+chmod 0755 /usr/local/bin/docker
+EOF
+
+COPY sandbox-bridge /opt/deputies/sandbox-bridge
 COPY --chmod=0755 start-bridge.sh /opt/deputies/start-bridge.sh
-COPY --chown=sandbox:sandbox lambda-microvm-runtime.mjs /opt/deputies/lambda-microvm-runtime.mjs
+COPY lambda-microvm-runtime.mjs runtime-config.mjs /opt/deputies/
 COPY --from=playwright-browsers --chown=root:root /ms-playwright /ms-playwright
 
-USER sandbox
 WORKDIR /workspace
 
 RUN git lfs install --skip-repo
