@@ -1,4 +1,5 @@
 import { getModels, type KnownProvider } from '@earendil-works/pi-ai';
+import { AMAZON_BEDROCK_INFERENCE_PROFILE_MODEL_IDS, AMAZON_BEDROCK_PROVIDER } from '../runner/bedrock.js';
 
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue' | 'pi';
@@ -8,8 +9,8 @@ export type SandboxProviderKind =
   | 'docker'
   | 'daytona'
   | 'tensorlake'
-  | 'k8s-agent-sandbox'
-  | 'ecs';
+  | 'lambda-microvm'
+  | 'k8s-agent-sandbox';
 export type DockerOrchestratorMode = 'in-process' | 'http';
 export type AgentSandboxOrchestratorMode = 'in-process' | 'http';
 export type AppStoreKind = 'memory' | 'postgres';
@@ -21,6 +22,17 @@ export type AuthGithubDefaultGroupRole = 'viewer' | 'member' | 'admin';
 export type WebSearchProviderKind = 'disabled' | 'auto' | 'brave' | 'duckduckgo';
 
 const MODEL_PROVIDER_AUTH: Array<{ provider: KnownProvider; env: string[] }> = [
+  {
+    provider: AMAZON_BEDROCK_PROVIDER,
+    env: [
+      'AWS_PROFILE',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_BEARER_TOKEN_BEDROCK',
+      'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+      'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+      'AWS_WEB_IDENTITY_TOKEN_FILE',
+    ],
+  },
   { provider: 'anthropic', env: ['ANTHROPIC_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'] },
   { provider: 'openai', env: ['OPENAI_API_KEY'] },
   { provider: 'openai-codex', env: ['OPENAI_CODEX_AUTH_FILE', 'OPENAI_CODEX_AUTH_BASE64'] },
@@ -114,6 +126,16 @@ export type AppConfig = {
   tensorlakeSandboxMemoryMb?: number;
   tensorlakeSandboxDiskMb?: number;
   tensorlakeAllowInternetAccess?: boolean;
+  lambdaMicrovmRegion?: string;
+  lambdaMicrovmImageIdentifier?: string;
+  lambdaMicrovmImageVersion?: string;
+  lambdaMicrovmExecutionRoleArn?: string;
+  lambdaMicrovmIngressNetworkConnectors: string[];
+  lambdaMicrovmEgressNetworkConnectors: string[];
+  lambdaMicrovmMaximumDurationSeconds: number;
+  lambdaMicrovmAuthTokenTtlMinutes: number;
+  lambdaMicrovmBridgePort: number;
+  lambdaMicrovmLogGroup?: string;
   slackApiBaseUrl: string;
   slackSigningSecret?: string;
   slackBotToken?: string;
@@ -192,7 +214,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'unsafe-local', 'docker', 'daytona', 'tensorlake', 'k8s-agent-sandbox', 'ecs'],
+      ['fake', 'unsafe-local', 'docker', 'daytona', 'tensorlake', 'lambda-microvm', 'k8s-agent-sandbox'],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
@@ -266,6 +288,21 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       25 * 1024 * 1024,
       'ARTIFACT_CREATE_MAX_BYTES',
     ),
+    lambdaMicrovmIngressNetworkConnectors: parseStringList(env.LAMBDA_MICROVM_INGRESS_NETWORK_CONNECTORS),
+    lambdaMicrovmEgressNetworkConnectors: parseStringList(env.LAMBDA_MICROVM_EGRESS_NETWORK_CONNECTORS),
+    lambdaMicrovmMaximumDurationSeconds: Math.min(
+      parsePositiveInteger(
+        env.LAMBDA_MICROVM_MAXIMUM_DURATION_SECONDS,
+        28_800,
+        'LAMBDA_MICROVM_MAXIMUM_DURATION_SECONDS',
+      ),
+      28_800,
+    ),
+    lambdaMicrovmAuthTokenTtlMinutes: Math.min(
+      parsePositiveInteger(env.LAMBDA_MICROVM_AUTH_TOKEN_TTL_MINUTES, 30, 'LAMBDA_MICROVM_AUTH_TOKEN_TTL_MINUTES'),
+      60,
+    ),
+    lambdaMicrovmBridgePort: parsePositiveInteger(env.LAMBDA_MICROVM_BRIDGE_PORT, 3584, 'LAMBDA_MICROVM_BRIDGE_PORT'),
     unsafeAllowLocalHttpCallbacks: parseBoolean(
       env.UNSAFE_ALLOW_LOCAL_HTTP_CALLBACKS,
       false,
@@ -338,6 +375,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       'TENSORLAKE_ALLOW_INTERNET_ACCESS',
     );
   }
+  if (env.LAMBDA_MICROVM_REGION) config.lambdaMicrovmRegion = env.LAMBDA_MICROVM_REGION;
+  else if (env.AWS_REGION) config.lambdaMicrovmRegion = env.AWS_REGION;
+  else if (env.AWS_DEFAULT_REGION) config.lambdaMicrovmRegion = env.AWS_DEFAULT_REGION;
+  if (env.LAMBDA_MICROVM_IMAGE_IDENTIFIER) config.lambdaMicrovmImageIdentifier = env.LAMBDA_MICROVM_IMAGE_IDENTIFIER;
+  if (env.LAMBDA_MICROVM_IMAGE_VERSION) config.lambdaMicrovmImageVersion = env.LAMBDA_MICROVM_IMAGE_VERSION;
+  if (env.LAMBDA_MICROVM_EXECUTION_ROLE_ARN)
+    config.lambdaMicrovmExecutionRoleArn = env.LAMBDA_MICROVM_EXECUTION_ROLE_ARN;
+  if (env.LAMBDA_MICROVM_LOG_GROUP) config.lambdaMicrovmLogGroup = env.LAMBDA_MICROVM_LOG_GROUP;
   if (env.SLACK_SIGNING_SECRET) config.slackSigningSecret = env.SLACK_SIGNING_SECRET;
   if (env.SLACK_BOT_TOKEN) config.slackBotToken = env.SLACK_BOT_TOKEN;
   if (env.GITHUB_APP_ID) config.githubAppId = env.GITHUB_APP_ID;
@@ -361,6 +406,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (runModeStartsWorker(config.runMode)) validateWebSearchConfig(config);
   validateSandboxSecretConfig(config, env);
   validateAgentSandboxOrchestratorConfig(config);
+  validateLambdaMicrovmConfig(config);
 
   return config;
 }
@@ -401,8 +447,16 @@ function validateAgentSandboxOrchestratorConfig(config: AppConfig): void {
   requireAgentSandboxOrchestratorToken(config);
 }
 
+function validateLambdaMicrovmConfig(config: AppConfig): void {
+  if (config.sandboxProvider !== 'lambda-microvm') return;
+  requireLambdaMicrovmImageIdentifier(config);
+}
+
 function validateSandboxSecretConfig(config: AppConfig, env: NodeJS.ProcessEnv): void {
-  const sandboxSecretsRequired = config.sandboxProvider === 'docker' || config.sandboxProvider === 'k8s-agent-sandbox';
+  const sandboxSecretsRequired =
+    config.sandboxProvider === 'docker' ||
+    config.sandboxProvider === 'k8s-agent-sandbox' ||
+    config.sandboxProvider === 'lambda-microvm';
   if (config.appDataStore === 'postgres' && sandboxSecretsRequired && !config.sandboxSecretEncryptionKey) {
     throw new Error(
       `SANDBOX_SECRET_ENCRYPTION_KEY is required when APP_DATA_STORE=postgres and SANDBOX_PROVIDER=${config.sandboxProvider}`,
@@ -422,9 +476,17 @@ function validateArtifactStorageConfig(config: AppConfig): void {
   if (!config.artifactStorageS3Bucket) {
     throw new Error('ARTIFACT_STORAGE_S3_BUCKET is required when ARTIFACT_STORAGE_PROVIDER=s3');
   }
-  if (!config.artifactStorageS3AccessKeyId || !config.artifactStorageS3SecretAccessKey) {
+  if (Boolean(config.artifactStorageS3AccessKeyId) !== Boolean(config.artifactStorageS3SecretAccessKey)) {
     throw new Error(
-      'ARTIFACT_STORAGE_S3_ACCESS_KEY_ID and ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY are required when ARTIFACT_STORAGE_PROVIDER=s3',
+      'ARTIFACT_STORAGE_S3_ACCESS_KEY_ID and ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY must be provided together',
+    );
+  }
+  if (
+    config.artifactStorageS3Endpoint &&
+    (!config.artifactStorageS3AccessKeyId || !config.artifactStorageS3SecretAccessKey)
+  ) {
+    throw new Error(
+      'ARTIFACT_STORAGE_S3_ACCESS_KEY_ID and ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY are required for S3-compatible artifact endpoints',
     );
   }
 }
@@ -525,6 +587,14 @@ export function requireTensorlakeRegisteredImage(config: AppConfig): string {
   }
 
   return config.tensorlakeRegisteredImage;
+}
+
+export function requireLambdaMicrovmImageIdentifier(config: AppConfig): string {
+  if (!config.lambdaMicrovmImageIdentifier) {
+    throw new Error('LAMBDA_MICROVM_IMAGE_IDENTIFIER is required when SANDBOX_PROVIDER=lambda-microvm');
+  }
+
+  return config.lambdaMicrovmImageIdentifier;
 }
 
 export function requireDockerOrchestratorUrl(config: AppConfig): string {
@@ -669,8 +739,14 @@ function deriveRunnerModelChoices(
 
 function providerDerivedRunnerModels(env: NodeJS.ProcessEnv): string[] {
   return MODEL_PROVIDER_AUTH.flatMap(({ provider, env: envNames }) =>
-    envNames.some((name) => env[name]) ? getModels(provider).map((model) => `${provider}/${model.id}`) : [],
+    envNames.some((name) => env[name]) ? providerModels(provider).map((model) => `${provider}/${model}`) : [],
   );
+}
+
+function providerModels(provider: KnownProvider): string[] {
+  const catalogModels = getModels(provider).map((model) => model.id);
+  if (provider === AMAZON_BEDROCK_PROVIDER) return [...AMAZON_BEDROCK_INFERENCE_PROFILE_MODEL_IDS, ...catalogModels];
+  return catalogModels;
 }
 
 function dedupeStrings(values: string[]): string[] {

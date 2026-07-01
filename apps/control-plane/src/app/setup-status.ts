@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { CreateBucketCommand, HeadBucketCommand, NoSuchBucket, S3Client } from '@aws-sdk/client-s3';
 import { Pool } from 'pg';
 import type { AppConfig } from '../config/index.js';
+import { configuredModels } from './model-availability.js';
 import type { AppServices } from './server.js';
 
 export type SetupStatusState = 'configured' | 'limited' | 'missing' | 'warning' | 'error';
@@ -221,17 +222,19 @@ function modelProviderStatus(config: AppConfig): SetupStatusItem {
     guidanceItems: providers.length
       ? undefined
       : ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENCODE_API_KEY', 'OPENAI_CODEX_AUTH_BASE64'],
-    details: [`Models available: ${config.runnerModelChoices.length}`],
+    details: [`Models available: ${configuredModels(config).length}`],
     docsPath: 'README.md',
   };
 }
 
 function modelProviders(config: AppConfig): string[] {
+  const models = configuredModels(config);
   const providers: string[] = [];
-  if (config.runnerModelChoices.some((model) => model.startsWith('anthropic/'))) providers.push('Anthropic');
-  if (config.runnerModelChoices.some((model) => model.startsWith('openai/'))) providers.push('OpenAI');
-  if (config.runnerModelChoices.some((model) => model.startsWith('openai-codex/'))) providers.push('OpenAI Codex');
-  if (config.runnerModelChoices.some((model) => model.startsWith('opencode/'))) providers.push('OpenCode Zen');
+  if (models.some((model) => model.startsWith('amazon-bedrock/'))) providers.push('Amazon Bedrock');
+  if (models.some((model) => model.startsWith('anthropic/'))) providers.push('Anthropic');
+  if (models.some((model) => model.startsWith('openai/'))) providers.push('OpenAI');
+  if (models.some((model) => model.startsWith('openai-codex/'))) providers.push('OpenAI Codex');
+  if (models.some((model) => model.startsWith('opencode/'))) providers.push('OpenCode Zen');
   return providers;
 }
 
@@ -257,10 +260,14 @@ async function objectStoreStatus(config: AppConfig): Promise<SetupStatusItem> {
     const client = new S3Client({
       region: config.artifactStorageS3Region,
       forcePathStyle: config.artifactStorageS3ForcePathStyle,
-      credentials: {
-        accessKeyId: config.artifactStorageS3AccessKeyId!,
-        secretAccessKey: config.artifactStorageS3SecretAccessKey!,
-      },
+      ...(config.artifactStorageS3AccessKeyId && config.artifactStorageS3SecretAccessKey
+        ? {
+            credentials: {
+              accessKeyId: config.artifactStorageS3AccessKeyId,
+              secretAccessKey: config.artifactStorageS3SecretAccessKey,
+            },
+          }
+        : {}),
       ...(config.artifactStorageS3Endpoint ? { endpoint: config.artifactStorageS3Endpoint } : {}),
     });
     try {
@@ -284,13 +291,8 @@ async function objectStoreStatus(config: AppConfig): Promise<SetupStatusItem> {
     state: 'missing',
     summary: 'Object storage is disabled.',
     guidance:
-      'Set ARTIFACT_STORAGE_PROVIDER=s3 and provide the S3 bucket and credentials to persist downloadable artifacts.',
-    guidanceItems: [
-      'ARTIFACT_STORAGE_PROVIDER=s3',
-      'ARTIFACT_STORAGE_S3_BUCKET',
-      'ARTIFACT_STORAGE_S3_ACCESS_KEY_ID',
-      'ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY',
-    ],
+      'Set ARTIFACT_STORAGE_PROVIDER=s3 and provide the S3 bucket to persist downloadable artifacts. Native AWS deployments can use the task role credential chain; S3-compatible endpoints also need explicit credentials.',
+    guidanceItems: ['ARTIFACT_STORAGE_PROVIDER=s3', 'ARTIFACT_STORAGE_S3_BUCKET'],
     details: [`Provider: ${config.artifactStorage}`],
     docsPath: 'README.md',
   };

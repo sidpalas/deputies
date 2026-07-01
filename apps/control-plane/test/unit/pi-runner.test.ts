@@ -49,6 +49,12 @@ vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
       return new FakeModelRegistry();
     }
 
+    getAll() {
+      return [];
+    }
+
+    registerProvider() {}
+
     find(provider: string, id: string) {
       return {
         id,
@@ -227,6 +233,47 @@ describe('PiRunner', () => {
     expect(events[2]?.payload).toMatchObject({ toolName: 'bash', toolCallId: 'tool-1' });
     expect(result).toEqual({ text: 'hello from pi', model: 'gpt-5.5', usage });
     expect(dispose).toHaveBeenCalled();
+  });
+
+  it('keeps Bedrock model version suffixes in Pi model IDs', async () => {
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'ok' }],
+            model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+          },
+        ],
+        prompt: vi.fn(),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe: () => () => {},
+      },
+      extensionsResult: {},
+    });
+
+    await new PiRunner({
+      model: 'amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      authBase64: Buffer.from('{}').toString('base64'),
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'hello',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async () => {},
+    });
+
+    expect(piMock.createAgentSession.mock.calls[0]![0]).toMatchObject({
+      model: expect.objectContaining({
+        provider: 'amazon-bedrock',
+        id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      }),
+    });
+    expect(piMock.createAgentSession.mock.calls[0]![0].thinkingLevel).toBeUndefined();
   });
 
   it('runs subagents in-process and caps nested registration at depth 4', async () => {

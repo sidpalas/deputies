@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import http, {
@@ -97,7 +97,13 @@ export function createSandboxBridgeServer(options: SandboxBridgeOptions): Server
 
         if (request.method === 'GET' && url.pathname === '/fs/read') {
           const content = await readFile(resolveWorkspacePath(workspacePath, requirePathParam(url)));
-          response.writeHead(200, { 'content-type': 'application/octet-stream' });
+          response.writeHead(200, {
+            'cache-control': 'no-transform',
+            'content-length': String(content.byteLength),
+            'content-type': 'application/octet-stream',
+            'x-content-type-options': 'nosniff',
+            'x-deputies-sha256': checksumSha256(content),
+          });
           response.end(content);
           return;
         }
@@ -404,6 +410,10 @@ function previewCookieHeader(header: string | undefined, skippedCookieNames: Set
       return name && !skippedCookieNames.has(name);
     });
   return cookies.length ? cookies.join('; ') : undefined;
+}
+
+function checksumSha256(body: Uint8Array): string {
+  return createHash('sha256').update(body).digest('hex');
 }
 
 async function execCommand(

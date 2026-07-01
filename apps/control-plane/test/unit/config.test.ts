@@ -104,6 +104,11 @@ describe('loadConfig', () => {
       artifactStorageS3ForcePathStyle: true,
       artifactStorageS3CreateBucket: false,
       artifactCreateMaxBytes: 26_214_400,
+      lambdaMicrovmIngressNetworkConnectors: [],
+      lambdaMicrovmEgressNetworkConnectors: [],
+      lambdaMicrovmMaximumDurationSeconds: 28_800,
+      lambdaMicrovmAuthTokenTtlMinutes: 30,
+      lambdaMicrovmBridgePort: 3584,
       unsafeAllowLocalHttpCallbacks: false,
       hideSetupPage: false,
     });
@@ -113,6 +118,13 @@ describe('loadConfig', () => {
     expect(loadConfig({ API_AUTH_MODE: 'none', OPENCODE_API_KEY: 'opencode-key' }).runnerModelChoices).toEqual(
       expect.arrayContaining(['opencode/kimi-k2.6', 'opencode/claude-sonnet-4-6', 'opencode/gpt-5.5']),
     );
+  });
+
+  it('derives Amazon Bedrock model choices from AWS task-role credentials', () => {
+    expect(
+      loadConfig({ API_AUTH_MODE: 'none', AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: '/v2/credentials/test' })
+        .runnerModelChoices,
+    ).toEqual(expect.arrayContaining(['amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0']));
   });
 
   it('parses supported run modes and providers', () => {
@@ -196,6 +208,18 @@ describe('loadConfig', () => {
         TENSORLAKE_SANDBOX_MEMORY_MB: '4096',
         TENSORLAKE_SANDBOX_DISK_MB: '20480',
         TENSORLAKE_ALLOW_INTERNET_ACCESS: 'false',
+        LAMBDA_MICROVM_REGION: 'us-east-2',
+        LAMBDA_MICROVM_IMAGE_IDENTIFIER: 'arn:aws:lambda:us-east-2:123456789012:microvm-image:deputies',
+        LAMBDA_MICROVM_IMAGE_VERSION: '1.0',
+        LAMBDA_MICROVM_EXECUTION_ROLE_ARN: 'arn:aws:iam::123456789012:role/deputies-microvm-runtime',
+        LAMBDA_MICROVM_INGRESS_NETWORK_CONNECTORS:
+          'arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:ALL_INGRESS',
+        LAMBDA_MICROVM_EGRESS_NETWORK_CONNECTORS:
+          'arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:INTERNET_EGRESS',
+        LAMBDA_MICROVM_MAXIMUM_DURATION_SECONDS: '14400',
+        LAMBDA_MICROVM_AUTH_TOKEN_TTL_MINUTES: '45',
+        LAMBDA_MICROVM_BRIDGE_PORT: '3585',
+        LAMBDA_MICROVM_LOG_GROUP: '/aws/lambda/microvms/deputies',
         SLACK_API_BASE_URL: 'https://slack.emulate.localhost/api',
         SLACK_SIGNING_SECRET: 'slack-secret',
         SLACK_BOT_TOKEN: 'xoxb-token',
@@ -304,6 +328,20 @@ describe('loadConfig', () => {
       tensorlakeSandboxMemoryMb: 4096,
       tensorlakeSandboxDiskMb: 20480,
       tensorlakeAllowInternetAccess: false,
+      lambdaMicrovmRegion: 'us-east-2',
+      lambdaMicrovmImageIdentifier: 'arn:aws:lambda:us-east-2:123456789012:microvm-image:deputies',
+      lambdaMicrovmImageVersion: '1.0',
+      lambdaMicrovmExecutionRoleArn: 'arn:aws:iam::123456789012:role/deputies-microvm-runtime',
+      lambdaMicrovmIngressNetworkConnectors: [
+        'arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:ALL_INGRESS',
+      ],
+      lambdaMicrovmEgressNetworkConnectors: [
+        'arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:INTERNET_EGRESS',
+      ],
+      lambdaMicrovmMaximumDurationSeconds: 14400,
+      lambdaMicrovmAuthTokenTtlMinutes: 45,
+      lambdaMicrovmBridgePort: 3585,
+      lambdaMicrovmLogGroup: '/aws/lambda/microvms/deputies',
       slackApiBaseUrl: 'https://slack.emulate.localhost/api',
       slackSigningSecret: 'slack-secret',
       slackBotToken: 'xoxb-token',
@@ -402,6 +440,22 @@ describe('loadConfig', () => {
     },
   );
 
+  it('requires a Lambda MicroVM image identifier for the Lambda MicroVM provider', () => {
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'lambda-microvm' })).toThrow(
+      'LAMBDA_MICROVM_IMAGE_IDENTIFIER is required when SANDBOX_PROVIDER=lambda-microvm',
+    );
+    expect(
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        SANDBOX_PROVIDER: 'lambda-microvm',
+        LAMBDA_MICROVM_IMAGE_IDENTIFIER: 'deputies-sandbox',
+      }),
+    ).toMatchObject({
+      sandboxProvider: 'lambda-microvm',
+      lambdaMicrovmImageIdentifier: 'deputies-sandbox',
+    });
+  });
+
   it('requires URL and token for k8s-agent-sandbox HTTP orchestrator mode', () => {
     expect(() =>
       loadConfig({
@@ -454,8 +508,24 @@ describe('loadConfig', () => {
         API_AUTH_MODE: 'none',
         ARTIFACT_STORAGE_PROVIDER: 's3',
         ARTIFACT_STORAGE_S3_BUCKET: 'artifacts',
+        ARTIFACT_STORAGE_S3_ACCESS_KEY_ID: 'key',
+      }),
+    ).toThrow('ARTIFACT_STORAGE_S3_ACCESS_KEY_ID and ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY must be provided together');
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        ARTIFACT_STORAGE_PROVIDER: 's3',
+        ARTIFACT_STORAGE_S3_BUCKET: 'artifacts',
+        ARTIFACT_STORAGE_S3_ENDPOINT: 'http://seaweedfs:8333',
       }),
     ).toThrow('ARTIFACT_STORAGE_S3_ACCESS_KEY_ID and ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY are required');
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        ARTIFACT_STORAGE_PROVIDER: 's3',
+        ARTIFACT_STORAGE_S3_BUCKET: 'artifacts',
+      }),
+    ).not.toThrow();
   });
 
   it('configures web search provider settings', () => {
@@ -675,7 +745,7 @@ describe('loadConfig', () => {
   it('rejects invalid enum values', () => {
     expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of combined, all, api, worker');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'local' })).toThrow(
-      'Expected one of fake, unsafe-local, docker, daytona, tensorlake, k8s-agent-sandbox, ecs',
+      'Expected one of fake, unsafe-local, docker, daytona, tensorlake, lambda-microvm, k8s-agent-sandbox',
     );
     expect(loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi' }).runner).toBe('pi');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_COOKIE_SAME_SITE: 'strict' })).toThrow(

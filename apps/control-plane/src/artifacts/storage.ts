@@ -195,10 +195,14 @@ export function createArtifactObjectStorage(config: AppConfig): ArtifactObjectSt
     new S3Client({
       region: config.artifactStorageS3Region,
       forcePathStyle: config.artifactStorageS3ForcePathStyle,
-      credentials: {
-        accessKeyId: config.artifactStorageS3AccessKeyId!,
-        secretAccessKey: config.artifactStorageS3SecretAccessKey!,
-      },
+      ...(config.artifactStorageS3AccessKeyId && config.artifactStorageS3SecretAccessKey
+        ? {
+            credentials: {
+              accessKeyId: config.artifactStorageS3AccessKeyId,
+              secretAccessKey: config.artifactStorageS3SecretAccessKey,
+            },
+          }
+        : {}),
       ...(config.artifactStorageS3Endpoint ? { endpoint: config.artifactStorageS3Endpoint } : {}),
     }),
     config.artifactStorageS3Bucket!,

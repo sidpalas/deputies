@@ -1,0 +1,68 @@
+app_hostname = "deputies.example.com"
+
+# If empty, preview hosts use app_hostname as their base domain. Point both the
+# app host and wildcard preview DNS record at alb_dns_name after apply:
+# - deputies.example.com -> alb_dns_name
+# - *.deputies.example.com -> alb_dns_name
+service_base_domain = ""
+
+aws_region  = "us-east-2"
+environment = "prod"
+name_prefix = "deputies"
+
+vpc_cidr = "10.42.0.0/16"
+nat_mode = "fck_nat"
+
+# Leave empty to request a Terraform-managed ACM cert for app_hostname and the
+# wildcard service base domain. Create Cloudflare validation CNAMEs from
+# managed_acm_dns_validation_records, wait for ACM issuance, then set
+# managed_acm_https_enabled = true to make Cloudflare connect to ALB over HTTPS.
+alb_certificate_arn             = ""
+create_managed_acm_certificate  = true
+managed_acm_https_enabled       = false
+
+# Use combined for one ECS service that runs API, worker, and web together.
+# Use split for separate API and worker ECS services; web runs beside API.
+topology_mode        = "combined"
+run_mode             = "combined"
+desired_count        = 1
+api_desired_count    = 1
+worker_desired_count = 1
+task_cpu             = 512
+task_memory          = 1024
+# api_task_cpu / api_task_memory / worker_task_cpu / worker_task_memory default
+# to task_cpu / task_memory when unset.
+# AWS Fargate Graviton is materially cheaper than x86 for this reference stack.
+# The published app images are multi-arch manifests with linux/arm64 support.
+cpu_architecture = "ARM64"
+
+runner               = "pi"
+runner_model_default = "amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+control_plane_image = "ghcr.io/sidpalas/deputies-control-plane"
+web_image           = "ghcr.io/sidpalas/deputies-web"
+image_tag           = "latest"
+# For immutable deployments, set image_tag = "" and use full digest refs above.
+
+db_instance_class        = "db.t4g.micro"
+db_multi_az              = false
+db_backup_retention_days = 1
+db_deletion_protection   = true
+db_skip_final_snapshot   = false
+db_iam_database_authentication_enabled = false
+app_secret_recovery_window_days        = 30
+
+sandbox_provider = "lambda-microvm"
+
+# Empty defaults to the stable Terraform-managed image name, but the image is
+# still created/updated by deploy/sandboxes/lambda-microvm mise tasks.
+lambda_microvm_image_identifier = ""
+lambda_microvm_image_version    = ""
+
+# Additional runtime secrets to write into the app's Secrets Manager JSON blob.
+# Values written here are stored in Terraform state.
+app_secret_values = {
+  # ANTHROPIC_API_KEY = "..."
+  # OPENAI_API_KEY    = "..."
+  # OPENCODE_API_KEY  = "..."
+}

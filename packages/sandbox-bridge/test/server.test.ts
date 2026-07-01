@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -71,6 +72,15 @@ describe('sandbox bridge server', () => {
 
     const read = await bridgeFetch('/fs/read?path=nested/file.txt');
     await expect(read.text()).resolves.toBe('hello');
+    const bytes = Buffer.from([0, 1, 2, 127, 128, 255]);
+    await expect(bridgeFetch('/fs/write?path=binary.bin', { method: 'PUT', body: bytes })).resolves.toMatchObject({
+      status: 200,
+    });
+    const binaryRead = await bridgeFetch('/fs/read?path=binary.bin');
+    expect(binaryRead.headers.get('cache-control')).toBe('no-transform');
+    expect(binaryRead.headers.get('content-length')).toBe(String(bytes.byteLength));
+    expect(binaryRead.headers.get('x-deputies-sha256')).toBe(checksumSha256(bytes));
+    expect(Buffer.from(await binaryRead.arrayBuffer())).toEqual(bytes);
     await expect((await bridgeFetch('/fs/readdir?path=nested')).json()).resolves.toEqual({ entries: ['file.txt'] });
     await expect((await bridgeFetch('/fs/exists?path=nested/file.txt')).json()).resolves.toEqual({ exists: true });
 
@@ -639,3 +649,7 @@ describe('sandbox bridge server', () => {
     });
   }
 });
+
+function checksumSha256(body: Uint8Array): string {
+  return createHash('sha256').update(body).digest('hex');
+}

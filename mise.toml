@@ -6,10 +6,12 @@ config_roots = [
   "apps/web",
   "apps/www",
   "deploy/docker-compose",
+  "deploy/aws",
   "deploy/kubernetes",
   "deploy/local",
   "deploy/railway",
   "deploy/sandboxes/daytona",
+  "deploy/sandboxes/lambda-microvm",
   "deploy/sandboxes/tensorlake",
   "packages/sandbox-bridge",
 ]
@@ -43,9 +45,34 @@ run = "pnpm -r --if-present test"
 description = "Run package TypeScript checks"
 run = "pnpm -r --if-present typecheck"
 
+[tasks."infra:validate"]
+description = "Validate infrastructure definitions"
+run = "mise run //deploy/aws:validate:ci && mise run //deploy/sandboxes/lambda-microvm:test"
+
+[tasks."images:app:build:local"]
+description = "Build control-plane and web images for the local Docker architecture"
+run = """
+set -euo pipefail
+docker buildx inspect >/dev/null 2>&1 || docker buildx create --use >/dev/null
+docker buildx build -f apps/control-plane/Dockerfile -t "${CONTROL_PLANE_IMAGE:-deputies-control-plane:local}" --load .
+docker buildx build -f apps/web/Dockerfile -t "${WEB_IMAGE:-deputies-web:local}" --load .
+"""
+
+[tasks."images:app:push:multiarch"]
+description = "Build and push multi-arch control-plane and web image manifests"
+run = """
+set -euo pipefail
+: "${CONTROL_PLANE_IMAGE:?Set CONTROL_PLANE_IMAGE, for example ghcr.io/sidpalas/deputies-control-plane:sha-...}"
+: "${WEB_IMAGE:?Set WEB_IMAGE, for example ghcr.io/sidpalas/deputies-web:sha-...}"
+platforms="${DEPUTIES_APP_IMAGE_PLATFORMS:-linux/amd64,linux/arm64}"
+docker buildx inspect >/dev/null 2>&1 || docker buildx create --use >/dev/null
+docker buildx build --platform "$platforms" -f apps/control-plane/Dockerfile -t "$CONTROL_PLANE_IMAGE" --push .
+docker buildx build --platform "$platforms" -f apps/web/Dockerfile -t "$WEB_IMAGE" --push .
+"""
+
 [tasks.check]
 description = "Run formatting, linting, typechecks, and unit tests"
-depends = ["format:check", "lint", "typecheck", "test"]
+depends = ["format:check", "lint", "typecheck", "test", "infra:validate"]
 
 [tasks."ci:smoke:local"]
 description = "Run smoke GitHub Actions workflow locally with Agent CI"

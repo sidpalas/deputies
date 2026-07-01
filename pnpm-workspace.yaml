@@ -2,8 +2,6 @@ packages:
   - apps/*
   - packages/*
 minimumReleaseAge: 4320
-minimumReleaseAgeExclude:
-  - '@flue/runtime'
 allowBuilds:
   '@google/genai': false
   '@mongodb-js/zstd': false
