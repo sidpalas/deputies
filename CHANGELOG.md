@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.0](https://github.com/sidpalas/deputies/compare/v0.11.2...v0.12.0) (2026-07-01)
+
+
+### Features
+
+* add AWS reference deployment ([#77](https://github.com/sidpalas/deputies/issues/77)) ([d195ec1](https://github.com/sidpalas/deputies/commit/d195ec1ebb1d7fffa47ebf09f28b64b11ef8f507))
+
+
+### Bug Fixes
+
+* satisfy lint for unreachable sandbox provider ([#79](https://github.com/sidpalas/deputies/issues/79)) ([e8a18ae](https://github.com/sidpalas/deputies/commit/e8a18ae36233ab1091a8d935e6fbf26347a40728))
+
 ## [0.11.2](https://github.com/sidpalas/deputies/compare/v0.11.1...v0.11.2) (2026-06-24)
 
 
