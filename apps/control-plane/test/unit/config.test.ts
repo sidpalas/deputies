@@ -124,7 +124,7 @@ describe('loadConfig', () => {
     expect(
       loadConfig({ API_AUTH_MODE: 'none', AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: '/v2/credentials/test' })
         .runnerModelChoices,
-    ).toEqual(expect.arrayContaining(['amazon-bedrock/us.amazon.nova-micro-v1:0']));
+    ).toEqual(expect.arrayContaining(['amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0']));
   });
 
   it('parses supported run modes and providers', () => {

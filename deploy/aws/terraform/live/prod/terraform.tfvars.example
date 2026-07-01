@@ -37,7 +37,7 @@ task_memory          = 1024
 cpu_architecture = "ARM64"
 
 runner               = "pi"
-runner_model_default = "amazon-bedrock/us.amazon.nova-micro-v1:0"
+runner_model_default = "amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 control_plane_image = "ghcr.io/sidpalas/deputies-control-plane"
 web_image           = "ghcr.io/sidpalas/deputies-web"

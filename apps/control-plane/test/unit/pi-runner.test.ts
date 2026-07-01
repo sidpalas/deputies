@@ -239,7 +239,13 @@ describe('PiRunner', () => {
     piMock.createAgentSession.mockResolvedValue({
       session: {
         sessionId: 'pi-session',
-        messages: [{ role: 'assistant', content: [{ type: 'text', text: 'ok' }], model: 'us.amazon.nova-micro-v1:0' }],
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'ok' }],
+            model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+          },
+        ],
         prompt: vi.fn(),
         abort: vi.fn(),
         dispose: vi.fn(),
@@ -249,7 +255,7 @@ describe('PiRunner', () => {
     });
 
     await new PiRunner({
-      model: 'amazon-bedrock/us.amazon.nova-micro-v1:0',
+      model: 'amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0',
       authBase64: Buffer.from('{}').toString('base64'),
     }).run({
       sessionId: 'session-1',
@@ -262,7 +268,10 @@ describe('PiRunner', () => {
     });
 
     expect(piMock.createAgentSession.mock.calls[0]![0]).toMatchObject({
-      model: expect.objectContaining({ provider: 'amazon-bedrock', id: 'us.amazon.nova-micro-v1:0' }),
+      model: expect.objectContaining({
+        provider: 'amazon-bedrock',
+        id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      }),
     });
     expect(piMock.createAgentSession.mock.calls[0]![0].thinkingLevel).toBeUndefined();
   });

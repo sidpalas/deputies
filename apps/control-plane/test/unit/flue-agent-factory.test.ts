@@ -1,5 +1,7 @@
 import { registerApiProvider, registerProvider } from '@flue/runtime';
+import { resolveModel } from '@flue/runtime/internal';
 import { randomUUID } from 'node:crypto';
+import { resolveBedrockRuntimeBaseUrl } from '../../src/runner/bedrock.js';
 import { RealFlueAgentFactory } from '../../src/runner-flue/agent-factory.js';
 import type { SandboxHandle } from '../../src/sandbox/types.js';
 
@@ -46,6 +48,18 @@ describe('RealFlueAgentFactory', () => {
 
     expect(saved.has('agent-session:["deputies","runner","thread-1"]')).toBe(true);
     expect(saved.has('agent-session:["agent-1","agent-1","thread-1"]')).toBe(false);
+  });
+
+  it('preserves Amazon Bedrock catalog metadata when configuring the runtime endpoint', () => {
+    const model = 'amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0';
+
+    new RealFlueAgentFactory({ model, env: {} });
+
+    expect(resolveModel(model)).toMatchObject({
+      maxTokens: 64_000,
+      contextWindow: 200_000,
+      baseUrl: resolveBedrockRuntimeBaseUrl(),
+    });
   });
 
   it('migrates valid legacy Flue session keys to the current storage key', async () => {

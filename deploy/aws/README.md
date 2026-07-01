@@ -129,10 +129,10 @@ For AWS-hosted model access, use the Pi runner with Amazon Bedrock model IDs:
 
 ```hcl
 runner               = "pi"
-runner_model_default = "amazon-bedrock/us.amazon.nova-micro-v1:0"
+runner_model_default = "amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 ```
 
-The ECS task role supplies AWS credentials. The runner uses `BEDROCK_REGION` when set, then `AWS_REGION`, then `AWS_DEFAULT_REGION`. Nova and Claude on Bedrock often require inference-profile IDs such as `us.amazon.nova-micro-v1:0` or `us.anthropic.claude-haiku-4-5-20251001-v1:0`; direct base model IDs can fail with on-demand throughput errors. Ensure Bedrock model/profile access is enabled in the selected region/account before relying on the deployment.
+The ECS task role supplies AWS credentials. The runner uses `BEDROCK_REGION` when set, then `AWS_REGION`, then `AWS_DEFAULT_REGION`. Claude on Bedrock often requires inference-profile IDs such as `us.anthropic.claude-haiku-4-5-20251001-v1:0`; direct base model IDs can fail with on-demand throughput errors. If Bedrock ships a useful inference-profile ID before the Pi catalog includes it, temporarily supplement the catalog in `apps/control-plane/src/runner/bedrock.ts`. Ensure Bedrock model/profile access is enabled in the selected region/account before relying on the deployment.
 
 ## Secrets Pattern
 
@@ -167,7 +167,9 @@ aws secretsmanager get-secret-value \
 
 ## State
 
-The reference root intentionally leaves backend configuration to the operator. For any real environment, configure an encrypted remote backend with locking before applying because Terraform state contains generated DB/auth/sandbox secrets and any values supplied through `app_secret_values`.
+The reference root intentionally leaves backend configuration to the operator. Without a backend block, Terraform uses a local backend; that is only for local testing and reference-stack iteration.
+
+For any real environment, configure an encrypted remote backend with locking before applying because Terraform state contains generated DB/auth/sandbox secrets and any values supplied through `app_secret_values`. Use the backend that fits your organization, for example an S3 backend with DynamoDB/S3 locking, Terraform Cloud, or another supported remote backend.
 
 ## Teardown
 

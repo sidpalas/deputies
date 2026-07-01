@@ -34,7 +34,8 @@ const defaultReadyTimeoutMs = 60_000;
 
 export const lambdaMicrovmCapabilities: SandboxCapabilities = {
   persistentFilesystem: true,
-  snapshots: true,
+  // Lambda MicroVM images are snapshot-like, but this provider exposes no product snapshot/restore API yet.
+  snapshots: false,
   stopStart: true,
   exec: true,
   filesystem: true,

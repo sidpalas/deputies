@@ -1,20 +1,15 @@
 export const AMAZON_BEDROCK_PROVIDER = 'amazon-bedrock';
 export const BEDROCK_CONVERSE_STREAM_API = 'bedrock-converse-stream';
 
-export const AMAZON_BEDROCK_INFERENCE_PROFILE_MODELS = [
-  {
-    id: 'us.amazon.nova-micro-v1:0',
-    baseModelId: 'amazon.nova-micro-v1:0',
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  },
-  {
-    id: 'us.amazon.nova-lite-v1:0',
-    baseModelId: 'amazon.nova-lite-v1:0',
-    contextWindow: 300_000,
-    maxTokens: 8192,
-  },
-] as const;
+export type AmazonBedrockInferenceProfileModel = {
+  id: string;
+  baseModelId: string;
+  contextWindow: number;
+  maxTokens: number;
+};
+
+// Add entries here only when a useful Bedrock inference-profile ID is missing from pi-ai's catalog.
+export const AMAZON_BEDROCK_INFERENCE_PROFILE_MODELS: readonly AmazonBedrockInferenceProfileModel[] = [];
 
 const BEDROCK_DEFAULT_REGION = 'us-east-1';
 

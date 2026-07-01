@@ -206,7 +206,7 @@ variable "runner" {
 variable "runner_model_default" {
   description = "Default runner model."
   type        = string
-  default     = "amazon-bedrock/us.amazon.nova-micro-v1:0"
+  default     = "amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
 variable "sandbox_provider" {

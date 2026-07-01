@@ -305,11 +305,11 @@ Amazon Bedrock through the Pi runner:
 
 ```sh
 RUNNER=pi
-RUNNER_MODEL_DEFAULT=amazon-bedrock/us.amazon.nova-micro-v1:0
+RUNNER_MODEL_DEFAULT=amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
 BEDROCK_REGION=us-east-2
 ```
 
-Bedrock uses the default AWS SDK credential chain, such as an ECS task role in the AWS reference deployment. If `BEDROCK_REGION` is unset, Deputies falls back to `AWS_REGION`, then `AWS_DEFAULT_REGION`, then `us-east-1`. Nova and Claude models commonly require inference-profile IDs with the regional prefix, for example `us.amazon.nova-micro-v1:0` or `us.anthropic.claude-haiku-4-5-20251001-v1:0`; direct base model IDs can fail when on-demand throughput is unsupported.
+Bedrock uses the default AWS SDK credential chain, such as an ECS task role in the AWS reference deployment. If `BEDROCK_REGION` is unset, Deputies falls back to `AWS_REGION`, then `AWS_DEFAULT_REGION`, then `us-east-1`. Claude models commonly require inference-profile IDs with the regional prefix, for example `us.anthropic.claude-haiku-4-5-20251001-v1:0`; direct base model IDs can fail when on-demand throughput is unsupported. If Bedrock ships a useful inference-profile ID before the Pi catalog includes it, add a temporary entry to `AMAZON_BEDROCK_INFERENCE_PROFILE_MODELS` in `apps/control-plane/src/runner/bedrock.ts`.
 
 Optional model picker choices override:
 

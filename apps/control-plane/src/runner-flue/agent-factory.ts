@@ -98,6 +98,9 @@ export class RealFlueAgentFactory implements FlueAgentFactory {
 
 function registerAmazonBedrockInferenceProfiles(model: ModelConfig, providers: string[]): void {
   if (!usesAmazonBedrock(model) && !providers.includes(AMAZON_BEDROCK_PROVIDER)) return;
+  configureProvider(AMAZON_BEDROCK_PROVIDER, { baseUrl: resolveBedrockRuntimeBaseUrl() });
+  if (!usesSupplementalAmazonBedrockProfile(model)) return;
+
   registerProvider(AMAZON_BEDROCK_PROVIDER, {
     api: BEDROCK_CONVERSE_STREAM_API,
     baseUrl: resolveBedrockRuntimeBaseUrl(),
@@ -110,8 +113,14 @@ function registerAmazonBedrockInferenceProfiles(model: ModelConfig, providers: s
   });
 }
 
-function usesAmazonBedrock(model: ModelConfig): boolean {
+function usesAmazonBedrock(model: ModelConfig): model is string {
   return typeof model === 'string' && model.startsWith(`${AMAZON_BEDROCK_PROVIDER}/`);
+}
+
+function usesSupplementalAmazonBedrockProfile(model: ModelConfig): boolean {
+  if (!usesAmazonBedrock(model)) return false;
+  const modelId = model.slice(`${AMAZON_BEDROCK_PROVIDER}/`.length);
+  return AMAZON_BEDROCK_INFERENCE_PROFILE_MODELS.some((profile) => profile.id === modelId);
 }
 
 class FreshStartUnsupportedSessionStore implements SessionStore {
