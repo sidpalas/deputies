@@ -67,7 +67,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     docker-cli \
     docker.io \
     fd-find \
-    ffmpeg \
     git \
     git-lfs \
     iptables \
