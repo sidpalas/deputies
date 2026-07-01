@@ -327,7 +327,11 @@ function createSandboxProvider(): SandboxProvider {
     return new AgentSandboxProvider({ orchestrator });
   }
 
-  throw new Error(`SANDBOX_PROVIDER=${config.sandboxProvider} is not wired yet`);
+  return assertUnreachableSandboxProvider(config.sandboxProvider);
+}
+
+function assertUnreachableSandboxProvider(provider: never): never {
+  throw new Error(`SANDBOX_PROVIDER=${String(provider)} is not wired yet`);
 }
 
 function optional<T extends Record<string, unknown>>(input: T): T {
