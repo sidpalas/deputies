@@ -9,6 +9,7 @@ import {
   planRepositoryPreparation,
   preparedRepositoryFromPlan,
   type RepositoryPreparationPlan,
+  type RepositoryPreparationResult,
 } from '../repositories/prepare.js';
 import { sandboxRepositoryShell, type RepositoryShell } from '../repositories/shell.js';
 import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
@@ -144,7 +145,9 @@ export class FlueRunner implements Runner {
         createdAt: new Date(),
       });
 
-      const setupNote = repositorySetup ? await this.runRepositorySetup(input, repositorySetup, session) : null;
+      const setupResult = repositorySetup ? await this.runRepositorySetup(input, repositorySetup, session) : null;
+      if (setupResult) repositoryState.prepared = setupResult;
+      const setupNote = setupResult?.setupFailureNote ?? null;
 
       // Cancellation must not leave partial Flue turn state in durable history.
       // A prompt-only warning is cheaper but advisory, and models can still continue
@@ -202,8 +205,8 @@ export class FlueRunner implements Runner {
     input: RunnerInput,
     setup: RepositoryPreparationPlan,
     session: FlueSessionPort,
-  ): Promise<string | null> {
-    const result = await executeRepositoryPreparation({
+  ): Promise<RepositoryPreparationResult> {
+    return executeRepositoryPreparation({
       plan: setup,
       workspaceRoot: input.sandbox.workspacePath,
       shell: flueSessionShell(session),
@@ -213,7 +216,6 @@ export class FlueRunner implements Runner {
       ...(this.options.setupScript ? { setupScript: this.options.setupScript } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
     });
-    return result.setupFailureNote;
   }
 
   private async loadSessionSnapshot(sessionId: string) {

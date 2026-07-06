@@ -138,7 +138,7 @@ describe('LocalSandboxProvider', () => {
     const result = await sandbox.exec({ command: setup!.command, cwd: sandbox.workspacePath, env: setup!.env });
 
     expect(result.exitCode).toBe(0);
-    await expect(sandbox.fs?.readFile('manaflow/README.md')).resolves.toBe('hello local git\n');
+    await expect(sandbox.fs?.readFile('manaflow-ai/manaflow/README.md')).resolves.toBe('hello local git\n');
     await expect(sandbox.exec({ command: 'git config user.name', cwd: setup!.workspacePath })).resolves.toMatchObject({
       stdout: 'DevDeputies\n',
     });
@@ -169,7 +169,7 @@ describe('LocalSandboxProvider', () => {
                 return input.sandbox.exec(shellInput(command, options));
               },
               async prompt() {
-                const readme = await input.sandbox.fs?.readFile('manaflow/README.md');
+                const readme = await input.sandbox.fs?.readFile('manaflow-ai/manaflow/README.md');
                 return { text: `readme: ${readme?.trim()}` };
               },
               abort() {},
@@ -194,7 +194,7 @@ describe('LocalSandboxProvider', () => {
       },
     });
 
-    expect(calls[0]).toMatchObject({ cwd: `${sandbox.workspacePath}/manaflow` });
+    expect(calls[0]).toMatchObject({ cwd: `${sandbox.workspacePath}/manaflow-ai/manaflow` });
     expect(result.text).toBe('readme: hello local git');
     expect(events.map((event) => event.type)).toEqual([
       'run_started',
@@ -205,9 +205,9 @@ describe('LocalSandboxProvider', () => {
     expect(events[1]?.payload).toMatchObject({
       owner: 'manaflow-ai',
       repo: 'manaflow',
-      workspacePath: `${sandbox.workspacePath}/manaflow`,
+      workspacePath: `${sandbox.workspacePath}/manaflow-ai/manaflow`,
     });
-    await expect(sandbox.fs?.readFile('manaflow/README.md')).resolves.toBe('hello local git\n');
+    await expect(sandbox.fs?.readFile('manaflow-ai/manaflow/README.md')).resolves.toBe('hello local git\n');
   });
 });
 

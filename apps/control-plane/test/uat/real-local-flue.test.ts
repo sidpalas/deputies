@@ -62,8 +62,8 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Flue + local sandbox UAT', ()
       }),
     );
     expect(events).toContainEqual(expect.objectContaining({ type: 'setup_script_finished' }));
-    await expect(sandbox.fs?.readFile('manaflow/README.md')).resolves.toBe('LOCAL_FLUE_UAT_OK\n');
-    await expect(sandbox.fs?.readFile('manaflow/.setup-ran')).resolves.toBe('');
+    await expect(sandbox.fs?.readFile('manaflow-ai/manaflow/README.md')).resolves.toBe('LOCAL_FLUE_UAT_OK\n');
+    await expect(sandbox.fs?.readFile('manaflow-ai/manaflow/.setup-ran')).resolves.toBe('');
   }, 180_000);
 });
 

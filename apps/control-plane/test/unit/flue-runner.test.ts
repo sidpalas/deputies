@@ -161,6 +161,7 @@ describe('FlueRunner', () => {
                 if (options?.env) shell.env = options.env;
                 if (options?.cwd) shell.cwd = options.cwd;
                 shells.push(shell);
+                if (command.includes('deputies-setup-ran')) return { stdout: '', stderr: '', exitCode: 1 };
                 return { stdout: 'cloned', stderr: '', exitCode: 0 };
               },
               async prompt(text) {
@@ -189,17 +190,18 @@ describe('FlueRunner', () => {
       },
     });
 
-    expect(calls[0]).toMatchObject({ cwd: '/workspace/manaflow' });
+    expect(calls[0]).toMatchObject({ cwd: '/workspace/manaflow-ai/manaflow' });
     expect(calls[0]?.tools?.map((tool) => tool.name)).toEqual(['repository', 'gh', 'git']);
-    expect(shells).toHaveLength(1);
-    expect(shells[0]!.cwd).toBe('/workspace');
-    expect(shells[0]!.command).toContain(
+    expect(shells).toHaveLength(2);
+    expect(shells[0]!.command).toContain('deputies-setup-ran');
+    expect(shells[1]!.cwd).toBe('/workspace');
+    expect(shells[1]!.command).toContain(
       'git -c \'http.https://github.com/manaflow-ai/manaflow.git.extraHeader\'="$auth_header" -c core.hooksPath=/dev/null clone',
     );
-    expect(shells[0]!.command).toContain('unset GITHUB_AUTH_HEADER');
-    expect(shells[0]!.command).toContain("git -C '/workspace/manaflow' config user.name 'DevDeputies'");
-    expect(shells[0]!.command).not.toContain('ghs_secret_token');
-    expect(shells[0]!.env).toEqual({
+    expect(shells[1]!.command).toContain('unset GITHUB_AUTH_HEADER');
+    expect(shells[1]!.command).toContain("git -C '/workspace/manaflow-ai/manaflow' config user.name 'DevDeputies'");
+    expect(shells[1]!.command).not.toContain('ghs_secret_token');
+    expect(shells[1]!.env).toEqual({
       GITHUB_AUTH_HEADER: `Authorization: Basic ${Buffer.from('x-access-token:ghs_secret_token').toString('base64')}`,
     });
 
@@ -210,7 +212,7 @@ describe('FlueRunner', () => {
       'agent_text_delta',
       'run_completed',
     ]);
-    expect(eventsJson).toContain('/workspace/manaflow');
+    expect(eventsJson).toContain('/workspace/manaflow-ai/manaflow');
     expect(eventsJson).not.toContain('ghs_secret_token');
   });
 
@@ -267,9 +269,9 @@ describe('FlueRunner', () => {
     });
 
     expect(execCalls).toHaveLength(2);
-    expect(execCalls[0]).toMatchObject({ cwd: '/workspace/manaflow', timeoutMs: 30_000 });
+    expect(execCalls[0]).toMatchObject({ cwd: '/workspace/manaflow-ai/manaflow', timeoutMs: 30_000 });
     expect(execCalls[1]).toMatchObject({
-      cwd: '/workspace/manaflow',
+      cwd: '/workspace/manaflow-ai/manaflow',
       env: { DEPUTIES: '1', DEPUTIES_SETUP: '1' },
       timeoutMs: 600_000,
     });

@@ -38,7 +38,7 @@ describe('runRepositorySetupScript', () => {
 
     expect(result).toEqual({ status });
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.command).toContain('git ls-files -s --error-unmatch');
+    expect(calls[0]?.command).toContain("git ls-tree HEAD -- '.agents/setup'");
     expect(events).toEqual([]);
   });
 
@@ -61,10 +61,12 @@ describe('runRepositorySetupScript', () => {
 
     expect(result).toMatchObject({ status: 'ran', exitCode: 0, timedOut: false, stdoutTail: 'installed\n' });
     expect(calls).toHaveLength(2);
-    expect(calls[0]!.command).toContain("git hash-object '.agents/setup'");
+    expect(calls[0]!.command).toContain('script_hash="$3"');
     expect(calls[0]!.command).toContain('reason=cloned');
-    expect(calls[1]!.command).toContain('./.agents/setup');
-    expect(calls[1]!.command).not.toContain('bash .agents/setup');
+    expect(calls[1]!.command).toContain('git show HEAD:.agents/setup >"$setup_file"');
+    expect(calls[1]!.command).toContain('"$setup_file" >"$setup_stdout"');
+    expect(calls[1]!.command).not.toContain('bash "$setup_file"');
+    expect(calls[1]!.command).toContain("printf '%s\\n' '1' > '.git/deputies-setup-ran'");
     expect(calls[1]!.command).toContain('if [ "$setup_exit" -eq 0 ]; then');
     expect(calls[1]!.command).toContain("printf '%s\\n' 'abc123' > '.git/deputies-setup-hash'");
     expect(calls[1]!.options).toMatchObject({
@@ -89,7 +91,7 @@ describe('runRepositorySetupScript', () => {
       ),
     );
 
-    expect(calls[1]?.command).toContain("bash '.agents/setup'");
+    expect(calls[1]?.command).toContain('bash "$setup_file"');
   });
 
   it('emits a failed finished event without throwing on script failure', async () => {

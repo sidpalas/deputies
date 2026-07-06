@@ -1,5 +1,6 @@
 import type { RunnerInput } from '../runner/types.js';
-import type { RepositoryShell } from './shell.js';
+import { repositorySetupRanMarkerPath } from './setup.js';
+import { shellScript, type RepositoryShell } from './shell.js';
 
 const setupScriptPath = '.agents/setup';
 const setupStampPath = '.git/deputies-setup-hash';
@@ -214,58 +215,71 @@ async function executeSetupScript(
 }
 
 function probeCommand(repositoryWasCloned: boolean): string {
-  return [
-    'set -eu',
-    `if [ -L ${quoteShell(setupScriptPath)} ] || [ ! -f ${quoteShell(setupScriptPath)} ]; then`,
-    `  printf '%s\\n' ${quoteShell('deputies-setup:absent')}`,
-    '  exit 0',
-    'fi',
-    `tracked_setup="$(git ls-files -s --error-unmatch -- ${quoteShell(setupScriptPath)} 2>/dev/null || true)"`,
-    'case "$tracked_setup" in',
-    '  100644\\ *|100755\\ *) ;;',
-    '  *)',
-    `    printf '%s\\n' ${quoteShell('deputies-setup:absent')}`,
-    '    exit 0',
-    '    ;;',
-    'esac',
-    `script_hash="$(git hash-object ${quoteShell(setupScriptPath)})"`,
-    'stamp_hash=""',
-    `if [ -f ${quoteShell(setupStampPath)} ]; then`,
-    `  stamp_hash="$(cat ${quoteShell(setupStampPath)} || true)"`,
-    'fi',
-    'exec_flag=0',
-    `if [ -x ${quoteShell(setupScriptPath)} ]; then exec_flag=1; fi`,
-    repositoryWasCloned ? 'reason=cloned' : 'reason=',
-    'if [ -z "$reason" ] && [ -z "$stamp_hash" ]; then reason=no_stamp; fi',
-    'if [ -z "$reason" ] && [ "$stamp_hash" != "$script_hash" ]; then reason=script_changed; fi',
-    'if [ -z "$reason" ]; then',
-    `  printf '%s\\n' ${quoteShell('deputies-setup:skip')}`,
-    'else',
-    '  printf \'deputies-setup:run reason=%s hash=%s exec=%s\\n\' "$reason" "$script_hash" "$exec_flag"',
-    'fi',
-  ].join('\n');
+  const reasonLine = repositoryWasCloned ? 'reason=cloned' : 'reason=';
+  return shellScript(`
+    set -eu
+
+    tracked_setup="$(git ls-tree HEAD -- ${quoteShell(setupScriptPath)} 2>/dev/null || true)"
+    case "$tracked_setup" in
+      "100644 blob "*|"100755 blob "*) ;;
+      *)
+        printf '%s\\n' ${quoteShell('deputies-setup:absent')}
+        exit 0
+        ;;
+    esac
+
+    set -- $tracked_setup
+    script_mode="$1"
+    script_hash="$3"
+    stamp_hash=""
+    if [ -f ${quoteShell(setupStampPath)} ]; then
+      stamp_hash="$(cat ${quoteShell(setupStampPath)} || true)"
+    fi
+
+    exec_flag=0
+    if [ "$script_mode" = "100755" ]; then exec_flag=1; fi
+    ${reasonLine}
+    if [ -z "$reason" ] && [ -z "$stamp_hash" ]; then reason=no_stamp; fi
+    if [ -z "$reason" ] && [ "$stamp_hash" != "$script_hash" ]; then reason=script_changed; fi
+
+    if [ -z "$reason" ]; then
+      printf '%s\\n' ${quoteShell('deputies-setup:skip')}
+    else
+      printf 'deputies-setup:run reason=%s hash=%s exec=%s\\n' "$reason" "$script_hash" "$exec_flag"
+    fi
+  `);
 }
 
 function runCommand(probe: Extract<SetupScriptProbe, { action: 'run' }>): string {
-  const invocation = probe.executable ? `./${setupScriptPath}` : `bash ${quoteShell(setupScriptPath)}`;
-  return [
-    'set -u',
-    'setup_stdout="$(mktemp)"',
-    'setup_stderr="$(mktemp)"',
-    'cleanup_setup_output() { rm -f "$setup_stdout" "$setup_stderr"; }',
-    'trap cleanup_setup_output EXIT',
-    'set +e',
-    `${invocation} >"$setup_stdout" 2>"$setup_stderr"`,
-    'setup_exit=$?',
-    'set -e',
-    `if [ -s "$setup_stdout" ]; then tail -c ${outputTailBytes} "$setup_stdout"; fi`,
-    `if [ -s "$setup_stderr" ]; then tail -c ${outputTailBytes} "$setup_stderr" >&2; fi`,
-    'if [ "$setup_exit" -eq 0 ]; then',
-    `  printf '%s\\n' ${quoteShell(probe.hash)} > ${quoteShell(setupStampPath)}`,
-    '  setup_exit=$?',
-    'fi',
-    'exit "$setup_exit"',
-  ].join('\n');
+  const invocation = probe.executable ? '"$setup_file"' : 'bash "$setup_file"';
+  return shellScript(`
+    set -u
+
+    setup_file="$(mktemp)"
+    setup_stdout="$(mktemp)"
+    setup_stderr="$(mktemp)"
+    cleanup_setup_output() { rm -f "$setup_file" "$setup_stdout" "$setup_stderr"; }
+    trap cleanup_setup_output EXIT
+
+    git show HEAD:${setupScriptPath} >"$setup_file"
+    if [ ${probe.executable ? '1' : '0'} -eq 1 ]; then chmod +x "$setup_file"; fi
+    printf '%s\\n' '1' > ${quoteShell(repositorySetupRanMarkerPath)}
+
+    set +e
+    ${invocation} >"$setup_stdout" 2>"$setup_stderr"
+    setup_exit=$?
+    set -e
+
+    if [ -s "$setup_stdout" ]; then tail -c ${outputTailBytes} "$setup_stdout"; fi
+    if [ -s "$setup_stderr" ]; then tail -c ${outputTailBytes} "$setup_stderr" >&2; fi
+
+    if [ "$setup_exit" -eq 0 ]; then
+      printf '%s\\n' ${quoteShell(probe.hash)} > ${quoteShell(setupStampPath)}
+      setup_exit=$?
+    fi
+
+    exit "$setup_exit"
+  `);
 }
 
 function tailOutput(output: string): string {

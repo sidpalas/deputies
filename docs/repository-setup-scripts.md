@@ -7,7 +7,7 @@ Repository owners can commit `.agents/setup` at the repository root to prepare a
 - Location: `.agents/setup`, a single regular file tracked by Git at the repository root.
 - Execution: executable files run as `./.agents/setup`; non-executable files run as `bash .agents/setup`.
 - Ignored paths: untracked files, directories, and symlinks at `.agents/setup` are treated as absent.
-- Working directory: the prepared repository workspace, such as `/workspace/<repo>`.
+- Working directory: the prepared repository workspace, such as `/workspace/<owner>/<repo>`.
 - Environment: the sandbox's normal environment plus `DEPUTIES=1` and `DEPUTIES_SETUP=1`.
 - Credentials: Deputies does not pass the temporary `GITHUB_AUTH_HEADER` used for clone/fetch into the script.
 - Interactivity: scripts run without a TTY or stdin. They must not prompt.
@@ -28,6 +28,8 @@ The script runs when the repository was freshly cloned, the stamp is missing, or
 Setup script failures are non-fatal. Deputies continues the run, emits `setup_script_started` and `setup_script_finished` events, and tells the agent about the failure so it can remediate or work around it.
 
 If Deputies cannot inspect whether `.agents/setup` should run, it emits `setup_script_finished` with `phase: "probe"` and tells the agent about the probe failure. `setup_script_finished` stores only the last 8 KiB of stdout and stderr. Do not print secrets.
+
+After a setup script executes in a workspace, Deputies disables its authenticated `git` tool for that workspace. Use a fresh sandbox before running authenticated git operations with GitHub App credentials. This avoids injecting clone/fetch credentials back into a sandbox after repository code has run.
 
 Operators can disable the feature globally:
 

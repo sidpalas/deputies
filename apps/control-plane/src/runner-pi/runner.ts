@@ -28,6 +28,7 @@ import {
   preparedRepositoryFromPlan,
   type RepositoryCheckoutResult,
   type RepositoryPreparationPlan,
+  type RepositoryPreparationResult,
 } from '../repositories/prepare.js';
 import {
   AMAZON_BEDROCK_INFERENCE_PROFILE_MODELS,
@@ -207,7 +208,11 @@ export class PiRunner implements Runner {
         createdAt: new Date(),
       });
 
-      const setupNote = repositorySetup ? await completePiRepositorySetup(input, this.options, repositorySetup) : null;
+      const setupResult = repositorySetup
+        ? await completePiRepositorySetup(input, this.options, repositorySetup)
+        : null;
+      if (setupResult) repositoryState.prepared = setupResult;
+      const setupNote = setupResult?.setupFailureNote ?? null;
 
       if (input.signal?.aborted) throw new Error('Operation aborted');
       await session.prompt(withSetupNote(input.prompt, setupNote), { expandPromptTemplates: false });
@@ -565,8 +570,8 @@ async function completePiRepositorySetup(
   input: RunnerInput,
   options: PiRunnerOptions,
   setup: NonNullable<PiRepositorySetup>,
-): Promise<string | null> {
-  const result = await completeRepositoryPreparation({
+): Promise<RepositoryPreparationResult> {
+  return completeRepositoryPreparation({
     plan: setup.plan,
     repositoryWasCloned: setup.checkout.repositoryWasCloned,
     emit: input.emit,
@@ -575,7 +580,6 @@ async function completePiRepositorySetup(
     ...(options.setupScript ? { setupScript: options.setupScript } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
   });
-  return result.setupFailureNote;
 }
 
 function withSetupNote(prompt: string, setupNote: string | null): string {
