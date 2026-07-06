@@ -41,6 +41,8 @@ import type {
   SessionRecord,
   SessionVisibilityFilter,
   SessionMessageSummary,
+  SessionTranscriptOptions,
+  SessionTranscriptPage,
   SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
@@ -620,9 +622,31 @@ export class MemoryStore implements AppStore {
     return [...(this.messages.get(sessionId) ?? [])];
   }
 
+  async getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null> {
+    return this.messages.get(input.sessionId)?.find((message) => message.id === input.messageId) ?? null;
+  }
+
   async getSessionMessageSummary(sessionId: string): Promise<SessionMessageSummary> {
     const messages = await this.getMessages(sessionId);
     return { count: messages.length, lastMessage: messages[messages.length - 1] ?? null };
+  }
+
+  async getSessionTranscript(input: SessionTranscriptOptions): Promise<SessionTranscriptPage> {
+    const candidates = (this.messages.get(input.sessionId) ?? [])
+      .filter((message) => input.beforeSequence === undefined || message.sequence < input.beforeSequence)
+      .sort((left, right) => right.sequence - left.sequence);
+    const page = candidates.slice(0, input.limit);
+    const entries = page.map((message) => ({
+      message,
+      finalResponse: latestFinalResponseForMessage(this.events.get(input.sessionId) ?? [], message.id),
+    }));
+    return {
+      entries,
+      hasMore: candidates.length > input.limit,
+      ...(candidates.length > input.limit && entries.length
+        ? { nextBeforeSequence: entries[entries.length - 1]!.message.sequence }
+        : {}),
+    };
   }
 
   async updatePendingMessage(input: {
@@ -1427,6 +1451,14 @@ function sessionMatchesAgentScope(session: SessionRecord, input: AgentSessionLis
 
 function sessionIsReadableToAgentGroup(session: SessionRecord, ownerGroupId: string): boolean {
   return session.visibility === 'organization' || session.ownerGroupId === ownerGroupId;
+}
+
+function latestFinalResponseForMessage(events: EventRecord[], messageId: string): EventRecord | null {
+  return (
+    events
+      .filter((event) => event.type === 'agent_response_final' && event.messageId === messageId)
+      .sort((left, right) => right.sequence - left.sequence)[0] ?? null
+  );
 }
 
 function externalThreadKey(source: string, externalId: string): string {

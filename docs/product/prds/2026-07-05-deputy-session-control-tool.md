@@ -28,12 +28,14 @@ Agents can delegate short in-run subtasks through runner-native task tools, but 
 
 - `DEPUTY_TOOL_ENABLED` defaults to `true`.
 - Supported actions are `spawn`, `list_sessions`, `get_session`, `send_message`, and `cancel`.
+- `list_sessions` defaults to all sessions the acting session may read; agents can pass `scope=children` to list only direct children.
 - Child sessions inherit the parent session's owner group, visibility, and write policy.
+- Child sessions copy creator attribution from the triggering parent message when present; agent policy must not use `createdByUserId` for authority.
 - Agents may read organization-visible sessions or sessions in their own group.
 - Agents may send messages to and cancel only non-archived direct children.
 - `notifyOnComplete=true` is consumed once and sends a deputy-authored parent follow-up for completed, failed, or cancelled child runs.
-- Child output embedded in parent notifications must be framed as untrusted context, not instructions.
-- `get_session` must not load an unbounded event log just to report latest run status or final response text.
+- Successful parent notifications must be informational and not embed child output. Agents can inspect the child with `get_session` when useful.
+- `get_session` must be summary-only by default and must return bounded newest-first transcript pages only when explicitly requested.
 
 ## Acceptance Criteria
 

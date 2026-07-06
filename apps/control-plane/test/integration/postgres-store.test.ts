@@ -365,9 +365,29 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(created.created).toBe(true);
     expect(created.session).toMatchObject({ id: childSession.id, parentSessionId: parent.id, spawnDepth: 1 });
     expect(created.message).toMatchObject({ sequence: 1, status: 'pending', source: 'deputy' });
+    await expect(
+      store.getMessage({ sessionId: childSession.id, messageId: '00000000-0000-4000-8000-000000000932' }),
+    ).resolves.toMatchObject({ sequence: 1, status: 'pending', source: 'deputy' });
+    await store.appendEventWithNextSequence({
+      sessionId: childSession.id,
+      messageId: '00000000-0000-4000-8000-000000000932',
+      type: 'agent_response_final',
+      payload: { text: 'child final response' },
+      createdAt: now,
+    });
+    await expect(store.getSessionTranscript({ sessionId: childSession.id, limit: 1 })).resolves.toMatchObject({
+      entries: [
+        {
+          message: expect.objectContaining({ sequence: 1, prompt: 'start child work' }),
+          finalResponse: expect.objectContaining({ payload: { text: 'child final response' } }),
+        },
+      ],
+      hasMore: false,
+    });
     await expect(store.getEvents(childSession.id)).resolves.toMatchObject([
       { sequence: 1, type: 'session_created' },
       { sequence: 2, type: 'message_created' },
+      { sequence: 3, type: 'agent_response_final' },
     ]);
     await expect(store.getEvents(parent.id)).resolves.toMatchObject([
       { sequence: 1, type: 'session_created' },

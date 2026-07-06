@@ -31,7 +31,7 @@ Deputies has runner-native subagent mechanisms for quick intra-run delegation, b
 - Flue and Pi adapters expose the same `deputies` action surface when `DEPUTY_TOOL_ENABLED=true`.
 - `spawn` creates a child session with status `queued`, parent lineage, inherited access fields, and an initial pending message.
 - `idempotencyKey` deterministically derives child session/message IDs so retrying returns the same child without consuming more quota.
-- `notifyOnComplete=true` stores child context that is consumed once when the child reaches a terminal outcome. Parent notifications frame child output/error text as untrusted context.
+- `notifyOnComplete=true` stores child context that is consumed once when the child reaches a terminal outcome. Successful parent notifications are informational and output-free; failure notifications include bounded diagnostic error text.
 - Parent cancellation and archival never cascade. Agents and humans must explicitly cancel children they no longer need.
 
 ## Data Model / Schema Changes
@@ -45,6 +45,9 @@ Deputies has runner-native subagent mechanisms for quick intra-run delegation, b
 ## API / Contract Changes
 
 - Agent tool actions: `spawn`, `list_sessions`, `get_session`, `send_message`, `cancel`.
+- `list_sessions` defaults to the full readable set for the acting session agent; explicit `scope=children` narrows to direct children.
+- `get_session` defaults to a cheap summary. `includeTranscript=true` or transcript pagination params return bounded newest-first transcript pages; agents should use runner-native subagents when a large transcript needs summarization.
+- Spawned children copy `createdByUserId` from the triggering parent message when present for human write-policy attribution; session-agent authorization ignores `createdByUserId`.
 - New config: `DEPUTY_TOOL_ENABLED`, `DEPUTY_MAX_SPAWN_DEPTH`, `DEPUTY_MAX_CHILDREN_PER_SESSION`, `DEPUTY_MAX_SPAWNS_PER_RUN`.
 - Web session DTOs include `parentSessionId` and `spawnDepth`.
 - Web UI displays session lineage and labels deputy-authored messages.

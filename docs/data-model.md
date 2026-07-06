@@ -181,6 +181,7 @@ Rules:
 - `parent_session_id` records the durable parent-child relationship for agent-spawned child sessions. It is nullable and uses `on delete set null` so deleting or pruning a parent cannot cascade-delete work history.
 - `spawn_depth` starts at `0` for root sessions and increments by one for each `deputies`-spawned child. Tool policy enforces the configured max depth before insertion.
 - Child sessions inherit the parent's `owner_group_id`, `visibility`, and `write_policy`; lineage is for coordination and audit, not a separate RBAC boundary.
+- Child sessions copy `created_by_user_id` from the triggering parent message when present. This is human attribution for `creator_only` write-policy checks, not an input to agent authorization.
 - `queue_paused_at` is used while editing pending messages so the worker does not claim a message mid-edit.
 - `context` stores durable session-level defaults such as the current repository. It must not store transient delivery data, callbacks, provider tokens, or raw webhook payloads.
 - `context.deputy.notifyParentOnComplete` is allowed only as explicit control metadata for a child session to request one parent follow-up after terminal completion, failure, or cancellation. Workers clear it after consumption and may record `parentNotificationSentAt`.

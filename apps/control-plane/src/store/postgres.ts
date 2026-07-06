@@ -40,6 +40,8 @@ import type {
   SandboxSecrets,
   SessionRecord,
   SessionMessageSummary,
+  SessionTranscriptOptions,
+  SessionTranscriptPage,
   SessionVisibilityFilter,
   SessionWithSandboxRecord,
   UpdateAutomationRecord,
@@ -1327,6 +1329,16 @@ export class PostgresStore implements AppStore {
     return result.rows.map(toMessage);
   }
 
+  async getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null> {
+    const result = await this.pool.query<MessageRow>(
+      `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+       FROM messages
+       WHERE session_id = $1 AND id = $2`,
+      [input.sessionId, input.messageId],
+    );
+    return result.rows[0] ? toMessage(result.rows[0]) : null;
+  }
+
   async getSessionMessageSummary(sessionId: string): Promise<SessionMessageSummary> {
     const [countResult, lastMessageResult] = await Promise.all([
       this.pool.query<{ message_count: PgInteger }>(
@@ -1345,6 +1357,41 @@ export class PostgresStore implements AppStore {
     return {
       count: Number(countResult.rows[0]?.message_count ?? 0),
       lastMessage: lastMessageResult.rows[0] ? toMessage(lastMessageResult.rows[0]) : null,
+    };
+  }
+
+  async getSessionTranscript(input: SessionTranscriptOptions): Promise<SessionTranscriptPage> {
+    const requested = input.limit + 1;
+    const messageResult = await this.pool.query<MessageRow>(
+      `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+       FROM messages
+       WHERE session_id = $1
+         AND ($2::bigint IS NULL OR sequence < $2)
+       ORDER BY sequence DESC
+       LIMIT $3`,
+      [input.sessionId, input.beforeSequence ?? null, requested],
+    );
+    const hasMore = messageResult.rows.length > input.limit;
+    const messages = messageResult.rows.slice(0, input.limit).map(toMessage);
+    if (!messages.length) return { entries: [], hasMore: false };
+
+    const finalResponses = await this.pool.query<EventRow>(
+      `SELECT DISTINCT ON (message_id) id, session_id, run_id, message_id, sequence, type, payload, created_at
+       FROM events
+       WHERE session_id = $1
+         AND type = 'agent_response_final'
+         AND message_id = ANY($2::uuid[])
+       ORDER BY message_id, sequence DESC`,
+      [input.sessionId, messages.map((message) => message.id)],
+    );
+    const responseByMessageId = new Map<string, EventRecord>();
+    for (const row of finalResponses.rows) {
+      if (row.message_id) responseByMessageId.set(row.message_id, toEvent(row));
+    }
+    return {
+      entries: messages.map((message) => ({ message, finalResponse: responseByMessageId.get(message.id) ?? null })),
+      hasMore,
+      ...(hasMore ? { nextBeforeSequence: messages[messages.length - 1]!.sequence } : {}),
     };
   }
 

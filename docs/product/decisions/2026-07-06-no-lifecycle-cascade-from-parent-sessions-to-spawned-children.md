@@ -37,7 +37,7 @@ Runaway spawn is handled by making human cleanup easy and by bounding blast radi
 - No cascade code should be written for parent cancellation or archival.
 - Tool guidance must tell agents that parent run cancellation and parent archival do not affect children, and that direct children must be cancelled explicitly with `deputies({ action: "cancel", sessionId })` when no longer needed.
 - Orphaned completion notifications are expected. A `notifyOnComplete` child that finishes after its parent was archived fails to enqueue the parent notification because archived sessions reject messages. The worker catches this, logs a warning with child and parent session IDs, and continues finalizing the child without retrying or surfacing a run failure.
-- `get_session` remains the parent's cheap view of child state, so it must not load unbounded event logs.
+- `get_session` remains the parent's cheap view of child state by default. Transcript retrieval is explicit, bounded, and paginated newest-first.
 
 ## Revisit When
 

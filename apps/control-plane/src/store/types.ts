@@ -506,6 +506,23 @@ export type SessionMessageSummary = {
   lastMessage: MessageRecord | null;
 };
 
+export type SessionTranscriptOptions = {
+  sessionId: string;
+  limit: number;
+  beforeSequence?: number;
+};
+
+export type SessionTranscriptEntry = {
+  message: MessageRecord;
+  finalResponse: EventRecord | null;
+};
+
+export type SessionTranscriptPage = {
+  entries: SessionTranscriptEntry[];
+  hasMore: boolean;
+  nextBeforeSequence?: number;
+};
+
 // Limits a session listing to what a non-admin user can read: organization-visible
 // sessions plus sessions owned by one of the user's groups.
 export type SessionVisibilityFilter = {
@@ -551,8 +568,10 @@ export interface MessageStore {
   updateSession(record: SessionRecord): Promise<SessionRecord>;
   nextMessageSequence(sessionId: string): Promise<number>;
   createMessage(record: CreateMessageRecord): Promise<MessageRecord>;
+  getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null>;
   getMessages(sessionId: string): Promise<MessageRecord[]>;
   getSessionMessageSummary(sessionId: string): Promise<SessionMessageSummary>;
+  getSessionTranscript(input: SessionTranscriptOptions): Promise<SessionTranscriptPage>;
   updatePendingMessage(input: { sessionId: string; messageId: string; prompt: string }): Promise<MessageRecord | null>;
   cancelPendingMessage(input: {
     sessionId: string;

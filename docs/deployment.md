@@ -364,7 +364,7 @@ DEPUTY_MAX_SPAWNS_PER_RUN=3
 
 Set `DEPUTY_TOOL_ENABLED=false` to hide the tool for a conservative deployment.
 
-When enabled for `RUNNER=flue` or `RUNNER=pi`, the tool runs in the trusted worker process and writes product sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions inherit the parent's owner group, visibility, and write policy, and can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`. Child response/error text in that follow-up is framed as untrusted context.
+When enabled for `RUNNER=flue` or `RUNNER=pi`, the tool runs in the trusted worker process and writes product sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions inherit the parent's owner group, visibility, and write policy, and copy the triggering message's author user as creator attribution when present. They can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`. Successful completion follow-ups are informational and output-free; agents can explicitly request bounded newest-first transcript pages with `get_session` when the child result matters.
 
 Before relying on the default in production, review the organization-level coordination policy, worker capacity, and session-spawn limits. Use `DEPUTY_TOOL_ENABLED=false` if the deployment needs a conservative rollout.
 
