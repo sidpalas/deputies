@@ -3,12 +3,14 @@ import type { NormalizedEvent } from '../events/types.js';
 import { StoreConflictError } from './types.js';
 import type {
   AppStore,
+  AgentSessionListOptions,
   ArtifactRecord,
   AutomationInvocationRecord,
   AutomationRecord,
   AuthSessionRecord,
   AuthUserRecord,
   CallbackDeliveryRecord,
+  ChildSessionListOptions,
   CreateAutomationInvocationRecord,
   CreateAutomationRecord,
   CreateArtifactRecord,
@@ -19,6 +21,8 @@ import type {
   CreateMessageRecord,
   CreateSandboxRecord,
   CreateSessionRecord,
+  CreateSessionWithFirstMessageInput,
+  CreateSessionWithFirstMessageResult,
   CreateWebhookSourceRecord,
   EventDeltaCompactionInput,
   EventRecord,
@@ -35,6 +39,9 @@ import type {
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  SessionMessageSummary,
+  SessionTranscriptOptions,
+  SessionTranscriptPage,
   SessionVisibilityFilter,
   SessionWithSandboxRecord,
   UpdateAutomationRecord,
@@ -426,6 +433,8 @@ export class PostgresStore implements AppStore {
          status,
          title,
          context,
+         parent_session_id,
+         spawn_depth,
          owner_group_id,
          visibility,
          write_policy,
@@ -433,13 +442,15 @@ export class PostgresStore implements AppStore {
          created_at,
          updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING ${sessionSelectColumns}`,
       [
         record.id,
         record.status,
         record.title ?? null,
         record.context ?? null,
+        record.parentSessionId ?? null,
+        record.spawnDepth ?? 0,
         record.ownerGroupId,
         record.visibility,
         record.writePolicy,
@@ -450,6 +461,190 @@ export class PostgresStore implements AppStore {
     );
 
     return toSession(result.rows[0]!);
+  }
+
+  async createSessionWithFirstMessage(
+    input: CreateSessionWithFirstMessageInput,
+  ): Promise<CreateSessionWithFirstMessageResult> {
+    return this.transaction(async (client) => {
+      if (input.parentChildLimit) {
+        if (input.session.parentSessionId !== input.parentChildLimit.parentSessionId) {
+          throw new Error('Parent child limit must match the session parent');
+        }
+        const parent = await client.query('SELECT id FROM sessions WHERE id = $1 FOR UPDATE', [
+          input.parentChildLimit.parentSessionId,
+        ]);
+        if (!parent.rows[0])
+          throw new Error(`Parent session does not exist: ${input.parentChildLimit.parentSessionId}`);
+      }
+
+      const existing = await client.query<SessionRow>(`SELECT ${sessionSelectColumns} FROM sessions WHERE id = $1`, [
+        input.session.id,
+      ]);
+      if (existing.rows[0]) {
+        const message = await client.query<MessageRow>(
+          `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+           FROM messages
+           WHERE session_id = $1
+           ORDER BY sequence ASC
+           LIMIT 1`,
+          [input.session.id],
+        );
+        if (!message.rows[0]) throw new Error(`First message does not exist for session: ${input.session.id}`);
+        return {
+          session: toSession(existing.rows[0]),
+          message: toMessage(message.rows[0]),
+          events: [],
+          created: false,
+        };
+      }
+
+      if (input.parentChildLimit) {
+        const count = await client.query<{ child_count: PgInteger }>(
+          `SELECT COUNT(*) AS child_count
+           FROM sessions
+           WHERE parent_session_id = $1
+             AND status <> 'archived'`,
+          [input.parentChildLimit.parentSessionId],
+        );
+        if (Number(count.rows[0]?.child_count ?? 0) >= input.parentChildLimit.maxNonArchivedChildren) {
+          throw new Error(
+            `Cannot spawn more than ${input.parentChildLimit.maxNonArchivedChildren} non-archived child sessions`,
+          );
+        }
+      }
+
+      const sessionResult = await client.query<SessionRow>(
+        `INSERT INTO sessions (
+           id,
+           status,
+           title,
+           context,
+           parent_session_id,
+           spawn_depth,
+           owner_group_id,
+           visibility,
+           write_policy,
+           created_by_user_id,
+           created_at,
+           updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING ${sessionSelectColumns}`,
+        [
+          input.session.id,
+          input.session.status,
+          input.session.title ?? null,
+          input.session.context ?? null,
+          input.session.parentSessionId ?? null,
+          input.session.spawnDepth ?? 0,
+          input.session.ownerGroupId,
+          input.session.visibility,
+          input.session.writePolicy,
+          input.session.createdByUserId ?? null,
+          input.session.createdAt,
+          input.session.updatedAt,
+        ],
+      );
+
+      await client.query(
+        `INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
+         VALUES ($1, 'messages', 2), ($1, 'events', 3)`,
+        [input.session.id],
+      );
+
+      const messageResult = await client.query<MessageRow>(
+        `INSERT INTO messages (id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at)
+         VALUES ($1, $2, 1, 'pending', $3, $4, $5, $6, $7, $8)
+         RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
+        [
+          input.message.id,
+          input.session.id,
+          input.message.prompt,
+          input.message.authorUserId ?? null,
+          input.message.authorName ?? null,
+          input.message.source ?? null,
+          input.message.context ?? null,
+          input.message.createdAt,
+        ],
+      );
+
+      const eventValues = [
+        {
+          ...input.sessionCreatedEvent,
+          sessionId: input.session.id,
+          sequence: 1,
+        },
+        {
+          ...input.messageCreatedEvent,
+          sessionId: input.session.id,
+          messageId: input.message.id,
+          sequence: 2,
+        },
+      ] as Array<NormalizedEvent & { sequence: number }>;
+      const childEvents: EventRecord[] = [];
+      for (const event of eventValues) {
+        const inserted = await client.query<EventRow>(
+          `WITH inserted AS (
+             INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING id, session_id, run_id, message_id, sequence, type, payload, created_at
+           )
+           SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at,
+                  pg_notify($8, json_build_object('id', id)::text)
+           FROM inserted`,
+          [
+            event.sessionId,
+            event.runId ?? null,
+            event.messageId ?? null,
+            event.sequence,
+            event.type,
+            event.payload,
+            event.createdAt,
+            eventNotificationChannel,
+          ],
+        );
+        childEvents.push(toEvent(inserted.rows[0]!));
+      }
+
+      const events = [...childEvents];
+      if (input.parentSpawnedEvent) {
+        const parentEvent = await client.query<EventRow>(
+          `WITH next_sequence AS (
+             INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
+             VALUES ($1, 'events', 2)
+             ON CONFLICT (session_id, kind)
+             DO UPDATE SET next_sequence = session_sequence_counters.next_sequence + 1
+             RETURNING next_sequence - 1 AS sequence
+           ), inserted AS (
+             INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
+             SELECT $1, $2, $3, sequence, $4, $5, $6
+             FROM next_sequence
+             RETURNING id, session_id, run_id, message_id, sequence, type, payload, created_at
+           )
+           SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at,
+                  pg_notify($7, json_build_object('id', id)::text)
+           FROM inserted`,
+          [
+            input.parentSpawnedEvent.sessionId,
+            input.parentSpawnedEvent.runId ?? null,
+            input.parentSpawnedEvent.messageId ?? null,
+            input.parentSpawnedEvent.type,
+            input.parentSpawnedEvent.payload,
+            input.parentSpawnedEvent.createdAt,
+            eventNotificationChannel,
+          ],
+        );
+        events.push(toEvent(parentEvent.rows[0]!));
+      }
+
+      return {
+        session: toSession(sessionResult.rows[0]!),
+        message: toMessage(messageResult.rows[0]!),
+        events,
+        created: true,
+      };
+    });
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
@@ -466,6 +661,38 @@ export class PostgresStore implements AppStore {
       `SELECT ${sessionSelectColumns} FROM sessions ORDER BY updated_at DESC, created_at DESC`,
     );
 
+    return result.rows.map(toSession);
+  }
+
+  async listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]> {
+    const scopePredicate =
+      input.scope === 'children'
+        ? `parent_session_id = $2 AND (visibility = 'organization' OR owner_group_id = $1)`
+        : input.scope === 'group'
+          ? `owner_group_id = $1`
+          : `(visibility = 'organization' OR owner_group_id = $1)`;
+    const result = await this.pool.query<SessionRow>(
+      `SELECT ${sessionSelectColumns}
+       FROM sessions
+       WHERE ${scopePredicate}
+         AND ($3::text IS NULL OR status = $3)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT $4`,
+      [input.ownerGroupId, input.actingSessionId, input.status ?? null, input.limit],
+    );
+    return result.rows.map(toSession);
+  }
+
+  async listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]> {
+    const result = await this.pool.query<SessionRow>(
+      `SELECT ${sessionSelectColumns}
+       FROM sessions
+       WHERE parent_session_id = $1
+         AND (visibility = 'organization' OR owner_group_id = $2)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT $3`,
+      [input.parentSessionId, input.ownerGroupId, input.limit],
+    );
     return result.rows.map(toSession);
   }
 
@@ -512,12 +739,14 @@ export class PostgresStore implements AppStore {
            context = $4,
            created_at = $5,
            updated_at = $6,
-           owner_group_id = $7,
-           visibility = $8,
-           write_policy = $9,
-           created_by_user_id = $10
-       WHERE id = $1
-       RETURNING ${sessionSelectColumns}`,
+            parent_session_id = $7,
+            spawn_depth = $8,
+            owner_group_id = $9,
+            visibility = $10,
+            write_policy = $11,
+            created_by_user_id = $12
+        WHERE id = $1
+        RETURNING ${sessionSelectColumns}`,
       [
         record.id,
         record.status,
@@ -525,6 +754,8 @@ export class PostgresStore implements AppStore {
         record.context ?? null,
         record.createdAt,
         record.updatedAt,
+        record.parentSessionId ?? null,
+        record.spawnDepth,
         record.ownerGroupId,
         record.visibility,
         record.writePolicy,
@@ -549,12 +780,14 @@ export class PostgresStore implements AppStore {
              context = $4,
              created_at = $5,
              updated_at = $6,
-             owner_group_id = $7,
-             visibility = $8,
-             write_policy = $9,
-             created_by_user_id = $10
-         WHERE id = $1
-         RETURNING ${sessionSelectColumns}`,
+              parent_session_id = $7,
+              spawn_depth = $8,
+              owner_group_id = $9,
+              visibility = $10,
+              write_policy = $11,
+              created_by_user_id = $12
+          WHERE id = $1
+          RETURNING ${sessionSelectColumns}`,
         [
           record.id,
           record.status,
@@ -562,6 +795,8 @@ export class PostgresStore implements AppStore {
           record.context ?? null,
           record.createdAt,
           record.updatedAt,
+          record.parentSessionId ?? null,
+          record.spawnDepth,
           record.ownerGroupId,
           record.visibility,
           record.writePolicy,
@@ -647,10 +882,12 @@ export class PostgresStore implements AppStore {
            context = $4,
            created_at = $5,
            updated_at = $6,
-           owner_group_id = $10,
-           visibility = $11,
-           write_policy = $12,
-           created_by_user_id = $13
+            parent_session_id = $10,
+            spawn_depth = $11,
+            owner_group_id = $12,
+            visibility = $13,
+            write_policy = $14,
+            created_by_user_id = $15
        WHERE id = $1
          AND EXISTS (
            SELECT 1 FROM runs
@@ -671,6 +908,8 @@ export class PostgresStore implements AppStore {
         input.runId,
         input.leaseOwner,
         input.now,
+        input.record.parentSessionId ?? null,
+        input.record.spawnDepth,
         input.record.ownerGroupId,
         input.record.visibility,
         input.record.writePolicy,
@@ -1090,6 +1329,72 @@ export class PostgresStore implements AppStore {
     return result.rows.map(toMessage);
   }
 
+  async getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null> {
+    const result = await this.pool.query<MessageRow>(
+      `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+       FROM messages
+       WHERE session_id = $1 AND id = $2`,
+      [input.sessionId, input.messageId],
+    );
+    return result.rows[0] ? toMessage(result.rows[0]) : null;
+  }
+
+  async getSessionMessageSummary(sessionId: string): Promise<SessionMessageSummary> {
+    const [countResult, lastMessageResult] = await Promise.all([
+      this.pool.query<{ message_count: PgInteger }>(
+        `SELECT COUNT(*) AS message_count FROM messages WHERE session_id = $1`,
+        [sessionId],
+      ),
+      this.pool.query<MessageRow>(
+        `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+         FROM messages
+         WHERE session_id = $1
+         ORDER BY sequence DESC
+         LIMIT 1`,
+        [sessionId],
+      ),
+    ]);
+    return {
+      count: Number(countResult.rows[0]?.message_count ?? 0),
+      lastMessage: lastMessageResult.rows[0] ? toMessage(lastMessageResult.rows[0]) : null,
+    };
+  }
+
+  async getSessionTranscript(input: SessionTranscriptOptions): Promise<SessionTranscriptPage> {
+    const requested = input.limit + 1;
+    const messageResult = await this.pool.query<MessageRow>(
+      `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+       FROM messages
+       WHERE session_id = $1
+         AND ($2::bigint IS NULL OR sequence < $2)
+       ORDER BY sequence DESC
+       LIMIT $3`,
+      [input.sessionId, input.beforeSequence ?? null, requested],
+    );
+    const hasMore = messageResult.rows.length > input.limit;
+    const messages = messageResult.rows.slice(0, input.limit).map(toMessage);
+    if (!messages.length) return { entries: [], hasMore: false };
+
+    const finalResponses = await this.pool.query<EventRow>(
+      `SELECT DISTINCT ON (message_id) id, session_id, run_id, message_id, sequence, type, payload, created_at
+       FROM events
+       WHERE session_id = $1
+         AND type = 'agent_response_final'
+         AND message_id = ANY($2::uuid[])
+       ORDER BY message_id, sequence DESC`,
+      [input.sessionId, messages.map((message) => message.id)],
+    );
+    const responseByMessageId = new Map<string, EventRecord>();
+    for (const row of finalResponses.rows) {
+      if (row.message_id) responseByMessageId.set(row.message_id, toEvent(row));
+    }
+    return {
+      entries: messages.map((message) => ({ message, finalResponse: responseByMessageId.get(message.id) ?? null })),
+      hasMore,
+      ...(hasMore ? { nextBeforeSequence: messages[messages.length - 1]!.sequence } : {}),
+    };
+  }
+
   async updatePendingMessage(input: {
     sessionId: string;
     messageId: string;
@@ -1253,6 +1558,18 @@ export class PostgresStore implements AppStore {
        FROM runs
        WHERE id = $1`,
       [runId],
+    );
+    return result.rows[0] ? toRun(result.rows[0]) : null;
+  }
+
+  async getLatestRunForSession(sessionId: string): Promise<RunRecord | null> {
+    const result = await this.pool.query<RunRow>(
+      `SELECT id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, attempt, started_at, completed_at, failed_at, error, metadata
+       FROM runs
+       WHERE session_id = $1
+       ORDER BY started_at DESC, id DESC
+       LIMIT 1`,
+      [sessionId],
     );
     return result.rows[0] ? toRun(result.rows[0]) : null;
   }
@@ -1874,6 +2191,18 @@ export class PostgresStore implements AppStore {
     );
 
     return result.rows.map(toEvent);
+  }
+
+  async getLatestEventByType(sessionId: string, type: EventRecord['type']): Promise<EventRecord | null> {
+    const result = await this.pool.query<EventRow>(
+      `SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at
+       FROM events
+       WHERE session_id = $1 AND type = $2
+       ORDER BY sequence DESC
+       LIMIT 1`,
+      [sessionId, type],
+    );
+    return result.rows[0] ? toEvent(result.rows[0]) : null;
   }
 
   async listEvents(afterId = 0, limit?: number): Promise<EventRecord[]> {

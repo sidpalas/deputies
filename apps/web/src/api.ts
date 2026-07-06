@@ -27,6 +27,8 @@ export type Session = {
   status: string;
   displayStatus?: string;
   displayStatusTooltip?: string;
+  parentSessionId?: string;
+  spawnDepth: number;
   ownerGroupId: string;
   ownerGroupName?: string;
   visibility: SessionVisibility;

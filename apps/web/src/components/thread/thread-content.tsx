@@ -11,6 +11,7 @@ import type {
   ExternalResource,
   Message,
   SandboxService,
+  Session,
 } from '../../api.js';
 import { getApiBaseUrl } from '../../api.js';
 import {
@@ -47,6 +48,13 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: 'short',
   day: 'numeric',
 });
+
+export type SessionLineage = {
+  current: Pick<Session, 'id' | 'title' | 'status' | 'spawnDepth'>;
+  parent: Pick<Session, 'id' | 'title' | 'status'> | undefined;
+  children: Array<Pick<Session, 'id' | 'title' | 'status'>>;
+  onSelectSession?: (sessionId: string) => void;
+};
 
 export function ChatPanel(props: {
   activeProgress: Record<string, string>;
@@ -272,6 +280,7 @@ function UserMessageCard(props: {
 }
 
 function messageLabel(message: Message): string {
+  if (message.source === 'deputy') return `Deputy message ${message.sequence}`;
   if (message.source === 'github_notice') return `GitHub notice ${message.sequence}`;
   if (message.source === 'slack_notice') return `Slack notice ${message.sequence}`;
   if (message.context?.transcriptOnly && message.source === 'github') return `GitHub comment ${message.sequence}`;
@@ -459,6 +468,7 @@ function humanizeEventName(value: string): string {
 
 export function MobileContextPanel(props: {
   accessPanel?: ReactNode;
+  lineage?: SessionLineage | undefined;
   canWriteSession: boolean;
   repository: string | null;
   branch: string | null;
@@ -492,6 +502,7 @@ export function MobileContextPanel(props: {
 
 export function DesktopContextPanel(props: {
   accessPanel?: ReactNode;
+  lineage?: SessionLineage | undefined;
   canWriteSession: boolean;
   repository: string | null;
   branch: string | null;
@@ -516,6 +527,7 @@ export function DesktopContextPanel(props: {
 
 function ContextPanelContent(props: {
   accessPanel?: ReactNode;
+  lineage?: SessionLineage | undefined;
   canWriteSession: boolean;
   repository: string | null;
   branch: string | null;
@@ -530,6 +542,7 @@ function ContextPanelContent(props: {
   return (
     <div className="p-4 pt-0 xl:p-0 xl:pt-0">
       {props.accessPanel ? <div className="mt-3 border-b border-border pb-3">{props.accessPanel}</div> : null}
+      {props.lineage ? <SessionLineageSection lineage={props.lineage} /> : null}
       <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
         <strong className="block font-medium text-foreground">Repository</strong>
         {props.repository ? (
@@ -650,6 +663,66 @@ function ContextPanelContent(props: {
         {!props.callbacks.length ? <p className="text-sm text-muted-foreground">No callbacks yet.</p> : null}
       </div>
     </div>
+  );
+}
+
+function SessionLineageSection(props: { lineage: SessionLineage }) {
+  const { lineage } = props;
+  if (!lineage.parent && lineage.children.length === 0 && lineage.current.spawnDepth === 0) return null;
+  return (
+    <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
+      <strong className="block font-medium text-foreground">Session lineage</strong>
+      <span className="mt-1 block text-xs">Durable child sessions spawned through the Deputies tool.</span>
+      {lineage.parent ? (
+        <div className="mt-3">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Spawned by
+          </span>
+          <LineageSessionButton item={lineage.parent} onSelectSession={lineage.onSelectSession} />
+        </div>
+      ) : null}
+      {lineage.children.length ? (
+        <div className="mt-3">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Children ({lineage.children.length})
+          </span>
+          <div className="grid gap-2">
+            {lineage.children.map((child) => (
+              <LineageSessionButton key={child.id} item={child} onSelectSession={lineage.onSelectSession} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function LineageSessionButton(props: {
+  item: Pick<Session, 'id' | 'title' | 'status'>;
+  onSelectSession?: ((sessionId: string) => void) | undefined;
+}) {
+  const label = props.item.title || props.item.id;
+  const content = (
+    <>
+      <span className="min-w-0 truncate text-left text-foreground">{label}</span>
+      <Badge className={statusTextClass(props.item.status)}>{props.item.status}</Badge>
+    </>
+  );
+  if (!props.onSelectSession) {
+    return (
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border bg-card/70 px-3 py-2">
+        {content}
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border bg-card/70 px-3 py-2 text-left transition-colors hover:border-primary/60 hover:bg-primary/5"
+      onClick={() => props.onSelectSession?.(props.item.id)}
+    >
+      {content}
+    </button>
   );
 }
 

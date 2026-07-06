@@ -29,7 +29,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 ## Agent Runtime
 
-- Agent-facing Deputies control/API surface, likely exposed through an MCP server, so agents can inspect available deputies, view sessions and session state, spawn new sessions, send follow-up messages, and coordinate handoffs or sub-agent work safely with scoped permissions and auditability.
+- Harden the opt-in `deputies` control tool with richer audit views, policy diagnostics, and eventual MCP exposure if external agent runtimes need the same scoped session-control surface.
 - Agent authentication to external services through MCP, CLI credentials, API tokens, and short-lived provider tokens.
 - Credential scoping and injection policy for tools, commands, MCP servers, and sandbox environments.
 - Sandbox credential broker for GitHub repository operations: keep GitHub App installation tokens outside the sandbox trust domain, route `git` smart-HTTP and `gh` operations through a control-plane or sandbox-bridge proxy, and enforce push/PR policy server-side with opaque per-session sandbox credentials. Treat this as the gate for safely preparing untrusted PR branches or forks; until then repository setup assumes trusted, allowlisted repositories.

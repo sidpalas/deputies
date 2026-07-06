@@ -2,6 +2,7 @@ import type { NormalizedEvent } from '../events/types.js';
 import { defaultGroupId, StoreConflictError } from './types.js';
 import type {
   AppStore,
+  AgentSessionListOptions,
   ArtifactRecord,
   AutomationInvocationRecord,
   AutomationRecord,
@@ -9,6 +10,7 @@ import type {
   AuthSessionRecord,
   AuthUserRecord,
   CallbackDeliveryRecord,
+  ChildSessionListOptions,
   CreateAutomationInvocationRecord,
   CreateAutomationRecord,
   CreateArtifactRecord,
@@ -26,6 +28,8 @@ import type {
   EventDeltaCompactionInput,
   CreateMessageRecord,
   CreateSessionRecord,
+  CreateSessionWithFirstMessageInput,
+  CreateSessionWithFirstMessageResult,
   ClaimedMessage,
   ClaimedMessageBatch,
   ListAutomationInvocationsOptions,
@@ -36,6 +40,9 @@ import type {
   SandboxSecrets,
   SessionRecord,
   SessionVisibilityFilter,
+  SessionMessageSummary,
+  SessionTranscriptOptions,
+  SessionTranscriptPage,
   SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
@@ -216,8 +223,55 @@ export class MemoryStore implements AppStore {
       throw new Error(`Session already exists: ${record.id}`);
     }
 
-    this.sessions.set(record.id, record);
-    return record;
+    const session = withSessionDefaults(record);
+    this.sessions.set(record.id, session);
+    return session;
+  }
+
+  async createSessionWithFirstMessage(
+    input: CreateSessionWithFirstMessageInput,
+  ): Promise<CreateSessionWithFirstMessageResult> {
+    validateParentChildLimit(input, (parentSessionId) => this.sessions.has(parentSessionId));
+    const existing = this.sessions.get(input.session.id);
+    if (existing) {
+      const message = this.messages.get(input.session.id)?.[0];
+      if (!message) throw new Error(`First message does not exist for session: ${input.session.id}`);
+      return { session: existing, message, events: [], created: false };
+    }
+
+    if (input.parentChildLimit) {
+      const childCount = [...this.sessions.values()].filter(
+        (session) =>
+          session.parentSessionId === input.parentChildLimit!.parentSessionId && session.status !== 'archived',
+      ).length;
+      if (childCount >= input.parentChildLimit.maxNonArchivedChildren) {
+        throw new Error(
+          `Cannot spawn more than ${input.parentChildLimit.maxNonArchivedChildren} non-archived child sessions`,
+        );
+      }
+    }
+
+    const session = withSessionDefaults(input.session);
+    const message: MessageRecord = {
+      ...input.message,
+      sessionId: session.id,
+      sequence: 1,
+      status: 'pending',
+    };
+    this.sessions.set(session.id, session);
+    this.messages.set(session.id, [message]);
+
+    const events = [
+      await this.appendEvent({ ...input.sessionCreatedEvent, sessionId: session.id, sequence: 1 }),
+      await this.appendEvent({
+        ...input.messageCreatedEvent,
+        sessionId: session.id,
+        messageId: message.id,
+        sequence: 2,
+      }),
+    ];
+    if (input.parentSpawnedEvent) events.push(await this.appendEventWithNextSequence(input.parentSpawnedEvent));
+    return { session, message, events, created: true };
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
@@ -226,6 +280,20 @@ export class MemoryStore implements AppStore {
 
   async listSessions(): Promise<SessionRecord[]> {
     return [...this.sessions.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+
+  async listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]> {
+    return (await this.listSessions())
+      .filter((session) => sessionMatchesAgentScope(session, input))
+      .filter((session) => !input.status || session.status === input.status)
+      .slice(0, input.limit);
+  }
+
+  async listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]> {
+    return (await this.listSessions())
+      .filter((session) => session.parentSessionId === input.parentSessionId)
+      .filter((session) => sessionIsReadableToAgentGroup(session, input.ownerGroupId))
+      .slice(0, input.limit);
   }
 
   async listSessionsWithLatestSandbox(
@@ -554,6 +622,33 @@ export class MemoryStore implements AppStore {
     return [...(this.messages.get(sessionId) ?? [])];
   }
 
+  async getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null> {
+    return this.messages.get(input.sessionId)?.find((message) => message.id === input.messageId) ?? null;
+  }
+
+  async getSessionMessageSummary(sessionId: string): Promise<SessionMessageSummary> {
+    const messages = await this.getMessages(sessionId);
+    return { count: messages.length, lastMessage: messages[messages.length - 1] ?? null };
+  }
+
+  async getSessionTranscript(input: SessionTranscriptOptions): Promise<SessionTranscriptPage> {
+    const candidates = (this.messages.get(input.sessionId) ?? [])
+      .filter((message) => input.beforeSequence === undefined || message.sequence < input.beforeSequence)
+      .sort((left, right) => right.sequence - left.sequence);
+    const page = candidates.slice(0, input.limit);
+    const entries = page.map((message) => ({
+      message,
+      finalResponse: latestFinalResponseForMessage(this.events.get(input.sessionId) ?? [], message.id),
+    }));
+    return {
+      entries,
+      hasMore: candidates.length > input.limit,
+      ...(candidates.length > input.limit && entries.length
+        ? { nextBeforeSequence: entries[entries.length - 1]!.message.sequence }
+        : {}),
+    };
+  }
+
   async updatePendingMessage(input: {
     sessionId: string;
     messageId: string;
@@ -687,6 +782,14 @@ export class MemoryStore implements AppStore {
 
   async getRun(runId: string): Promise<RunRecord | null> {
     return this.runs.get(runId) ?? null;
+  }
+
+  async getLatestRunForSession(sessionId: string): Promise<RunRecord | null> {
+    return (
+      Array.from(this.runs.values())
+        .filter((run) => run.sessionId === sessionId)
+        .sort((left, right) => right.startedAt.getTime() - left.startedAt.getTime())[0] ?? null
+    );
   }
 
   async recoverStaleRuns(input: { now: Date; limit: number }): Promise<RecoveredRun[]> {
@@ -1044,6 +1147,14 @@ export class MemoryStore implements AppStore {
     return limit === undefined ? events : events.slice(0, limit);
   }
 
+  async getLatestEventByType(sessionId: string, type: EventRecord['type']): Promise<EventRecord | null> {
+    return (
+      (this.events.get(sessionId) ?? [])
+        .filter((event) => event.type === type)
+        .sort((a, b) => b.sequence - a.sequence)[0] ?? null
+    );
+  }
+
   async listEvents(afterId = 0, limit?: number): Promise<EventRecord[]> {
     const events = [...this.events.values()]
       .flat()
@@ -1315,10 +1426,49 @@ function getRunMessageIds(run: RunRecord): string[] {
   return [run.messageId];
 }
 
+function validateParentChildLimit(
+  input: CreateSessionWithFirstMessageInput,
+  parentExists: (parentSessionId: string) => boolean,
+): void {
+  if (!input.parentChildLimit) return;
+  if (input.session.parentSessionId !== input.parentChildLimit.parentSessionId) {
+    throw new Error('Parent child limit must match the session parent');
+  }
+  if (!parentExists(input.parentChildLimit.parentSessionId)) {
+    throw new Error(`Parent session does not exist: ${input.parentChildLimit.parentSessionId}`);
+  }
+}
+
+function sessionMatchesAgentScope(session: SessionRecord, input: AgentSessionListOptions): boolean {
+  if (input.scope === 'children') {
+    return (
+      session.parentSessionId === input.actingSessionId && sessionIsReadableToAgentGroup(session, input.ownerGroupId)
+    );
+  }
+  if (input.scope === 'group') return session.ownerGroupId === input.ownerGroupId;
+  return sessionIsReadableToAgentGroup(session, input.ownerGroupId);
+}
+
+function sessionIsReadableToAgentGroup(session: SessionRecord, ownerGroupId: string): boolean {
+  return session.visibility === 'organization' || session.ownerGroupId === ownerGroupId;
+}
+
+function latestFinalResponseForMessage(events: EventRecord[], messageId: string): EventRecord | null {
+  return (
+    events
+      .filter((event) => event.type === 'agent_response_final' && event.messageId === messageId)
+      .sort((left, right) => right.sequence - left.sequence)[0] ?? null
+  );
+}
+
 function externalThreadKey(source: string, externalId: string): string {
   return `${source}:${externalId}`;
 }
 
 function deliveryKey(source: string, dedupeKey: string): string {
   return `${source}:${dedupeKey}`;
+}
+
+function withSessionDefaults(record: CreateSessionRecord): SessionRecord {
+  return { ...record, spawnDepth: record.spawnDepth ?? 0 };
 }

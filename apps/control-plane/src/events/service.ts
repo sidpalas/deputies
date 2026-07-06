@@ -8,6 +8,7 @@ import type { EventRecord, EventStore } from '../store/types.js';
 
 const globalEventTypes = new Set<NormalizedEventType>([
   'session_created',
+  'session_spawned',
   'session_updated',
   'session_archived',
   'session_unarchived',

@@ -362,6 +362,23 @@ WEB_SEARCH_TIMEOUT_MS=10000
 
 `WEB_SEARCH_PROVIDER=auto` uses Brave Search when `WEB_SEARCH_BRAVE_API_KEY` or `BRAVE_API_KEY` is set. Without a Brave key, it falls back to DuckDuckGo HTML search, which does not require an API key. Set `WEB_SEARCH_PROVIDER=disabled` to remove the tool, or `WEB_SEARCH_PROVIDER=brave` to fail closed unless a Brave key is configured.
 
+## Deputy Control Tool
+
+The `deputies` agent tool is enabled by default so agents can coordinate separate, durable Deputies sessions from inside a run:
+
+```sh
+DEPUTY_TOOL_ENABLED=true
+DEPUTY_MAX_SPAWN_DEPTH=2
+DEPUTY_MAX_CHILDREN_PER_SESSION=5
+DEPUTY_MAX_SPAWNS_PER_RUN=3
+```
+
+Set `DEPUTY_TOOL_ENABLED=false` to hide the tool for a conservative deployment.
+
+When enabled for `RUNNER=flue` or `RUNNER=pi`, the tool runs in the trusted worker process and writes product sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions inherit the parent's owner group, visibility, and write policy, and copy the triggering message's author user as creator attribution when present. They can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`. Successful completion follow-ups are informational and output-free; agents can explicitly request bounded newest-first transcript pages with `get_session` when the child result matters.
+
+Before relying on the default in production, review the organization-level coordination policy, worker capacity, and session-spawn limits. Use `DEPUTY_TOOL_ENABLED=false` if the deployment needs a conservative rollout.
+
 ## Sandbox Providers
 
 ### Fake

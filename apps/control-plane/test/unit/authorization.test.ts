@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  agentCanReadSession,
+  agentCanCancelSession,
+  agentCanSpawnInGroup,
+  agentCanWriteSession,
+  type AgentPrincipal,
+} from '../../src/auth/agent-authorization.js';
+import {
   canCreateSessionInGroup,
   canManageAllGroups,
   canManageGroup,
@@ -88,6 +95,38 @@ describe('authorization rules', () => {
   });
 });
 
+describe('agent authorization rules', () => {
+  const agent: AgentPrincipal = {
+    kind: 'session_agent',
+    sessionId: 'parent-session',
+    ownerGroupId: defaultGroupId,
+    spawnDepth: 1,
+  };
+
+  it('reads organization-visible sessions and same-group private sessions only', () => {
+    expect(agentCanReadSession(agent, session({ visibility: 'organization', ownerGroupId: otherGroupId }))).toBe(true);
+    expect(agentCanReadSession(agent, session({ visibility: 'group', ownerGroupId: defaultGroupId }))).toBe(true);
+    expect(agentCanReadSession(agent, session({ visibility: 'group', ownerGroupId: otherGroupId }))).toBe(false);
+  });
+
+  it('spawns only in the acting session group', () => {
+    expect(agentCanSpawnInGroup(agent, defaultGroupId)).toBe(true);
+    expect(agentCanSpawnInGroup(agent, otherGroupId)).toBe(false);
+  });
+
+  it('writes only to non-archived direct children', () => {
+    expect(agentCanWriteSession(agent, session({ parentSessionId: agent.sessionId }))).toBe(true);
+    expect(agentCanWriteSession(agent, session({ parentSessionId: 'other-parent' }))).toBe(false);
+    expect(agentCanWriteSession(agent, session({ parentSessionId: agent.sessionId, status: 'archived' }))).toBe(false);
+  });
+
+  it('cancels only non-archived direct children', () => {
+    expect(agentCanCancelSession(agent, session({ parentSessionId: agent.sessionId }))).toBe(true);
+    expect(agentCanCancelSession(agent, session({ parentSessionId: 'other-parent' }))).toBe(false);
+    expect(agentCanCancelSession(agent, session({ parentSessionId: agent.sessionId, status: 'archived' }))).toBe(false);
+  });
+});
+
 function authFor(user: AuthUserRecord, memberships: GroupMemberRecord[]): RequestAuthorization {
   return { bypass: false, user, memberships };
 }
@@ -108,6 +147,7 @@ function session(input: Partial<SessionRecord> = {}): SessionRecord {
   return {
     id: 'session-1',
     status: 'idle',
+    spawnDepth: 0,
     ownerGroupId: defaultGroupId,
     visibility: 'group',
     writePolicy: 'group_members',

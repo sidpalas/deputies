@@ -56,6 +56,7 @@ import { startTelemetry } from './telemetry/index.js';
 import { instrumentStore } from './telemetry/store.js';
 import type { WebSearchToolServices } from './web-search/tool.js';
 import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from './worker/service.js';
+import type { DeputyToolBaseServices } from './sessions/deputy-tool.js';
 
 const config = loadConfig(process.env);
 const telemetry = startTelemetry({ runMode: config.runMode });
@@ -363,6 +364,7 @@ async function createRunner(): Promise<Runner> {
   }
 
   const model = requireRunnerModelDefault(config);
+  const deputy = createDeputyToolServices();
   if (config.runner === 'pi') {
     const piOptions: PiRunnerOptions = {
       model,
@@ -377,6 +379,7 @@ async function createRunner(): Promise<Runner> {
       piOptions.artifactToolMaxBytes = config.artifactCreateMaxBytes;
     }
     if (webSearch) piOptions.webSearch = webSearch;
+    if (deputy) piOptions.deputy = deputy;
     piOptions.repositoryAccess = createRepositoryAccess();
     piOptions.externalResources = services.externalResources;
     if (services.sandboxKeepalive) piOptions.sandboxKeepalive = services.sandboxKeepalive;
@@ -420,6 +423,7 @@ async function createRunner(): Promise<Runner> {
     repositoryAccess: createRepositoryAccess(),
     ...(artifactObjectStorage ? { artifacts: services.artifacts } : {}),
     ...(webSearch ? { webSearch } : {}),
+    ...(deputy ? { deputy } : {}),
     externalResources: services.externalResources,
     artifactToolMaxBytes: config.artifactCreateMaxBytes,
     ...(services.sandboxKeepalive ? { sandboxKeepalive: services.sandboxKeepalive } : {}),
@@ -428,6 +432,20 @@ async function createRunner(): Promise<Runner> {
     modelUnavailableReason: (inputModel) =>
       services.modelAvailability.unavailableFor(inputModel || config.runnerModelDefault)?.reason,
   });
+}
+
+function createDeputyToolServices(): DeputyToolBaseServices | undefined {
+  if (!config.deputyToolEnabled) return undefined;
+  return {
+    store: services.store,
+    events: services.events,
+    messages: services.messages,
+    ...(githubRepositoryAccess ? { github: githubRepositoryAccess } : {}),
+    ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
+    maxSpawnDepth: config.deputyMaxSpawnDepth,
+    maxChildrenPerSession: config.deputyMaxChildrenPerSession,
+    maxSpawnsPerRun: config.deputyMaxSpawnsPerRun,
+  };
 }
 
 function createWebSearchServices(): WebSearchToolServices | undefined {

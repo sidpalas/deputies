@@ -1962,6 +1962,7 @@ describe('core API', () => {
       await store.updateSession({
         ...session,
         status: 'idle',
+        spawnDepth: 0,
         ownerGroupId: defaultGroupId,
         visibility: 'organization',
         writePolicy: 'group_members',
@@ -2008,6 +2009,7 @@ describe('core API', () => {
       await store.updateSession({
         ...session,
         status: 'idle',
+        spawnDepth: 0,
         ownerGroupId: defaultGroupId,
         visibility: 'organization',
         writePolicy: 'group_members',
@@ -2695,6 +2697,7 @@ describe('core API', () => {
         return {
           id: '00000000-0000-4000-8000-000000000001',
           status: 'active' as const,
+          spawnDepth: 0,
           ownerGroupId: defaultGroupId,
           visibility: 'organization' as const,
           writePolicy: 'group_members' as const,

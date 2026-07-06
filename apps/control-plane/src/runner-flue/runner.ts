@@ -16,10 +16,12 @@ import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
 import { createArtifactTool } from './artifact-tool.js';
 import { createGitTool, type AgentRef } from './git-tool.js';
 import { createGitHubCliTool } from './github-cli-tool.js';
+import { createDeputyTool } from './deputy-tool.js';
 import { createServiceTool } from './service-tool.js';
 import { createRepositoryTool, type RepositoryToolServices, type RepositoryToolState } from './repository-tool.js';
 import type { FlueAgentFactory, FluePromptResponse, FlueSessionPort } from './types.js';
 import { createWebSearchTool, type WebSearchToolServices } from './web-search-tool.js';
+import type { DeputyToolBaseServices } from '../sessions/deputy-tool.js';
 
 export type FlueRunnerOptions = {
   repositoryAccess?: {
@@ -32,6 +34,7 @@ export type FlueRunnerOptions = {
   sandboxKeepaliveMaxExtensionMs?: number;
   setupScript?: { enabled: boolean; timeoutMs: number };
   webSearch?: WebSearchToolServices;
+  deputy?: DeputyToolBaseServices;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
 };
 
@@ -71,6 +74,7 @@ export class FlueRunner implements Runner {
         } satisfies RepositoryToolServices)
       : null;
     const tools = [];
+    const deputyRunState = { spawns: 0 };
     if (this.options.artifacts) {
       tools.push(
         createArtifactTool({
@@ -114,6 +118,18 @@ export class FlueRunner implements Runner {
       );
     }
     if (this.options.webSearch) tools.push(createWebSearchTool(this.options.webSearch));
+    if (this.options.deputy) {
+      tools.push(
+        createDeputyTool({
+          ...this.options.deputy,
+          sessionId: input.sessionId,
+          runId: input.runId,
+          messageId: input.messageId,
+          runState: deputyRunState,
+          ...(input.shouldPersist ? { shouldPersist: input.shouldPersist } : {}),
+        }),
+      );
+    }
 
     const agent = await this.agentFactory.create({
       agentId: input.sessionId,
@@ -163,6 +179,7 @@ export class FlueRunner implements Runner {
             Boolean(this.options.artifacts),
             Boolean(repositoryServices),
             Boolean(this.options.webSearch),
+            Boolean(this.options.deputy),
             setupNote,
           ),
           input.signal ? { signal: input.signal } : undefined,
@@ -258,6 +275,7 @@ function withToolGuidance(
   includeArtifacts: boolean,
   includeRepository: boolean,
   includeWebSearch: boolean,
+  includeDeputy: boolean,
   setupNote: string | null = null,
 ): string {
   const lines = [
@@ -296,6 +314,17 @@ function withToolGuidance(
       '- Use web_search({ action: "search", query }) for current documentation, facts, APIs, package versions, and other public web lookups.',
       '- Use web_search({ action: "fetch", url }) to read a specific public page found in search results or provided by the user.',
       '- Prefer authoritative sources and include source URLs in your reasoning or final answer when web results affect the answer.',
+      '',
+    );
+  }
+  if (includeDeputy) {
+    lines.push(
+      'Deputies tool guidance:',
+      '- Use deputies({ action: "spawn", prompt, title, repository, model, idempotencyKey, notifyOnComplete }) only when work should become a separate durable Deputies product session visible to the user.',
+      '- For quick in-run delegation, use Flue task/session.task instead of spawning a Deputies session.',
+      '- Do not busy-wait after spawning. Use deputies({ action: "get_session", sessionId }) for explicit polling, end the turn when appropriate, or set notifyOnComplete=true so the child enqueues a parent follow-up when it completes.',
+      '- deputies send_message and cancel are intentionally limited to direct child sessions spawned by this session.',
+      '- Child sessions inherit this session group, visibility, and write policy. Parent run cancellation and parent archival do not cancel or archive children; explicitly use deputies({ action: "cancel", sessionId }) for direct children you no longer need.',
       '',
     );
   }

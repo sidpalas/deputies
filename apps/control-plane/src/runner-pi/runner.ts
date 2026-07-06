@@ -42,6 +42,7 @@ import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
 import { PI_SESSION_DATA_VERSION, type PiSessionData, type PiSessionStore } from './session-store.js';
 import { createPiArtifactToolDefinition } from './artifact-tool.js';
+import { createPiDeputyToolDefinition } from './deputy-tool.js';
 import { createPiGitToolDefinition } from './git-tool.js';
 import { createPiGitHubCliToolDefinition } from './github-cli-tool.js';
 import { createPiRepositoryToolDefinition } from './repository-tool.js';
@@ -49,6 +50,7 @@ import { createSandboxPiToolDefinitions } from './sandbox-tools.js';
 import { createPiServiceToolDefinition } from './service-tool.js';
 import { createPiWebSearchToolDefinition } from './web-search-tool.js';
 import type { WebSearchToolServices } from '../web-search/tool.js';
+import type { DeputyToolBaseServices } from '../sessions/deputy-tool.js';
 import {
   createPiSubagentToolDefinition,
   piSubagentSystemPrompt,
@@ -85,6 +87,7 @@ export type PiRunnerOptions = {
   sandboxKeepaliveMaxExtensionMs?: number;
   setupScript?: { enabled: boolean; timeoutMs: number };
   webSearch?: WebSearchToolServices;
+  deputy?: DeputyToolBaseServices;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
 };
 
@@ -99,6 +102,7 @@ type PiToolSet = {
 
 type PiToolSetContext = {
   subagentDepth: number;
+  deputyRunState: { spawns: number };
   runSubagent?: (input: PiSubagentRunInput) => Promise<PiSubagentRunResult>;
 };
 
@@ -142,6 +146,7 @@ export class PiRunner implements Runner {
     await resourceLoader.reload();
 
     const repositoryState = createRepositoryState(input.context, repositorySetup);
+    const deputyRunState = { spawns: 0 };
     const runSubagent = (subagentInput: PiSubagentRunInput) =>
       runPiSubagent({
         input,
@@ -152,12 +157,14 @@ export class PiRunner implements Runner {
         modelName,
         modelSelection,
         repositoryState,
+        deputyRunState,
         parentCwd: cwd,
         subagentDepth: 0,
         subagentInput,
       });
     const { customTools } = createPiToolSet(input, this.options, repositoryState, cwd, {
       subagentDepth: 0,
+      deputyRunState,
       runSubagent,
     });
 
@@ -359,6 +366,19 @@ function createPiToolSet(
 
   if (options.webSearch) customTools.push(createPiWebSearchToolDefinition(options.webSearch));
 
+  if (options.deputy) {
+    customTools.push(
+      createPiDeputyToolDefinition({
+        ...options.deputy,
+        sessionId: input.sessionId,
+        runId: input.runId,
+        messageId: input.messageId,
+        runState: context.deputyRunState,
+        ...(input.shouldPersist ? { shouldPersist: input.shouldPersist } : {}),
+      }),
+    );
+  }
+
   if (context.subagentDepth < PI_SUBAGENT_MAX_DEPTH) {
     if (!context.runSubagent) throw new Error('Pi subagent runner is not configured');
     customTools.push(createPiSubagentToolDefinition({ run: context.runSubagent }));
@@ -376,6 +396,7 @@ type RunPiSubagentInput = {
   modelName: string;
   modelSelection: PiModelSelection;
   repositoryState: RepositoryToolState;
+  deputyRunState: { spawns: number };
   parentCwd: string;
   subagentDepth: number;
   subagentInput: PiSubagentRunInput;
@@ -408,6 +429,7 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
     });
   const { customTools } = createPiToolSet(params.input, params.options, params.repositoryState, cwd, {
     subagentDepth: childDepth,
+    deputyRunState: params.deputyRunState,
     runSubagent,
   });
   const created = await createAgentSession({
