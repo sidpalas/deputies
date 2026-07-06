@@ -1,4 +1,4 @@
-import type { NormalizedEvent } from '../events/types.js';
+import type { NormalizedEvent, NormalizedEventType } from '../events/types.js';
 
 export type SessionStatus =
   | 'created'
@@ -112,6 +112,8 @@ export type SessionRecord = {
   status: SessionStatus;
   createdAt: Date;
   updatedAt: Date;
+  parentSessionId?: string;
+  spawnDepth: number;
   ownerGroupId: string;
   visibility: SessionVisibility;
   writePolicy: SessionWritePolicy;
@@ -323,6 +325,8 @@ export type CreateSessionRecord = {
   status: SessionStatus;
   createdAt: Date;
   updatedAt: Date;
+  parentSessionId?: string;
+  spawnDepth?: number;
   ownerGroupId: string;
   visibility: SessionVisibility;
   writePolicy: SessionWritePolicy;
@@ -342,6 +346,25 @@ export type CreateMessageRecord = {
   authorName?: string;
   source?: string;
   context?: Record<string, unknown>;
+};
+
+export type CreateSessionWithFirstMessageInput = {
+  session: CreateSessionRecord;
+  message: Omit<CreateMessageRecord, 'sessionId' | 'sequence' | 'status'>;
+  sessionCreatedEvent: NormalizedEvent<'session_created'>;
+  messageCreatedEvent: Omit<NormalizedEvent<'message_created'>, 'sessionId' | 'messageId'>;
+  parentSpawnedEvent?: NormalizedEvent<'session_spawned'>;
+  parentChildLimit?: {
+    parentSessionId: string;
+    maxNonArchivedChildren: number;
+  };
+};
+
+export type CreateSessionWithFirstMessageResult = {
+  session: SessionRecord;
+  message: MessageRecord;
+  events: EventRecord[];
+  created: boolean;
 };
 
 export type CreateWebhookSourceRecord = {
@@ -470,6 +493,9 @@ export type SessionVisibilityFilter = {
 
 export interface SessionStore {
   createSession(record: CreateSessionRecord): Promise<SessionRecord>;
+  createSessionWithFirstMessage(
+    input: CreateSessionWithFirstMessageInput,
+  ): Promise<CreateSessionWithFirstMessageResult>;
   getSession(id: string): Promise<SessionRecord | null>;
   listSessions(): Promise<SessionRecord[]>;
   listSessionsWithLatestSandbox(
@@ -538,6 +564,7 @@ export interface RunStore {
     heartbeatAt: Date;
   }): Promise<RunRecord | null>;
   getRun(runId: string): Promise<RunRecord | null>;
+  getLatestRunForSession(sessionId: string): Promise<RunRecord | null>;
   recoverStaleRuns(input: { now: Date; limit: number }): Promise<RecoveredRun[]>;
   requestRunCancellation(input: {
     sessionId: string;
@@ -644,6 +671,7 @@ export interface EventStore {
     guard: { runId: string; leaseOwner: string; now: Date },
   ): Promise<EventRecord | null>;
   getEvents(sessionId: string, afterSequence?: number, limit?: number): Promise<EventRecord[]>;
+  getLatestEventByType(sessionId: string, type: NormalizedEventType): Promise<EventRecord | null>;
   listEvents(afterId?: number, limit?: number): Promise<EventRecord[]>;
   compactFinalizedAgentTextDeltas(input: EventDeltaCompactionInput): Promise<number>;
 }

@@ -138,28 +138,31 @@ Rules:
 
 ## Sessions
 
-Represents a durable background task workspace.
+Represents a durable background task workspace. Sessions may also form a shallow lineage when an agent uses the opt-in `deputies` tool to spawn durable child sessions.
 
-Suggested columns:
+Current relevant columns:
 
 ```txt
 id uuid primary key
-title text
 status text not null
-queue_paused_at timestamptz
+title text
 context jsonb
-source text
-created_by jsonb
-metadata jsonb not null default '{}'
+parent_session_id uuid references sessions(id) on delete set null
+spawn_depth integer not null default 0
+owner_group_id uuid not null references groups(id)
+visibility text not null
+write_policy text not null
+created_by_user_id uuid references auth_users(id)
+queue_paused_at timestamptz
 created_at timestamptz not null
 updated_at timestamptz not null
-archived_at timestamptz
 ```
 
 Statuses:
 
 ```txt
 created
+queued
 active
 idle
 completed
@@ -175,8 +178,18 @@ Rules:
 - A session may have one current sandbox, but historical sandbox rows should be preserved.
 - Source-specific identifiers belong in `external_threads`, not the session row.
 - Archived sessions are read-only until restored.
+- `parent_session_id` records the durable parent-child relationship for agent-spawned child sessions. It is nullable and uses `on delete set null` so deleting or pruning a parent cannot cascade-delete work history.
+- `spawn_depth` starts at `0` for root sessions and increments by one for each `deputies`-spawned child. Tool policy enforces the configured max depth before insertion.
+- Child sessions inherit the parent's `owner_group_id`, `visibility`, and `write_policy`; lineage is for coordination and audit, not a separate RBAC boundary.
 - `queue_paused_at` is used while editing pending messages so the worker does not claim a message mid-edit.
 - `context` stores durable session-level defaults such as the current repository. It must not store transient delivery data, callbacks, provider tokens, or raw webhook payloads.
+- `context.deputy.notifyParentOnComplete` is allowed only as explicit control metadata for a child session to request one parent follow-up after terminal completion, failure, or cancellation. Workers clear it after consumption and may record `parentNotificationSentAt`.
+
+Indexes:
+
+```txt
+(parent_session_id)
+```
 
 ## Messages
 
@@ -232,6 +245,7 @@ Rules:
 - Follow-ups sent during an active run remain pending and are handled by the next batch.
 - Pending messages can be edited or cancelled before the worker claims them.
 - Active run cancellation marks claimed messages `cancelling` first, then the worker finalizes them as `cancelled`.
+- Agent-authored coordination messages use `source='deputy'` so API clients and the web UI can distinguish them from human-authored follow-ups.
 
 Indexes:
 
@@ -377,6 +391,7 @@ Important current event types:
 
 ```txt
 session_created
+session_spawned
 session_archived
 session_unarchived
 session_updated

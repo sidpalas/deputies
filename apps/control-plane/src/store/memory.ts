@@ -26,6 +26,8 @@ import type {
   EventDeltaCompactionInput,
   CreateMessageRecord,
   CreateSessionRecord,
+  CreateSessionWithFirstMessageInput,
+  CreateSessionWithFirstMessageResult,
   ClaimedMessage,
   ClaimedMessageBatch,
   ListAutomationInvocationsOptions,
@@ -216,8 +218,54 @@ export class MemoryStore implements AppStore {
       throw new Error(`Session already exists: ${record.id}`);
     }
 
-    this.sessions.set(record.id, record);
-    return record;
+    const session = withSessionDefaults(record);
+    this.sessions.set(record.id, session);
+    return session;
+  }
+
+  async createSessionWithFirstMessage(
+    input: CreateSessionWithFirstMessageInput,
+  ): Promise<CreateSessionWithFirstMessageResult> {
+    const existing = this.sessions.get(input.session.id);
+    if (existing) {
+      const message = this.messages.get(input.session.id)?.[0];
+      if (!message) throw new Error(`First message does not exist for session: ${input.session.id}`);
+      return { session: existing, message, events: [], created: false };
+    }
+
+    if (input.parentChildLimit) {
+      const childCount = [...this.sessions.values()].filter(
+        (session) =>
+          session.parentSessionId === input.parentChildLimit!.parentSessionId && session.status !== 'archived',
+      ).length;
+      if (childCount >= input.parentChildLimit.maxNonArchivedChildren) {
+        throw new Error(
+          `Cannot spawn more than ${input.parentChildLimit.maxNonArchivedChildren} non-archived child sessions`,
+        );
+      }
+    }
+
+    const session = withSessionDefaults(input.session);
+    const message: MessageRecord = {
+      ...input.message,
+      sessionId: session.id,
+      sequence: 1,
+      status: 'pending',
+    };
+    this.sessions.set(session.id, session);
+    this.messages.set(session.id, [message]);
+
+    const events = [
+      await this.appendEvent({ ...input.sessionCreatedEvent, sessionId: session.id, sequence: 1 }),
+      await this.appendEvent({
+        ...input.messageCreatedEvent,
+        sessionId: session.id,
+        messageId: message.id,
+        sequence: 2,
+      }),
+    ];
+    if (input.parentSpawnedEvent) events.push(await this.appendEventWithNextSequence(input.parentSpawnedEvent));
+    return { session, message, events, created: true };
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
@@ -689,6 +737,14 @@ export class MemoryStore implements AppStore {
     return this.runs.get(runId) ?? null;
   }
 
+  async getLatestRunForSession(sessionId: string): Promise<RunRecord | null> {
+    return (
+      Array.from(this.runs.values())
+        .filter((run) => run.sessionId === sessionId)
+        .sort((left, right) => right.startedAt.getTime() - left.startedAt.getTime())[0] ?? null
+    );
+  }
+
   async recoverStaleRuns(input: { now: Date; limit: number }): Promise<RecoveredRun[]> {
     const recovered: RecoveredRun[] = [];
     let selected = 0;
@@ -1044,6 +1100,14 @@ export class MemoryStore implements AppStore {
     return limit === undefined ? events : events.slice(0, limit);
   }
 
+  async getLatestEventByType(sessionId: string, type: EventRecord['type']): Promise<EventRecord | null> {
+    return (
+      (this.events.get(sessionId) ?? [])
+        .filter((event) => event.type === type)
+        .sort((a, b) => b.sequence - a.sequence)[0] ?? null
+    );
+  }
+
   async listEvents(afterId = 0, limit?: number): Promise<EventRecord[]> {
     const events = [...this.events.values()]
       .flat()
@@ -1321,4 +1385,8 @@ function externalThreadKey(source: string, externalId: string): string {
 
 function deliveryKey(source: string, dedupeKey: string): string {
   return `${source}:${dedupeKey}`;
+}
+
+function withSessionDefaults(record: CreateSessionRecord): SessionRecord {
+  return { ...record, spawnDepth: record.spawnDepth ?? 0 };
 }

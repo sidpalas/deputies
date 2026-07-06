@@ -6,6 +6,8 @@ import type { SessionRecord, SessionStore, SessionVisibility, SessionWritePolicy
 export type CreateSessionInput = {
   id?: string;
   title?: string;
+  parentSessionId?: string;
+  spawnDepth?: number;
   ownerGroupId?: string;
   visibility?: SessionVisibility;
   writePolicy?: SessionWritePolicy;
@@ -37,6 +39,7 @@ export class SessionService {
     const record: SessionRecord = {
       id: input.id ?? randomUUID(),
       status: 'created',
+      spawnDepth: input.spawnDepth ?? 0,
       ownerGroupId: input.ownerGroupId ?? defaultGroupId,
       visibility: input.visibility ?? 'organization',
       writePolicy: input.writePolicy ?? 'group_members',
@@ -45,6 +48,7 @@ export class SessionService {
     };
 
     if (input.title) record.title = input.title;
+    if (input.parentSessionId) record.parentSessionId = input.parentSessionId;
     if (input.createdByUserId) record.createdByUserId = input.createdByUserId;
 
     const session = await this.store.createSession(record);

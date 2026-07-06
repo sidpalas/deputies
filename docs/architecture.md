@@ -287,6 +287,19 @@ Current examples:
 - Authenticated git network operations such as push use the `git` custom tool. Its handler runs in trusted worker code, but it calls Flue agent-level `shell(...)` so the actual git process and object transfer happen inside the remote sandbox repository with command-scoped credentials while the prompt is active.
 - Local file edits and local commits should use sandbox tools such as `write`, `edit`, and `bash`; publishing those commits should use the authenticated `git` tool rather than trying to use `gh` API refs for sandbox-local objects.
 - Guardrails block raw GitHub Git Database API routes through `gh` and risky authenticated `git push` forms such as force, mirror, and delete refspecs.
+- The `deputies` custom tool is an opt-in product control-surface tool. It runs in the trusted worker, creates and inspects durable product sessions through the store, and is not a sandbox-local subtask mechanism.
+
+Deputies tool policy:
+
+- `DEPUTY_TOOL_ENABLED=false` by default. When disabled, runners do not expose the `deputies` tool.
+- Supported actions are `spawn`, `list_sessions`, `get_session`, `send_message`, and `cancel`.
+- Child sessions inherit the parent session's owner group, visibility, and write policy. They record `parent_session_id` and `spawn_depth` so the web UI and audit events can show lineage.
+- Parent run cancellation and parent archival do not cancel or archive spawned children. Children are independent durable sessions; cleanup is explicit via direct child cancellation or human UI action.
+- A session agent may read organization-visible sessions or sessions in its own group, may spawn only in its own group, and may write/cancel only non-archived direct child sessions.
+- Spawn is bounded by depth, direct-child count, and per-run spawn limits. `idempotencyKey` produces stable child session/message IDs for retry-safe spawning.
+- `notifyOnComplete=true` stores explicit child context so the worker can enqueue one deputy-authored follow-up message into the parent session after the child reaches a terminal outcome. The worker clears the flag before notification so later child follow-ups do not create parent/child loops.
+- Parent notifications frame child response/error text as untrusted context, not as instructions for the parent session.
+- Quick in-run delegation should still use Flue task/subagent facilities rather than spawning a product session.
 
 If we later expose raw Flue agent endpoints, they should be clearly separated from product session endpoints:
 

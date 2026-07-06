@@ -351,6 +351,23 @@ WEB_SEARCH_TIMEOUT_MS=10000
 
 `WEB_SEARCH_PROVIDER=auto` uses Brave Search when `WEB_SEARCH_BRAVE_API_KEY` or `BRAVE_API_KEY` is set. Without a Brave key, it falls back to DuckDuckGo HTML search, which does not require an API key. Set `WEB_SEARCH_PROVIDER=disabled` to remove the tool, or `WEB_SEARCH_PROVIDER=brave` to fail closed unless a Brave key is configured.
 
+## Deputy Control Tool
+
+The `deputies` agent tool is disabled by default. Keep the default off unless agents should be able to coordinate separate, durable Deputies sessions from inside a run:
+
+```sh
+DEPUTY_TOOL_ENABLED=false
+DEPUTY_MAX_SPAWN_DEPTH=2
+DEPUTY_MAX_CHILDREN_PER_SESSION=5
+DEPUTY_MAX_SPAWNS_PER_RUN=3
+```
+
+Set `DEPUTY_TOOL_ENABLED=true` to expose the tool.
+
+When enabled for `RUNNER=flue` or `RUNNER=pi`, the tool runs in the trusted worker process and writes product sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions inherit the parent's owner group, visibility, and write policy, and can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`. Child response/error text in that follow-up is framed as untrusted context.
+
+Keep the tool disabled for conservative production rollouts until you have reviewed the organization-level coordination policy, worker capacity, and session-spawn limits.
+
 ## Sandbox Providers
 
 ### Fake

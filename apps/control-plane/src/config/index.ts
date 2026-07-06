@@ -110,6 +110,10 @@ export type AppConfig = {
   webSearchMaxResults: number;
   webSearchContentMaxChars: number;
   webSearchTimeoutMs: number;
+  deputyToolEnabled: boolean;
+  deputyMaxSpawnDepth: number;
+  deputyMaxChildrenPerSession: number;
+  deputyMaxSpawnsPerRun: number;
   fakeRunnerArtifact?: Record<string, unknown>;
   daytonaApiKey?: string;
   daytonaApiUrl?: string;
@@ -251,6 +255,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       'WEB_SEARCH_CONTENT_MAX_CHARS',
     ),
     webSearchTimeoutMs: parsePositiveInteger(env.WEB_SEARCH_TIMEOUT_MS, 10_000, 'WEB_SEARCH_TIMEOUT_MS'),
+    deputyToolEnabled: parseBoolean(env.DEPUTY_TOOL_ENABLED, false, 'DEPUTY_TOOL_ENABLED'),
+    deputyMaxSpawnDepth: parsePositiveInteger(env.DEPUTY_MAX_SPAWN_DEPTH, 2, 'DEPUTY_MAX_SPAWN_DEPTH'),
+    deputyMaxChildrenPerSession: parsePositiveInteger(
+      env.DEPUTY_MAX_CHILDREN_PER_SESSION,
+      5,
+      'DEPUTY_MAX_CHILDREN_PER_SESSION',
+    ),
+    deputyMaxSpawnsPerRun: parsePositiveInteger(env.DEPUTY_MAX_SPAWNS_PER_RUN, 3, 'DEPUTY_MAX_SPAWNS_PER_RUN'),
     slackApiBaseUrl: env.SLACK_API_BASE_URL ?? 'https://slack.com/api',
     unsafeSlackWebhookAllowAllIds: parseBoolean(
       env.UNSAFE_SLACK_WEBHOOK_ALLOW_ALL_IDS,

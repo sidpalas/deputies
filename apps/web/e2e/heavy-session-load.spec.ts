@@ -139,6 +139,7 @@ function buildSessionFixture(input: {
     id: input.sessionId,
     status: 'idle',
     displayStatus: 'idle',
+    spawnDepth: 0,
     ownerGroupId: '00000000-0000-4000-8000-000000000101',
     ownerGroupName: 'Synthetic Load Fixtures',
     visibility: 'organization',
