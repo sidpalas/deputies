@@ -4,3 +4,5 @@ set -euo pipefail
 printf '%s\n' 'Hello from .agents/setup'
 printf 'DEPUTIES=%s\n' "${DEPUTIES:-}"
 printf 'DEPUTIES_SETUP=%s\n' "${DEPUTIES_SETUP:-}"
+
+touch foo.txt
