@@ -56,6 +56,8 @@ locals {
     SERVICE_TRUST_FORWARDED_HOSTS           = "false"
     RUNNER                                  = var.runner
     RUNNER_MODEL_DEFAULT                    = var.runner_model_default
+    REPOSITORY_SETUP_SCRIPT_ENABLED         = "true"
+    REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS = "600"
     SANDBOX_PROVIDER                        = var.sandbox_provider
     SANDBOX_WORKSPACE_PATH                  = "/workspace"
     ARTIFACT_STORAGE_PROVIDER               = "s3"

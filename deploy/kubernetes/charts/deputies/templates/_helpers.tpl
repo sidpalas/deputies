@@ -107,6 +107,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ $root.Values.config.serviceTrustForwardedHosts | quote }}
 - name: RUNNER_MODEL_DEFAULT
   value: {{ $root.Values.config.runnerModelDefault | quote }}
+- name: REPOSITORY_SETUP_SCRIPT_ENABLED
+  value: {{ $root.Values.config.repositorySetupScriptEnabled | quote }}
+- name: REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS
+  value: {{ $root.Values.config.repositorySetupScriptTimeoutSeconds | quote }}
 - name: DAYTONA_IMAGE
   value: {{ $root.Values.config.daytonaImage | quote }}
 - name: AGENT_SANDBOX_ORCHESTRATOR_MODE

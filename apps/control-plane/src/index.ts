@@ -72,6 +72,10 @@ const services = createServices(store, {
   ...(artifactObjectStorage ? { artifactObjectStorage } : {}),
 });
 const webSearch = createWebSearchServices();
+const repositorySetupScript = {
+  enabled: config.repositorySetupScriptEnabled,
+  timeoutMs: config.repositorySetupScriptTimeoutMs,
+};
 const githubClient =
   config.githubAppId || config.githubAppPrivateKey ? new GitHubClient({ apiBaseUrl: config.githubApiBaseUrl }) : null;
 const githubRepositoryAccess = githubClient ? createGitHubRepositoryAccess(githubClient) : null;
@@ -368,6 +372,7 @@ async function createRunner(): Promise<Runner> {
       ...(config.openaiCodexAuthBase64 ? { authBase64: config.openaiCodexAuthBase64 } : {}),
       modelUnavailableReason: (inputModel: string | undefined) =>
         services.modelAvailability.unavailableFor(inputModel || model)?.reason,
+      setupScript: repositorySetupScript,
     };
     if (artifactObjectStorage) {
       piOptions.artifacts = services.artifacts;
@@ -423,6 +428,7 @@ async function createRunner(): Promise<Runner> {
     artifactToolMaxBytes: config.artifactCreateMaxBytes,
     ...(services.sandboxKeepalive ? { sandboxKeepalive: services.sandboxKeepalive } : {}),
     sandboxKeepaliveMaxExtensionMs: config.sandboxKeepaliveMaxExtensionMs,
+    setupScript: repositorySetupScript,
     modelUnavailableReason: (inputModel) =>
       services.modelAvailability.unavailableFor(inputModel || config.runnerModelDefault)?.reason,
   });

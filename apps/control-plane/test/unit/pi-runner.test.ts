@@ -814,6 +814,155 @@ describe('PiRunner', () => {
     }
   });
 
+  it('runs repository setup scripts after repository_ready and sends failures to the prompt', async () => {
+    const execCalls: ExecCall[] = [];
+    const sandbox = createMemorySandbox();
+    const execResponses = [
+      { exitCode: 0, stdout: 'prepared\ndeputies-repo-setup:cloned=1\n', stderr: '' },
+      { exitCode: 0, stdout: 'deputies-setup:run reason=cloned hash=abc123 exec=1\n', stderr: '' },
+      { exitCode: 1, stdout: 'setup stdout', stderr: 'setup stderr' },
+    ];
+    sandbox.exec = async (input) => {
+      execCalls.push({
+        command: input.command,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.env ? { env: input.env } : {}),
+        ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      });
+      const now = new Date();
+      return {
+        ...(execResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' }),
+        startedAt: now,
+        completedAt: now,
+      };
+    };
+    const prompt = vi.fn();
+    const messages = [
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'handled setup failure' }],
+        model: 'gpt-5.5',
+        stopReason: 'stop',
+      },
+    ];
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages,
+        prompt,
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe: vi.fn(() => () => {}),
+      },
+      extensionsResult: {},
+    });
+    const events: NormalizedEvent[] = [];
+
+    const result = await new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      repositoryAccess: {
+        github: {
+          async getRepositoryAccess() {
+            return githubAccess;
+          },
+        },
+      },
+      setupScript: { enabled: true, timeoutMs: 600_000 },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'work in repo',
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
+      sandbox,
+      emit: async (event) => {
+        events.push(event);
+      },
+    });
+
+    expect(result.text).toBe('handled setup failure');
+    expect(execCalls).toHaveLength(3);
+    expect(execCalls[0]?.cwd).toBe('/workspace');
+    expect(execCalls[1]).toMatchObject({ cwd: '/workspace/manaflow-ai/manaflow', timeoutMs: 30_000 });
+    expect(execCalls[2]).toMatchObject({
+      cwd: '/workspace/manaflow-ai/manaflow',
+      env: { DEPUTIES: '1', DEPUTIES_SETUP: '1' },
+      timeoutMs: 600_000,
+    });
+    expect(events.map((event) => event.type)).toEqual([
+      'run_started',
+      'repository_ready',
+      'setup_script_started',
+      'setup_script_finished',
+      'run_completed',
+    ]);
+    expect(events[3]?.payload).toMatchObject({ isError: true, stdoutTail: 'setup stdout', stderrTail: 'setup stderr' });
+    expect(prompt).toHaveBeenCalledWith(expect.stringContaining('.agents/setup failed'), {
+      expandPromptTemplates: false,
+    });
+    expect(prompt.mock.calls[0]?.[0]).toContain('setup stdout\nsetup stderr');
+  });
+
+  it('does not probe for disabled repository setup scripts', async () => {
+    const execCalls: ExecCall[] = [];
+    const sandbox = createMemorySandbox();
+    sandbox.exec = async (input) => {
+      execCalls.push({ command: input.command, ...(input.cwd ? { cwd: input.cwd } : {}) });
+      const now = new Date();
+      return {
+        exitCode: 0,
+        stdout: 'prepared\ndeputies-repo-setup:cloned=1\n',
+        stderr: '',
+        startedAt: now,
+        completedAt: now,
+      };
+    };
+    const messages = [
+      { role: 'assistant', content: [{ type: 'text', text: 'done' }], model: 'gpt-5.5', stopReason: 'stop' },
+    ];
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages,
+        prompt: vi.fn(),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe: vi.fn(() => () => {}),
+      },
+      extensionsResult: {},
+    });
+
+    await new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      repositoryAccess: {
+        github: {
+          async getRepositoryAccess() {
+            return githubAccess;
+          },
+        },
+      },
+      setupScript: { enabled: false, timeoutMs: 600_000 },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'work in repo',
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
+      sandbox,
+      emit: async () => {},
+    });
+
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]?.command).toContain(
+      'git -c \'http.https://github.com/manaflow-ai/manaflow.git.extraHeader\'="$auth_header" -c core.hooksPath=/dev/null clone',
+    );
+    expect(execCalls[0]?.command).toContain('unset GITHUB_AUTH_HEADER');
+    expect(execCalls[0]?.command).toContain('export GIT_CONFIG_GLOBAL=/dev/null');
+    expect(execCalls[0]?.command).toContain('export GIT_CONFIG_SYSTEM=/dev/null');
+  });
+
   it('rejects artifact paths outside the sandbox workspace and enforces post-read size', async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'deputies-pi-artifact-tool-'));
     try {

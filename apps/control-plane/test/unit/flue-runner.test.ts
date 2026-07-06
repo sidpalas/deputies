@@ -189,12 +189,17 @@ describe('FlueRunner', () => {
       },
     });
 
-    expect(calls[0]).toMatchObject({ cwd: '/workspace/manaflow' });
+    expect(calls[0]).toMatchObject({ cwd: '/workspace/manaflow-ai/manaflow' });
     expect(calls[0]?.tools?.map((tool) => tool.name)).toEqual(['repository', 'gh', 'git']);
     expect(shells).toHaveLength(1);
     expect(shells[0]!.cwd).toBe('/workspace');
-    expect(shells[0]!.command).toContain('git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone');
-    expect(shells[0]!.command).toContain("git -C '/workspace/manaflow' config user.name 'DevDeputies'");
+    expect(shells[0]!.command).toContain(
+      'git -c \'http.https://github.com/manaflow-ai/manaflow.git.extraHeader\'="$auth_header" -c core.hooksPath=/dev/null clone',
+    );
+    expect(shells[0]!.command).toContain('unset GITHUB_AUTH_HEADER');
+    expect(shells[0]!.command).toContain('export GIT_CONFIG_GLOBAL=/dev/null');
+    expect(shells[0]!.command).toContain('export GIT_CONFIG_SYSTEM=/dev/null');
+    expect(shells[0]!.command).toContain("git -C '/workspace/manaflow-ai/manaflow' config user.name 'DevDeputies'");
     expect(shells[0]!.command).not.toContain('ghs_secret_token');
     expect(shells[0]!.env).toEqual({
       GITHUB_AUTH_HEADER: `Authorization: Basic ${Buffer.from('x-access-token:ghs_secret_token').toString('base64')}`,
@@ -207,8 +212,208 @@ describe('FlueRunner', () => {
       'agent_text_delta',
       'run_completed',
     ]);
-    expect(eventsJson).toContain('/workspace/manaflow');
+    expect(eventsJson).toContain('/workspace/manaflow-ai/manaflow');
     expect(eventsJson).not.toContain('ghs_secret_token');
+  });
+
+  it('runs repository setup scripts after repository_ready and before prompting', async () => {
+    const prompts: string[] = [];
+    const sandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+    const execCalls: Parameters<SandboxHandle['exec']>[0][] = [];
+    const execResponses = [
+      { exitCode: 0, stdout: 'deputies-setup:run reason=cloned hash=abc123 exec=1\n', stderr: '' },
+      { exitCode: 0, stdout: 'setup ok', stderr: '' },
+    ];
+    sandbox.exec = async (input) => {
+      execCalls.push(input);
+      const now = new Date();
+      return {
+        ...(execResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' }),
+        startedAt: now,
+        completedAt: now,
+      };
+    };
+    const factory: FlueAgentFactory = {
+      async create() {
+        return {
+          async session() {
+            return {
+              async shell() {
+                return { stdout: 'prepared\ndeputies-repo-setup:cloned=1\n', stderr: '', exitCode: 0 };
+              },
+              async prompt(text) {
+                prompts.push(text);
+                return { text: 'done' };
+              },
+              abort() {},
+            };
+          },
+        };
+      },
+    };
+    const events: NormalizedEvent[] = [];
+
+    await new FlueRunner(factory, {
+      repositoryAccess: { github: new StaticGitHubAccessProvider('ghs_secret_token') },
+      setupScript: { enabled: true, timeoutMs: 600_000 },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'work on repo',
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
+      sandbox,
+      emit: async (event) => {
+        events.push(event);
+      },
+    });
+
+    expect(execCalls).toHaveLength(2);
+    expect(execCalls[0]).toMatchObject({ cwd: '/workspace/manaflow-ai/manaflow', timeoutMs: 30_000 });
+    expect(execCalls[1]).toMatchObject({
+      cwd: '/workspace/manaflow-ai/manaflow',
+      env: { DEPUTIES: '1', DEPUTIES_SETUP: '1' },
+      timeoutMs: 600_000,
+    });
+    expect(events.map((event) => event.type)).toEqual([
+      'run_started',
+      'repository_ready',
+      'setup_script_started',
+      'setup_script_finished',
+      'agent_text_delta',
+      'run_completed',
+    ]);
+    expect(prompts[0]).not.toContain('.agents/setup failed');
+  });
+
+  it('surfaces setup script failures to the prompt without failing the run', async () => {
+    const prompts: string[] = [];
+    const sandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+    const execResponses = [
+      { exitCode: 0, stdout: 'deputies-setup:run reason=cloned hash=abc123 exec=1\n', stderr: '' },
+      { exitCode: 1, stdout: 'setup stdout', stderr: 'setup stderr' },
+    ];
+    sandbox.exec = async () => {
+      const now = new Date();
+      return {
+        ...(execResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' }),
+        startedAt: now,
+        completedAt: now,
+      };
+    };
+    const factory: FlueAgentFactory = {
+      async create() {
+        return {
+          async session() {
+            return {
+              async shell() {
+                return { stdout: 'prepared\ndeputies-repo-setup:cloned=1\n', stderr: '', exitCode: 0 };
+              },
+              async prompt(text) {
+                prompts.push(text);
+                return { text: 'remediated' };
+              },
+              abort() {},
+            };
+          },
+        };
+      },
+    };
+    const events: NormalizedEvent[] = [];
+
+    const result = await new FlueRunner(factory, {
+      repositoryAccess: { github: new StaticGitHubAccessProvider('ghs_secret_token') },
+      setupScript: { enabled: true, timeoutMs: 600_000 },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'work on repo',
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
+      sandbox,
+      emit: async (event) => {
+        events.push(event);
+      },
+    });
+
+    expect(result.text).toBe('remediated');
+    expect(events.find((event) => event.type === 'setup_script_finished')?.payload).toMatchObject({
+      isError: true,
+      exitCode: 1,
+      stdoutTail: 'setup stdout',
+      stderrTail: 'setup stderr',
+    });
+    expect(prompts[0]).toContain('Note: the repository setup script .agents/setup failed');
+    expect(prompts[0]).toContain('setup stdout\nsetup stderr');
+  });
+
+  it('does not emit setup script events when scripts are absent or disabled', async () => {
+    const factory: FlueAgentFactory = {
+      async create() {
+        return {
+          async session() {
+            return {
+              async shell() {
+                return { stdout: 'prepared\ndeputies-repo-setup:cloned=0\n', stderr: '', exitCode: 0 };
+              },
+              async prompt() {
+                return { text: 'done' };
+              },
+              abort() {},
+            };
+          },
+        };
+      },
+    };
+    const absentSandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+    const absentExecCalls: Parameters<SandboxHandle['exec']>[0][] = [];
+    absentSandbox.exec = async (input) => {
+      absentExecCalls.push(input);
+      const now = new Date();
+      return { exitCode: 0, stdout: 'deputies-setup:absent\n', stderr: '', startedAt: now, completedAt: now };
+    };
+    const absentEvents: NormalizedEvent[] = [];
+
+    await new FlueRunner(factory, {
+      repositoryAccess: { github: new StaticGitHubAccessProvider('ghs_secret_token') },
+      setupScript: { enabled: true, timeoutMs: 600_000 },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'work on repo',
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
+      sandbox: absentSandbox,
+      emit: async (event) => {
+        absentEvents.push(event);
+      },
+    });
+
+    const disabledSandbox = await new FakeSandboxProvider().create({ sessionId: 'session-2' });
+    const disabledExecCalls: Parameters<SandboxHandle['exec']>[0][] = [];
+    disabledSandbox.exec = async (input) => {
+      disabledExecCalls.push(input);
+      const now = new Date();
+      return { exitCode: 0, stdout: '', stderr: '', startedAt: now, completedAt: now };
+    };
+
+    await new FlueRunner(factory, {
+      repositoryAccess: { github: new StaticGitHubAccessProvider('ghs_secret_token') },
+      setupScript: { enabled: false, timeoutMs: 600_000 },
+    }).run({
+      sessionId: 'session-2',
+      runId: 'run-2',
+      messageId: 'message-2',
+      prompt: 'work on repo',
+      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
+      sandbox: disabledSandbox,
+      emit: async () => {},
+    });
+
+    expect(absentExecCalls).toHaveLength(1);
+    expect(absentEvents.map((event) => event.type)).not.toContain('setup_script_started');
+    expect(absentEvents.map((event) => event.type)).not.toContain('setup_script_finished');
+    expect(disabledExecCalls).toEqual([]);
   });
 
   it('registers artifact and stores sandbox files as product artifacts', async () => {

@@ -23,8 +23,8 @@ export function createPiRepositoryToolDefinition(services: RepositoryToolService
     ],
     parameters: piRepositoryToolParameters,
     executionMode: 'sequential',
-    async execute(_toolCallId, params) {
-      const text = await executeRepositoryTool(services, params as Record<string, unknown>);
+    async execute(_toolCallId, params, signal) {
+      const text = await executeRepositoryTool(services, params as Record<string, unknown>, signal);
       return { content: [{ type: 'text', text }], details: { text } };
     },
   };

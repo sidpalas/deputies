@@ -55,6 +55,8 @@ export type AppConfig = {
   eventDeltaCompactionRetentionMs: number;
   eventDeltaCompactionIntervalMs: number;
   eventDeltaCompactionBatchSize: number;
+  repositorySetupScriptEnabled: boolean;
+  repositorySetupScriptTimeoutMs: number;
   runMode: RunMode;
   runner: RunnerKind;
   sandboxProvider: SandboxProviderKind;
@@ -214,6 +216,17 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       5_000,
       'EVENT_DELTA_COMPACTION_BATCH_SIZE',
     ),
+    repositorySetupScriptEnabled: parseBoolean(
+      env.REPOSITORY_SETUP_SCRIPT_ENABLED,
+      true,
+      'REPOSITORY_SETUP_SCRIPT_ENABLED',
+    ),
+    repositorySetupScriptTimeoutMs:
+      parsePositiveInteger(
+        env.REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS,
+        600,
+        'REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS',
+      ) * 1000,
     runMode,
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(

@@ -245,6 +245,10 @@ function standaloneActivityTitle(event: AgentEvent, provider: string | undefined
   if (event.type === 'run_failed') return 'Run failed';
   if (event.type === 'message_failed') return 'Message failed';
   if (event.type === 'message_completed') return 'Message completed';
+  if (event.type === 'setup_script_finished') {
+    const subject = event.payload.phase === 'probe' ? 'Setup script probe' : 'Setup script';
+    return `${subject} ${isFailure ? 'failed' : 'completed'}`;
+  }
   return `${humanizeEventName(event.type)}${isFailure ? ' failed' : ''}`;
 }
 
@@ -253,9 +257,21 @@ function standaloneActivityDetail(event: AgentEvent): string | undefined {
     const batchSize = typeof event.payload.batchSize === 'number' ? event.payload.batchSize : undefined;
     return batchSize && batchSize > 1 ? `${batchSize} queued messages are running together.` : undefined;
   }
+  if (event.type === 'setup_script_finished') return setupScriptFinishedDetail(event.payload);
   if (event.type === 'run_completed') return runCompletedDetail(event.payload);
   if (event.type === 'sandbox_ready' && event.payload.created === true) return 'Sandbox was created for this run.';
   return previewValue(event.payload.message) ?? previewValue(event.payload.result);
+}
+
+function setupScriptFinishedDetail(payload: Record<string, unknown>): string | undefined {
+  const durationMs = typeof payload.durationMs === 'number' ? payload.durationMs : undefined;
+  const stdoutTail = stringValue(payload.stdoutTail);
+  const stderrTail = stringValue(payload.stderrTail);
+  const output = [stdoutTail, stderrTail].filter(Boolean).join('\n').trim();
+  const parts: string[] = [];
+  if (durationMs !== undefined) parts.push(`Duration: ${formatDuration(durationMs)}`);
+  if (output) parts.push(output);
+  return parts.length ? parts.join('\n') : undefined;
 }
 
 function runCompletedDetail(payload: Record<string, unknown>): string | undefined {
@@ -391,6 +407,11 @@ function truncateText(value: string, maxLength: number): string {
 
 function humanizeEventName(value: string): string {
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${durationMs}ms`;
+  return `${Math.round(durationMs / 1000)}s`;
 }
 
 function formatDate(value: string): string {

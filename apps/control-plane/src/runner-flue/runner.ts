@@ -3,11 +3,15 @@ import type { NormalizedEvent } from '../events/types.js';
 import type { ArtifactService } from '../artifacts/service.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
+import { type RepositoryAccessProvider } from '../repositories/setup.js';
 import {
-  prepareRepositoryShellSetup,
-  type RepositoryAccessProvider,
-  type RepositoryShellSetup,
-} from '../repositories/setup.js';
+  executeRepositoryPreparation,
+  planRepositoryPreparation,
+  preparedRepositoryFromPlan,
+  type RepositoryPreparationPlan,
+  type RepositoryPreparationResult,
+} from '../repositories/prepare.js';
+import { sandboxRepositoryShell, type RepositoryShell } from '../repositories/shell.js';
 import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
 import { createArtifactTool } from './artifact-tool.js';
 import { createGitTool, type AgentRef } from './git-tool.js';
@@ -28,6 +32,7 @@ export type FlueRunnerOptions = {
   artifactToolMaxBytes?: number;
   sandboxKeepalive?: SandboxKeepaliveService;
   sandboxKeepaliveMaxExtensionMs?: number;
+  setupScript?: { enabled: boolean; timeoutMs: number };
   webSearch?: WebSearchToolServices;
   deputy?: DeputyToolBaseServices;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
@@ -45,20 +50,16 @@ export class FlueRunner implements Runner {
 
     const pendingEvents: Array<Promise<void>> = [];
     let sawTextDelta = false;
-    const repositorySetupInput: Parameters<typeof prepareRepositoryShellSetup>[0] = {
+    const repositorySetupInput: Parameters<typeof planRepositoryPreparation>[0] = {
       context: input.context,
       sandbox: input.sandbox,
     };
     if (this.options.repositoryAccess?.github) repositorySetupInput.github = this.options.repositoryAccess.github;
-    const repositorySetup = await prepareRepositoryShellSetup(repositorySetupInput);
+    const repositorySetup = await planRepositoryPreparation(repositorySetupInput);
     const agentRef: AgentRef = {};
     const repositoryState: RepositoryToolState = { context: structuredClone(input.context) };
     if (repositorySetup) {
-      repositoryState.prepared = {
-        repository: { provider: 'github', owner: repositorySetup.access.owner, repo: repositorySetup.access.repo },
-        access: repositorySetup.access,
-        workspacePath: repositorySetup.workspacePath,
-      };
+      repositoryState.prepared = preparedRepositoryFromPlan(repositorySetup);
     }
     const repositoryServices = this.options.repositoryAccess?.github
       ? ({
@@ -68,6 +69,7 @@ export class FlueRunner implements Runner {
           state: repositoryState,
           emit: input.emit,
           eventBase: { sessionId: input.sessionId, runId: input.runId, messageId: input.messageId },
+          ...(this.options.setupScript ? { setupScript: this.options.setupScript } : {}),
           ...(input.updateSessionContext ? { updateSessionContext: input.updateSessionContext } : {}),
         } satisfies RepositoryToolServices)
       : null;
@@ -159,7 +161,9 @@ export class FlueRunner implements Runner {
         createdAt: new Date(),
       });
 
-      if (repositorySetup) await this.runRepositorySetup(input, repositorySetup, session);
+      const setupResult = repositorySetup ? await this.runRepositorySetup(input, repositorySetup, session) : null;
+      if (setupResult) repositoryState.prepared = setupResult;
+      const setupNote = setupResult?.setupFailureNote ?? null;
 
       // Cancellation must not leave partial Flue turn state in durable history.
       // A prompt-only warning is cheaper but advisory, and models can still continue
@@ -176,6 +180,7 @@ export class FlueRunner implements Runner {
             Boolean(repositoryServices),
             Boolean(this.options.webSearch),
             Boolean(this.options.deputy),
+            setupNote,
           ),
           input.signal ? { signal: input.signal } : undefined,
         );
@@ -215,34 +220,18 @@ export class FlueRunner implements Runner {
 
   private async runRepositorySetup(
     input: RunnerInput,
-    setup: RepositoryShellSetup,
+    setup: RepositoryPreparationPlan,
     session: FlueSessionPort,
-  ): Promise<void> {
-    if (!session.shell) throw new Error('Flue session does not support shell commands for repository setup');
-    const result = await session.shell(setup.command, {
-      cwd: input.sandbox.workspacePath,
-      env: setup.env,
-      timeout: 120_000,
+  ): Promise<RepositoryPreparationResult> {
+    return executeRepositoryPreparation({
+      plan: setup,
+      workspaceRoot: input.sandbox.workspacePath,
+      shell: flueSessionShell(session),
+      setupShell: sandboxRepositoryShell(input.sandbox),
+      emit: input.emit,
+      eventBase: { sessionId: input.sessionId, runId: input.runId, messageId: input.messageId },
+      ...(this.options.setupScript ? { setupScript: this.options.setupScript } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
-    });
-    if (input.signal?.aborted) throw new Error('Operation aborted');
-    if (result.exitCode !== 0) {
-      throw new Error(`Repository setup failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`);
-    }
-    await input.emit({
-      sessionId: input.sessionId,
-      runId: input.runId,
-      messageId: input.messageId,
-      type: 'repository_ready',
-      payload: {
-        provider: setup.access.provider,
-        owner: setup.access.owner,
-        repo: setup.access.repo,
-        ...(setup.branch ? { branch: setup.branch } : {}),
-        workspacePath: setup.workspacePath,
-        expiresAt: setup.access.expiresAt.toISOString(),
-      },
-      createdAt: new Date(),
     });
   }
 
@@ -263,6 +252,17 @@ export class FlueRunner implements Runner {
   }
 }
 
+function flueSessionShell(session: FlueSessionPort): RepositoryShell {
+  if (!session.shell) throw new Error('Flue session does not support shell commands for repository setup');
+  return (command, options = {}) =>
+    session.shell!(command, {
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
+    });
+}
+
 function promptResponseMetadata(response: FluePromptResponse) {
   const metadata: Pick<RunnerResult, 'model' | 'usage'> = {};
   if (response.model) metadata.model = typeof response.model === 'string' ? response.model : response.model.id;
@@ -276,6 +276,7 @@ function withToolGuidance(
   includeRepository: boolean,
   includeWebSearch: boolean,
   includeDeputy: boolean,
+  setupNote: string | null = null,
 ): string {
   const lines = [
     'Service tool guidance:',
@@ -327,6 +328,7 @@ function withToolGuidance(
       '',
     );
   }
+  if (setupNote) lines.push(`${setupNote}\n`);
   lines.push('User request:', prompt);
   return lines.join('\n');
 }

@@ -15,6 +15,7 @@ Deputies is a control plane for delegating engineering work to [background agent
 - Supports Slack and GitHub integrations for issue, thread, and callback-driven workflows.
 - Supports GitHub OAuth login for browser access control.
 - Works with [Daytona](https://www.daytona.io/) and Docker as sandbox providers, plus fake and unsafe local providers for tests and trusted development.
+- Runs repo-owned `.agents/setup` scripts to prepare sandbox workspaces before agents start.
 - Supports standard LLM API-key configuration and OpenAI Codex/ChatGPT subscriptions.
 - Tracks artifacts, callback deliveries, repositories, sandbox status, and queued messages.
 - Deploys as portable Node, Caddy, Postgres, and optional S3-compatible object storage services.

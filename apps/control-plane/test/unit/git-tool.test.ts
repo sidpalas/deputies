@@ -26,13 +26,40 @@ describe('authenticated git Flue tool', () => {
     expect(result).toBe('exitCode: 0\nstdout:\npushed');
     expect(shells).toEqual([
       {
-        command: "git -c http.extraHeader=\"$GITHUB_AUTH_HEADER\" 'push' 'origin' 'sp/test'",
+        command: [
+          'set -eu',
+          '',
+          'auth_header="$GITHUB_AUTH_HEADER"',
+          'unset GITHUB_AUTH_HEADER',
+          'export GIT_CONFIG_GLOBAL=/dev/null',
+          'export GIT_CONFIG_SYSTEM=/dev/null',
+          '',
+          "git remote set-url origin 'https://github.com/manaflow-ai/manaflow.git'",
+          "git -c 'http.https://github.com/manaflow-ai/manaflow.git.extraHeader'=\"$auth_header\" -c core.hooksPath=/dev/null 'push' 'origin' 'sp/test'",
+        ].join('\n'),
         cwd: '/workspace/manaflow',
         env: {
           GITHUB_AUTH_HEADER: `Authorization: Basic ${Buffer.from('x-access-token:ghs_secret_token').toString('base64')}`,
         },
       },
     ]);
+  });
+
+  it('redacts the full auth header from command output', async () => {
+    const authHeader = `Authorization: Basic ${Buffer.from('x-access-token:ghs_secret_token').toString('base64')}`;
+    const agentRef: AgentRef = {
+      current: {
+        async session() {
+          throw new Error('not used');
+        },
+        async shell() {
+          return { exitCode: 0, stdout: authHeader, stderr: '' };
+        },
+      },
+    };
+    const tool = createGitTool({ agentRef, repository: repositoryServices(agentRef) });
+
+    await expect(tool.execute({ args: ['config', '--list'] })).resolves.toBe('exitCode: 0\nstdout:\n[redacted]');
   });
 
   it('rejects executable names and top-level flags', async () => {

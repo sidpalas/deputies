@@ -23,6 +23,8 @@ const eventTypes = new Set([
   'sandbox_stopped',
   'sandbox_stop_failed',
   'repository_ready',
+  'setup_script_started',
+  'setup_script_finished',
   'agent_text_delta',
   'agent_response_final',
   'tool_started',

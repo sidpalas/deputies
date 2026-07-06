@@ -1,4 +1,5 @@
 import type { SandboxHandle } from '../sandbox/types.js';
+import { shellScript } from './shell.js';
 
 export type GitHubRepository = {
   owner: string;
@@ -37,7 +38,7 @@ export async function prepareRepositoryShellSetup(input: {
 
   const access = await input.github.getRepositoryAccess({ owner: repository.owner, repo: repository.repo });
   const branch = parseBranchContext(input.context);
-  const workspacePath = joinPath(input.sandbox.workspacePath, access.repo);
+  const workspacePath = joinPath(joinPath(input.sandbox.workspacePath, access.owner), access.repo);
   return {
     access,
     ...(branch ? { branch } : {}),
@@ -70,35 +71,53 @@ export function parseRepositoryContext(context: Record<string, unknown>): Reposi
 export function repositorySetupCommand(access: GitHubRepositoryAccess, workspacePath: string, branch?: string): string {
   const checkoutBranch = branch ? quoteShell(branch) : '"$default_branch"';
   const checkoutRemote = branch ? quoteShell(`origin/${branch}`) : '"origin/$default_branch"';
-  return [
-    'set -eu',
-    `mkdir -p ${quoteShell(parentPath(workspacePath))}`,
-    'repository_was_cloned=0',
-    `if [ -d ${quoteShell(joinPath(workspacePath, '.git'))} ]; then`,
-    `  git -C ${quoteShell(workspacePath)} remote set-url origin ${quoteShell(access.cloneUrl)}`,
-    `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" -C ${quoteShell(workspacePath)} fetch --prune origin`,
-    'else',
-    `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone -- ${quoteShell(access.cloneUrl)} ${quoteShell(workspacePath)}`,
-    '  repository_was_cloned=1',
-    'fi',
-    `default_branch="$(git -C ${quoteShell(workspacePath)} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"`,
-    `if [ -z "$default_branch" ]; then`,
-    `  default_branch="$(git -C ${quoteShell(workspacePath)} for-each-ref --format='%(refname:short)' refs/remotes/origin/main refs/remotes/origin/master | sed 's#^origin/##' | head -n 1)"`,
-    'fi',
-    ...(branch ? [`default_branch=${quoteShell(branch)}`] : []),
-    `if [ -n "$default_branch" ]; then`,
-    `  if [ "$repository_was_cloned" = "1" ] || git -C ${quoteShell(workspacePath)} diff --quiet --ignore-submodules -- && git -C ${quoteShell(workspacePath)} diff --cached --quiet --ignore-submodules --; then`,
-    `    git -C ${quoteShell(workspacePath)} checkout -B ${checkoutBranch} ${checkoutRemote}`,
-    '  else',
-    `    current_branch="$(git -C ${quoteShell(workspacePath)} branch --show-current || true)"`,
-    '    if [ "$current_branch" != "$default_branch" ]; then',
-    '      echo "Repository has uncommitted changes; preserving checkout instead of switching branches." >&2',
-    '    fi',
-    '  fi',
-    'fi',
-    `git -C ${quoteShell(workspacePath)} config user.name 'DevDeputies'`,
-    `git -C ${quoteShell(workspacePath)} config user.email 'devdeputies@users.noreply.github.com'`,
-  ].join('\n');
+  const gitAuthConfig = authenticatedGitConfig(access.cloneUrl);
+  const branchOverride = branch ? `default_branch=${quoteShell(branch)}` : '';
+  return shellScript(`
+    set -eu
+
+    auth_header="$GITHUB_AUTH_HEADER"
+    unset GITHUB_AUTH_HEADER
+    export GIT_CONFIG_GLOBAL=/dev/null
+    export GIT_CONFIG_SYSTEM=/dev/null
+
+    mkdir -p ${quoteShell(parentPath(workspacePath))}
+    repository_was_cloned=0
+
+    if [ -d ${quoteShell(joinPath(workspacePath, '.git'))} ]; then
+      git -C ${quoteShell(workspacePath)} remote set-url origin ${quoteShell(access.cloneUrl)}
+      git ${gitAuthConfig} -C ${quoteShell(workspacePath)} fetch --prune origin
+    else
+      git ${gitAuthConfig} clone -- ${quoteShell(access.cloneUrl)} ${quoteShell(workspacePath)}
+      repository_was_cloned=1
+    fi
+
+    default_branch="$(git -C ${quoteShell(workspacePath)} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+    if [ -z "$default_branch" ]; then
+      default_branch="$(git -C ${quoteShell(workspacePath)} for-each-ref --format='%(refname:short)' refs/remotes/origin/main refs/remotes/origin/master | sed 's#^origin/##' | head -n 1)"
+    fi
+    ${branchOverride}
+
+    if [ -n "$default_branch" ]; then
+      if [ "$repository_was_cloned" = "1" ] || git -C ${quoteShell(workspacePath)} diff --quiet --ignore-submodules -- && git -C ${quoteShell(workspacePath)} diff --cached --quiet --ignore-submodules --; then
+        git -c core.hooksPath=/dev/null -C ${quoteShell(workspacePath)} checkout -B ${checkoutBranch} ${checkoutRemote}
+      else
+        current_branch="$(git -C ${quoteShell(workspacePath)} branch --show-current || true)"
+        if [ "$current_branch" != "$default_branch" ]; then
+          echo "Repository has uncommitted changes; preserving checkout instead of switching branches." >&2
+        fi
+      fi
+    fi
+
+    git -C ${quoteShell(workspacePath)} config user.name 'DevDeputies'
+    git -C ${quoteShell(workspacePath)} config user.email 'devdeputies@users.noreply.github.com'
+    echo "deputies-repo-setup:cloned=$repository_was_cloned"
+  `);
+}
+
+function authenticatedGitConfig(url: string): string {
+  if (!/^https?:\/\//.test(url)) return '-c core.hooksPath=/dev/null';
+  return `-c ${quoteShell(`http.${url}.extraHeader`)}="$auth_header" -c core.hooksPath=/dev/null`;
 }
 
 function parseBranchContext(context: Record<string, unknown>): string | undefined {

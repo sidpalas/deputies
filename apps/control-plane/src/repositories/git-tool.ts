@@ -1,4 +1,5 @@
 import { getPreparedRepository, type RepositoryToolServices } from './tool.js';
+import { shellScript } from './shell.js';
 
 const MAX_ARGS = 64;
 const MAX_ARG_LENGTH = 4_096;
@@ -31,12 +32,14 @@ export async function executeGitTool(
   const prepared = getPreparedRepository(repository);
   const shell = repository.shell();
   if (!shell) throw new Error('Authenticated git is unavailable before the sandbox shell is ready');
-  const result = await shell(gitCommand(args), {
+
+  const authHeader = gitAuthHeader(prepared.access.auth.token);
+  const result = await shell(gitCommand(args, prepared.access.cloneUrl), {
     cwd: prepared.workspacePath,
-    env: { GITHUB_AUTH_HEADER: gitAuthHeader(prepared.access.auth.token) },
+    env: { GITHUB_AUTH_HEADER: authHeader },
     timeoutMs: 120_000,
   });
-  const output = formatShellResult(result, prepared.access.auth.token);
+  const output = formatShellResult(result, prepared.access.auth.token, authHeader);
   if (result.exitCode !== 0) throw new Error(output);
   return output;
 }
@@ -71,8 +74,23 @@ function validatePushArgs(args: string[]): void {
   }
 }
 
-function gitCommand(args: string[]): string {
-  return `git -c http.extraHeader="$GITHUB_AUTH_HEADER" ${args.map(quoteShell).join(' ')}`;
+function gitCommand(args: string[], cloneUrl: string): string {
+  return shellScript(`
+    set -eu
+
+    auth_header="$GITHUB_AUTH_HEADER"
+    unset GITHUB_AUTH_HEADER
+    export GIT_CONFIG_GLOBAL=/dev/null
+    export GIT_CONFIG_SYSTEM=/dev/null
+
+    git remote set-url origin ${quoteShell(cloneUrl)}
+    git ${authenticatedGitConfig(cloneUrl)} ${args.map(quoteShell).join(' ')}
+  `);
+}
+
+function authenticatedGitConfig(url: string): string {
+  if (!/^https?:\/\//.test(url)) return '-c core.hooksPath=/dev/null';
+  return `-c ${quoteShell(`http.${url}.extraHeader`)}="$auth_header" -c core.hooksPath=/dev/null`;
 }
 
 function gitAuthHeader(token: string): string {
@@ -80,15 +98,22 @@ function gitAuthHeader(token: string): string {
   return `Authorization: Basic ${credentials}`;
 }
 
-function formatShellResult(result: { exitCode: number; stdout: string; stderr: string }, token: string): string {
+function formatShellResult(
+  result: { exitCode: number; stdout: string; stderr: string },
+  token: string,
+  authHeader: string,
+): string {
   const parts = [`exitCode: ${result.exitCode}`];
-  if (result.stdout.trim()) parts.push(`stdout:\n${redactSecrets(result.stdout.trim(), token)}`);
-  if (result.stderr.trim()) parts.push(`stderr:\n${redactSecrets(result.stderr.trim(), token)}`);
+  if (result.stdout.trim()) parts.push(`stdout:\n${redactSecrets(result.stdout.trim(), token, authHeader)}`);
+  if (result.stderr.trim()) parts.push(`stderr:\n${redactSecrets(result.stderr.trim(), token, authHeader)}`);
   return parts.join('\n');
 }
 
-function redactSecrets(value: string, token: string): string {
-  return value.replaceAll(token, '[redacted]').replace(/gh[ousr]_[A-Za-z0-9_]+/g, '[redacted]');
+function redactSecrets(value: string, token: string, authHeader: string): string {
+  return value
+    .replaceAll(token, '[redacted]')
+    .replaceAll(authHeader, '[redacted]')
+    .replace(/gh[ousr]_[A-Za-z0-9_]+/g, '[redacted]');
 }
 
 function quoteShell(value: string): string {

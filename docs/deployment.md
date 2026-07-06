@@ -319,6 +319,17 @@ RUNNER_MODEL_CHOICES=anthropic/claude-haiku-4-5,openai/gpt-5.5
 
 If unset, model choices are derived from Pi's catalog for providers with configured credentials.
 
+## Repository Setup Scripts
+
+Deputies runs a repository-committed `.agents/setup` script after clone/checkout and before the agent prompt when the script is present. See [Repository Setup Scripts](./repository-setup-scripts.md) for the user-facing convention.
+
+```sh
+REPOSITORY_SETUP_SCRIPT_ENABLED=true
+REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS=600
+```
+
+Set `REPOSITORY_SETUP_SCRIPT_ENABLED=false` to disable repo-owned setup execution globally. This can be useful for restricted providers or operators that do not want repository code running before the agent starts. The clone/fetch `GITHUB_AUTH_HEADER` is never passed to the setup script.
+
 OpenAI Codex subscription auth:
 
 ```sh
