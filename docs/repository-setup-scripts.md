@@ -13,7 +13,7 @@ Repository owners can commit `.agents/setup` at the repository root to prepare a
 - Interactivity: scripts run without a TTY or stdin. They must not prompt.
 - Timeout: `REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS`, default `600` seconds.
 
-The script runs with whatever credentials are already available to the agent in the sandbox, such as installed CLIs or mounted auth. Treat it like any other repository-controlled code an agent can run inside the sandbox.
+The script runs with whatever credentials are already available to the agent in the sandbox, such as installed CLIs or mounted auth. Treat it like any other repository-controlled code an agent can run inside the sandbox. Under the current trust model, Deputies prepares trusted, allowlisted repositories only; repository code and dependencies can observe short-lived, repo-scoped credentials used later by sandbox-backed `git` or `gh` operations.
 
 ## Idempotency
 
@@ -28,8 +28,6 @@ The script runs when the repository was freshly cloned, the stamp is missing, or
 Setup script failures are non-fatal. Deputies continues the run, emits `setup_script_started` and `setup_script_finished` events, and tells the agent about the failure so it can remediate or work around it.
 
 If Deputies cannot inspect whether `.agents/setup` should run, it emits `setup_script_finished` with `phase: "probe"` and tells the agent about the probe failure. `setup_script_finished` stores only the last 8 KiB of stdout and stderr. Do not print secrets.
-
-After a setup script executes in a workspace, Deputies disables its authenticated `git` tool for that workspace. Use a fresh sandbox before running authenticated git operations with GitHub App credentials. This avoids injecting clone/fetch credentials back into a sandbox after repository code has run.
 
 Operators can disable the feature globally:
 

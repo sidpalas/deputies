@@ -1,3 +1,8 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
 import type { NormalizedEvent } from '../../src/events/types.js';
 import {
   parseRepositoryWasCloned,
@@ -6,6 +11,8 @@ import {
   setupScriptResultLine,
 } from '../../src/repositories/setup-script.js';
 import type { RepositoryShell, RepositoryShellOptions, RepositoryShellResult } from '../../src/repositories/shell.js';
+
+const execFileAsync = promisify(execFile);
 
 describe('runRepositorySetupScript', () => {
   it('does not probe when disabled', async () => {
@@ -66,7 +73,6 @@ describe('runRepositorySetupScript', () => {
     expect(calls[1]!.command).toContain('git show HEAD:.agents/setup >"$setup_file"');
     expect(calls[1]!.command).toContain('"$setup_file" >"$setup_stdout"');
     expect(calls[1]!.command).not.toContain('bash "$setup_file"');
-    expect(calls[1]!.command).toContain("printf '%s\\n' '1' > '.git/deputies-setup-ran'");
     expect(calls[1]!.command).toContain('if [ "$setup_exit" -eq 0 ]; then');
     expect(calls[1]!.command).toContain("printf '%s\\n' 'abc123' > '.git/deputies-setup-hash'");
     expect(calls[1]!.options).toMatchObject({
@@ -92,6 +98,46 @@ describe('runRepositorySetupScript', () => {
     );
 
     expect(calls[1]?.command).toContain('bash "$setup_file"');
+  });
+
+  it('uses the committed setup blob instead of dirty worktree contents', async () => {
+    await withTempGitRepository(async (repoPath) => {
+      await mkdir(path.join(repoPath, '.agents'));
+      await writeFile(path.join(repoPath, '.agents/setup'), '#!/usr/bin/env bash\nprintf "HEAD setup\\n"\n');
+      await git(repoPath, ['add', '.agents/setup']);
+      await git(repoPath, [
+        '-c',
+        'user.name=Deputies Test',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '-m',
+        'setup',
+      ]);
+      await writeFile(path.join(repoPath, '.agents/setup'), '#!/usr/bin/env bash\nprintf "WORKTREE setup\\n"\n');
+
+      const firstRun = await runRepositorySetupScript(
+        baseOptions(
+          {
+            workspacePath: repoPath,
+            shell: realRepositoryShell,
+          },
+          [],
+        ),
+      );
+      expect(firstRun).toMatchObject({ status: 'ran', exitCode: 0, stdoutTail: 'HEAD setup\n' });
+
+      const secondRun = await runRepositorySetupScript(
+        baseOptions(
+          {
+            workspacePath: repoPath,
+            shell: realRepositoryShell,
+          },
+          [],
+        ),
+      );
+      expect(secondRun).toEqual({ status: 'skipped' });
+    });
   });
 
   it('emits a failed finished event without throwing on script failure', async () => {
@@ -302,3 +348,46 @@ function scriptedShell(calls: ShellCall[], responses: ShellResponse[]): Reposito
 function ok(stdout: string): ShellResponse {
   return { exitCode: 0, stdout, stderr: '' };
 }
+
+async function withTempGitRepository(run: (repoPath: string) => Promise<void>): Promise<void> {
+  const repoPath = await mkdtemp(path.join(tmpdir(), 'deputies-setup-test-'));
+  try {
+    await git(repoPath, ['init', '-q']);
+    await run(repoPath);
+  } finally {
+    await rm(repoPath, { recursive: true, force: true });
+  }
+}
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, { cwd, encoding: 'utf8' });
+  return stdout;
+}
+
+const realRepositoryShell: RepositoryShell = async (command, options = {}) => {
+  try {
+    const { stdout, stderr } = await execFileAsync('bash', ['-lc', command], {
+      cwd: options.cwd,
+      encoding: 'utf8',
+      env: { ...process.env, ...options.env },
+      ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    const now = new Date();
+    return { exitCode: 0, stdout, stderr, startedAt: now, completedAt: now };
+  } catch (error) {
+    const execError = error as Error & {
+      code?: number | string | null;
+      stdout?: string;
+      stderr?: string;
+    };
+    const now = new Date();
+    return {
+      exitCode: typeof execError.code === 'number' ? execError.code : 1,
+      stdout: execError.stdout ?? '',
+      stderr: execError.stderr ?? execError.message,
+      startedAt: now,
+      completedAt: now,
+    };
+  }
+};

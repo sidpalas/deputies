@@ -79,7 +79,6 @@ describe('repository Flue tool', () => {
           if (options?.cwd) shell.cwd = options.cwd;
           if (options?.env) shell.env = options.env;
           shells.push(shell);
-          if (command.includes('deputies-setup-ran')) return { exitCode: 1, stdout: '', stderr: '' };
           return { exitCode: 0, stdout: 'prepared', stderr: '' };
         },
       },
@@ -96,24 +95,25 @@ describe('repository Flue tool', () => {
     const result = await tool.execute({ action: 'prepare' });
 
     expect(result).toContain('Workspace path: /workspace/manaflow-ai/manaflow');
-    expect(shells).toHaveLength(2);
-    expect(shells[0]?.command).toContain('deputies-setup-ran');
-    expect(shells[1]?.cwd).toBe('/workspace');
-    expect(shells[1]?.command).toContain(
+    expect(shells).toHaveLength(1);
+    expect(shells[0]?.cwd).toBe('/workspace');
+    expect(shells[0]?.command).toContain(
       'git -c \'http.https://github.com/manaflow-ai/manaflow.git.extraHeader\'="$auth_header" -c core.hooksPath=/dev/null clone',
     );
-    expect(shells[1]?.command).toContain('unset GITHUB_AUTH_HEADER');
-    expect(shells[1]?.command).toContain('default_branch="$(git -C');
-    expect(shells[1]?.command).toContain('diff --quiet --ignore-submodules');
-    expect(shells[1]?.command).toContain('preserving checkout instead of switching branches');
-    expect(shells[1]?.command).toContain('git -c core.hooksPath=/dev/null');
-    expect(shells[1]?.command).toContain('checkout -B "$default_branch" "origin/$default_branch"');
-    expect(shells[1]?.command).toContain("git -C '/workspace/manaflow-ai/manaflow' config user.name 'DevDeputies'");
-    expect(shells[1]?.command).toContain(
+    expect(shells[0]?.command).toContain('unset GITHUB_AUTH_HEADER');
+    expect(shells[0]?.command).toContain('export GIT_CONFIG_GLOBAL=/dev/null');
+    expect(shells[0]?.command).toContain('export GIT_CONFIG_SYSTEM=/dev/null');
+    expect(shells[0]?.command).toContain('default_branch="$(git -C');
+    expect(shells[0]?.command).toContain('diff --quiet --ignore-submodules');
+    expect(shells[0]?.command).toContain('preserving checkout instead of switching branches');
+    expect(shells[0]?.command).toContain('git -c core.hooksPath=/dev/null');
+    expect(shells[0]?.command).toContain('checkout -B "$default_branch" "origin/$default_branch"');
+    expect(shells[0]?.command).toContain("git -C '/workspace/manaflow-ai/manaflow' config user.name 'DevDeputies'");
+    expect(shells[0]?.command).toContain(
       "git -C '/workspace/manaflow-ai/manaflow' config user.email 'devdeputies@users.noreply.github.com'",
     );
-    expect(shells[1]?.command).not.toContain('ghs_secret_token');
-    expect(shells[1]?.env).toEqual({
+    expect(shells[0]?.command).not.toContain('ghs_secret_token');
+    expect(shells[0]?.env).toEqual({
       GITHUB_AUTH_HEADER: `Authorization: Basic ${Buffer.from('x-access-token:ghs_secret_token').toString('base64')}`,
     });
     expect(services.state.prepared?.workspacePath).toBe('/workspace/manaflow-ai/manaflow');
@@ -124,10 +124,7 @@ describe('repository Flue tool', () => {
     const shells: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = [];
     const execCalls: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = [];
     const events: NormalizedEvent[] = [];
-    const shellResponses = [
-      { exitCode: 1, stdout: '', stderr: '' },
-      { exitCode: 0, stdout: 'prepared\ndeputies-repo-setup:cloned=1\n', stderr: '' },
-    ];
+    const shellResponses = [{ exitCode: 0, stdout: 'prepared\ndeputies-repo-setup:cloned=1\n', stderr: '' }];
     const execResponses = [
       { exitCode: 0, stdout: 'deputies-setup:run reason=cloned hash=abc123 exec=0\n', stderr: '' },
       { exitCode: 0, stdout: 'setup ok', stderr: '' },
@@ -174,7 +171,7 @@ describe('repository Flue tool', () => {
     const result = await tool.execute({ action: 'prepare' });
 
     expect(result).toContain('Setup script: ran successfully');
-    expect(shells).toHaveLength(2);
+    expect(shells).toHaveLength(1);
     expect(execCalls).toHaveLength(2);
     expect(execCalls[0]?.cwd).toBe('/workspace/manaflow-ai/manaflow');
     expect(execCalls[1]?.env).toEqual({ DEPUTIES: '1', DEPUTIES_SETUP: '1' });
@@ -187,10 +184,7 @@ describe('repository Flue tool', () => {
   });
 
   it('returns repository prepare results when setup scripts fail', async () => {
-    const shellResponses = [
-      { exitCode: 1, stdout: '', stderr: '' },
-      { exitCode: 0, stdout: 'prepared\ndeputies-repo-setup:cloned=1\n', stderr: '' },
-    ];
+    const shellResponses = [{ exitCode: 0, stdout: 'prepared\ndeputies-repo-setup:cloned=1\n', stderr: '' }];
     const execResponses = [
       { exitCode: 0, stdout: 'deputies-setup:run reason=cloned hash=abc123 exec=1\n', stderr: '' },
       { exitCode: 1, stdout: 'bad stdout', stderr: 'bad stderr' },

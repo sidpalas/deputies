@@ -1,8 +1,6 @@
 import type { SandboxHandle } from '../sandbox/types.js';
 import { shellScript } from './shell.js';
 
-export const repositorySetupRanMarkerPath = '.git/deputies-setup-ran';
-
 export type GitHubRepository = {
   owner: string;
   repo: string;
@@ -80,6 +78,8 @@ export function repositorySetupCommand(access: GitHubRepositoryAccess, workspace
 
     auth_header="$GITHUB_AUTH_HEADER"
     unset GITHUB_AUTH_HEADER
+    export GIT_CONFIG_GLOBAL=/dev/null
+    export GIT_CONFIG_SYSTEM=/dev/null
 
     mkdir -p ${quoteShell(parentPath(workspacePath))}
     repository_was_cloned=0
@@ -112,25 +112,6 @@ export function repositorySetupCommand(access: GitHubRepositoryAccess, workspace
     git -C ${quoteShell(workspacePath)} config user.name 'DevDeputies'
     git -C ${quoteShell(workspacePath)} config user.email 'devdeputies@users.noreply.github.com'
     echo "deputies-repo-setup:cloned=$repository_was_cloned"
-  `);
-}
-
-export function repositorySetupRanCheckCommand(workspacePath: string): string {
-  return `[ -f ${quoteShell(joinPath(workspacePath, repositorySetupRanMarkerPath))} ]`;
-}
-
-export function repositoryReuseAfterSetupCommand(access: GitHubRepositoryAccess, workspacePath: string): string {
-  return shellScript(`
-    set -eu
-
-    if [ ! -d ${quoteShell(joinPath(workspacePath, '.git'))} ]; then
-      echo "Repository setup marker exists but ${workspacePath} is not a git checkout." >&2
-      exit 1
-    fi
-
-    git -C ${quoteShell(workspacePath)} remote set-url origin ${quoteShell(access.cloneUrl)}
-    echo "Repository setup script already ran in this workspace; skipping authenticated refresh." >&2
-    echo "deputies-repo-setup:cloned=0"
   `);
 }
 

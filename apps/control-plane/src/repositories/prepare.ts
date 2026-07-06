@@ -2,8 +2,6 @@ import type { RunnerInput } from '../runner/types.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 import {
   prepareRepositoryShellSetup,
-  repositoryReuseAfterSetupCommand,
-  repositorySetupRanCheckCommand,
   type GitHubRepository,
   type GitHubRepositoryAccess,
   type RepositoryAccessProvider,
@@ -81,20 +79,9 @@ export async function checkoutRepositoryPreparation(input: {
   shell: RepositoryShell;
   signal?: AbortSignal;
 }): Promise<RepositoryCheckoutResult> {
-  const marker = await input.shell(repositorySetupRanCheckCommand(input.plan.workspacePath), {
+  const result = await input.shell(input.plan.command, {
     cwd: input.workspaceRoot,
-    timeoutMs: 30_000,
-    ...(input.signal ? { signal: input.signal } : {}),
-  });
-  if (input.signal?.aborted) throw new Error('Operation aborted');
-
-  const command =
-    marker.exitCode === 0
-      ? repositoryReuseAfterSetupCommand(input.plan.access, input.plan.workspacePath)
-      : input.plan.command;
-  const result = await input.shell(command, {
-    cwd: input.workspaceRoot,
-    ...(marker.exitCode === 0 ? {} : { env: input.plan.env }),
+    env: input.plan.env,
     timeoutMs: repositorySetupTimeoutMs,
     ...(input.signal ? { signal: input.signal } : {}),
   });

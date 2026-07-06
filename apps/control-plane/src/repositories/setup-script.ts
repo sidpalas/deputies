@@ -1,5 +1,4 @@
 import type { RunnerInput } from '../runner/types.js';
-import { repositorySetupRanMarkerPath } from './setup.js';
 import { shellScript, type RepositoryShell } from './shell.js';
 
 const setupScriptPath = '.agents/setup';
@@ -263,8 +262,6 @@ function runCommand(probe: Extract<SetupScriptProbe, { action: 'run' }>): string
 
     git show HEAD:${setupScriptPath} >"$setup_file"
     if [ ${probe.executable ? '1' : '0'} -eq 1 ]; then chmod +x "$setup_file"; fi
-    printf '%s\\n' '1' > ${quoteShell(repositorySetupRanMarkerPath)}
-
     set +e
     ${invocation} >"$setup_stdout" 2>"$setup_stderr"
     setup_exit=$?

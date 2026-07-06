@@ -15,7 +15,6 @@ describe('authenticated git Flue tool', () => {
           if (options?.cwd) shell.cwd = options.cwd;
           if (options?.env) shell.env = options.env;
           shells.push(shell);
-          if (command.includes('deputies-setup-ran')) return { exitCode: 1, stdout: '', stderr: '' };
           return { exitCode: 0, stdout: 'pushed', stderr: '' };
         },
       },
@@ -27,15 +26,13 @@ describe('authenticated git Flue tool', () => {
     expect(result).toBe('exitCode: 0\nstdout:\npushed');
     expect(shells).toEqual([
       {
-        command: "[ -f '/workspace/manaflow/.git/deputies-setup-ran' ]",
-        cwd: '/workspace/manaflow',
-      },
-      {
         command: [
           'set -eu',
           '',
           'auth_header="$GITHUB_AUTH_HEADER"',
           'unset GITHUB_AUTH_HEADER',
+          'export GIT_CONFIG_GLOBAL=/dev/null',
+          'export GIT_CONFIG_SYSTEM=/dev/null',
           '',
           "git remote set-url origin 'https://github.com/manaflow-ai/manaflow.git'",
           "git -c 'http.https://github.com/manaflow-ai/manaflow.git.extraHeader'=\"$auth_header\" -c core.hooksPath=/dev/null 'push' 'origin' 'sp/test'",
@@ -55,8 +52,7 @@ describe('authenticated git Flue tool', () => {
         async session() {
           throw new Error('not used');
         },
-        async shell(command) {
-          if (command.includes('deputies-setup-ran')) return { exitCode: 1, stdout: '', stderr: '' };
+        async shell() {
           return { exitCode: 0, stdout: authHeader, stderr: '' };
         },
       },
@@ -64,26 +60,6 @@ describe('authenticated git Flue tool', () => {
     const tool = createGitTool({ agentRef, repository: repositoryServices(agentRef) });
 
     await expect(tool.execute({ args: ['config', '--list'] })).resolves.toBe('exitCode: 0\nstdout:\n[redacted]');
-  });
-
-  it('disables authenticated git after setup script execution', async () => {
-    const agentRef: AgentRef = {
-      current: {
-        async session() {
-          throw new Error('not used');
-        },
-        async shell(command) {
-          return command.includes('deputies-setup-ran')
-            ? { exitCode: 0, stdout: '', stderr: '' }
-            : { exitCode: 0, stdout: 'pushed', stderr: '' };
-        },
-      },
-    };
-    const tool = createGitTool({ agentRef, repository: repositoryServices(agentRef) });
-
-    await expect(tool.execute({ args: ['push', 'origin', 'sp/test'] })).rejects.toThrow(
-      'Authenticated git is disabled after .agents/setup has run',
-    );
   });
 
   it('rejects executable names and top-level flags', async () => {

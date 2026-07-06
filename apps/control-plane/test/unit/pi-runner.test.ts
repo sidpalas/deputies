@@ -818,7 +818,6 @@ describe('PiRunner', () => {
     const execCalls: ExecCall[] = [];
     const sandbox = createMemorySandbox();
     const execResponses = [
-      { exitCode: 1, stdout: '', stderr: '' },
       { exitCode: 0, stdout: 'prepared\ndeputies-repo-setup:cloned=1\n', stderr: '' },
       { exitCode: 0, stdout: 'deputies-setup:run reason=cloned hash=abc123 exec=1\n', stderr: '' },
       { exitCode: 1, stdout: 'setup stdout', stderr: 'setup stderr' },
@@ -883,12 +882,10 @@ describe('PiRunner', () => {
     });
 
     expect(result.text).toBe('handled setup failure');
-    expect(execCalls).toHaveLength(4);
+    expect(execCalls).toHaveLength(3);
     expect(execCalls[0]?.cwd).toBe('/workspace');
-    expect(execCalls[0]?.command).toContain('deputies-setup-ran');
-    expect(execCalls[1]?.cwd).toBe('/workspace');
-    expect(execCalls[2]).toMatchObject({ cwd: '/workspace/manaflow-ai/manaflow', timeoutMs: 30_000 });
-    expect(execCalls[3]).toMatchObject({
+    expect(execCalls[1]).toMatchObject({ cwd: '/workspace/manaflow-ai/manaflow', timeoutMs: 30_000 });
+    expect(execCalls[2]).toMatchObject({
       cwd: '/workspace/manaflow-ai/manaflow',
       env: { DEPUTIES: '1', DEPUTIES_SETUP: '1' },
       timeoutMs: 600_000,
@@ -914,8 +911,8 @@ describe('PiRunner', () => {
       execCalls.push({ command: input.command, ...(input.cwd ? { cwd: input.cwd } : {}) });
       const now = new Date();
       return {
-        exitCode: input.command.includes('deputies-setup-ran') ? 1 : 0,
-        stdout: input.command.includes('deputies-setup-ran') ? '' : 'prepared\ndeputies-repo-setup:cloned=1\n',
+        exitCode: 0,
+        stdout: 'prepared\ndeputies-repo-setup:cloned=1\n',
         stderr: '',
         startedAt: now,
         completedAt: now,
@@ -957,12 +954,13 @@ describe('PiRunner', () => {
       emit: async () => {},
     });
 
-    expect(execCalls).toHaveLength(2);
-    expect(execCalls[0]?.command).toContain('deputies-setup-ran');
-    expect(execCalls[1]?.command).toContain(
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]?.command).toContain(
       'git -c \'http.https://github.com/manaflow-ai/manaflow.git.extraHeader\'="$auth_header" -c core.hooksPath=/dev/null clone',
     );
-    expect(execCalls[1]?.command).toContain('unset GITHUB_AUTH_HEADER');
+    expect(execCalls[0]?.command).toContain('unset GITHUB_AUTH_HEADER');
+    expect(execCalls[0]?.command).toContain('export GIT_CONFIG_GLOBAL=/dev/null');
+    expect(execCalls[0]?.command).toContain('export GIT_CONFIG_SYSTEM=/dev/null');
   });
 
   it('rejects artifact paths outside the sandbox workspace and enforces post-read size', async () => {
@@ -1270,9 +1268,6 @@ function createMemorySandbox(options: { execCalls?: ExecCall[] } = {}): SandboxH
       }
       if (input.command.includes('exec fd') || input.command.includes('exec fdfind')) {
         return { exitCode: 0, stdout: '/workspace/src/app.ts\n', stderr: '', startedAt: now, completedAt: now };
-      }
-      if (input.command.includes('deputies-setup-ran')) {
-        return { exitCode: 1, stdout: '', stderr: '', startedAt: now, completedAt: now };
       }
       return { exitCode: 0, stdout: `ran: ${input.command}`, stderr: '', startedAt: now, completedAt: now };
     },

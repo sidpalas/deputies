@@ -1,5 +1,4 @@
 import { getPreparedRepository, type RepositoryToolServices } from './tool.js';
-import { repositorySetupRanCheckCommand } from './setup.js';
 import { shellScript } from './shell.js';
 
 const MAX_ARGS = 64;
@@ -33,12 +32,6 @@ export async function executeGitTool(
   const prepared = getPreparedRepository(repository);
   const shell = repository.shell();
   if (!shell) throw new Error('Authenticated git is unavailable before the sandbox shell is ready');
-  if (prepared.setupScriptResult?.status === 'ran') throw setupRanGitError();
-  const setupMarker = await shell(repositorySetupRanCheckCommand(prepared.workspacePath), {
-    cwd: prepared.workspacePath,
-    timeoutMs: 30_000,
-  });
-  if (setupMarker.exitCode === 0) throw setupRanGitError();
 
   const authHeader = gitAuthHeader(prepared.access.auth.token);
   const result = await shell(gitCommand(args, prepared.access.cloneUrl), {
@@ -49,12 +42,6 @@ export async function executeGitTool(
   const output = formatShellResult(result, prepared.access.auth.token, authHeader);
   if (result.exitCode !== 0) throw new Error(output);
   return output;
-}
-
-function setupRanGitError(): Error {
-  return new Error(
-    'Authenticated git is disabled after .agents/setup has run in this workspace. Start a fresh sandbox before using authenticated git operations.',
-  );
 }
 
 function validateArgs(value: unknown): string[] {
@@ -93,6 +80,8 @@ function gitCommand(args: string[], cloneUrl: string): string {
 
     auth_header="$GITHUB_AUTH_HEADER"
     unset GITHUB_AUTH_HEADER
+    export GIT_CONFIG_GLOBAL=/dev/null
+    export GIT_CONFIG_SYSTEM=/dev/null
 
     git remote set-url origin ${quoteShell(cloneUrl)}
     git ${authenticatedGitConfig(cloneUrl)} ${args.map(quoteShell).join(' ')}

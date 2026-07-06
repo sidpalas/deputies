@@ -32,6 +32,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Agent-facing Deputies control/API surface, likely exposed through an MCP server, so agents can inspect available deputies, view sessions and session state, spawn new sessions, send follow-up messages, and coordinate handoffs or sub-agent work safely with scoped permissions and auditability.
 - Agent authentication to external services through MCP, CLI credentials, API tokens, and short-lived provider tokens.
 - Credential scoping and injection policy for tools, commands, MCP servers, and sandbox environments.
+- Sandbox credential broker for GitHub repository operations: keep GitHub App installation tokens outside the sandbox trust domain, route `git` smart-HTTP and `gh` operations through a control-plane or sandbox-bridge proxy, and enforce push/PR policy server-side with opaque per-session sandbox credentials. Treat this as the gate for safely preparing untrusted PR branches or forks; until then repository setup assumes trusted, allowlisted repositories.
 - First-class multi-repository task support, including environments made of one or more repositories, one primary writable repo by default, auxiliary read-only context repos, and explicit multi-writable change sets when a task spans repos.
 - Prompt templates and snapshot tests for Slack/GitHub/Linear inputs.
 - Better repo resolution from Slack/GitHub/Linear context.
