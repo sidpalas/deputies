@@ -56,6 +56,8 @@ describe('loadConfig', () => {
       eventDeltaCompactionRetentionMs: 86_400_000,
       eventDeltaCompactionIntervalMs: 60_000,
       eventDeltaCompactionBatchSize: 5_000,
+      repositorySetupScriptEnabled: true,
+      repositorySetupScriptTimeoutMs: 600_000,
       runMode: 'combined',
       runner: 'fake',
       sandboxProvider: 'fake',
@@ -145,6 +147,8 @@ describe('loadConfig', () => {
         EVENT_DELTA_COMPACTION_RETENTION_SECONDS: '86400',
         EVENT_DELTA_COMPACTION_INTERVAL_SECONDS: '300',
         EVENT_DELTA_COMPACTION_BATCH_SIZE: '250',
+        REPOSITORY_SETUP_SCRIPT_ENABLED: 'false',
+        REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS: '45',
         RUN_MODE: 'worker',
         RUNNER: 'flue',
         SANDBOX_PROVIDER: 'unsafe-local',
@@ -266,6 +270,8 @@ describe('loadConfig', () => {
       eventDeltaCompactionRetentionMs: 86_400_000,
       eventDeltaCompactionIntervalMs: 300_000,
       eventDeltaCompactionBatchSize: 250,
+      repositorySetupScriptEnabled: false,
+      repositorySetupScriptTimeoutMs: 45_000,
       runMode: 'worker',
       runner: 'flue',
       sandboxProvider: 'unsafe-local',
@@ -374,6 +380,15 @@ describe('loadConfig', () => {
       artifactCreateMaxBytes: 1024,
       unsafeAllowLocalHttpCallbacks: true,
     });
+  });
+
+  it('rejects invalid repository setup script config', () => {
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', REPOSITORY_SETUP_SCRIPT_ENABLED: 'yes' })).toThrow(
+      'REPOSITORY_SETUP_SCRIPT_ENABLED must be true or false',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS: '0' })).toThrow(
+      'REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS must be a positive integer',
+    );
   });
 
   it('rejects invalid Daytona sandbox resource values', () => {

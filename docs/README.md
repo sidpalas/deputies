@@ -14,6 +14,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Integrations](./integrations.md): generic webhook, GitHub, Slack, Linear, callbacks, auth, and external thread mapping.
 - [Web UI](./web-ui.md): separate Vite React operator UI, browser auth, and static deployment notes.
 - [Deputies App Preview](./deputies-app-preview.md): agent runbook for running the Deputies app from a branch inside a sandbox behind the outer service preview.
+- [Repository Setup Scripts](./repository-setup-scripts.md): `.agents/setup` convention for repo-owned sandbox preparation before agent work begins.
 - [Access Groups](./access-groups.md): RBAC roles, session access policies, group management, and GitHub auth allowlists.
 - [Local Development](./contributing-local-development.md): contributor setup, Postgres, Portless, Docker Compose, real Flue, and local integrations.
 - [Development Tasks](./development-tasks.md): where to put `package.json` scripts versus `mise` tasks in this monorepo.
@@ -103,6 +104,7 @@ The current scaffold has implemented the portable control-plane foundation:
 - Opt-in real local Flue and real Daytona/Flue UAT paths with credentials.
 - Slack and GitHub webhook integrations with external thread reuse, callback delivery, and archived-session recovery.
 - GitHub App repository access with guarded `repository`, `gh`, and authenticated `git` tools.
+- Repo-owned `.agents/setup` scripts for preparing sandbox workspaces before agent prompts.
 - Flue `artifact({ action: "create" })` tool for publishing sandbox files as downloadable/previewable product artifacts.
 
 The following MVP pieces are still planned:

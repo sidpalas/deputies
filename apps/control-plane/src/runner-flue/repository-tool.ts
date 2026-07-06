@@ -4,10 +4,10 @@ import {
   repositoryToolDescription,
   repositoryToolParameters,
   type PreparedRepository,
-  type RepositoryShell,
   type RepositoryToolServices as SharedRepositoryToolServices,
   type RepositoryToolState,
 } from '../repositories/tool.js';
+import { sandboxRepositoryShell, type RepositoryShell } from '../repositories/shell.js';
 import type { AgentRef } from './git-tool.js';
 
 export type { PreparedRepository, RepositoryToolState };
@@ -32,6 +32,7 @@ export function toSharedRepositoryToolServices(services: RepositoryToolServices)
   return {
     ...shared,
     shell: () => flueShell(agentRef),
+    setupShell: () => sandboxRepositoryShell(shared.sandbox),
   };
 }
 

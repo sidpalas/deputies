@@ -63,6 +63,22 @@ export type NormalizedEventPayloadMap = {
     workspacePath: string;
     expiresAt: string;
   };
+  setup_script_started: {
+    path: string;
+    workspacePath: string;
+    reason: 'cloned' | 'no_stamp' | 'script_changed';
+  };
+  setup_script_finished: {
+    path: string;
+    phase: 'probe' | 'script';
+    workspacePath: string;
+    exitCode: number;
+    durationMs: number;
+    isError: boolean;
+    timedOut?: true;
+    stdoutTail: string;
+    stderrTail: string;
+  };
   agent_text_delta: { text: string; flueSessionId?: string | undefined };
   agent_response_final: { text: string; model?: string; usage?: ModelUsagePayload };
   tool_started: ToolStartedPayload;
@@ -181,6 +197,8 @@ export type NormalizedEventType =
   | 'sandbox_stopped'
   | 'sandbox_stop_failed'
   | 'repository_ready'
+  | 'setup_script_started'
+  | 'setup_script_finished'
   | 'agent_text_delta'
   | 'agent_response_final'
   | 'tool_started'

@@ -1,46 +1,32 @@
+import { type GitHubRepository, type GitHubRepositoryAccess, type RepositoryAccessProvider } from './setup.js';
 import {
-  repositorySetupCommand,
-  type GitHubRepository,
-  type GitHubRepositoryAccess,
-  type RepositoryAccessProvider,
-} from './setup.js';
+  executeRepositoryPreparation,
+  planRepositoryPreparation,
+  repositoryPreparationSummary,
+  type PreparedRepository as PreparedRepositoryType,
+} from './prepare.js';
+import type { RepositorySetupScriptPolicy } from './setup-script.js';
+import type { RepositoryShell } from './shell.js';
 import type { RunnerInput } from '../runner/types.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 
-export type RepositoryShellResult = {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-};
-
-export type RepositoryShellOptions = {
-  env?: Record<string, string>;
-  cwd?: string;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-};
-
-export type RepositoryShell = (command: string, options?: RepositoryShellOptions) => PromiseLike<RepositoryShellResult>;
+export type PreparedRepository = PreparedRepositoryType;
 
 export type RepositoryToolState = {
   context: Record<string, unknown>;
   prepared?: PreparedRepository;
 };
 
-export type PreparedRepository = {
-  repository: GitHubRepository & { provider: 'github' };
-  access: GitHubRepositoryAccess;
-  workspacePath: string;
-};
-
 export type RepositoryToolServices = {
   github: RepositoryAccessProvider;
   sandbox: SandboxHandle;
   shell: () => RepositoryShell | undefined;
+  setupShell?: () => RepositoryShell | undefined;
   state: RepositoryToolState;
   emit: RunnerInput['emit'];
   eventBase: Pick<RunnerInput, 'sessionId' | 'runId' | 'messageId'>;
   updateSessionContext?: RunnerInput['updateSessionContext'];
+  setupScript?: RepositorySetupScriptPolicy;
 };
 
 export const repositoryToolDescription =
@@ -61,6 +47,7 @@ export const repositoryToolParameters = {
 export async function executeRepositoryTool(
   services: RepositoryToolServices,
   params: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<string> {
   const action = typeof params.action === 'string' ? params.action : '';
   switch (action) {
@@ -71,7 +58,7 @@ export async function executeRepositoryTool(
     case 'set':
       return setRepositoryContext(services, params);
     case 'prepare':
-      return prepareActiveRepository(services);
+      return prepareActiveRepository(services, signal);
     default:
       throw new Error('repository action must be one of: status, list, set, prepare');
   }
@@ -106,46 +93,32 @@ export function getPreparedRepository(services: RepositoryToolServices): Prepare
   return services.state.prepared;
 }
 
-export async function prepareActiveRepository(services: RepositoryToolServices): Promise<string> {
+export async function prepareActiveRepository(services: RepositoryToolServices, signal?: AbortSignal): Promise<string> {
   const repository = getActiveRepository(services.state);
   if (!repository)
     throw new Error('No active repository is set. Use repository({ action: "set", owner, repo }) first.');
   const shell = services.shell();
   if (!shell) throw new Error('Repository preparation is unavailable before the sandbox shell is ready');
-  const access = await services.github.getRepositoryAccess(repository);
-  const branch = typeof services.state.context.branch === 'string' ? services.state.context.branch : undefined;
-  const workspacePath = joinPath(services.sandbox.workspacePath, access.repo);
-  const result = await shell(repositorySetupCommand(access, workspacePath, branch), {
-    cwd: services.sandbox.workspacePath,
-    env: { GITHUB_AUTH_HEADER: gitAuthHeader(access.auth.token) },
-    timeoutMs: 120_000,
+  const setupShell = services.setupShell?.() ?? shell;
+  const plan = await planRepositoryPreparation({
+    context: services.state.context,
+    sandbox: services.sandbox,
+    github: services.github,
   });
-  if (result.exitCode !== 0)
-    throw new Error(
-      `Repository preparation failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`,
-    );
-
-  services.state.prepared = { repository, access, workspacePath };
-  await services.emit({
-    ...services.eventBase,
-    type: 'repository_ready',
-    payload: {
-      provider: access.provider,
-      owner: access.owner,
-      repo: access.repo,
-      ...(branch ? { branch } : {}),
-      workspacePath,
-      expiresAt: access.expiresAt.toISOString(),
-    },
-    createdAt: new Date(),
+  if (!plan) throw new Error('No active repository is set. Use repository({ action: "set", owner, repo }) first.');
+  const result = await executeRepositoryPreparation({
+    plan,
+    workspaceRoot: services.sandbox.workspacePath,
+    shell,
+    setupShell,
+    emit: services.emit,
+    eventBase: services.eventBase,
+    ...(services.setupScript ? { setupScript: services.setupScript } : {}),
+    ...(signal ? { signal } : {}),
   });
 
-  return [
-    `Repository prepared: ${repository.owner}/${repository.repo}`,
-    ...(branch ? [`Branch: ${branch}`] : []),
-    `Workspace path: ${workspacePath}`,
-    'Use absolute paths under this workspace for read/write/edit/bash if this run did not start in the repository cwd.',
-  ].join('\n');
+  services.state.prepared = result;
+  return repositoryPreparationSummary(result);
 }
 
 function repositoryStatus(services: RepositoryToolServices): string {
@@ -218,13 +191,4 @@ function parseRepositoryValue(value: unknown): (GitHubRepository & { provider: '
   const owner = typeof record.owner === 'string' ? record.owner.trim() : '';
   const repo = typeof record.repo === 'string' ? record.repo.trim() : '';
   return provider === 'github' && owner && repo ? { provider, owner, repo } : null;
-}
-
-function gitAuthHeader(token: string): string {
-  const credentials = Buffer.from(`x-access-token:${token}`).toString('base64');
-  return `Authorization: Basic ${credentials}`;
-}
-
-function joinPath(base: string, child: string): string {
-  return `${base.replace(/\/+$/, '')}/${child.replace(/^\/+/, '')}`;
 }

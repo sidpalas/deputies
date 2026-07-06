@@ -20,17 +20,25 @@ import type { ArtifactService } from '../artifacts/service.js';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
 import { getModels, type Api, type Model } from '@earendil-works/pi-ai';
-import { prepareRepositoryShellSetup, type RepositoryAccessProvider } from '../repositories/setup.js';
+import type { RepositoryAccessProvider } from '../repositories/setup.js';
+import {
+  checkoutRepositoryPreparation,
+  completeRepositoryPreparation,
+  planRepositoryPreparation,
+  preparedRepositoryFromPlan,
+  type RepositoryCheckoutResult,
+  type RepositoryPreparationPlan,
+} from '../repositories/prepare.js';
 import {
   AMAZON_BEDROCK_INFERENCE_PROFILE_MODELS,
   AMAZON_BEDROCK_PROVIDER,
   BEDROCK_CONVERSE_STREAM_API,
   resolveBedrockRuntimeBaseUrl,
 } from '../runner/bedrock.js';
-import type { RepositoryShell, RepositoryToolServices, RepositoryToolState } from '../repositories/tool.js';
+import { type RepositoryToolServices, type RepositoryToolState } from '../repositories/tool.js';
+import { sandboxRepositoryShell } from '../repositories/shell.js';
 import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
-import type { SandboxHandle } from '../sandbox/types.js';
 import { PI_SESSION_DATA_VERSION, type PiSessionData, type PiSessionStore } from './session-store.js';
 import { createPiArtifactToolDefinition } from './artifact-tool.js';
 import { createPiGitToolDefinition } from './git-tool.js';
@@ -74,6 +82,7 @@ export type PiRunnerOptions = {
   artifactToolMaxBytes?: number;
   sandboxKeepalive?: SandboxKeepaliveService;
   sandboxKeepaliveMaxExtensionMs?: number;
+  setupScript?: { enabled: boolean; timeoutMs: number };
   webSearch?: WebSearchToolServices;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
 };
@@ -120,7 +129,7 @@ export class PiRunner implements Runner {
     if (unavailableReason) throw new Error(unavailableReason);
 
     const repositorySetup = await preparePiRepositorySetup(input, this.options);
-    const cwd = repositorySetup?.workspacePath ?? input.sandbox.workspacePath;
+    const cwd = repositorySetup?.plan.workspacePath ?? input.sandbox.workspacePath;
     const lease = await this.getSessionLease(input.sessionId, cwd);
     const modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.agentDir, 'models.json'));
     registerAmazonBedrockInferenceProfiles(modelRegistry, modelName);
@@ -198,26 +207,10 @@ export class PiRunner implements Runner {
         createdAt: new Date(),
       });
 
-      if (repositorySetup) {
-        await input.emit({
-          sessionId: input.sessionId,
-          runId: input.runId,
-          messageId: input.messageId,
-          type: 'repository_ready',
-          payload: {
-            provider: repositorySetup.access.provider,
-            owner: repositorySetup.access.owner,
-            repo: repositorySetup.access.repo,
-            ...(repositorySetup.branch ? { branch: repositorySetup.branch } : {}),
-            workspacePath: repositorySetup.workspacePath,
-            expiresAt: repositorySetup.access.expiresAt.toISOString(),
-          },
-          createdAt: new Date(),
-        });
-      }
+      const setupNote = repositorySetup ? await completePiRepositorySetup(input, this.options, repositorySetup) : null;
 
       if (input.signal?.aborted) throw new Error('Operation aborted');
-      await session.prompt(input.prompt, { expandPromptTemplates: false });
+      await session.prompt(withSetupNote(input.prompt, setupNote), { expandPromptTemplates: false });
       await Promise.all(pendingEvents);
       if (input.signal?.aborted) throw new Error('Operation aborted');
 
@@ -296,7 +289,10 @@ export class PiRunner implements Runner {
   }
 }
 
-type PiRepositorySetup = Awaited<ReturnType<typeof preparePiRepositorySetup>>;
+type PiRepositorySetup = {
+  plan: RepositoryPreparationPlan;
+  checkout: RepositoryCheckoutResult;
+} | null;
 
 function createPiToolSet(
   input: RunnerInput,
@@ -308,7 +304,7 @@ function createPiToolSet(
   const customTools = createSandboxPiToolDefinitions(input.sandbox, cwd);
 
   const repositoryServices = options.repositoryAccess?.github
-    ? createPiRepositoryServices(input, options.repositoryAccess.github, repositoryState)
+    ? createPiRepositoryServices(input, options.repositoryAccess.github, repositoryState, options.setupScript)
     : null;
 
   if (options.artifacts) {
@@ -525,11 +521,7 @@ function resolveSubagentCwd(parentCwd: string, cwd: string | undefined): string 
 function createRepositoryState(context: Record<string, unknown>, setup: PiRepositorySetup): RepositoryToolState {
   const state: RepositoryToolState = { context: structuredClone(context) };
   if (setup) {
-    state.prepared = {
-      repository: { provider: 'github', owner: setup.access.owner, repo: setup.access.repo },
-      access: setup.access,
-      workspacePath: setup.workspacePath,
-    };
+    state.prepared = preparedRepositoryFromPlan(setup.plan);
   }
   return state;
 }
@@ -538,6 +530,7 @@ function createPiRepositoryServices(
   input: RunnerInput,
   github: RepositoryAccessProvider,
   state: RepositoryToolState,
+  setupScript: PiRunnerOptions['setupScript'],
 ): RepositoryToolServices {
   return {
     github,
@@ -546,43 +539,47 @@ function createPiRepositoryServices(
     state,
     emit: input.emit,
     eventBase: { sessionId: input.sessionId, runId: input.runId, messageId: input.messageId },
+    ...(setupScript ? { setupScript } : {}),
     ...(input.updateSessionContext ? { updateSessionContext: input.updateSessionContext } : {}),
   };
 }
 
-function sandboxRepositoryShell(sandbox: SandboxHandle): RepositoryShell {
-  return async (command, options = {}) => {
-    const result = await sandbox.exec({
-      command,
-      ...(options.cwd ? { cwd: options.cwd } : {}),
-      ...(options.env ? { env: options.env } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
-    });
-    return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
-  };
-}
-
 async function preparePiRepositorySetup(input: RunnerInput, options: PiRunnerOptions) {
-  const repositorySetupInput: Parameters<typeof prepareRepositoryShellSetup>[0] = {
+  const repositorySetupInput: Parameters<typeof planRepositoryPreparation>[0] = {
     context: input.context,
     sandbox: input.sandbox,
   };
   if (options.repositoryAccess?.github) repositorySetupInput.github = options.repositoryAccess.github;
-  const setup = await prepareRepositoryShellSetup(repositorySetupInput);
-  if (!setup) return null;
-  const result = await input.sandbox.exec({
-    command: setup.command,
-    cwd: input.sandbox.workspacePath,
-    env: setup.env,
-    timeoutMs: 120_000,
+  const plan = await planRepositoryPreparation(repositorySetupInput);
+  if (!plan) return null;
+  const checkout = await checkoutRepositoryPreparation({
+    plan,
+    workspaceRoot: input.sandbox.workspacePath,
+    shell: sandboxRepositoryShell(input.sandbox),
     ...(input.signal ? { signal: input.signal } : {}),
   });
-  if (input.signal?.aborted) throw new Error('Operation aborted');
-  if (result.exitCode !== 0) {
-    throw new Error(`Repository setup failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`);
-  }
-  return setup;
+  return { plan, checkout };
+}
+
+async function completePiRepositorySetup(
+  input: RunnerInput,
+  options: PiRunnerOptions,
+  setup: NonNullable<PiRepositorySetup>,
+): Promise<string | null> {
+  const result = await completeRepositoryPreparation({
+    plan: setup.plan,
+    repositoryWasCloned: setup.checkout.repositoryWasCloned,
+    emit: input.emit,
+    eventBase: { sessionId: input.sessionId, runId: input.runId, messageId: input.messageId },
+    setupShell: sandboxRepositoryShell(input.sandbox),
+    ...(options.setupScript ? { setupScript: options.setupScript } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
+  });
+  return result.setupFailureNote;
+}
+
+function withSetupNote(prompt: string, setupNote: string | null): string {
+  return setupNote ? `${setupNote}\n\n${prompt}` : prompt;
 }
 
 function createNewSessionManager(sessionId: string, cwd: string): SessionManager {

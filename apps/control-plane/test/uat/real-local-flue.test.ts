@@ -35,6 +35,7 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Flue + local sandbox UAT', ()
 
     const result = await new FlueRunner(new RealFlueAgentFactory({ model: requireRunnerModelDefault(config) }), {
       repositoryAccess: { github: new LocalGitAccessProvider(remotePath) },
+      setupScript: { enabled: true, timeoutMs: config.repositorySetupScriptTimeoutMs },
     }).run({
       sessionId: 'real-local-flue-uat',
       runId: 'real-local-flue-uat-run',
@@ -60,7 +61,9 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Flue + local sandbox UAT', ()
         }),
       }),
     );
+    expect(events).toContainEqual(expect.objectContaining({ type: 'setup_script_finished' }));
     await expect(sandbox.fs?.readFile('manaflow/README.md')).resolves.toBe('LOCAL_FLUE_UAT_OK\n');
+    await expect(sandbox.fs?.readFile('manaflow/.setup-ran')).resolves.toBe('');
   }, 180_000);
 });
 
@@ -74,7 +77,10 @@ async function createLocalGitRemote(sandbox: SandboxHandle): Promise<string> {
       "git -C seed config user.name 'Test User'",
       "git -C seed config user.email 'test@example.com'",
       "printf 'LOCAL_FLUE_UAT_OK\\n' > seed/README.md",
-      'git -C seed add README.md',
+      'mkdir -p seed/.agents',
+      "printf '#!/usr/bin/env bash\\nset -eu\\ntouch .setup-ran\\n' > seed/.agents/setup",
+      'chmod +x seed/.agents/setup',
+      'git -C seed add README.md .agents/setup',
       "git -C seed commit -m 'initial commit'",
       'git -C seed branch -M main',
       'git -C seed remote add origin ../remote.git',

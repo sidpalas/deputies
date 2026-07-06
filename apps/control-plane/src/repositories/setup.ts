@@ -98,6 +98,7 @@ export function repositorySetupCommand(access: GitHubRepositoryAccess, workspace
     'fi',
     `git -C ${quoteShell(workspacePath)} config user.name 'DevDeputies'`,
     `git -C ${quoteShell(workspacePath)} config user.email 'devdeputies@users.noreply.github.com'`,
+    'echo "deputies-repo-setup:cloned=$repository_was_cloned"',
   ].join('\n');
 }
 

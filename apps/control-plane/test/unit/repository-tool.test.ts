@@ -113,6 +113,110 @@ describe('repository Flue tool', () => {
     expect(events.map((event) => event.type)).toEqual(['repository_ready']);
   });
 
+  it('runs repository setup scripts during prepare and reports the outcome', async () => {
+    const shells: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = [];
+    const execCalls: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = [];
+    const events: NormalizedEvent[] = [];
+    const shellResponses = [{ exitCode: 0, stdout: 'prepared\ndeputies-repo-setup:cloned=1\n', stderr: '' }];
+    const execResponses = [
+      { exitCode: 0, stdout: 'deputies-setup:run reason=cloned hash=abc123 exec=0\n', stderr: '' },
+      { exitCode: 0, stdout: 'setup ok', stderr: '' },
+    ];
+    const agentRef: AgentRef = {
+      current: {
+        async session() {
+          throw new Error('not used');
+        },
+        async shell(command, options) {
+          const shell: { command: string; cwd?: string; env?: Record<string, string> } = { command };
+          if (options?.cwd) shell.cwd = options.cwd;
+          if (options?.env) shell.env = options.env;
+          shells.push(shell);
+          return shellResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' };
+        },
+      },
+    };
+    const services = repositoryServices({
+      agentRef,
+      sandbox: {
+        workspacePath: '/workspace',
+        async exec(input: { command: string; cwd?: string; env?: Record<string, string> }) {
+          const call: { command: string; cwd?: string; env?: Record<string, string> } = { command: input.command };
+          if (input.cwd) call.cwd = input.cwd;
+          if (input.env) call.env = input.env;
+          execCalls.push(call);
+          const now = new Date();
+          return {
+            ...(execResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' }),
+            startedAt: now,
+            completedAt: now,
+          };
+        },
+      } as never,
+      setupScript: { enabled: true, timeoutMs: 600_000 },
+      emit: async (event) => {
+        events.push(event);
+      },
+    });
+    services.state.context = { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } };
+    const tool = createRepositoryTool(services);
+
+    const result = await tool.execute({ action: 'prepare' });
+
+    expect(result).toContain('Setup script: ran successfully');
+    expect(shells).toHaveLength(1);
+    expect(execCalls).toHaveLength(2);
+    expect(execCalls[0]?.cwd).toBe('/workspace/manaflow');
+    expect(execCalls[1]?.env).toEqual({ DEPUTIES: '1', DEPUTIES_SETUP: '1' });
+    expect(execCalls[1]?.command).toContain("bash '.agents/setup'");
+    expect(events.map((event) => event.type)).toEqual([
+      'repository_ready',
+      'setup_script_started',
+      'setup_script_finished',
+    ]);
+  });
+
+  it('returns repository prepare results when setup scripts fail', async () => {
+    const shellResponses = [{ exitCode: 0, stdout: 'prepared\ndeputies-repo-setup:cloned=1\n', stderr: '' }];
+    const execResponses = [
+      { exitCode: 0, stdout: 'deputies-setup:run reason=cloned hash=abc123 exec=1\n', stderr: '' },
+      { exitCode: 1, stdout: 'bad stdout', stderr: 'bad stderr' },
+    ];
+    const agentRef: AgentRef = {
+      current: {
+        async session() {
+          throw new Error('not used');
+        },
+        async shell() {
+          return shellResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' };
+        },
+      },
+    };
+    const services = repositoryServices({
+      agentRef,
+      sandbox: {
+        workspacePath: '/workspace',
+        async exec() {
+          const now = new Date();
+          return {
+            ...(execResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' }),
+            startedAt: now,
+            completedAt: now,
+          };
+        },
+      } as never,
+      setupScript: { enabled: true, timeoutMs: 600_000 },
+    });
+    services.state.context = { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } };
+    const tool = createRepositoryTool(services);
+
+    const result = await tool.execute({ action: 'prepare' });
+
+    expect(result).toContain('Repository prepared: manaflow-ai/manaflow');
+    expect(result).toContain('Setup script: FAILED (exit 1)');
+    expect(result).toContain('bad stdout\nbad stderr');
+  });
+
   it('requires an active repository before prepare', async () => {
     const tool = createRepositoryTool(repositoryServices());
 
