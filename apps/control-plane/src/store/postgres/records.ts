@@ -41,6 +41,8 @@ export type SessionRow = QueryResultRow & {
   status: SessionStatus;
   title: string | null;
   context: Record<string, unknown> | null;
+  parent_session_id: string | null;
+  spawn_depth: PgInteger;
   owner_group_id: string;
   visibility: SessionVisibility;
   write_policy: SessionWritePolicy;
@@ -51,7 +53,7 @@ export type SessionRow = QueryResultRow & {
 };
 
 export const sessionSelectColumns =
-  'id, status, title, context, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, queue_paused_at';
+  'id, status, title, context, parent_session_id, spawn_depth, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, queue_paused_at';
 
 export type AuthUserRow = QueryResultRow & {
   id: string;
@@ -359,9 +361,11 @@ export function toSession(row: SessionRow): SessionRecord {
     ownerGroupId: row.owner_group_id ?? defaultGroupId,
     visibility: row.visibility ?? 'organization',
     writePolicy: row.write_policy ?? 'group_members',
+    spawnDepth: Number(row.spawn_depth ?? 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+  if (row.parent_session_id) record.parentSessionId = row.parent_session_id;
   if (row.title) record.title = row.title;
   if (row.queue_paused_at) record.queuePausedAt = row.queue_paused_at;
   if (row.created_by_user_id) record.createdByUserId = row.created_by_user_id;

@@ -1,6 +1,7 @@
 import type { SessionData } from '@flue/runtime';
 import type { Pool } from 'pg';
 import { createServices } from '../../src/app/server.js';
+import { normalizeAppendInput } from '../../src/events/service.js';
 import { PostgresFlueSessionStore } from '../../src/runner-flue/session-store.js';
 import {
   PI_SESSION_DATA_VERSION,
@@ -309,6 +310,136 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       payload: { title: 'Atomic update', visibility: 'group' },
     });
     await expect(store.getSession(session.id)).resolves.toMatchObject({ visibility: 'group' });
+  });
+
+  it('creates a child session with its first message atomically and enforces child caps', async () => {
+    const services = createServices(store);
+    const parent = await services.sessions.create({ title: 'Parent session', visibility: 'group' });
+    const now = new Date('2026-05-06T00:00:00.000Z');
+    const childSession = {
+      id: '00000000-0000-4000-8000-000000000931',
+      status: 'queued' as const,
+      title: 'Child session',
+      parentSessionId: parent.id,
+      spawnDepth: 1,
+      ownerGroupId: parent.ownerGroupId,
+      visibility: parent.visibility,
+      writePolicy: parent.writePolicy,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const input = {
+      session: childSession,
+      message: {
+        id: '00000000-0000-4000-8000-000000000932',
+        prompt: 'start child work',
+        source: 'deputy',
+        authorName: 'Deputy: Parent session',
+        createdAt: now,
+      },
+      sessionCreatedEvent: normalizeAppendInput({
+        sessionId: childSession.id,
+        type: 'session_created',
+        payload: { title: childSession.title, parentSessionId: parent.id, spawnDepth: 1 },
+      }),
+      messageCreatedEvent: normalizeAppendInput({
+        sessionId: childSession.id,
+        messageId: '00000000-0000-4000-8000-000000000932',
+        type: 'message_created',
+        payload: { sequence: 1, source: 'deputy' },
+      }),
+      parentSpawnedEvent: normalizeAppendInput({
+        sessionId: parent.id,
+        type: 'session_spawned',
+        payload: {
+          childSessionId: childSession.id,
+          title: childSession.title,
+          ownerGroupId: childSession.ownerGroupId,
+          spawnDepth: childSession.spawnDepth,
+        },
+      }),
+      parentChildLimit: { parentSessionId: parent.id, maxNonArchivedChildren: 1 },
+    };
+
+    const created = await store.createSessionWithFirstMessage(input);
+    expect(created.created).toBe(true);
+    expect(created.session).toMatchObject({ id: childSession.id, parentSessionId: parent.id, spawnDepth: 1 });
+    expect(created.message).toMatchObject({ sequence: 1, status: 'pending', source: 'deputy' });
+    await expect(
+      store.getMessage({ sessionId: childSession.id, messageId: '00000000-0000-4000-8000-000000000932' }),
+    ).resolves.toMatchObject({ sequence: 1, status: 'pending', source: 'deputy' });
+    await store.appendEventWithNextSequence({
+      sessionId: childSession.id,
+      messageId: '00000000-0000-4000-8000-000000000932',
+      type: 'agent_response_final',
+      payload: { text: 'child final response' },
+      createdAt: now,
+    });
+    await expect(store.getSessionTranscript({ sessionId: childSession.id, limit: 1 })).resolves.toMatchObject({
+      entries: [
+        {
+          message: expect.objectContaining({ sequence: 1, prompt: 'start child work' }),
+          finalResponse: expect.objectContaining({ payload: { text: 'child final response' } }),
+        },
+      ],
+      hasMore: false,
+    });
+    await expect(store.getEvents(childSession.id)).resolves.toMatchObject([
+      { sequence: 1, type: 'session_created' },
+      { sequence: 2, type: 'message_created' },
+      { sequence: 3, type: 'agent_response_final' },
+    ]);
+    await expect(store.getEvents(parent.id)).resolves.toMatchObject([
+      { sequence: 1, type: 'session_created' },
+      { sequence: 2, type: 'session_spawned' },
+    ]);
+
+    const replay = await store.createSessionWithFirstMessage(input);
+    expect(replay.created).toBe(false);
+    expect(replay.session.id).toBe(childSession.id);
+    await expect(services.messages.enqueue({ sessionId: childSession.id, prompt: 'follow-up' })).resolves.toMatchObject(
+      {
+        sequence: 2,
+      },
+    );
+    await expect(store.getSessionMessageSummary(childSession.id)).resolves.toMatchObject({
+      count: 2,
+      lastMessage: expect.objectContaining({ sequence: 2, prompt: 'follow-up' }),
+    });
+    await expect(
+      store.listSessionsForAgent({
+        ownerGroupId: parent.ownerGroupId,
+        actingSessionId: parent.id,
+        scope: 'children',
+        limit: 1,
+      }),
+    ).resolves.toMatchObject([expect.objectContaining({ id: childSession.id })]);
+    await expect(
+      store.listChildSessions({ parentSessionId: parent.id, ownerGroupId: parent.ownerGroupId, limit: 1 }),
+    ).resolves.toMatchObject([expect.objectContaining({ id: childSession.id })]);
+
+    await expect(
+      store.createSessionWithFirstMessage({
+        ...input,
+        session: { ...childSession, id: '00000000-0000-4000-8000-000000000933' },
+        message: { ...input.message, id: '00000000-0000-4000-8000-000000000934' },
+      }),
+    ).rejects.toThrow('Cannot spawn more than 1 non-archived child sessions');
+    await expect(
+      store.createSessionWithFirstMessage({
+        ...input,
+        session: {
+          ...childSession,
+          id: '00000000-0000-4000-8000-000000000935',
+          parentSessionId: parent.id,
+        },
+        message: { ...input.message, id: '00000000-0000-4000-8000-000000000936' },
+        parentChildLimit: {
+          parentSessionId: '00000000-0000-4000-8000-000000000937',
+          maxNonArchivedChildren: 5,
+        },
+      }),
+    ).rejects.toThrow('Parent child limit must match the session parent');
   });
 
   it('claims pending messages as a queue batch and respects queue pause', async () => {

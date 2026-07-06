@@ -12,6 +12,7 @@ vi.mock('shiki', () => ({ codeToHtml: codeToHtmlMock }));
 const session = {
   id: '00000000-0000-4000-8000-000000000001',
   status: 'idle',
+  spawnDepth: 0,
   title: 'Existing session',
   ownerGroupId: '00000000-0000-4000-8000-000000000010',
   visibility: 'organization',
@@ -2587,6 +2588,39 @@ it('labels transcript-only integration entries as not queued', async () => {
   expect(screen.getByText('GitHub notice 2')).toBeInTheDocument();
   expect(screen.getAllByText('not queued')).toHaveLength(2);
   expect(screen.getByText(/unarchive and proceed/)).toBeInTheDocument();
+});
+
+it('shows session lineage and labels deputy-authored messages', async () => {
+  const childSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000302',
+    title: 'Child investigation',
+    parentSessionId: session.id,
+    spawnDepth: 1,
+    status: 'queued',
+  };
+  mockApi({
+    sessions: [session, childSession],
+    messages: [
+      messageFixture({
+        id: '00000000-0000-4000-8000-000000000303',
+        sequence: 1,
+        status: 'pending',
+        source: 'deputy',
+        prompt: 'Child session completed with a summary.',
+      }),
+    ],
+    messagesBySession: { [childSession.id]: [] },
+  });
+  render(<App />);
+
+  expect(await screen.findByText('Deputy message 1')).toBeInTheDocument();
+  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  expect(contextPanel.getByText('Session lineage')).toBeInTheDocument();
+  expect(contextPanel.getByText('Children (1)')).toBeInTheDocument();
+  fireEvent.click(contextPanel.getByRole('button', { name: /Child investigation/ }));
+
+  await waitFor(() => expect(sessionStorage.getItem('deputies-selected-session-id')).toBe(childSession.id));
 });
 
 it('shows callback delivery status and replays failed callbacks', async () => {

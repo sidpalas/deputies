@@ -150,7 +150,12 @@ import {
   ThreadSidebar,
 } from './components/app-panels.js';
 import { cn } from './lib/utils.js';
-import { ChatPanel, DesktopContextPanel, MobileContextPanel } from './components/thread/thread-content.js';
+import {
+  ChatPanel,
+  DesktopContextPanel,
+  MobileContextPanel,
+  type SessionLineage,
+} from './components/thread/thread-content.js';
 
 type AsyncState<T> = {
   data: T;
@@ -460,6 +465,16 @@ export function App() {
     selectedSessionId && detailLoadedSessionId !== selectedSessionId && !selectedSessionHasMessages,
   );
   const sortedSessions = useMemo(() => sortSessionsByLastActivity(sessions), [sessions]);
+  const selectedSessionLineage: SessionLineage | undefined = selectedSession
+    ? {
+        current: selectedSession,
+        parent: selectedSession.parentSessionId
+          ? sessions.find((session) => session.id === selectedSession.parentSessionId)
+          : undefined,
+        children: sessions.filter((session) => session.parentSessionId === selectedSession.id),
+        onSelectSession: selectSession,
+      }
+    : undefined;
 
   function updateNavigation(next: Partial<NavigationState>) {
     setNavigation((current) => ({ ...current, ...next }));
@@ -2357,6 +2372,7 @@ export function App() {
                                       onUpdateAccess={handleUpdateSessionAccess}
                                     />
                                   }
+                                  lineage={selectedSessionLineage}
                                   repository={selectedRepository}
                                   branch={selectedSessionBranch || null}
                                   artifacts={artifacts}
@@ -2449,6 +2465,7 @@ export function App() {
                               onUpdateAccess={handleUpdateSessionAccess}
                             />
                           }
+                          lineage={selectedSessionLineage}
                           repository={selectedRepository}
                           branch={selectedSessionBranch || null}
                           artifacts={artifacts}

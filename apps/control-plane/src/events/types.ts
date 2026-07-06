@@ -17,9 +17,18 @@ export type NormalizedEventPayload<T extends NormalizedEventType = NormalizedEve
 export type NormalizedEventPayloadMap = {
   session_created: {
     title: string | null;
+    parentSessionId?: string;
+    spawnDepth?: number;
+    spawnedBy?: { sessionId: string; runId: string; messageId: string };
     ownerGroupId?: string;
     visibility?: 'group' | 'organization';
     writePolicy?: 'group_members' | 'creator_only';
+  };
+  session_spawned: {
+    childSessionId: string;
+    title: string | null;
+    ownerGroupId: string;
+    spawnDepth: number;
   };
   session_archived: EmptyEventPayload;
   session_unarchived: EmptyEventPayload;
@@ -163,6 +172,7 @@ type CallbackPayload = {
 
 export type NormalizedEventType =
   | 'session_created'
+  | 'session_spawned'
   | 'session_archived'
   | 'session_unarchived'
   | 'session_updated'
