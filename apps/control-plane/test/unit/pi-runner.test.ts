@@ -955,7 +955,10 @@ describe('PiRunner', () => {
     });
 
     expect(execCalls).toHaveLength(1);
-    expect(execCalls[0]?.command).toContain('git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone');
+    expect(execCalls[0]?.command).toContain(
+      'git -c \'http.https://github.com/manaflow-ai/manaflow.git.extraHeader\'="$auth_header" -c core.hooksPath=/dev/null clone',
+    );
+    expect(execCalls[0]?.command).toContain('unset GITHUB_AUTH_HEADER');
   });
 
   it('rejects artifact paths outside the sandbox workspace and enforces post-read size', async () => {

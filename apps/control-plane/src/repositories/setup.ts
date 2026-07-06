@@ -70,15 +70,18 @@ export function parseRepositoryContext(context: Record<string, unknown>): Reposi
 export function repositorySetupCommand(access: GitHubRepositoryAccess, workspacePath: string, branch?: string): string {
   const checkoutBranch = branch ? quoteShell(branch) : '"$default_branch"';
   const checkoutRemote = branch ? quoteShell(`origin/${branch}`) : '"origin/$default_branch"';
+  const gitAuthConfig = authenticatedGitConfig(access.cloneUrl);
   return [
     'set -eu',
+    'auth_header="$GITHUB_AUTH_HEADER"',
+    'unset GITHUB_AUTH_HEADER',
     `mkdir -p ${quoteShell(parentPath(workspacePath))}`,
     'repository_was_cloned=0',
     `if [ -d ${quoteShell(joinPath(workspacePath, '.git'))} ]; then`,
     `  git -C ${quoteShell(workspacePath)} remote set-url origin ${quoteShell(access.cloneUrl)}`,
-    `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" -C ${quoteShell(workspacePath)} fetch --prune origin`,
+    `  git ${gitAuthConfig} -C ${quoteShell(workspacePath)} fetch --prune origin`,
     'else',
-    `  git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone -- ${quoteShell(access.cloneUrl)} ${quoteShell(workspacePath)}`,
+    `  git ${gitAuthConfig} clone -- ${quoteShell(access.cloneUrl)} ${quoteShell(workspacePath)}`,
     '  repository_was_cloned=1',
     'fi',
     `default_branch="$(git -C ${quoteShell(workspacePath)} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"`,
@@ -88,7 +91,7 @@ export function repositorySetupCommand(access: GitHubRepositoryAccess, workspace
     ...(branch ? [`default_branch=${quoteShell(branch)}`] : []),
     `if [ -n "$default_branch" ]; then`,
     `  if [ "$repository_was_cloned" = "1" ] || git -C ${quoteShell(workspacePath)} diff --quiet --ignore-submodules -- && git -C ${quoteShell(workspacePath)} diff --cached --quiet --ignore-submodules --; then`,
-    `    git -C ${quoteShell(workspacePath)} checkout -B ${checkoutBranch} ${checkoutRemote}`,
+    `    git -c core.hooksPath=/dev/null -C ${quoteShell(workspacePath)} checkout -B ${checkoutBranch} ${checkoutRemote}`,
     '  else',
     `    current_branch="$(git -C ${quoteShell(workspacePath)} branch --show-current || true)"`,
     '    if [ "$current_branch" != "$default_branch" ]; then',
@@ -100,6 +103,11 @@ export function repositorySetupCommand(access: GitHubRepositoryAccess, workspace
     `git -C ${quoteShell(workspacePath)} config user.email 'devdeputies@users.noreply.github.com'`,
     'echo "deputies-repo-setup:cloned=$repository_was_cloned"',
   ].join('\n');
+}
+
+function authenticatedGitConfig(url: string): string {
+  if (!/^https?:\/\//.test(url)) return '-c core.hooksPath=/dev/null';
+  return `-c ${quoteShell(`http.${url}.extraHeader`)}="$auth_header" -c core.hooksPath=/dev/null`;
 }
 
 function parseBranchContext(context: Record<string, unknown>): string | undefined {

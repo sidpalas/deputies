@@ -4,9 +4,9 @@ Repository owners can commit `.agents/setup` at the repository root to prepare a
 
 ## Convention
 
-- Location: `.agents/setup`, a single regular file at the repository root.
+- Location: `.agents/setup`, a single regular file tracked by Git at the repository root.
 - Execution: executable files run as `./.agents/setup`; non-executable files run as `bash .agents/setup`.
-- Ignored paths: directories and symlinks at `.agents/setup` are treated as absent.
+- Ignored paths: untracked files, directories, and symlinks at `.agents/setup` are treated as absent.
 - Working directory: the prepared repository workspace, such as `/workspace/<repo>`.
 - Environment: the sandbox's normal environment plus `DEPUTIES=1` and `DEPUTIES_SETUP=1`.
 - Credentials: Deputies does not pass the temporary `GITHUB_AUTH_HEADER` used for clone/fetch into the script.
@@ -68,3 +68,11 @@ fi
 ```
 
 Heavy setup can hit memory or CPU limits on smaller sandbox providers. Prefer cached package managers and idempotent checks before expensive work.
+
+When starting long-lived background services, detach their standard streams so the setup command can finish:
+
+```bash
+nohup pnpm dev >/tmp/my-app.log 2>&1 </dev/null &
+```
+
+Avoid a plain `server &` when the server inherits stdout or stderr; some sandbox providers wait for those streams to close and the setup command can hang until the timeout.

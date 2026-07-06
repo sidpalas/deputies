@@ -193,7 +193,10 @@ describe('FlueRunner', () => {
     expect(calls[0]?.tools?.map((tool) => tool.name)).toEqual(['repository', 'gh', 'git']);
     expect(shells).toHaveLength(1);
     expect(shells[0]!.cwd).toBe('/workspace');
-    expect(shells[0]!.command).toContain('git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone');
+    expect(shells[0]!.command).toContain(
+      'git -c \'http.https://github.com/manaflow-ai/manaflow.git.extraHeader\'="$auth_header" -c core.hooksPath=/dev/null clone',
+    );
+    expect(shells[0]!.command).toContain('unset GITHUB_AUTH_HEADER');
     expect(shells[0]!.command).toContain("git -C '/workspace/manaflow' config user.name 'DevDeputies'");
     expect(shells[0]!.command).not.toContain('ghs_secret_token');
     expect(shells[0]!.env).toEqual({

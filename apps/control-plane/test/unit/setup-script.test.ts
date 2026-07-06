@@ -38,6 +38,7 @@ describe('runRepositorySetupScript', () => {
 
     expect(result).toEqual({ status });
     expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toContain('git ls-files -s --error-unmatch');
     expect(events).toEqual([]);
   });
 

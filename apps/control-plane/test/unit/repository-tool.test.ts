@@ -96,10 +96,14 @@ describe('repository Flue tool', () => {
 
     expect(result).toContain('Workspace path: /workspace/manaflow');
     expect(shells[0]?.cwd).toBe('/workspace');
-    expect(shells[0]?.command).toContain('git -c http.extraHeader="$GITHUB_AUTH_HEADER" clone');
+    expect(shells[0]?.command).toContain(
+      'git -c \'http.https://github.com/manaflow-ai/manaflow.git.extraHeader\'="$auth_header" -c core.hooksPath=/dev/null clone',
+    );
+    expect(shells[0]?.command).toContain('unset GITHUB_AUTH_HEADER');
     expect(shells[0]?.command).toContain('default_branch="$(git -C');
     expect(shells[0]?.command).toContain('diff --quiet --ignore-submodules');
     expect(shells[0]?.command).toContain('preserving checkout instead of switching branches');
+    expect(shells[0]?.command).toContain('git -c core.hooksPath=/dev/null');
     expect(shells[0]?.command).toContain('checkout -B "$default_branch" "origin/$default_branch"');
     expect(shells[0]?.command).toContain("git -C '/workspace/manaflow' config user.name 'DevDeputies'");
     expect(shells[0]?.command).toContain(

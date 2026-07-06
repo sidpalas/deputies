@@ -99,6 +99,8 @@ config:
   appDataStore: postgres
   runnerStateStore: postgres
   runnerModelDefault: anthropic/claude-haiku-4-5
+  repositorySetupScriptEnabled: 'true'
+  repositorySetupScriptTimeoutSeconds: '600'
   artifactStorageProvider: s3
   artifactStorageS3Endpoint: http://seaweedfs:8333
   artifactStorageS3Region: us-east-1
