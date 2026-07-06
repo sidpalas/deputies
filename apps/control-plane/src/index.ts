@@ -31,7 +31,7 @@ import { SlackRunProgressNotifier } from './integrations/slack/progress-notifier
 import { FakeRunner } from './runner/fake.js';
 import type { Runner } from './runner/types.js';
 import { RealFlueAgentFactory, type RealFlueAgentFactoryOptions } from './runner-flue/agent-factory.js';
-import { loadOpenAICodexApiKey } from './runner-flue/openai-codex-auth.js';
+import { loadOpenAICodexApiKey } from './runner/openai-codex-auth.js';
 import { FlueRunner } from './runner-flue/runner.js';
 import { PostgresFlueSessionStore } from './runner-flue/session-store.js';
 import { PiRunner, type PiRunnerOptions } from './runner-pi/runner.js';
@@ -395,6 +395,7 @@ async function createRunner(): Promise<Runner> {
   const options: RealFlueAgentFactoryOptions = {
     model,
   };
+  console.warn('RUNNER=flue is deprecated and will be removed. Use RUNNER=pi for real agent work.');
   if (configuredModels(config).some((configuredModel) => configuredModel.startsWith('openai-codex/'))) {
     const codexAuth = {};
     if (config.openaiCodexAuthFile) Object.assign(codexAuth, { authFile: config.openaiCodexAuthFile });

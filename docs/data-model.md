@@ -551,13 +551,13 @@ Stores runner-owned internal session history for durable runner continuation. Th
 
 Product state remains in `sessions`, `messages`, `runs`, `events`, `artifacts`, and `sandboxes`. Runner runtime tables are opaque SDK state used only by the runner adapter that wrote them.
 
-Changing a product session from one runner to another does not continue the previous runner's internal history. For example, a session that starts on `RUNNER=flue` can later receive work with `RUNNER=pi`, but Pi starts a new Pi runtime history for that product session. The product UI still shows the prior messages/events, but the Pi agent does not read or convert `flue_sessions`. Cross-runner continuation requires an explicit transcript conversion layer or a future runner-agnostic transcript store.
+Changing a product session from one runner to another does not continue the previous runner's internal history. For example, a legacy session that starts on deprecated `RUNNER=flue` can later receive work with `RUNNER=pi`, but Pi starts a new Pi runtime history for that product session. The product UI still shows the prior messages/events, but the Pi agent does not read or convert `flue_sessions`. Cross-runner continuation requires an explicit transcript conversion layer or a future runner-agnostic transcript store.
 
 The runner tables are intentionally separate for now. A future shared `agent_sessions` table is viable, but it should include an explicit `runner` discriminator, runner-owned key, product `session_id`, schema/data version fields, and tests that prevent one runner from loading another runner's state. Without those guardrails, a shared table makes divergent SDK shapes easier to mix accidentally, weakens table-level constraints such as Pi's `sessions(id)` foreign key, and couples Flue and Pi storage migrations even though each runtime owns a different opaque format.
 
 ### Flue Sessions
 
-Stores Flue's internal session history for Node deployments.
+Stores deprecated Flue runner internal session history for legacy Node deployments. New deployments should use Pi sessions instead.
 
 Suggested columns:
 

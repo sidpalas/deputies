@@ -9,7 +9,7 @@ A production-like deployment usually includes:
 - A web static entrypoint and reverse proxy that serves `apps/web/dist`, proxies API routes, and forwards sandbox service preview hosts.
 - One or more control-plane API processes.
 - One or more worker processes, either combined with the API or split out.
-- Postgres for durable product state and Flue state.
+- Postgres for durable product state and runner state.
 - Optional S3-compatible object storage for artifact blobs.
 - A sandbox provider for real agent work: Daytona, Docker, Tensorlake, Kubernetes Agent Sandbox, or AWS Lambda MicroVM.
 
@@ -286,12 +286,14 @@ RUNNER=fake
 SANDBOX_PROVIDER=fake
 ```
 
-Real Flue runner:
+Default real runner:
 
 ```sh
-RUNNER=flue
+RUNNER=pi
 RUNNER_MODEL_DEFAULT=anthropic/claude-haiku-4-5
 ```
+
+`RUNNER=flue` is deprecated and kept only for legacy deployments while the Flue runner is removed. Do not use it for new deployments.
 
 Provider credentials:
 
@@ -301,7 +303,7 @@ OPENAI_API_KEY=<secret>
 OPENCODE_API_KEY=<secret>
 ```
 
-Amazon Bedrock through the Pi runner:
+Amazon Bedrock through Pi:
 
 ```sh
 RUNNER=pi
@@ -375,7 +377,7 @@ DEPUTY_MAX_SPAWNS_PER_RUN=3
 
 Set `DEPUTY_TOOL_ENABLED=false` to hide the tool for a conservative deployment.
 
-When enabled for `RUNNER=flue` or `RUNNER=pi`, the tool runs in the trusted worker process and writes product sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions inherit the parent's owner group, visibility, and write policy, and copy the triggering message's author user as creator attribution when present. They can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`. Successful completion follow-ups are informational and output-free; agents can explicitly request bounded newest-first transcript pages with `get_session` when the child result matters.
+When enabled for `RUNNER=pi` or deprecated `RUNNER=flue`, the tool runs in the trusted worker process and writes product sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions inherit the parent's owner group, visibility, and write policy, and copy the triggering message's author user as creator attribution when present. They can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`. Successful completion follow-ups are informational and output-free; agents can explicitly request bounded newest-first transcript pages with `get_session` when the child result matters.
 
 Before relying on the default in production, review the organization-level coordination policy, worker capacity, and session-spawn limits. Use `DEPUTY_TOOL_ENABLED=false` if the deployment needs a conservative rollout.
 

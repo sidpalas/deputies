@@ -2,7 +2,7 @@
 
 ## Goal
 
-The system must support multiple sandbox providers without changing session, message, worker, integration, or Flue runner code. Provider-specific behavior belongs behind a stable sandbox provider interface plus capability flags.
+The system must support multiple sandbox providers without changing session, message, worker, integration, or runner code. Provider-specific behavior belongs behind a stable sandbox provider interface plus capability flags.
 
 Initial providers may include:
 
@@ -25,11 +25,11 @@ Tensorlake sandboxes require `TENSORLAKE_REGISTERED_IMAGE` to name a registered 
 
 ## Design Rule
 
-The worker coordinates product sandbox lifecycle through the provider interface. The Flue runner receives a Flue-compatible sandbox connector derived from the provider handle.
+The worker coordinates product sandbox lifecycle through the provider interface. The Pi runner uses the provider handle through the generic sandbox tool layer. The deprecated Flue runner receives a Flue-compatible sandbox connector derived from the same provider handle while it remains supported.
 
 No module outside `sandbox` and provider-specific adapters should know whether a session is running on Docker, Daytona, Kubernetes, Lambda MicroVMs, or a fake test provider.
 
-Flue already defines the runtime sandbox shape through `SandboxFactory` and `SessionEnv`. Our provider interface should not become a second agent filesystem/tool runtime. It should own lifecycle concerns that Flue intentionally does not own for our product: create, reconnect, health, destroy, stop/start when supported, persisted provider IDs, and provider capabilities.
+Our provider interface should not become a second agent filesystem/tool runtime. It should own lifecycle concerns that runner SDKs intentionally do not own for our product: create, reconnect, health, destroy, stop/start when supported, persisted provider IDs, and provider capabilities. Deprecated Flue support adapts this handle into Flue's `SandboxFactory` and `SessionEnv` shape.
 
 ## Provider Interface
 
@@ -136,7 +136,7 @@ export interface SandboxFileSystem {
 }
 ```
 
-This mirrors the Flue connector shape closely enough that `runner-flue` can adapt a `SandboxHandle` into a Flue sandbox factory.
+This is the stable sandbox contract used by Pi tools and other runner adapters. Deprecated `runner-flue` can also adapt a `SandboxHandle` into a Flue sandbox factory.
 
 ## Lifecycle Semantics
 
@@ -245,9 +245,11 @@ Examples:
 
 The lifecycle manager should select behavior based on capabilities.
 
-## Flue Connector Adapter
+## Legacy Flue Connector Adapter
 
-`runner-flue` should adapt `SandboxHandle` into Flue's `SandboxFactory` contract.
+New real-agent work uses Pi through generic sandbox handles and Pi tool definitions. This section documents the deprecated Flue adapter that remains only for legacy support and removal work.
+
+Deprecated `runner-flue` adapts `SandboxHandle` into Flue's `SandboxFactory` contract.
 
 Conceptually:
 
@@ -266,7 +268,7 @@ Flue writeFile -> SandboxHandle.fs.writeFile
 Flue readdir/stat/exists/mkdir/rm -> SandboxHandle.fs
 ```
 
-The current Flue adapter requires providers to expose `fs`; it does not implement shell-based filesystem fallbacks yet. Providers without native filesystem APIs need a bridge or adapter-level filesystem implementation before they can be used with `runner-flue`.
+The current deprecated Flue adapter requires providers to expose `fs`; it does not implement shell-based filesystem fallbacks. Providers without native filesystem APIs need a bridge or adapter-level filesystem implementation before they can be used with `runner-flue`.
 
 ## Provider Examples
 
@@ -303,7 +305,7 @@ Implementation plan:
 2. Add `DockerSandboxProvider` behind the existing `SandboxProvider` interface.
 3. Add a narrow `DockerOrchestrator` interface used by `DockerSandboxProvider`.
 4. Implement an in-process Docker orchestrator for single-service local/dev operation.
-5. Keep the orchestrator boundary HTTP-compatible so production can run the same logic as a separate service without changing worker, lifecycle, or Flue code.
+5. Keep the orchestrator boundary HTTP-compatible so production can run the same logic as a separate service without changing worker, lifecycle, or runner code.
 6. Add a sandbox bridge process to the Docker image and use it for all runtime operations.
 7. Add provider conformance tests and Docker-specific integration tests.
 
@@ -498,9 +500,9 @@ Persist provider metadata needed to reconnect without storing long-lived credent
 
 If bridge tokens are persisted, they must be treated as secrets. Prefer an orchestrator-owned token store or encrypted storage over raw metadata when running in production.
 
-#### Flue Integration
+#### Runner Integration
 
-No Docker-specific logic should be added to `runner-flue`.
+No Docker-specific logic should be added to `runner-pi` or deprecated `runner-flue`.
 
 The Docker provider must return a normal filesystem-capable `SandboxHandle`:
 
@@ -515,7 +517,7 @@ The Docker provider must return a normal filesystem-capable `SandboxHandle`:
 }
 ```
 
-`apps/control-plane/src/runner-flue/sandbox-factory.ts` should continue adapting `SandboxHandle` into Flue's `SandboxFactory`. A small improvement is acceptable: fail early with a clear error when `RUNNER=flue` is paired with a provider handle that lacks `fs`.
+`apps/control-plane/src/runner-pi/sandbox-tools.ts` should continue using `SandboxHandle` directly. While deprecated Flue support exists, `apps/control-plane/src/runner-flue/sandbox-factory.ts` should continue adapting `SandboxHandle` into Flue's `SandboxFactory` and fail early with a clear error when `RUNNER=flue` is paired with a provider handle that lacks `fs`.
 
 #### Docker Security
 
@@ -548,16 +550,17 @@ Behavior:
 Current implementation:
 
 - `apps/control-plane/src/sandbox/daytona.ts` wraps the Daytona TypeScript SDK behind the product `SandboxProvider` interface.
-- `apps/control-plane/src/runner-flue/sandbox-factory.ts` adapts any filesystem-capable `SandboxHandle` into Flue's `SandboxFactory` using `createSandboxSessionEnv`.
+- `apps/control-plane/src/runner-pi/sandbox-tools.ts` exposes sandbox-backed shell and filesystem tools for Pi.
+- Deprecated `apps/control-plane/src/runner-flue/sandbox-factory.ts` adapts any filesystem-capable `SandboxHandle` into Flue's `SandboxFactory` using `createSandboxSessionEnv`.
 - Daytona creation supports optional `DAYTONA_IMAGE`, `DAYTONA_SNAPSHOT`, `DAYTONA_API_URL`, and `DAYTONA_TARGET` configuration.
 - Daytona creation supports optional deployment-level resource requests through `DAYTONA_SANDBOX_CPU`, `DAYTONA_SANDBOX_GPU`, `DAYTONA_SANDBOX_MEMORY_GIB`, and `DAYTONA_SANDBOX_DISK_GIB`. These map to Daytona SDK `resources` values; CPU/GPU are counts, memory/disk are GiB.
 - Resource sizing is intentionally deployment-level policy. If the product needs per-session sizing later, the session API should accept an allowlisted resource profile instead of raw CPU, memory, and disk values.
 - Daytona creation sets `autoStopInterval` from `SANDBOX_IDLE_TIMEOUT_SECONDS` using Daytona's minute granularity. The default product timeout is 900 seconds.
 - Daytona exec cancellation is best-effort. Deputies observes `AbortSignal`s before and during SDK `executeCommand` calls so the worker can stop waiting and mark a run cancelled, but Daytona's direct exec API does not expose a remote command cancel/kill handle. If cancellation happens after a command starts, that command may keep running and may continue mutating the persistent sandbox filesystem until it exits or hits its timeout.
-- This follows Flue's documented connector shape: product code creates/configures the Daytona sandbox, then Flue receives a connector-wrapped sandbox.
+- Deprecated Flue support follows Flue's documented connector shape: product code creates/configures the Daytona sandbox, then Flue receives a connector-wrapped sandbox.
 - Provider sandbox IDs, workspace paths, metadata, health timestamps, and lifecycle status are persisted in `sandboxes`.
 - Follow-up messages reconnect to the latest active sandbox for the session/provider when health is ready. Stopped sandboxes are restarted before reconnect so filesystem state can be reused. Unhealthy or missing sandboxes are marked unhealthy and replaced.
-- `apps/control-plane/test/uat/real-daytona-flue.test.ts` provides an opt-in built-artifact UAT path for `RUNNER=flue` plus `SANDBOX_PROVIDER=daytona`; it is skipped unless `RUN_REAL_DAYTONA_FLUE_UAT=true` and required credentials are present.
+- `apps/control-plane/test/uat/real-daytona-flue.test.ts` provides an opt-in legacy built-artifact UAT path for `RUNNER=flue` plus `SANDBOX_PROVIDER=daytona`; it is skipped unless `RUN_REAL_DAYTONA_FLUE_UAT=true` and required credentials are present.
 
 ### Kubernetes Provider
 
@@ -689,12 +692,12 @@ Docker testing approach:
 - Unit test bridge path validation and command timeout behavior inside the bridge package.
 - Run provider conformance tests against the fake orchestrator and against real Docker when enabled.
 - Add real Docker integration tests guarded by an environment variable such as `RUN_DOCKER_SANDBOX_TESTS=true`.
-- Add one Flue adapter integration test using a Docker handle to verify repository setup and command execution still use the generic `SandboxHandle` path.
+- Add one Pi adapter integration test using a Docker handle to verify repository setup and command execution still use the generic `SandboxHandle` path.
 - Add cleanup tests for idempotent destroy, missing containers, stopped containers, and orphaned resources.
 
-## Relationship To Flue's Daytona Example
+## Legacy Relationship To Flue's Daytona Example
 
-Flue's documented remote coding-agent example creates a Daytona sandbox, initializes a setup agent, clones the repo, installs dependencies, then initializes a second project-scoped agent in the same sandbox with `cwd` set to the cloned repo.
+This section records the deprecated Flue runner's original Daytona shape. Flue's documented remote coding-agent example creates a Daytona sandbox, initializes a setup agent, clones the repo, installs dependencies, then initializes a second project-scoped agent in the same sandbox with `cwd` set to the cloned repo.
 
 Our design should preserve that shape:
 
@@ -703,7 +706,7 @@ provider lifecycle manager
   -> create/connect sandbox and persist provider sandbox ID
   -> produce Flue SandboxFactory from provider handle
 
-runner-flue
+deprecated runner-flue
   -> use setup Flue agent for repo clone/sync/setup
   -> use project Flue agent with cwd=/workspace/project for user prompt
 ```

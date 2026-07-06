@@ -9,7 +9,7 @@ https://railway.com/deploy/deputies-monolith
 The template provisions a simple production-style stack:
 
 - A monolithic Deputies service with API and worker in one process.
-- Railway Postgres for durable product and Flue state.
+- Railway Postgres for durable product and runner state.
 - Railway object storage bucket for artifact blobs.
 - Fake runner and fake sandbox defaults so the app can boot without model or sandbox credentials.
 
@@ -37,9 +37,11 @@ Railway provides service variables for Postgres and object storage connection de
 To run real agent work, set:
 
 ```sh
-RUNNER=flue
+RUNNER=pi
 RUNNER_MODEL_DEFAULT=<provider/model>
 ```
+
+`RUNNER=flue` is deprecated and kept only for existing legacy deployments while the Flue runner is removed.
 
 Then configure one of the supported model auth paths:
 
@@ -177,7 +179,7 @@ After deploying and setting variables:
 2. Check `GET /health`.
 3. Open the setup checklist or call `GET /setup/status`.
 4. Confirm Postgres migrations are applied.
-5. Confirm model provider credentials are detected when `RUNNER=flue`.
+5. Confirm model provider credentials are detected when `RUNNER=pi`.
 6. Create a test session and run one fake or real task.
 7. If enabled, verify artifact download/preview, service preview links, GitHub webhook delivery, and Slack URL verification.
 

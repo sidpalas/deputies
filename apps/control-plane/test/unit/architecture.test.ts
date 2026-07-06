@@ -34,7 +34,11 @@ describe('architecture boundaries', () => {
 
     for (const file of files) {
       const text = await readFile(file, 'utf8');
-      if (internalImports(file, text).some((path) => path.startsWith('runner/') || path.startsWith('runner-flue/'))) {
+      if (
+        internalImports(file, text).some(
+          (path) => path.startsWith('runner/') || path.startsWith('runner-pi/') || path.startsWith('runner-flue/'),
+        )
+      ) {
         offenders.push(relative(root, file));
       }
     }
@@ -42,13 +46,13 @@ describe('architecture boundaries', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('allows only index.ts to compose api/app with runner-flue', async () => {
+  it('allows only index.ts to compose api/app with runner implementations', async () => {
     const files = (await sourceFiles()).filter((file) => relative(srcRoot, file).startsWith('app/'));
     const offenders: string[] = [];
 
     for (const file of files) {
       const text = await readFile(file, 'utf8');
-      if (internalImports(file, text).some((path) => path.startsWith('runner-flue/')))
+      if (internalImports(file, text).some((path) => path.startsWith('runner-pi/') || path.startsWith('runner-flue/')))
         offenders.push(relative(root, file));
     }
 
@@ -60,6 +64,7 @@ describe('architecture boundaries', () => {
     const imports = internalImports(join(srcRoot, 'index.ts'), text);
 
     expect(imports.some((path) => path.startsWith('store/'))).toBe(true);
+    expect(imports.some((path) => path.startsWith('runner-pi/'))).toBe(true);
     expect(imports.some((path) => path.startsWith('runner-flue/'))).toBe(true);
     expect(imports.some((path) => path.startsWith('sandbox/'))).toBe(true);
     expect(imports.some((path) => path.startsWith('integrations/'))).toBe(true);
@@ -81,8 +86,11 @@ describe('architecture boundaries', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('prevents runner-flue from importing api/app or integrations', async () => {
-    const files = (await sourceFiles()).filter((file) => relative(srcRoot, file).startsWith('runner-flue/'));
+  it('prevents runner implementations from importing api/app or integrations', async () => {
+    const files = (await sourceFiles()).filter((file) => {
+      const path = relative(srcRoot, file);
+      return path.startsWith('runner-pi/') || path.startsWith('runner-flue/');
+    });
     const offenders: string[] = [];
 
     for (const file of files) {

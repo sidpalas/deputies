@@ -11,9 +11,9 @@ import BaseLayout from '../layouts/BaseLayout.astro';
     <div class="hero-copy">
       <h1 id="hero-title">Engineering agents for delegated work.</h1>
       <p class="hero-text">
-        Deputies is an open source control plane for background coding agents, powered by
-        <a href="https://flueframework.com/" target="_blank" rel="noopener noreferrer">Flue</a>. It runs on your
-        existing infrastructure: a Node API, Postgres database, and static React frontend.
+        Deputies is an open source control plane for background coding agents, built on
+        <a href="https://pi.dev/" target="_blank" rel="noopener noreferrer">Pi</a>. It runs on your existing
+        infrastructure: a Node API, Postgres database, and static React frontend.
       </p>
       <p class="hero-text">
         Run agents in sandboxes tailored to your dev environment, with the right repositories, tools, services, and
@@ -255,8 +255,8 @@ import BaseLayout from '../layouts/BaseLayout.astro';
     <article class="faq-item">
       <h3>Does it work with my LLM subscription?</h3>
       <p>
-        Deputies works with ChatGPT Pro through <code>@earendil-works/pi-ai/oauth</code>, because Flue uses Pi under the
-        hood. Any LLM provider supported by Pi should be supported by Deputies, or at least be easy to add.
+        Deputies works with ChatGPT Pro through <code>@earendil-works/pi-ai/oauth</code>. Any LLM provider supported by
+        Pi should be supported by Deputies, or at least be easy to add.
       </p>
     </article>
     <article class="faq-item">
@@ -267,10 +267,9 @@ import BaseLayout from '../layouts/BaseLayout.astro';
         toward LangChain's hosted LangSmith platform.
       </p>
       <p>
-        When <a href="https://flueframework.com/" target="_blank" rel="noopener noreferrer">Flue</a> came out, it looked like
-        the right foundation for my take on a background agent: one built with deployability front and center. These systems
-        should run wherever the rest of your infrastructure already runs, so teams can keep secure access patterns intact
-        without introducing a new deployment model.
+        Deputies focuses on the control-plane layer around agents: durable queues, session history, integrations,
+        sandbox lifecycle, artifacts, and deployment choices. The runner can evolve underneath that boundary; Deputies
+        is built on <a href="https://pi.dev/" target="_blank" rel="noopener noreferrer">Pi</a> for real agent work.
       </p>
     </article>
   </section>

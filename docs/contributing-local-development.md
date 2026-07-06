@@ -67,7 +67,7 @@ SERVICE_TRUST_FORWARDED_HOSTS=true
 VITE_API_BASE_URL=
 VITE_PORTLESS_URL=https://deputies.localhost
 
-RUNNER=flue
+RUNNER=pi
 RUNNER_MODEL_DEFAULT=anthropic/claude-haiku-4-5
 ANTHROPIC_API_KEY=<secret>
 
