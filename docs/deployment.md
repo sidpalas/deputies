@@ -353,20 +353,20 @@ WEB_SEARCH_TIMEOUT_MS=10000
 
 ## Deputy Control Tool
 
-The `deputies` agent tool is disabled by default. Keep the default off unless agents should be able to coordinate separate, durable Deputies sessions from inside a run:
+The `deputies` agent tool is enabled by default so agents can coordinate separate, durable Deputies sessions from inside a run:
 
 ```sh
-DEPUTY_TOOL_ENABLED=false
+DEPUTY_TOOL_ENABLED=true
 DEPUTY_MAX_SPAWN_DEPTH=2
 DEPUTY_MAX_CHILDREN_PER_SESSION=5
 DEPUTY_MAX_SPAWNS_PER_RUN=3
 ```
 
-Set `DEPUTY_TOOL_ENABLED=true` to expose the tool.
+Set `DEPUTY_TOOL_ENABLED=false` to hide the tool for a conservative deployment.
 
 When enabled for `RUNNER=flue` or `RUNNER=pi`, the tool runs in the trusted worker process and writes product sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions inherit the parent's owner group, visibility, and write policy, and can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`. Child response/error text in that follow-up is framed as untrusted context.
 
-Keep the tool disabled for conservative production rollouts until you have reviewed the organization-level coordination policy, worker capacity, and session-spawn limits.
+Before relying on the default in production, review the organization-level coordination policy, worker capacity, and session-spawn limits. Use `DEPUTY_TOOL_ENABLED=false` if the deployment needs a conservative rollout.
 
 ## Sandbox Providers
 

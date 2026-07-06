@@ -373,6 +373,7 @@ function createPiToolSet(
         runId: input.runId,
         messageId: input.messageId,
         runState: context.deputyRunState,
+        ...(input.shouldPersist ? { shouldPersist: input.shouldPersist } : {}),
       }),
     );
   }

@@ -124,6 +124,7 @@ export class FlueRunner implements Runner {
           runId: input.runId,
           messageId: input.messageId,
           runState: deputyRunState,
+          ...(input.shouldPersist ? { shouldPersist: input.shouldPersist } : {}),
         }),
       );
     }

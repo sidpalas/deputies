@@ -485,6 +485,27 @@ export type SessionWithSandboxRecord = {
   sandbox: SandboxRecord | null;
 };
 
+export type AgentSessionListScope = 'children' | 'group' | 'organization';
+
+export type AgentSessionListOptions = {
+  ownerGroupId: string;
+  actingSessionId: string;
+  scope: AgentSessionListScope;
+  limit: number;
+  status?: SessionStatus;
+};
+
+export type ChildSessionListOptions = {
+  parentSessionId: string;
+  ownerGroupId: string;
+  limit: number;
+};
+
+export type SessionMessageSummary = {
+  count: number;
+  lastMessage: MessageRecord | null;
+};
+
 // Limits a session listing to what a non-admin user can read: organization-visible
 // sessions plus sessions owned by one of the user's groups.
 export type SessionVisibilityFilter = {
@@ -498,6 +519,8 @@ export interface SessionStore {
   ): Promise<CreateSessionWithFirstMessageResult>;
   getSession(id: string): Promise<SessionRecord | null>;
   listSessions(): Promise<SessionRecord[]>;
+  listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]>;
+  listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]>;
   listSessionsWithLatestSandbox(
     provider: string,
     visibleTo?: SessionVisibilityFilter,
@@ -529,6 +552,7 @@ export interface MessageStore {
   nextMessageSequence(sessionId: string): Promise<number>;
   createMessage(record: CreateMessageRecord): Promise<MessageRecord>;
   getMessages(sessionId: string): Promise<MessageRecord[]>;
+  getSessionMessageSummary(sessionId: string): Promise<SessionMessageSummary>;
   updatePendingMessage(input: { sessionId: string; messageId: string; prompt: string }): Promise<MessageRecord | null>;
   cancelPendingMessage(input: {
     sessionId: string;

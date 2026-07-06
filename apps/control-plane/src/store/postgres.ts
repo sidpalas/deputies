@@ -3,12 +3,14 @@ import type { NormalizedEvent } from '../events/types.js';
 import { StoreConflictError } from './types.js';
 import type {
   AppStore,
+  AgentSessionListOptions,
   ArtifactRecord,
   AutomationInvocationRecord,
   AutomationRecord,
   AuthSessionRecord,
   AuthUserRecord,
   CallbackDeliveryRecord,
+  ChildSessionListOptions,
   CreateAutomationInvocationRecord,
   CreateAutomationRecord,
   CreateArtifactRecord,
@@ -37,6 +39,7 @@ import type {
   SandboxRecord,
   SandboxSecrets,
   SessionRecord,
+  SessionMessageSummary,
   SessionVisibilityFilter,
   SessionWithSandboxRecord,
   UpdateAutomationRecord,
@@ -463,9 +466,14 @@ export class PostgresStore implements AppStore {
   ): Promise<CreateSessionWithFirstMessageResult> {
     return this.transaction(async (client) => {
       if (input.parentChildLimit) {
-        await client.query('SELECT id FROM sessions WHERE id = $1 FOR UPDATE', [
+        if (input.session.parentSessionId !== input.parentChildLimit.parentSessionId) {
+          throw new Error('Parent child limit must match the session parent');
+        }
+        const parent = await client.query('SELECT id FROM sessions WHERE id = $1 FOR UPDATE', [
           input.parentChildLimit.parentSessionId,
         ]);
+        if (!parent.rows[0])
+          throw new Error(`Parent session does not exist: ${input.parentChildLimit.parentSessionId}`);
       }
 
       const existing = await client.query<SessionRow>(`SELECT ${sessionSelectColumns} FROM sessions WHERE id = $1`, [
@@ -651,6 +659,38 @@ export class PostgresStore implements AppStore {
       `SELECT ${sessionSelectColumns} FROM sessions ORDER BY updated_at DESC, created_at DESC`,
     );
 
+    return result.rows.map(toSession);
+  }
+
+  async listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]> {
+    const scopePredicate =
+      input.scope === 'children'
+        ? `parent_session_id = $2 AND (visibility = 'organization' OR owner_group_id = $1)`
+        : input.scope === 'group'
+          ? `owner_group_id = $1`
+          : `(visibility = 'organization' OR owner_group_id = $1)`;
+    const result = await this.pool.query<SessionRow>(
+      `SELECT ${sessionSelectColumns}
+       FROM sessions
+       WHERE ${scopePredicate}
+         AND ($3::text IS NULL OR status = $3)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT $4`,
+      [input.ownerGroupId, input.actingSessionId, input.status ?? null, input.limit],
+    );
+    return result.rows.map(toSession);
+  }
+
+  async listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]> {
+    const result = await this.pool.query<SessionRow>(
+      `SELECT ${sessionSelectColumns}
+       FROM sessions
+       WHERE parent_session_id = $1
+         AND (visibility = 'organization' OR owner_group_id = $2)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT $3`,
+      [input.parentSessionId, input.ownerGroupId, input.limit],
+    );
     return result.rows.map(toSession);
   }
 
@@ -1285,6 +1325,27 @@ export class PostgresStore implements AppStore {
     );
 
     return result.rows.map(toMessage);
+  }
+
+  async getSessionMessageSummary(sessionId: string): Promise<SessionMessageSummary> {
+    const [countResult, lastMessageResult] = await Promise.all([
+      this.pool.query<{ message_count: PgInteger }>(
+        `SELECT COUNT(*) AS message_count FROM messages WHERE session_id = $1`,
+        [sessionId],
+      ),
+      this.pool.query<MessageRow>(
+        `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+         FROM messages
+         WHERE session_id = $1
+         ORDER BY sequence DESC
+         LIMIT 1`,
+        [sessionId],
+      ),
+    ]);
+    return {
+      count: Number(countResult.rows[0]?.message_count ?? 0),
+      lastMessage: lastMessageResult.rows[0] ? toMessage(lastMessageResult.rows[0]) : null,
+    };
   }
 
   async updatePendingMessage(input: {

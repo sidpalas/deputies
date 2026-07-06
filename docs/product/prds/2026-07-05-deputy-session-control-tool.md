@@ -26,7 +26,7 @@ Agents can delegate short in-run subtasks through runner-native task tools, but 
 
 ## Requirements
 
-- `DEPUTY_TOOL_ENABLED` defaults to `false`.
+- `DEPUTY_TOOL_ENABLED` defaults to `true`.
 - Supported actions are `spawn`, `list_sessions`, `get_session`, `send_message`, and `cancel`.
 - Child sessions inherit the parent session's owner group, visibility, and write policy.
 - Agents may read organization-visible sessions or sessions in their own group.

@@ -24,7 +24,7 @@ export function createPiDeputyToolDefinition(services: DeputyToolServices): Tool
     parameters: piDeputyToolParameters,
     executionMode: 'sequential',
     async execute(_toolCallId, params) {
-      const result = await executeDeputyTool(services, params as Record<string, unknown>);
+      const result = await executeDeputyTool(services, params);
       return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
     },
   };

@@ -93,6 +93,32 @@ describe('deputies tool', () => {
     });
   });
 
+  it('returns structured errors for malformed input and disabled persistence', async () => {
+    const { services, store } = await createDeputyServices();
+
+    await expect(executeDeputyTool(services, null)).resolves.toEqual({
+      ok: false,
+      error: 'deputies params must be an object',
+    });
+    await expect(executeDeputyTool(services, { action: 'wat' })).resolves.toEqual({
+      ok: false,
+      error: 'deputies action must be one of: spawn, list_sessions, get_session, send_message, cancel',
+    });
+
+    services.shouldPersist = async () => false;
+    await expect(executeDeputyTool(services, { action: 'spawn', prompt: 'blocked' })).resolves.toMatchObject({
+      ok: false,
+      action: 'spawn',
+      error: 'Cannot mutate Deputies sessions because the parent run is no longer active',
+    });
+    await expect(store.listSessions()).resolves.toHaveLength(1);
+
+    await expect(executeDeputyTool(services, { action: 'list_sessions' })).resolves.toMatchObject({
+      ok: true,
+      action: 'list_sessions',
+    });
+  });
+
   it('sends follow-ups only to non-archived direct children', async () => {
     const { services, store } = await createDeputyServices();
     const spawned = await executeDeputyTool(services, { action: 'spawn', prompt: 'child' });

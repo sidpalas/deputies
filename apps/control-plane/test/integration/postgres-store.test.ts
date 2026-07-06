@@ -382,6 +382,21 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
         sequence: 2,
       },
     );
+    await expect(store.getSessionMessageSummary(childSession.id)).resolves.toMatchObject({
+      count: 2,
+      lastMessage: expect.objectContaining({ sequence: 2, prompt: 'follow-up' }),
+    });
+    await expect(
+      store.listSessionsForAgent({
+        ownerGroupId: parent.ownerGroupId,
+        actingSessionId: parent.id,
+        scope: 'children',
+        limit: 1,
+      }),
+    ).resolves.toMatchObject([expect.objectContaining({ id: childSession.id })]);
+    await expect(
+      store.listChildSessions({ parentSessionId: parent.id, ownerGroupId: parent.ownerGroupId, limit: 1 }),
+    ).resolves.toMatchObject([expect.objectContaining({ id: childSession.id })]);
 
     await expect(
       store.createSessionWithFirstMessage({
@@ -390,6 +405,21 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
         message: { ...input.message, id: '00000000-0000-4000-8000-000000000934' },
       }),
     ).rejects.toThrow('Cannot spawn more than 1 non-archived child sessions');
+    await expect(
+      store.createSessionWithFirstMessage({
+        ...input,
+        session: {
+          ...childSession,
+          id: '00000000-0000-4000-8000-000000000935',
+          parentSessionId: parent.id,
+        },
+        message: { ...input.message, id: '00000000-0000-4000-8000-000000000936' },
+        parentChildLimit: {
+          parentSessionId: '00000000-0000-4000-8000-000000000937',
+          maxNonArchivedChildren: 5,
+        },
+      }),
+    ).rejects.toThrow('Parent child limit must match the session parent');
   });
 
   it('claims pending messages as a queue batch and respects queue pause', async () => {

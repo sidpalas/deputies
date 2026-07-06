@@ -15,8 +15,9 @@ export type DeputyToolBaseServices = {
   store: Pick<
     AppStore,
     | 'getSession'
-    | 'listSessions'
-    | 'getMessages'
+    | 'listSessionsForAgent'
+    | 'listChildSessions'
+    | 'getSessionMessageSummary'
     | 'getLatestRunForSession'
     | 'getLatestEventByType'
     | 'createSessionWithFirstMessage'
@@ -35,6 +36,7 @@ export type DeputyToolServices = DeputyToolBaseServices & {
   runId: string;
   messageId: string;
   runState: { spawns: number };
+  shouldPersist?: () => Promise<boolean>;
 };
 
 export type DeputyToolResult =
@@ -119,27 +121,40 @@ export const deputyToolParameters = {
   },
 } as const;
 
-export async function executeDeputyTool(
-  services: DeputyToolServices,
-  params: Record<string, unknown>,
-): Promise<DeputyToolResult> {
-  const action = readAction(params.action);
+export async function executeDeputyTool(services: DeputyToolServices, params: unknown): Promise<DeputyToolResult> {
+  let action: DeputyAction | undefined;
   try {
+    const input = readParams(params);
+    action = readAction(input.action);
+    if (isMutatingAction(action) && services.shouldPersist && !(await services.shouldPersist())) {
+      throw new Error('Cannot mutate Deputies sessions because the parent run is no longer active');
+    }
     switch (action) {
       case 'spawn':
-        return { ok: true, action, ...(await spawnSession(services, params)) };
+        return { ok: true, action, ...(await spawnSession(services, input)) };
       case 'list_sessions':
-        return { ok: true, action, ...(await listSessions(services, params)) };
+        return { ok: true, action, ...(await listSessions(services, input)) };
       case 'get_session':
-        return { ok: true, action, ...(await getSession(services, params)) };
+        return { ok: true, action, ...(await getSession(services, input)) };
       case 'send_message':
-        return { ok: true, action, ...(await sendMessage(services, params)) };
+        return { ok: true, action, ...(await sendMessage(services, input)) };
       case 'cancel':
-        return { ok: true, action, ...(await cancelChildRun(services, params)) };
+        return { ok: true, action, ...(await cancelChildRun(services, input)) };
     }
   } catch (error) {
-    return { ok: false, action, error: errorMessage(error) };
+    return { ok: false, ...(action ? { action } : {}), error: errorMessage(error) };
   }
+}
+
+function readParams(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('deputies params must be an object');
+  }
+  return value as Record<string, unknown>;
+}
+
+function isMutatingAction(action: DeputyAction): boolean {
+  return action === 'spawn' || action === 'send_message' || action === 'cancel';
 }
 
 async function spawnSession(services: DeputyToolServices, params: Record<string, unknown>) {
@@ -263,11 +278,15 @@ async function listSessions(services: DeputyToolServices, params: Record<string,
   const scope = readScope(params.scope);
   const status = readOptionalStatus(params.status);
   const limit = readLimit(params.limit);
-  const sessions = (await services.store.listSessions())
-    .filter((session) => sessionMatchesScope(agent, session, scope))
-    .filter((session) => !status || session.status === status)
-    .slice(0, limit)
-    .map(serializeSessionSummary);
+  const sessions = (
+    await services.store.listSessionsForAgent({
+      ownerGroupId: agent.ownerGroupId,
+      actingSessionId: agent.sessionId,
+      scope,
+      limit,
+      ...(status ? { status } : {}),
+    })
+  ).map(serializeSessionSummary);
   return { scope, sessions };
 }
 
@@ -275,24 +294,25 @@ async function getSession(services: DeputyToolServices, params: Record<string, u
   const parent = await requireActingSession(services);
   const agent = agentPrincipal(parent);
   const session = await requireReadableSession(services, agent, readString(params.sessionId, 'sessionId', 128));
-  const [allSessions, messages, latestRun, latestFinalResponse] = await Promise.all([
-    services.store.listSessions(),
-    services.store.getMessages(session.id),
+  const [children, messageSummary, latestRun, latestFinalResponse] = await Promise.all([
+    services.store.listChildSessions({
+      parentSessionId: session.id,
+      ownerGroupId: agent.ownerGroupId,
+      limit: maxListLimit,
+    }),
+    services.store.getSessionMessageSummary(session.id),
     services.store.getLatestRunForSession(session.id),
     services.store.getLatestEventByType(session.id, 'agent_response_final'),
   ]);
-  const children = allSessions
-    .filter((candidate) => candidate.parentSessionId === session.id && agentCanReadSession(agent, candidate))
-    .map(serializeSessionSummary);
   return {
     session: {
       ...serializeSessionSummary(session),
       queuePausedAt: session.queuePausedAt?.toISOString() ?? null,
-      children,
-      messageCount: messages.length,
+      children: children.map(serializeSessionSummary),
+      messageCount: messageSummary.count,
       lastRunStatus: lastRunStatus(latestRun),
       lastCompletedResponseText: lastCompletedResponseText(latestFinalResponse),
-      lastMessage: serializeMessageSummary(messages[messages.length - 1]),
+      lastMessage: serializeMessageSummary(messageSummary.lastMessage ?? undefined),
     },
   };
 }
@@ -357,12 +377,6 @@ async function requireCancellableChild(
     throw new Error(`Can only cancel non-archived direct child sessions: ${sessionId}`);
   }
   return session;
-}
-
-function sessionMatchesScope(agent: AgentPrincipal, session: SessionRecord, scope: ListScope): boolean {
-  if (scope === 'children') return session.parentSessionId === agent.sessionId && agentCanReadSession(agent, session);
-  if (scope === 'group') return session.ownerGroupId === agent.ownerGroupId && agentCanReadSession(agent, session);
-  return agentCanReadSession(agent, session);
 }
 
 function agentPrincipal(session: SessionRecord): AgentPrincipal {

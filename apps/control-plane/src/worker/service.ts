@@ -3,7 +3,7 @@ import type { ArtifactService } from '../artifacts/service.js';
 import { CallbackDispatcher, CallbackService, type CompletionCallbackSender } from '../callbacks/service.js';
 import type { AppendEventInput, EventService } from '../events/service.js';
 import { MessageService } from '../messages/service.js';
-import type { Runner } from '../runner/types.js';
+import type { Runner, RunnerResult } from '../runner/types.js';
 import { SandboxLifecycleService } from '../sandbox/service.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import type {
@@ -92,7 +92,7 @@ export class WorkerService {
     await this.notifyRunStarted(claimed.messages[0]!, claimed.run);
 
     try {
-      await this.runWithHeartbeat(claimed);
+      const result = await this.runWithHeartbeat(claimed);
       if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
       const completed = await traceAsync('worker.finalize_run', { 'deputies.result': 'completed' }, () =>
         this.options.store.completeRunBatch({
@@ -112,6 +112,13 @@ export class WorkerService {
         });
       }
       await this.notifyRunCompleted(completed.messages[0]!, completed.run);
+      if (result) {
+        await this.enqueueDeputyCompletionNotification({
+          sessionId: completed.messages[0]!.sessionId,
+          runId: completed.run.id,
+          outcome: { status: 'completed', responseText: result.text },
+        });
+      }
     } catch (error) {
       if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
       const message = error instanceof Error ? error.message : 'Unknown worker error';
@@ -172,7 +179,7 @@ export class WorkerService {
     return recovered.length;
   }
 
-  private async runWithHeartbeat(claimed: ClaimedMessageBatch): Promise<void> {
+  private async runWithHeartbeat(claimed: ClaimedMessageBatch): Promise<RunnerResult | null> {
     const abort = new AbortController();
     const pollCancellation = () => {
       this.options.store
@@ -204,14 +211,14 @@ export class WorkerService {
     pollCancellation();
 
     try {
-      await this.runClaimedMessage(claimed, abort.signal);
+      return await this.runClaimedMessage(claimed, abort.signal);
     } finally {
       clearInterval(heartbeat);
       clearInterval(cancellationPoll);
     }
   }
 
-  private async runClaimedMessage(claimed: ClaimedMessageBatch, signal: AbortSignal): Promise<void> {
+  private async runClaimedMessage(claimed: ClaimedMessageBatch, signal: AbortSignal): Promise<RunnerResult | null> {
     const primary = claimed.messages[0]!;
     await this.appendOwnedRunEvent({
       sessionId: primary.sessionId,
@@ -302,8 +309,8 @@ export class WorkerService {
               (await this.isRunOwnedByThisWorker(claimed.run.id)),
           }),
       );
-      if (await this.isRunCancellationRequested(claimed.run.id)) return;
-      if (!(await this.isRunOwnedByThisWorker(claimed.run.id))) return;
+      if (await this.isRunCancellationRequested(claimed.run.id)) return null;
+      if (!(await this.isRunOwnedByThisWorker(claimed.run.id))) return null;
       await this.appendOwnedRunEvent({
         sessionId: primary.sessionId,
         runId: claimed.run.id,
@@ -333,12 +340,7 @@ export class WorkerService {
         result,
         artifactRecords: artifacts,
       });
-      await this.enqueueDeputyCompletionNotification({
-        sessionId: session.id,
-        runId: claimed.run.id,
-        useRunGuard: true,
-        outcome: { status: 'completed', responseText: result.text },
-      });
+      return result;
     } finally {
       const current = await this.options.store.getActiveSandbox(primary.sessionId, record.provider);
       if (current?.id === record.id) await this.options.store.updateSandbox({ ...current, updatedAt: new Date() });

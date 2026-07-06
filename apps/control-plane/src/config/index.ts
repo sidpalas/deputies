@@ -255,7 +255,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       'WEB_SEARCH_CONTENT_MAX_CHARS',
     ),
     webSearchTimeoutMs: parsePositiveInteger(env.WEB_SEARCH_TIMEOUT_MS, 10_000, 'WEB_SEARCH_TIMEOUT_MS'),
-    deputyToolEnabled: parseBoolean(env.DEPUTY_TOOL_ENABLED, false, 'DEPUTY_TOOL_ENABLED'),
+    deputyToolEnabled: parseBoolean(env.DEPUTY_TOOL_ENABLED, true, 'DEPUTY_TOOL_ENABLED'),
     deputyMaxSpawnDepth: parsePositiveInteger(env.DEPUTY_MAX_SPAWN_DEPTH, 2, 'DEPUTY_MAX_SPAWN_DEPTH'),
     deputyMaxChildrenPerSession: parsePositiveInteger(
       env.DEPUTY_MAX_CHILDREN_PER_SESSION,

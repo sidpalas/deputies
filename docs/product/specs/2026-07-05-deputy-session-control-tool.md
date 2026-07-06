@@ -59,7 +59,7 @@ Deputies has runner-native subagent mechanisms for quick intra-run delegation, b
 ## Rollout / Migration Plan
 
 - Ship migration first; existing sessions backfill to `spawn_depth=0` and no parent.
-- Keep `DEPUTY_TOOL_ENABLED=false` by default.
+- Keep `DEPUTY_TOOL_ENABLED=true` by default, with `DEPUTY_TOOL_ENABLED=false` available for conservative deployments.
 - Enable per deployment after reviewing worker capacity and spawn caps.
 
 ## Risks And Tradeoffs

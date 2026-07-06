@@ -2,6 +2,7 @@ import type { NormalizedEvent } from '../events/types.js';
 import { defaultGroupId, StoreConflictError } from './types.js';
 import type {
   AppStore,
+  AgentSessionListOptions,
   ArtifactRecord,
   AutomationInvocationRecord,
   AutomationRecord,
@@ -9,6 +10,7 @@ import type {
   AuthSessionRecord,
   AuthUserRecord,
   CallbackDeliveryRecord,
+  ChildSessionListOptions,
   CreateAutomationInvocationRecord,
   CreateAutomationRecord,
   CreateArtifactRecord,
@@ -38,6 +40,7 @@ import type {
   SandboxSecrets,
   SessionRecord,
   SessionVisibilityFilter,
+  SessionMessageSummary,
   SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
@@ -226,6 +229,7 @@ export class MemoryStore implements AppStore {
   async createSessionWithFirstMessage(
     input: CreateSessionWithFirstMessageInput,
   ): Promise<CreateSessionWithFirstMessageResult> {
+    validateParentChildLimit(input, (parentSessionId) => this.sessions.has(parentSessionId));
     const existing = this.sessions.get(input.session.id);
     if (existing) {
       const message = this.messages.get(input.session.id)?.[0];
@@ -274,6 +278,20 @@ export class MemoryStore implements AppStore {
 
   async listSessions(): Promise<SessionRecord[]> {
     return [...this.sessions.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+
+  async listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]> {
+    return (await this.listSessions())
+      .filter((session) => sessionMatchesAgentScope(session, input))
+      .filter((session) => !input.status || session.status === input.status)
+      .slice(0, input.limit);
+  }
+
+  async listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]> {
+    return (await this.listSessions())
+      .filter((session) => session.parentSessionId === input.parentSessionId)
+      .filter((session) => sessionIsReadableToAgentGroup(session, input.ownerGroupId))
+      .slice(0, input.limit);
   }
 
   async listSessionsWithLatestSandbox(
@@ -600,6 +618,11 @@ export class MemoryStore implements AppStore {
 
   async getMessages(sessionId: string): Promise<MessageRecord[]> {
     return [...(this.messages.get(sessionId) ?? [])];
+  }
+
+  async getSessionMessageSummary(sessionId: string): Promise<SessionMessageSummary> {
+    const messages = await this.getMessages(sessionId);
+    return { count: messages.length, lastMessage: messages[messages.length - 1] ?? null };
   }
 
   async updatePendingMessage(input: {
@@ -1377,6 +1400,33 @@ function getRunMessageIds(run: RunRecord): string[] {
   const messageIds = run.metadata.messageIds;
   if (Array.isArray(messageIds) && messageIds.every((id) => typeof id === 'string')) return messageIds;
   return [run.messageId];
+}
+
+function validateParentChildLimit(
+  input: CreateSessionWithFirstMessageInput,
+  parentExists: (parentSessionId: string) => boolean,
+): void {
+  if (!input.parentChildLimit) return;
+  if (input.session.parentSessionId !== input.parentChildLimit.parentSessionId) {
+    throw new Error('Parent child limit must match the session parent');
+  }
+  if (!parentExists(input.parentChildLimit.parentSessionId)) {
+    throw new Error(`Parent session does not exist: ${input.parentChildLimit.parentSessionId}`);
+  }
+}
+
+function sessionMatchesAgentScope(session: SessionRecord, input: AgentSessionListOptions): boolean {
+  if (input.scope === 'children') {
+    return (
+      session.parentSessionId === input.actingSessionId && sessionIsReadableToAgentGroup(session, input.ownerGroupId)
+    );
+  }
+  if (input.scope === 'group') return session.ownerGroupId === input.ownerGroupId;
+  return sessionIsReadableToAgentGroup(session, input.ownerGroupId);
+}
+
+function sessionIsReadableToAgentGroup(session: SessionRecord, ownerGroupId: string): boolean {
+  return session.visibility === 'organization' || session.ownerGroupId === ownerGroupId;
 }
 
 function externalThreadKey(source: string, externalId: string): string {

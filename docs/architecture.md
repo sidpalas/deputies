@@ -291,7 +291,7 @@ Current examples:
 
 Deputies tool policy:
 
-- `DEPUTY_TOOL_ENABLED=false` by default. When disabled, runners do not expose the `deputies` tool.
+- `DEPUTY_TOOL_ENABLED=true` by default. Set it to `false` when a deployment should hide the `deputies` tool from runners.
 - Supported actions are `spawn`, `list_sessions`, `get_session`, `send_message`, and `cancel`.
 - Child sessions inherit the parent session's owner group, visibility, and write policy. They record `parent_session_id` and `spawn_depth` so the web UI and audit events can show lineage.
 - Parent run cancellation and parent archival do not cancel or archive spawned children. Children are independent durable sessions; cleanup is explicit via direct child cancellation or human UI action.

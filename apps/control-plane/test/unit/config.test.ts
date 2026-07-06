@@ -87,7 +87,7 @@ describe('loadConfig', () => {
       webSearchMaxResults: 10,
       webSearchContentMaxChars: 5000,
       webSearchTimeoutMs: 10000,
-      deputyToolEnabled: false,
+      deputyToolEnabled: true,
       deputyMaxSpawnDepth: 2,
       deputyMaxChildrenPerSession: 5,
       deputyMaxSpawnsPerRun: 3,
