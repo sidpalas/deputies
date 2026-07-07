@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.0](https://github.com/sidpalas/deputies/compare/v0.12.0...v0.13.0) (2026-07-07)
+
+
+### Features
+
+* add deputies session control tool ([#80](https://github.com/sidpalas/deputies/issues/80)) ([9575524](https://github.com/sidpalas/deputies/commit/9575524233b8f457012479c88c3ad13cd2d7dfc2))
+* run repository setup scripts ([#81](https://github.com/sidpalas/deputies/issues/81)) ([9155aeb](https://github.com/sidpalas/deputies/commit/9155aebab41f5a9a69edc7182c8a2300e5afbc60))
+
+
+### Chores
+
+* prefer pi runner and deprecate flue ([#83](https://github.com/sidpalas/deputies/issues/83)) ([9b2fbe9](https://github.com/sidpalas/deputies/commit/9b2fbe96b839ebf1657cd62a2cfef3a877f738ff))
+
 ## [0.12.0](https://github.com/sidpalas/deputies/compare/v0.11.2...v0.12.0) (2026-07-01)
 
 
