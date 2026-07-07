@@ -1,5 +1,7 @@
 # Flue Persistence
 
+> **Deprecated:** `RUNNER=flue` is a legacy runner and is being removed. New deployments and real-agent work should use `RUNNER=pi`. This document is retained to explain existing `flue_sessions` data and guide removal/migration work.
+
 ## Why This Exists
 
 Flue has two relevant state concepts:

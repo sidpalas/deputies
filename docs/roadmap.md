@@ -14,17 +14,19 @@ Implemented so far:
 - Memory-backed `AppStore` for deterministic unit tests.
 - Docker Compose local Postgres.
 - SQL migration runner.
-- Postgres-backed `AppStore` for sessions, messages, events, runs, sandboxes, artifacts, Flue sessions, generic webhooks, callbacks, external thread mappings, and sequence counters.
+- Postgres-backed `AppStore` for sessions, messages, events, runs, sandboxes, artifacts, Pi sessions, legacy Flue sessions, generic webhooks, callbacks, external thread mappings, and sequence counters.
 - Durable worker loop with run leases, heartbeat renewal, stale lease recovery, batched same-session message claiming, queue pause/edit/cancel behavior, and active-run cancellation finalization.
 - DB-backed generic webhook sources with bearer auth, prompt prefixes, thread reuse, and delivery dedupe.
 - Architecture fitness tests for core import boundaries.
-- Postgres-backed Flue `SessionStore` and `runner-flue` adapter seam.
+- Postgres-backed Pi `SessionStore` and `runner-pi` adapter seam.
+- Legacy Postgres-backed Flue `SessionStore` and deprecated `runner-flue` adapter seam.
 - Daytona SDK dependency, sandbox provider adapter, and Flue `SandboxFactory` bridge.
-- Real Flue agent factory wiring behind `RUNNER=flue`.
+- Real Pi runner wiring behind `RUNNER=pi`.
+- Legacy Flue agent factory wiring remains behind deprecated `RUNNER=flue` during removal.
 - Sandbox lifecycle persistence with active sandbox reconnect/reuse.
-- Opt-in real Daytona/Flue built-artifact UAT scaffold.
+- Opt-in legacy real Daytona/Flue built-artifact UAT scaffold.
 - Flue live event normalization for text deltas, tools, commands, and tasks.
-- Built-artifact E2E coverage for API auth, sandbox reuse, webhook auth separation, and real Daytona/Flue follow-up persistence.
+- Built-artifact E2E coverage for API auth, sandbox reuse, webhook auth separation, and legacy real Daytona/Flue follow-up persistence.
 - Artifact persistence, optional filesystem/S3-compatible object storage, and generic HTTP completion callbacks.
 - Session artifact list/download/preview API.
 - Graceful shutdown for HTTP server, worker loop, and Postgres-backed resources.
@@ -35,7 +37,7 @@ Implemented so far:
 - GitHub App runtime access for allowlisted repositories, including real GitHub token minting, Flue-runner repository refresh, and opt-in real GitHub + Daytona clone UAT coverage.
 - GitHub webhook ingress for issue, PR, PR review comment, and PR review events with signature verification, delivery dedupe, repository/user/repository-owner allowlists, required trigger-phrase gating when webhooks are enabled, session mapping, bounded context fetching, received reactions, and completion comments through the callback dispatcher.
 - Agent runtime GitHub repository tooling for repository selection/preparation, authenticated `gh`, and authenticated guarded `git` operations inside prepared sandbox repositories.
-- Agent-created stored artifacts through the Flue `artifact({ action: "create" })` tool, with SeaweedFS-backed local Compose storage and web UI image/text previews.
+- Agent-created stored artifacts through Pi and legacy Flue artifact tools, with SeaweedFS-backed local Compose storage and web UI image/text previews.
 
 Still open from the early phases:
 
@@ -133,7 +135,7 @@ Acceptance criteria:
 - Stale processing messages recover.
 - Failed runner marks message/run failed and emits failure event.
 
-Status: implemented for fake and Flue runner paths. The worker claims pending messages transactionally, batches all queued messages for one session, enforces one active/cancelling run per session, executes the configured runner, renews heartbeats, recovers stale leases, supports active-run cancellation, and marks success/failure/cancel terminal states. More recovery policy can be added later when retry limits are introduced.
+Status: implemented for fake, Pi, and legacy Flue runner paths. The worker claims pending messages transactionally, batches all queued messages for one session, enforces one active/cancelling run per session, executes the configured runner, renews heartbeats, recovers stale leases, supports active-run cancellation, and marks success/failure/cancel terminal states. More recovery policy can be added later when retry limits are introduced.
 
 ## Phase 4: Generic Webhook Integration
 
@@ -159,31 +161,31 @@ Acceptance criteria:
 
 Status: implemented for the first DB-backed shape. Webhook sources are stored in Postgres with bearer tokens and prompt prefixes. The route accepts the shared integration ingress-style fields `thread.externalId`, `dedupeKey`, `title`, `prompt`, `actor`, `repository`, `callback`, and `context`; reuses sessions by external thread; dedupes deliveries; and enqueues prefixed prompts. Configurable JSON-path mapping/filtering/templates remain future enhancements.
 
-## Phase 5: Flue Runner Adapter
+## Phase 5: Runner Adapter
 
-Goal: connect real Flue execution behind the runner interface.
+Goal: connect real agent execution behind the runner interface. New real-agent work uses Pi; Flue is deprecated and retained only for legacy sessions while it is removed.
 
 Deliverables:
 
-- `runner-flue` module.
-- Postgres-backed Flue session store.
-- Flue initialization from session/message context.
-- Remote coding-agent setup flow based on Flue's documented Daytona pattern.
-- Event normalization from Flue events to internal events.
+- `runner-pi` module.
+- Postgres-backed Pi session store.
+- Pi initialization from session/message context.
+- Remote coding-agent setup flow based on the product sandbox abstraction.
+- Event normalization from Pi events to internal events.
 - Prompt builder integration.
 - Fake and real runner selectable by config.
 
 Acceptance criteria:
 
-- Only `runner-flue` imports `@flue/runtime`.
-- Flue session history survives process restart.
+- Only `runner-pi` imports Pi SDK packages.
+- Pi session history survives process restart.
 - Fake runner remains default in deterministic tests.
-- Real Flue runner can execute a minimal prompt in a controlled sandbox.
-- Real Flue runner can initialize a project-scoped agent with a sandbox `cwd`.
-- Real Flue runner uses Flue commands/tools/session APIs rather than a parallel harness.
-- Flue text/tool/task events are persisted as normalized events.
+- Real Pi runner can execute a minimal prompt in a controlled sandbox.
+- Real Pi runner can initialize a project-scoped agent with a sandbox `cwd`.
+- Real Pi runner uses Pi tools/session APIs rather than a parallel harness.
+- Pi text/tool/task events are persisted as normalized events.
 
-Status: mostly implemented. The Postgres-backed Flue `SessionStore` exists and is integration-tested. A `FlueRunner` adapter seam exists and is unit-tested with a fake Flue agent factory. A real Flue agent factory now creates in-process Flue contexts, passes provider-backed `SandboxFactory` instances, and uses durable Flue session persistence when configured. Flue text/tool/command/task events are normalized into product events. Credential-backed controlled sandbox execution exists as opt-in UAT and should be run/hardened with real credentials.
+Status: implemented for Pi. The Postgres-backed Pi session store exists, `PiRunner` is wired behind `RUNNER=pi`, Pi uses sandbox-backed tools, and Pi events are normalized into product events. The older Postgres-backed Flue `SessionStore`, `FlueRunner`, and real Flue factory remain as deprecated legacy support while removal is prepared.
 
 ## Phase 6: Sandbox Provider
 
@@ -287,7 +289,7 @@ Acceptance criteria:
 - Tokens are not persisted in events, messages, artifacts, or logs.
 - GitHub API base URLs remain configurable for emulator-backed tests.
 
-Status: implemented for current runtime needs. Config parsing, GitHub App JWT signing, repository installation lookup, repository-scoped installation token minting, per-repository token caching, repository allowlist checks, and runner-safe repository access instructions exist with focused unit coverage. Messages can carry repository context, and the Flue runner clones or fetches the repo inside the sandbox with command-scoped env auth. The agent can list/set/prepare repositories and use guarded authenticated `gh` and `git` tools for the active prepared repo. Token values are not written to events/messages/artifacts or prompt text. Opt-in real GitHub App and real GitHub + Daytona UATs verify token minting and sandbox clone/fetch. Provider-owned push/branch/PR helper operations remain next.
+Status: implemented for current runtime needs. Config parsing, GitHub App JWT signing, repository installation lookup, repository-scoped installation token minting, per-repository token caching, repository allowlist checks, and runner-safe repository access instructions exist with focused unit coverage. Messages can carry repository context, and the runner clones or fetches the repo inside the sandbox with command-scoped env auth. The agent can list/set/prepare repositories and use guarded authenticated `gh` and `git` tools for the active prepared repo. Token values are not written to events/messages/artifacts or prompt text. Opt-in real GitHub App and real GitHub + Daytona UATs verify token minting and sandbox clone/fetch. Provider-owned push/branch/PR helper operations remain next.
 
 ## Phase 9: GitHub Integration
 

@@ -1,5 +1,7 @@
 # Flue Upgrade Notes
 
+> **Deprecated:** `RUNNER=flue` is a legacy runner and is being removed. New deployments and real-agent work should use `RUNNER=pi`. These notes are retained only for existing Flue deployments and removal work.
+
 Deputies is currently pinned to `@flue/runtime@0.11.1`.
 
 ## Operator Impact

@@ -136,7 +136,7 @@ Generic webhook payloads currently require non-empty `thread.externalId`, `dedup
 
 GitHub App runtime access exists for webhook-created and manually selected repository work. The service mints short-lived installation credentials for clone/fetch and guarded runtime GitHub operations. Provider-owned branch push and PR helper operations remain future work.
 
-Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, signed inbound GitHub webhooks, webhook sender/repo-owner allowlists, trigger-phrase gating, GitHub completion comments, Flue-runner repository refresh from message repository context, a dynamic `repository` tool for status/list/set/prepare actions, a dynamic `gh` tool for authenticated GitHub CLI/API operations against the active repository, and a dynamic `git` tool for authenticated git network operations inside the prepared sandbox repository. The worker only ensures a sandbox exists. When a run starts with repository context, Flue performs pre-prompt clone/fetch and starts in the repository `cwd`. When no repository context exists, agents can choose an allowlisted repo with `repository set`, prepare it with `repository prepare`, and then use absolute paths in the returned workspace. PR helper operations are still future work.
+Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, signed inbound GitHub webhooks, webhook sender/repo-owner allowlists, trigger-phrase gating, GitHub completion comments, runner repository refresh from message repository context, a dynamic `repository` tool for status/list/set/prepare actions, a dynamic `gh` tool for authenticated GitHub CLI/API operations against the active repository, and a dynamic `git` tool for authenticated git network operations inside the prepared sandbox repository. The worker only ensures a sandbox exists. When a run starts with repository context, Pi performs pre-prompt clone/fetch and starts in the repository `cwd`. When no repository context exists, agents can choose an allowlisted repo with `repository set`, prepare it with `repository prepare`, and then use absolute paths in the returned workspace. PR helper operations are still future work.
 
 `GITHUB_API_BASE_URL`, `GITHUB_OAUTH_BASE_URL`, and `GITHUB_CLONE_BASE_URL` are intentionally separate. The API base points at GitHub's REST API or an emulator, the OAuth base points at the GitHub web host used for app user authorization, and the clone base points at the git remote host used for clone/fetch/push. Defaults are `https://api.github.com`, `https://github.com`, and `https://github.com`.
 
@@ -145,12 +145,12 @@ Credential handling:
 - `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_ID` stay in service environment/secrets and are used only server-side to sign GitHub App JWTs.
 - `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` are the same GitHub App's user-authorization credentials. They are used only for product UI login when `API_AUTH_MODE=session` and `AUTH_PROVIDER=github`.
 - Installation tokens are minted in memory, scoped to the requested repository, cached per repository until near expiry, and are not persisted in messages, events, artifacts, callbacks, or prompts.
-- Git clone/fetch auth is passed to Flue `session.shell` as command-scoped env: `GITHUB_AUTH_HEADER=Authorization: Basic base64(x-access-token:<installation-token>)`.
-- Shell commands reference only `$GITHUB_AUTH_HEADER`; token values are not embedded in command strings. Flue shell history records env variable names, not values.
+- Git clone/fetch auth is passed to runner sandbox execution as command-scoped env: `GITHUB_AUTH_HEADER=Authorization: Basic base64(x-access-token:<installation-token>)`.
+- Shell commands reference only `$GITHUB_AUTH_HEADER`; token values are not embedded in command strings. Runner event history records env variable names, not values.
 - The agent `repository` tool is always available when GitHub access is configured. `status` reports active/prepared repo state, `list` reports configured allowlist entries, `set` validates and persists session repo context, and `prepare` clones/fetches inside the sandbox.
 - Repository setup configures repo-local git identity as `DevDeputies <devdeputies@users.noreply.github.com>` so agents do not need to mutate global sandbox git config.
 - The agent `gh` tool runs in trusted worker code with `GH_TOKEN` for `github.com` or `GH_ENTERPRISE_TOKEN` plus `GH_HOST` for GitHub Enterprise hosts, `GH_REPO`, a temporary `GH_CONFIG_DIR`, disabled prompts, token redaction, and blocked auth/config/extension/clone escape hatches. It resolves the active repo at call time, blocks direct issue/PR comment posting so callbacks own final replies, and blocks GitHub Git Database API routes so sandbox-local commits are published through git, not remote object surgery.
-- The agent `git` tool runs the git process inside the prepared remote sandbox repository through Flue agent-level `shell` with command-scoped `GITHUB_AUTH_HEADER`. Agents should use it for authenticated push/fetch/pull operations, not for GitHub issue/comment/PR API work. Risky push forms such as force, mirror, delete, and force refspecs are blocked.
+- The agent `git` tool runs the git process inside the prepared remote sandbox repository with command-scoped `GITHUB_AUTH_HEADER`. Agents should use it for authenticated push/fetch/pull operations, not for GitHub issue/comment/PR API work. Risky push forms such as force, mirror, delete, and force refspecs are blocked.
 - `repository_ready` events contain repository identity, workspace path, and expiry metadata only.
 - GitHub webhooks fail closed when `GITHUB_WEBHOOK_SECRET` is set. Configure `GITHUB_WEBHOOK_ALLOWED_USERS` or `GITHUB_WEBHOOK_ALLOWED_ORGANIZATIONS`, or explicitly set `UNSAFE_GITHUB_WEBHOOK_ALLOW_ALL_USERS_AND_ORGS=true`, and configure at least one `GITHUB_WEBHOOK_TRIGGER_PHRASES` value.
 - `GITHUB_WEBHOOK_ALLOWED_USERS` gates the webhook sender login. `GITHUB_WEBHOOK_ALLOWED_ORGANIZATIONS` gates the repository owner. Empty means unrestricted for that dimension only after at least one webhook allowlist exists, or after unsafe allow-all is enabled. Configured lists are matched case-insensitively. Non-matching deliveries are recorded as failed integration deliveries and no session/message is created.
@@ -285,7 +285,7 @@ Normalize raw GitHub payloads into a small internal event shape before session/m
 
 - Support `issue_comment.created`, `pull_request_review_comment.created`, and selected `pull_request` actions first.
 - Add stable `triggerKey` and `concurrencyKey` fields, e.g. `issue_comment:<commentId>`, `pr:<number>`, and `issue:<number>`.
-- Resolve repository as `{ provider: 'github', owner, repo }` and attach it to message context so the Flue runner startup step can clone/fetch it inside the sandbox before the agent prompt.
+- Resolve repository as `{ provider: 'github', owner, repo }` and attach it to message context so the runner startup step can clone/fetch it inside the sandbox before the agent prompt.
 - Ignore bot/self comments to avoid loops.
 - Enforce `GITHUB_ALLOWED_REPOSITORIES` after signature verification, event parsing, and delivery receipt, but before any GitHub API context fetch or session/message creation.
 - Add caller gating after repo allowlist: explicit allowed GitHub users/orgs exist; collaborator permission checks requiring `write`, `maintain`, or `admin` remain open.
@@ -381,7 +381,7 @@ Acceptance criteria:
 
 Keep runtime GitHub auth fresh whenever a reused sandbox performs repository operations.
 
-- Continue minting/accessing short-lived tokens during Flue runner startup setup for clone/fetch.
+- Continue minting/accessing short-lived tokens during runner startup setup for clone/fetch.
 - Re-mint or refresh auth before push/PR operations, not only at sandbox creation time.
 - If a future sandbox provider supports outbound proxy or secret injection, implement it behind the sandbox provider boundary; do not require it for all providers.
 - Prefer Flue `session.shell(..., { env })` command-scoped auth for Daytona until a stronger provider-native mechanism exists.

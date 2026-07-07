@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "auth:login:openai-codex": "tsx src/runner-flue/openai-codex-login.ts",
+    "auth:login:openai-codex": "tsx src/runner/openai-codex-login.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "demo:export": "tsx src/scripts/export-static-demo.ts",
     "docker-orchestrator:dev": "tsx watch src/sandbox/docker-orchestrator-server.ts",

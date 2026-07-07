@@ -39,7 +39,7 @@ Combined mode runs API, integration, event streaming, worker, runner, and sandbo
 Responsibilities:
 
 - API, auth, integration webhooks, and event streams.
-- Queue writes, worker polling, run leases, Flue execution, and event normalization.
+- Queue writes, worker polling, run leases, runner execution, and event normalization.
 - Sandbox lifecycle and cleanup.
 - Durable state in Postgres, with optional large artifact storage.
 
@@ -49,7 +49,8 @@ background-agent service
   worker loop
   event streaming
   integration routes
-  Flue runner adapter
+  Pi runner adapter
+  legacy Flue runner adapter
   sandbox lifecycle manager
   Postgres store
 
@@ -59,7 +60,8 @@ Postgres
   events
   runs
   sandboxes
-  flue_sessions
+  pi_sessions
+  flue_sessions (legacy)
   artifacts
   external thread mappings
 
@@ -81,7 +83,7 @@ flowchart LR
   subgraph Runtime[Control plane process<br/>RUN_MODE=combined]
     direction TB
     API[API routes + auth + event streams]
-    Worker[Worker loop + leases<br/>Flue runner adapter]
+    Worker[Worker loop + leases<br/>Pi runner adapter]
     FirstPartyControl[First-party sandbox control<br/>e.g. Docker orchestrator]
     API --> Worker
     Worker --> FirstPartyControl
@@ -124,7 +126,7 @@ API responsibilities:
 Worker responsibilities:
 
 - Polling, run leases, heartbeats, stale lease recovery, and active-run exclusivity.
-- Sandbox lifecycle, Flue execution, cancellation, and event normalization.
+- Sandbox lifecycle, runner execution, cancellation, and event normalization.
 - Artifact recording and run/message finalization.
 
 Shared durable state:
@@ -146,7 +148,7 @@ flowchart LR
   end
 
   subgraph WorkerTier[Worker tier]
-    Workers[Worker service replicas<br/>RUN_MODE=worker<br/>Flue runner adapter]
+    Workers[Worker service replicas<br/>RUN_MODE=worker<br/>Pi runner adapter]
   end
 
   subgraph Durable[Durable state]
@@ -218,14 +220,14 @@ empty virtual sandbox
   -> remote sandbox through a connector
 ```
 
-For this product, there are two viable integration shapes:
+For this product, there are two runner integration shapes:
 
-1. **Embedded Flue runner inside product API/worker**, preferred for the portable control plane.
-2. **Delegate to a generated Flue server**, useful for standalone Flue agents or smoke tests.
+1. **Embedded Pi runner inside product API/worker**, preferred for new deployments and real agent work.
+2. **Embedded Flue runner inside product API/worker**, deprecated and retained only for legacy sessions while it is removed.
 
-The preferred MVP remains embedded Flue execution behind `runner-flue`, because we need durable Postgres-backed queues, run leases, integration dedupe, artifacts, and replayable product events around the agent run. Flue's generated Node server is not a durable work queue by itself.
+The preferred runtime is embedded Pi execution behind `runner-pi`, because we need durable Postgres-backed queues, run leases, integration dedupe, artifacts, and replayable product events around the agent run. Flue's generated Node server is not a durable work queue by itself and is not the direction for new Deputies deployments.
 
-The implementation should still align with Flue's Node deployment model:
+The deprecated Flue implementation should remain isolated behind `runner-flue` until removal. While it exists, it should still align with Flue's Node deployment model:
 
 - create the runtime context with `createFlueContext({ defaultStore })` for Postgres-backed Flue session persistence;
 - use `agent.session()` rather than custom conversation history;
@@ -233,7 +235,7 @@ The implementation should still align with Flue's Node deployment model:
 - use Flue sandbox connectors for remote environments;
 - treat Flue live events as input to our product event log.
 
-The embedded runner uses Flue the same way the generated Node server does: construct a `createFlueContext({ defaultStore })` in the worker process, create an agent profile with `createAgent(...)`, then call `ctx.init(agent, { name })`. The agent profile receives the product-managed provider sandbox via a Flue `SandboxFactory`, while `defaultStore` supplies the Postgres-backed Flue `SessionStore` instead of relying on the generated server's default in-memory store.
+The legacy embedded Flue runner uses Flue the same way the generated Node server does: construct a `createFlueContext({ defaultStore })` in the worker process, create an agent profile with `createAgent(...)`, then call `ctx.init(agent, { name })`. The agent profile receives the product-managed provider sandbox via a Flue `SandboxFactory`, while `defaultStore` supplies the Postgres-backed Flue `SessionStore` instead of relying on the generated server's default in-memory store.
 
 Flue live events are normalized before being written to the product event log:
 
@@ -244,9 +246,9 @@ Flue live events are normalized before being written to the product event log:
 - Error `run_end` and error-level `log` events -> `tool_finished` with `toolName: "flue"`.
 - Lifecycle/model events such as `run_start`, `run_resume`, `agent_start`, `agent_end`, `turn_*`, `message_*`, `thinking_*`, `compaction_*`, and `idle` are ignored unless they need product-visible UI later.
 
-## Flue Custom Tools
+## Runner Custom Tools
 
-Flue custom tools passed through `init({ tools })` are the preferred non-MCP extension point when we need authenticated or policy-scoped capabilities that should not expose raw credentials to the agent shell. They are useful for narrow provider actions and pragmatic CLI-backed operations such as the GitHub `gh` tool.
+Pi custom tools are the preferred non-MCP extension point when we need authenticated or policy-scoped capabilities that should not expose raw credentials to the agent shell. The deprecated Flue runner has equivalent legacy custom tools passed through `init({ tools })` until that runner is removed. These tools are useful for narrow provider actions and pragmatic CLI-backed operations such as the GitHub `gh` tool.
 
 Execution boundary:
 
@@ -260,7 +262,7 @@ Side-effect boundary:
 - Provider API side effects happen wherever the provider API applies them, for example creating a GitHub issue or comment.
 - Database side effects happen in our service database if the handler calls stores directly.
 - Filesystem side effects from ordinary Node filesystem APIs happen in the worker container and usually should be avoided for task workspaces.
-- Filesystem side effects intended for the agent workspace must be routed through Flue session/agent shell or sandbox APIs, for example startup `session.shell(...)` or prompt-time agent-level `shell(...)`, so they occur in the remote sandbox worktree.
+- Filesystem side effects intended for the agent workspace must be routed through runner sandbox APIs, so they occur in the remote sandbox worktree.
 
 Security model:
 
@@ -273,7 +275,7 @@ Security model:
 
 Choosing an extension point:
 
-- Use a Flue custom tool when the operation belongs to our trusted backend policy layer and can be represented as a model-callable capability.
+- Use a runner custom tool when the operation belongs to our trusted backend policy layer and can be represented as a model-callable capability.
 - Use remote MCP when a high-quality provider MCP server or our own MCP server gives the right tool surface and lifecycle semantics.
 - Use `session.shell(..., { env })` for one-off trusted setup commands that must mutate the remote sandbox, such as clone/fetch, with command-scoped credentials.
 - Avoid session-scoped shell credentials for general agent use; they are easier to leak into logs, files, command output, model context, or artifacts.
@@ -281,10 +283,10 @@ Choosing an extension point:
 
 Current examples:
 
-- Repository clone/fetch uses `session.shell(..., { env: { GITHUB_AUTH_HEADER } })` because the side effect must create or update files inside the remote sandbox.
+- Repository clone/fetch uses runner sandbox execution with command-scoped credentials because the side effect must create or update files inside the remote sandbox.
 - Dynamic repository selection uses the `repository` custom tool. `set` validates and persists session repo context, `list` helps the agent ask for clarification when uncertain, and `prepare` clones/fetches the selected repo inside the sandbox during the active run.
 - GitHub issue/PR API operations can use the `gh` custom tool, but final GitHub issue/PR comments are intentionally blocked there and are posted through the callback layer to avoid duplicate external replies.
-- Authenticated git network operations such as push use the `git` custom tool. Its handler runs in trusted worker code, but it calls Flue agent-level `shell(...)` so the actual git process and object transfer happen inside the remote sandbox repository with command-scoped credentials while the prompt is active.
+- Authenticated git network operations such as push use the `git` custom tool. Its handler runs in trusted worker code, but the actual git process and object transfer happen inside the remote sandbox repository with command-scoped credentials while the prompt is active.
 - Local file edits and local commits should use sandbox tools such as `write`, `edit`, and `bash`; publishing those commits should use the authenticated `git` tool rather than trying to use `gh` API refs for sandbox-local objects.
 - Guardrails block raw GitHub Git Database API routes through `gh` and risky authenticated `git push` forms such as force, mirror, and delete refspecs.
 - The `deputies` custom tool is an opt-in product control-surface tool. It runs in the trusted worker, creates and inspects durable product sessions through the store, and is not a sandbox-local subtask mechanism.
@@ -302,9 +304,9 @@ Deputies tool policy:
 - `notifyOnComplete=true` stores explicit child context so the worker can enqueue one deputy-authored follow-up message into the parent session after the child reaches a terminal outcome. The worker clears the flag before notification so later child follow-ups do not create parent/child loops.
 - Successful parent notifications are informational and output-free; agents can inspect the child explicitly with `get_session` if the result matters to the current work. Failed notifications still include bounded error text for diagnosis.
 - `get_session` is summary-only by default. When transcript details are requested, it returns bounded newest-first transcript pages with historical content marked as informational session data, not requests or instructions for the inspecting session.
-- Quick in-run delegation should still use Flue task/subagent facilities rather than spawning a product session.
+- Quick in-run delegation should use Pi subagent facilities rather than spawning a product session.
 
-If we later expose raw Flue agent endpoints, they should be clearly separated from product session endpoints:
+If we expose raw runner endpoints, they should be clearly separated from product session endpoints:
 
 ```txt
 /agents/:name/:id             # Flue-native invocation shape
@@ -338,6 +340,7 @@ apps/control-plane/src/
   messages/
   worker/
   runner/
+  runner-pi/
   runner-flue/
   sandbox/
   integrations/
@@ -361,10 +364,11 @@ docs/
 | -------------- | ------------------------------------------------------------------------------------ | -------------------------------------------- |
 | `api`/`app`    | Hono routes, request validation, auth boundaries, response formatting, middleware    | Agent execution, sandbox lifecycle decisions |
 | `app`          | Process bootstrap, run mode, graceful shutdown                                       | Business logic                               |
-| `sessions`     | Durable task workspace lifecycle and status                                          | SQL details, Flue calls                      |
+| `sessions`     | Durable task workspace lifecycle and status                                          | SQL details, runner calls                    |
 | `messages`     | Prompt/follow-up queue semantics                                                     | Running prompts                              |
 | `worker`       | Claiming runnable work and coordinating execution                                    | HTTP concerns                                |
-| `runner-flue`  | Flue initialization and event normalization                                          | Session persistence policy                   |
+| `runner-pi`    | Pi initialization, tool wiring, and event normalization                              | Session persistence policy                   |
+| `runner-flue`  | Deprecated Flue initialization and event normalization                               | Session persistence policy                   |
 | `sandbox`      | Provider interface, lifecycle, health, cleanup                                       | Prompt construction                          |
 | `integrations` | External webhook/auth normalization, source-specific prompt rendering, and callbacks | Direct agent execution                       |
 | `events`       | Append-only event log, replay, subscriber fanout                                     | Business decisions                           |
@@ -380,8 +384,9 @@ Allowed dependency direction:
 
 ```txt
 api -> sessions/messages/events/auth
-worker -> messages/sessions/runs/sandbox/runner-flue/events/artifacts
+worker -> messages/sessions/runs/sandbox/runner-pi/runner-flue/events/artifacts
 integrations -> sessions/messages/events/prompts/auth
+runner-pi -> events/sandbox/prompts
 runner-flue -> events/sandbox/prompts
 sandbox -> store/config
 sessions/messages/runs/events/artifacts -> store
@@ -391,16 +396,16 @@ store -> postgres driver + shared record/event types
 Forbidden dependencies:
 
 ```txt
-api/app -> runner-flue, except src/index.ts
-integrations -> runner-flue
+api/app -> runner-pi or runner-flue, except src/index.ts
+integrations -> runner-pi or runner-flue
 sessions/messages -> integration-specific modules
-runner-flue -> api/app/integrations
+runner-pi/runner-flue -> api/app/integrations
 store -> domain services
 ```
 
 `apps/control-plane/src/index.ts` is the composition root exception. It is allowed to wire concrete stores, runners, sandboxes, and integrations because process startup is where configuration is translated into concrete dependencies. Other API/app modules must depend on service contracts instead of runner implementations.
 
-Only `runner-flue` should import `@flue/runtime`. This keeps Flue replaceable and makes tests easier. Provider SDKs should stay in provider-specific adapters, such as `apps/control-plane/src/sandbox/daytona.ts` for `@daytona/sdk`. Store implementations may import shared data types, but must not import session/message/event service classes.
+Pi SDK runtime imports should stay in `runner-pi`; config may import Pi's model catalog and auth helpers may import Pi OAuth packages. Only `runner-flue` should import `@flue/runtime` while the deprecated Flue runner exists. This keeps runners replaceable and makes tests easier. Provider SDKs should stay in provider-specific adapters, such as `apps/control-plane/src/sandbox/daytona.ts` for `@daytona/sdk`. Store implementations may import shared data types, but must not import session/message/event service classes.
 
 The HTTP transport uses Hono on Node via `@hono/node-server`. This keeps the API layer lightweight while giving us middleware hooks for auth, request IDs, CORS, body limits, and route grouping as integrations grow.
 
@@ -414,7 +419,7 @@ Stored artifact blobs are optional and live behind the `artifacts` service. Post
 
 JSON request bodies are capped by `MAX_JSON_BODY_BYTES` and malformed/non-object bodies produce stable JSON error envelopes. This prevents transport parsing failures from leaking as generic internal errors.
 
-`runner-flue` must also provide or configure a Postgres-backed Flue session store. Flue's Node default is in-memory and is not acceptable for production, CI, UAT, or multi-replica deployments. Product state and Flue runtime state are separate but both must be durable.
+`runner-pi` must provide or configure a Postgres-backed Pi session store for durable deployments. When deprecated `RUNNER=flue` is still enabled, `runner-flue` must also provide or configure a Postgres-backed Flue session store. Product state and runner runtime state are separate but both must be durable.
 
 ## Request Flow
 
@@ -439,8 +444,8 @@ worker loop
   -> claim all pending messages for one session using Postgres transaction
   -> create/renew session run lease
   -> ensure sandbox exists and is healthy
-  -> start Flue runner
-  -> normalize Flue/sandbox events into event log
+  -> start configured runner
+  -> normalize runner/sandbox events into event log
   -> record artifacts
   -> mark claimed batch completed, failed, or cancelled
   -> release lease
@@ -474,7 +479,7 @@ Implementation mechanisms:
 
 ## Runner Interface
 
-The worker should call a generic runner interface, not Flue directly.
+The worker should call a generic runner interface, not a concrete SDK directly.
 
 ```ts
 interface Runner {
@@ -496,21 +501,22 @@ type RunnerInput = {
 Implementations:
 
 - `FakeRunner` for deterministic unit/e2e tests.
-- `FlueRunner` for production.
+- `PiRunner` for production and new real-agent deployments.
+- `FlueRunner` for deprecated legacy deployments until removal.
 - Future runners if needed.
 
-`FlueRunner` responsibilities include:
+`PiRunner` responsibilities include:
 
-- create Flue contexts with `defaultStore` set to the Postgres-backed Flue session store;
-- use stable Flue agent/session IDs derived from product session IDs;
-- follow Flue's remote coding-agent pattern: create or connect a real sandbox, run setup in that sandbox, then initialize a project-scoped agent with `cwd` set to the cloned repo;
-- call Flue `agent.session()` / `session.prompt()` / `session.skill()` / `session.task()` instead of implementing its own conversation or subagent system;
-- call `session.abort()` when the worker cancellation signal aborts, and suppress post-abort events/results;
-- grant product-authorized Flue tools, commands, and MCP tools;
-- treat Flue session data as runner-owned state;
+- create Pi sessions backed by the Postgres-backed Pi session store;
+- use stable Pi session IDs derived from product session IDs;
+- create or connect a real sandbox, run setup in that sandbox, then start the agent in the prepared repository `cwd`;
+- call Pi agent/session APIs instead of implementing a parallel conversation or subagent system;
+- abort the active Pi session when the worker cancellation signal aborts, and suppress post-abort events/results;
+- grant product-authorized Pi tools and sandbox tools;
+- treat Pi session data as runner-owned state;
 - persist normalized product events separately through the `events` module.
 
-Do not implement a separate subagent runtime for Flue-backed sessions. Product runs are durable work records; intra-run delegation belongs to Flue `session.task()` and the built-in task tool.
+Do not implement a separate subagent runtime for Pi-backed sessions. Product runs are durable work records; intra-run delegation belongs to Pi subagent facilities. Deprecated Flue-backed sessions should remain isolated behind `runner-flue` until removal.
 
 For remote coding agents, the runner should mirror Flue's documented two-stage setup pattern:
 

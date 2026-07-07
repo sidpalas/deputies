@@ -218,7 +218,7 @@ Adopt:
 - Health check before reuse.
 - Recreate when unreachable according to policy.
 
-Flue's documented Daytona coding-agent example remains relevant. Deputies uses a durable wrapper around that idea: persisted sandbox records, reconnect/reuse policy, pre-prompt repository setup through sandbox shell operations, and project-scoped Flue execution with `cwd` set to the prepared repository. A separate long-lived setup agent is not required for the current implementation.
+The Daytona coding-agent pattern remains relevant. Deputies uses a durable wrapper around that idea: persisted sandbox records, reconnect/reuse policy, pre-prompt repository setup through sandbox shell operations, and project-scoped runner execution with `cwd` set to the prepared repository. A separate long-lived setup agent is not required for the current implementation.
 
 ### 4. GitHub App Token Handling
 
@@ -503,7 +503,7 @@ Junior's `respond.ts` style is practical for a compact Slack bot. Deputies shoul
 
 ## What We Should Adopt From Mistle
 
-Mistle is the closest open source system-level reference for a hosted background coding-agent platform. Its `docs/architecture.md` splits the product into dashboard/control-plane API/control-plane worker services, data-plane API/data-plane worker/data-plane gateway services, and sandbox runtimes. Use it as implementation inspiration for sandbox profiles, runtime plans, credential brokering, and lifecycle workflows, not as a reason to replace Deputies' Flue runner boundary.
+Mistle is the closest open source system-level reference for a hosted background coding-agent platform. Its `docs/architecture.md` splits the product into dashboard/control-plane API/control-plane worker services, data-plane API/data-plane worker/data-plane gateway services, and sandbox runtimes. Use it as implementation inspiration for sandbox profiles, runtime plans, credential brokering, and lifecycle workflows, not as a reason to collapse Deputies' runner adapter boundary.
 
 The repository appears early but substantial. Its `README.md` describes Mistle as an open source platform for background coding agents in sandboxes with brokered credentials, reusable snapshots, sessions, and triggers, while also warning that the project and CLI are early. `VERSION` currently reports `0.31.0`, and `docs/roadmap.md` lists self-hosted deployment, triggers, CLI, and sandbox provider expansion as ongoing work.
 
@@ -557,7 +557,7 @@ Mistle registers Codex, OpenCode, and Pi as first-class agent runtimes in `packa
 
 Adopt:
 
-- Keep Flue behind `runner-flue` as the primary runtime boundary, but preserve a clean adapter seam for any future direct CLI/runtime support.
+- Keep Pi behind `runner-pi` as the primary runtime boundary, keep deprecated Flue isolated behind `runner-flue` until removal, and preserve a clean adapter seam for future direct CLI/runtime support.
 - Normalize runtime readiness, stream URLs, terminal access, and lifecycle signals at the product boundary instead of assuming every agent runtime behaves the same.
 - Put runtime-specific quirks in adapters, not in session orchestration, integration callbacks, or UI components.
 
@@ -683,9 +683,9 @@ Open SWE remains a useful reference model for invocation normalization, determin
 
 Junior remains a useful reference model for Slack-specific product contracts: explicit routing policy, one outbound boundary, assistant-thread status semantics, OAuth pause/resume, strict Slack HTTP tests, rubric evals, plugin manifests, and agent-readable telemetry docs. Deputies should adopt these selectively around its durable callback dispatcher and emulator-backed test strategy.
 
-Mistle is the strongest open source reference for a full hosted-agent platform: compiled runtime plans, credential brokering through managed egress, optional sandbox daemons, provider adapters, durable data-plane startup workflows, trigger delivery routes, and reconnectable runtime surfaces. Deputies should adopt these as boundary and lifecycle patterns while staying smaller, portable, and Flue-centered.
+Mistle is the strongest open source reference for a full hosted-agent platform: compiled runtime plans, credential brokering through managed egress, optional sandbox daemons, provider adapters, durable data-plane startup workflows, trigger delivery routes, and reconnectable runtime surfaces. Deputies should adopt these as boundary and lifecycle patterns while staying smaller, portable, and runner-adapter-centered.
 
-Use Flue as the agent runtime boundary, not as the entire product state model. Flue should own conversation mechanics, tools, skills, roles, tasks/subagents, live runtime events, and sandbox connector shape. The product should own durable background-work semantics, integrations, replayable product events, artifacts, queueing, leases, and operational state.
+Use Pi as the real-agent runtime boundary, not as the entire product state model. Pi should own conversation mechanics, tools, subagents, live runtime events, and sandbox interaction for new work. Deprecated Flue remains isolated behind `runner-flue` only during removal. The product should own durable background-work semantics, integrations, replayable product events, artifacts, queueing, leases, and operational state.
 
 The resulting design is:
 
@@ -694,7 +694,8 @@ Open-Inspect-style durable sessions/events/artifacts
 + Open SWE-style source normalization/follow-up/token handling
 + Junior-style Slack contracts/plugin manifest/eval/telemetry ideas
 + Mistle-style runtime plans/credential brokering/lifecycle workflows
-+ Flue runner adapter
++ Pi runner adapter
++ legacy Flue runner adapter during removal
 + portable Postgres/Node deployment model
 + provider-neutral sandbox interface
 ```

@@ -11,7 +11,7 @@ Deputies is a control plane for delegating engineering work to [background agent
 
 - Runs agent work in background sessions with a searchable activity history.
 - Streams progress, tool diagnostics, and final responses into the web UI.
-- Uses [Flue](https://github.com/withastro/flue) under the hood to run and resume agent work.
+- Built on [Pi](https://pi.dev/) for real agent work; the legacy Flue runner is deprecated and remains temporarily available during removal.
 - Supports Slack and GitHub integrations for issue, thread, and callback-driven workflows.
 - Supports GitHub OAuth login for browser access control.
 - Works with [Daytona](https://www.daytona.io/) and Docker as sandbox providers, plus fake and unsafe local providers for tests and trusted development.
@@ -35,7 +35,7 @@ More deployment targets are expected over time. See `deploy/README.md`, `docs/de
 
 ## Local Development
 
-For contributor setup, see `docs/contributing-local-development.md`. It covers the local Postgres and SeaweedFS baseline, Portless, Docker Compose, real Flue, and local integration testing.
+For contributor setup, see `docs/contributing-local-development.md`. It covers the local Postgres and SeaweedFS baseline, Portless, Docker Compose, Pi runner setup, and local integration testing.
 
 ## Project Layout
 

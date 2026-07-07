@@ -116,20 +116,23 @@ Concepts:
 - `Runner`
 - `RunnerInput`
 - `RunnerResult`
-- `FlueRunner`
+- `PiRunner`
+- `FlueRunner` (deprecated legacy runner)
 - `FakeRunner`
 
 Invariants:
 
-- Only `runner-flue` imports `@flue/runtime`.
+- Pi SDK runtime imports stay in `runner-pi`; config may import Pi's model catalog and auth helpers may import Pi OAuth packages.
+- Only `runner-flue` imports `@flue/runtime` while the deprecated Flue runner exists.
 - Runner emits normalized events.
 - Runner does not own product session state.
-- Flue runtime state is persisted separately through the Flue session store.
+- Runner runtime state is persisted separately through runner-owned session stores.
 
 Modules:
 
 ```txt
 apps/control-plane/src/runner
+apps/control-plane/src/runner-pi
 apps/control-plane/src/runner-flue
 ```
 
@@ -280,7 +283,8 @@ apps/control-plane/src/store/postgres.ts       # durable product state adapter
 apps/control-plane/src/db/migrations           # SQL migrations
 apps/control-plane/src/runner/types.ts         # runner port
 apps/control-plane/src/worker/service.ts       # durable work coordinator
-apps/control-plane/src/runner-flue             # Flue runner adapter
+apps/control-plane/src/runner-pi               # Pi runner adapter
+apps/control-plane/src/runner-flue             # deprecated Flue runner adapter
 apps/control-plane/src/sandbox/types.ts        # sandbox provider port
 ```
 
@@ -306,4 +310,4 @@ When adding a feature:
 4. Put provider-specific logic behind interfaces.
 5. Add tests at the domain boundary and at one user-visible boundary.
 
-If a change requires importing `@flue/runtime` outside `runner-flue`, importing provider SDKs outside `sandbox`, or importing Slack/GitHub/Linear types into `sessions`, the boundary is probably wrong.
+If a change requires importing Pi SDK packages outside `runner-pi`, importing `@flue/runtime` outside `runner-flue`, importing provider SDKs outside `sandbox`, or importing Slack/GitHub/Linear types into `sessions`, the boundary is probably wrong.

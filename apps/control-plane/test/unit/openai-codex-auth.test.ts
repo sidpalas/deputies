@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadOpenAICodexApiKey } from '../../src/runner-flue/openai-codex-auth.js';
+import { loadOpenAICodexApiKey } from '../../src/runner/openai-codex-auth.js';
 
 describe('loadOpenAICodexApiKey', () => {
   it('loads Codex OAuth credentials from a Pi auth file', async () => {

@@ -103,16 +103,19 @@ function githubWebhookStatus(config: AppConfig): SetupStatusItem {
 }
 
 function runnerStatus(config: AppConfig): SetupStatusItem {
-  const realRunnerSelected = config.runner === 'flue' || config.runner === 'pi';
+  const piRunnerSelected = config.runner === 'pi';
+  const flueRunnerSelected = config.runner === 'flue';
   return {
     id: 'runner',
     label: 'Runner',
-    state: realRunnerSelected ? 'configured' : 'warning',
-    summary: `${config.runner} runner selected.`,
-    guidance: realRunnerSelected ? undefined : 'Use Flue or Pi for real agent execution.',
-    guidanceItems: realRunnerSelected
+    state: piRunnerSelected ? 'configured' : 'warning',
+    summary: flueRunnerSelected ? 'flue runner selected; deprecated.' : `${config.runner} runner selected.`,
+    guidance: piRunnerSelected
       ? undefined
-      : ['RUNNER=flue', 'RUNNER=pi', 'RUNNER_MODEL_DEFAULT=<DEFAULT_MODEL_CHOICE>'],
+      : flueRunnerSelected
+        ? 'Flue is deprecated and will be removed. Switch to Pi for real agent execution.'
+        : 'Use Pi for real agent execution.',
+    guidanceItems: piRunnerSelected ? undefined : ['RUNNER=pi', 'RUNNER_MODEL_DEFAULT=<DEFAULT_MODEL_CHOICE>'],
     details: [`Runner: ${config.runner}`],
     docsPath: 'README.md',
   };

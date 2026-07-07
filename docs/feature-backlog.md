@@ -82,7 +82,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Emulate-backed GitHub integration tests once the GitHub App JWT emulator caveat is resolved upstream.
 - Expand deployment smoke coverage beyond the deterministic fake-runner path: Kubernetes split API/worker topology, Docker Compose split topology, static-session auth, migration idempotency on repeated install/upgrade, and a `cloud-provider-kind` LoadBalancer/Ingress access-mode check.
 - Add a positive sandbox preview smoke once there is a deterministic fake or ephemeral preview provider; the current deployment smoke only verifies service-host proxy requests do not fall through to the web SPA.
-- Opt-in credentialed UAT for real Flue runner, sandbox provider, model credentials, and artifact-tool creation/download, separate from the deterministic fake-runner full-stack smoke.
+- Opt-in credentialed UAT for the real Pi runner, sandbox provider, model credentials, and artifact-tool creation/download, separate from the deterministic fake-runner full-stack smoke.
 - Real-provider smoke tests for Daytona on a schedule.
 - Load profiles for session listing, event replay, SSE fanout, and worker throughput.
 - Contract schemas for public API responses and normalized events.

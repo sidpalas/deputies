@@ -648,7 +648,7 @@ export function requireAgentSandboxOrchestratorToken(config: AppConfig): string 
 
 export function requireRunnerModelDefault(config: AppConfig): string {
   if (!config.runnerModelDefault) {
-    throw new Error('RUNNER_MODEL_DEFAULT is required when RUNNER=flue or RUNNER=pi');
+    throw new Error('RUNNER_MODEL_DEFAULT is required when RUNNER=pi or deprecated RUNNER=flue');
   }
 
   return config.runnerModelDefault;
