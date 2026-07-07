@@ -147,6 +147,218 @@ describe('FlueRunner', () => {
     expect(events[6]?.payload).toMatchObject({ toolName: 'task', taskId: 'task-1' });
   });
 
+  it('appends filtered MCP tools and closes connections', async () => {
+    const close = vi.fn(async () => {});
+    const execute = vi.fn(async () => 'mcp ok');
+    const connect = vi.fn(async () => ({
+      name: 'executor',
+      tools: [
+        { name: 'mcp__executor__execute', description: 'Execute', parameters: { type: 'object' }, execute },
+        { name: 'mcp__executor__blocked', description: 'Blocked', parameters: { type: 'object' }, execute },
+      ],
+      close,
+    }));
+    const factory: FlueAgentFactory = {
+      async create(input) {
+        expect(input.tools?.map((tool) => tool.name)).toEqual(['mcp__executor__execute']);
+        return {
+          async session() {
+            return {
+              async prompt() {
+                return { text: await input.tools![0]!.execute({ query: 'hello' }) };
+              },
+              abort() {},
+            };
+          },
+        };
+      },
+    };
+    const sandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+
+    const result = await new FlueRunner(factory, {
+      mcp: {
+        servers: [
+          {
+            name: 'executor',
+            url: 'https://executor.example/mcp',
+            transport: 'streamable-http',
+            allowedTools: ['execute'],
+          },
+        ],
+        connectTimeoutMs: 10_000,
+        toolTimeoutMs: 60_000,
+        toolResultMaxChars: 100_000,
+        responseMaxBytes: 5 * 1024 * 1024,
+        connect,
+      },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'use executor',
+      context: {},
+      sandbox,
+      emit: async () => {},
+    });
+
+    expect(result.text).toBe('mcp ok');
+    expect(connect).toHaveBeenCalledWith(
+      'executor',
+      expect.objectContaining({ url: 'https://executor.example/mcp', transport: 'streamable-http' }),
+    );
+    expect(execute).toHaveBeenCalledWith({ query: 'hello' });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Flue runs alive when an MCP server is unavailable and prepends a prompt note', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const prompts: string[] = [];
+    const connect = vi.fn(async () => {
+      throw new Error('secret-token-from-transport');
+    });
+    const factory: FlueAgentFactory = {
+      async create() {
+        return {
+          async session() {
+            return {
+              async prompt(text) {
+                prompts.push(text);
+                return { text: 'continued without mcp' };
+              },
+              abort() {},
+            };
+          },
+        };
+      },
+    };
+    const sandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+
+    const result = await new FlueRunner(factory, {
+      mcp: {
+        servers: [{ name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' }],
+        connectTimeoutMs: 10_000,
+        toolTimeoutMs: 60_000,
+        toolResultMaxChars: 100_000,
+        responseMaxBytes: 5 * 1024 * 1024,
+        connect,
+      },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'hello',
+      context: {},
+      sandbox,
+      emit: async () => {},
+    });
+
+    expect(result.text).toBe('continued without mcp');
+    expect(prompts[0]).toContain('Note: MCP tools from server "executor" are unavailable this run.');
+    expect(prompts[0]).toContain('User request:\nhello');
+    expect(prompts[0]).not.toContain('secret-token-from-transport');
+    expect(warn).toHaveBeenCalledWith('MCP server "executor" is unavailable this run (unknown).');
+  });
+
+  it('closes MCP connections when a Flue run fails', async () => {
+    const close = vi.fn(async () => {});
+    const connect = vi.fn(async () => ({
+      name: 'executor',
+      tools: [],
+      close,
+    }));
+    const factory: FlueAgentFactory = {
+      async create() {
+        return {
+          async session() {
+            return {
+              async prompt() {
+                throw new Error('flue failed');
+              },
+              abort() {},
+            };
+          },
+        };
+      },
+    };
+    const sandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+
+    await expect(
+      new FlueRunner(factory, {
+        mcp: {
+          servers: [{ name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' }],
+          connectTimeoutMs: 10_000,
+          toolTimeoutMs: 60_000,
+          toolResultMaxChars: 100_000,
+          responseMaxBytes: 5 * 1024 * 1024,
+          connect,
+        },
+      }).run({
+        sessionId: 'session-1',
+        runId: 'run-1',
+        messageId: 'message-1',
+        prompt: 'hello',
+        context: {},
+        sandbox,
+        emit: async () => {},
+      }),
+    ).rejects.toThrow('flue failed');
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes MCP connections when a Flue run is aborted', async () => {
+    const close = vi.fn(async () => {});
+    const abort = vi.fn();
+    const controller = new AbortController();
+    const connect = vi.fn(async () => ({
+      name: 'executor',
+      tools: [],
+      close,
+    }));
+    const factory: FlueAgentFactory = {
+      async create() {
+        return {
+          async session() {
+            return {
+              async prompt(_text, options) {
+                expect(options?.signal).toBe(controller.signal);
+                controller.abort();
+                return { text: 'late' };
+              },
+              abort,
+            };
+          },
+        };
+      },
+    };
+    const sandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+
+    await expect(
+      new FlueRunner(factory, {
+        mcp: {
+          servers: [{ name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' }],
+          connectTimeoutMs: 10_000,
+          toolTimeoutMs: 60_000,
+          toolResultMaxChars: 100_000,
+          responseMaxBytes: 5 * 1024 * 1024,
+          connect,
+        },
+      }).run({
+        sessionId: 'session-1',
+        runId: 'run-1',
+        messageId: 'message-1',
+        prompt: 'hello',
+        context: {},
+        sandbox,
+        emit: async () => {},
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('Operation aborted');
+
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes GitHub repositories through Flue shell setup without persisting tokens to events', async () => {
     const calls: Parameters<FlueAgentFactory['create']>[0][] = [];
     const shells: Array<{ command: string; env?: Record<string, string>; cwd?: string }> = [];

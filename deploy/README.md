@@ -18,7 +18,7 @@ Contributor local support services:
 
 - `local/`: Postgres and SeaweedFS services used by mise tasks such as `mise run //deploy/local:infra:up` and `mise run //deploy/local:infra:down`. This directory does not deploy the full Deputies app stack; use `docker-compose/` if you prefer to run the full stack locally with Docker Compose.
 
-Provider-agnostic deployment guidance lives in `../docs/deployment.md`. Contributor-focused local development guidance lives in `../docs/contributing-local-development.md`.
+Provider-agnostic deployment guidance lives in `../docs/deployment.md`, including remote MCP/Executor variables such as `MCP_SERVERS`, `MCP_CONNECT_TIMEOUT_MS`, `MCP_TOOL_TIMEOUT_MS`, `MCP_TOOL_RESULT_MAX_CHARS`, and `MCP_RESPONSE_MAX_BYTES`. Contributor-focused local development guidance lives in `../docs/contributing-local-development.md`.
 
 Sandbox provider deployment assets live under `sandboxes/`. These build and verify sandbox runtime images only; they do not deploy the full Deputies app stack.
 

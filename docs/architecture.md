@@ -281,6 +281,14 @@ Choosing an extension point:
 - Avoid session-scoped shell credentials for general agent use; they are easier to leak into logs, files, command output, model context, or artifacts.
 - Avoid `defineCommand` for the current Daytona remote path; it is a local/bash-runtime command registration mechanism and does not provide the same tool surface for our remote sandbox sessions.
 
+Remote MCP path:
+
+- `MCP_SERVERS` configures one or more remote streamable-HTTP or SSE MCP endpoints. Executor is the recommended aggregation proxy for third-party integrations because it stores upstream service credentials server-side and exposes a small, policy-enforced MCP surface to Deputies.
+- MCP client connections are created per run in the trusted control-plane worker process. Pi adapts listed MCP tools into Pi custom tools, while Flue uses its native MCP adapter. In both runners the model sees ordinary tools named `mcp__<server>__<tool>`.
+- MCP endpoint headers such as `Authorization: Bearer <executor-api-key>` stay in process env/config and are attached by the worker's MCP transport. They are not written into the sandbox environment, prompts, persisted events, artifacts, or runner session history by Deputies.
+- MCP tool results are untrusted model context, like web-search output. Handlers format and cap result text; remote MCP servers and upstream integrations remain responsible for not returning their own credentials.
+- MCP server unavailability is non-fatal for a run. The runner logs a redacted warning, hides the server's tools for that run, and prepends a short prompt note so the agent does not assume the tools exist.
+
 Current examples:
 
 - Repository clone/fetch uses runner sandbox execution with command-scoped credentials because the side effect must create or update files inside the remote sandbox.

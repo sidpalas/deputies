@@ -1,4 +1,6 @@
 import { getModels, type KnownProvider } from '@earendil-works/pi-ai';
+import { sanitizeMcpNamePart } from '../mcp/client.js';
+import type { McpServerConfig } from '../mcp/types.js';
 import { AMAZON_BEDROCK_INFERENCE_PROFILE_MODEL_IDS, AMAZON_BEDROCK_PROVIDER } from '../runner/bedrock.js';
 
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
@@ -112,6 +114,11 @@ export type AppConfig = {
   webSearchMaxResults: number;
   webSearchContentMaxChars: number;
   webSearchTimeoutMs: number;
+  mcpServers: McpServerConfig[];
+  mcpToolTimeoutMs: number;
+  mcpConnectTimeoutMs: number;
+  mcpToolResultMaxChars: number;
+  mcpResponseMaxBytes: number;
   deputyToolEnabled: boolean;
   deputyMaxSpawnDepth: number;
   deputyMaxChildrenPerSession: number;
@@ -268,6 +275,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       'WEB_SEARCH_CONTENT_MAX_CHARS',
     ),
     webSearchTimeoutMs: parsePositiveInteger(env.WEB_SEARCH_TIMEOUT_MS, 10_000, 'WEB_SEARCH_TIMEOUT_MS'),
+    mcpServers: parseMcpServers(env.MCP_SERVERS),
+    mcpToolTimeoutMs: parsePositiveInteger(env.MCP_TOOL_TIMEOUT_MS, 60_000, 'MCP_TOOL_TIMEOUT_MS'),
+    mcpConnectTimeoutMs: parsePositiveInteger(env.MCP_CONNECT_TIMEOUT_MS, 10_000, 'MCP_CONNECT_TIMEOUT_MS'),
+    mcpToolResultMaxChars: parsePositiveInteger(env.MCP_TOOL_RESULT_MAX_CHARS, 100_000, 'MCP_TOOL_RESULT_MAX_CHARS'),
+    mcpResponseMaxBytes: parsePositiveInteger(env.MCP_RESPONSE_MAX_BYTES, 5 * 1024 * 1024, 'MCP_RESPONSE_MAX_BYTES'),
     deputyToolEnabled: parseBoolean(env.DEPUTY_TOOL_ENABLED, true, 'DEPUTY_TOOL_ENABLED'),
     deputyMaxSpawnDepth: parsePositiveInteger(env.DEPUTY_MAX_SPAWN_DEPTH, 2, 'DEPUTY_MAX_SPAWN_DEPTH'),
     deputyMaxChildrenPerSession: parsePositiveInteger(
@@ -751,6 +763,89 @@ function parseJsonRecord(value: string, name: string): Record<string, unknown> {
     // Fall through to the typed configuration error below.
   }
   throw new Error(`${name} must be a JSON object`);
+}
+
+function parseMcpServers(value: string | undefined): McpServerConfig[] {
+  if (!value) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error('MCP_SERVERS must be a JSON array');
+  }
+  if (!Array.isArray(parsed)) throw new Error('MCP_SERVERS must be a JSON array');
+
+  const sanitizedNames = new Set<string>();
+  return parsed.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`MCP_SERVERS[${index}] must be a JSON object`);
+    }
+    const record = entry as Record<string, unknown>;
+    const rawName = readRequiredMcpString(record, 'name', index);
+    const name = sanitizeMcpNamePart(rawName);
+    if (sanitizedNames.has(name))
+      throw new Error(`MCP_SERVERS[${index}].name duplicates another server after sanitization`);
+    sanitizedNames.add(name);
+
+    const url = readRequiredMcpString(record, 'url', index);
+    validateMcpUrl(url, index);
+
+    const transport = record.transport ?? 'streamable-http';
+    if (transport !== 'streamable-http' && transport !== 'sse') {
+      throw new Error(`MCP_SERVERS[${index}].transport must be one of streamable-http, sse`);
+    }
+
+    const config: McpServerConfig = { name, url, transport };
+    const headers = readMcpHeaders(record.headers, index);
+    if (headers) config.headers = headers;
+    const allowedTools = readMcpAllowedTools(record.allowedTools, index);
+    if (allowedTools) config.allowedTools = allowedTools;
+    return config;
+  });
+}
+
+function readRequiredMcpString(record: Record<string, unknown>, field: string, index: number): string {
+  const value = record[field];
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  throw new Error(`MCP_SERVERS[${index}].${field} must be a non-empty string`);
+}
+
+function validateMcpUrl(value: string, index: number): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`MCP_SERVERS[${index}].url must be a valid URL`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`MCP_SERVERS[${index}].url must use http or https`);
+  }
+}
+
+function readMcpHeaders(value: unknown, index: number): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`MCP_SERVERS[${index}].headers must be a JSON object with string values`);
+  }
+  const headers: Record<string, string> = {};
+  for (const [key, headerValue] of Object.entries(value)) {
+    if (typeof headerValue !== 'string') {
+      throw new Error(`MCP_SERVERS[${index}].headers.${key} must be a string`);
+    }
+    headers[key] = headerValue;
+  }
+  return headers;
+}
+
+function readMcpAllowedTools(value: unknown, index: number): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error(`MCP_SERVERS[${index}].allowedTools must be an array of strings`);
+  return value.map((item, toolIndex) => {
+    if (typeof item !== 'string' || !item.trim()) {
+      throw new Error(`MCP_SERVERS[${index}].allowedTools[${toolIndex}] must be a non-empty string`);
+    }
+    return item.trim();
+  });
 }
 
 function deriveRunnerModelChoices(

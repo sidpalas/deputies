@@ -379,6 +379,15 @@ async function createRunner(): Promise<Runner> {
       piOptions.artifactToolMaxBytes = config.artifactCreateMaxBytes;
     }
     if (webSearch) piOptions.webSearch = webSearch;
+    if (config.mcpServers.length) {
+      piOptions.mcp = {
+        servers: config.mcpServers,
+        connectTimeoutMs: config.mcpConnectTimeoutMs,
+        toolTimeoutMs: config.mcpToolTimeoutMs,
+        toolResultMaxChars: config.mcpToolResultMaxChars,
+        responseMaxBytes: config.mcpResponseMaxBytes,
+      };
+    }
     if (deputy) piOptions.deputy = deputy;
     piOptions.repositoryAccess = createRepositoryAccess();
     piOptions.externalResources = services.externalResources;
@@ -424,6 +433,17 @@ async function createRunner(): Promise<Runner> {
     repositoryAccess: createRepositoryAccess(),
     ...(artifactObjectStorage ? { artifacts: services.artifacts } : {}),
     ...(webSearch ? { webSearch } : {}),
+    ...(config.mcpServers.length
+      ? {
+          mcp: {
+            servers: config.mcpServers,
+            connectTimeoutMs: config.mcpConnectTimeoutMs,
+            toolTimeoutMs: config.mcpToolTimeoutMs,
+            toolResultMaxChars: config.mcpToolResultMaxChars,
+            responseMaxBytes: config.mcpResponseMaxBytes,
+          },
+        }
+      : {}),
     ...(deputy ? { deputy } : {}),
     externalResources: services.externalResources,
     artifactToolMaxBytes: config.artifactCreateMaxBytes,

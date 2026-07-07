@@ -154,6 +154,43 @@ Set `OTEL_SDK_DISABLED=true` to force-disable export. Other standard OTLP variab
 
 The browser does not export directly to OpenTelemetry. It posts authenticated milestone payloads to `/telemetry/browser-milestones`; keep that route proxied with the rest of the browser-facing API routes.
 
+## Remote MCP Servers
+
+Workers can expose tools from remote MCP servers to the agent with `MCP_SERVERS`. This is primarily intended for a self-hosted Executor instance, where Executor stores upstream integration credentials and Deputies only receives a streamable-HTTP MCP endpoint.
+
+Executor example:
+
+```sh
+MCP_SERVERS='[
+  {
+    "name": "executor",
+    "url": "https://<executor-host>/mcp",
+    "headers": { "Authorization": "Bearer <executor-api-key>" },
+    "transport": "streamable-http",
+    "allowedTools": ["execute", "skills", "resume"]
+  }
+]'
+```
+
+Related knobs:
+
+```sh
+MCP_CONNECT_TIMEOUT_MS=10000
+MCP_TOOL_TIMEOUT_MS=60000
+MCP_TOOL_RESULT_MAX_CHARS=100000
+MCP_RESPONSE_MAX_BYTES=5242880
+```
+
+Notes:
+
+- `MCP_SERVERS` defaults to an empty array when unset, so remote MCP tools are opt-in.
+- `name` is sanitized into the tool prefix. A server named `executor` exposes tools such as `mcp__executor__execute`.
+- `headers` are attached by the control-plane worker's MCP transport and are not forwarded to the sandbox.
+- `allowedTools` is optional and filters original, unprefixed MCP tool names.
+- `MCP_RESPONSE_MAX_BYTES` is a transport-level cap enforced while receiving MCP responses for both streamable HTTP and SSE.
+- `MCP_TOOL_TIMEOUT_MS` and `MCP_TOOL_RESULT_MAX_CHARS` are enforced by the Pi/shared MCP client. The deprecated Flue native MCP adapter ignores those two per-call/text-result knobs, but still uses the connect timeout and response byte cap.
+- A server that cannot connect for a run is skipped non-fatally; the agent receives a prompt note that the tools are unavailable.
+
 ## Postgres And Migrations
 
 Recommended durable configuration:

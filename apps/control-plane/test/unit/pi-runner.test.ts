@@ -7,6 +7,7 @@ import { FilesystemArtifactObjectStorage } from '../../src/artifacts/storage.js'
 import { createArtifactFromSandbox } from '../../src/artifacts/tool.js';
 import { EventService } from '../../src/events/service.js';
 import type { NormalizedEvent } from '../../src/events/types.js';
+import type { McpConnection } from '../../src/mcp/types.js';
 import type { GitHubRepositoryAccess } from '../../src/repositories/setup.js';
 import { PiRunner } from '../../src/runner-pi/runner.js';
 import { createSandboxPiToolDefinitions } from '../../src/runner-pi/sandbox-tools.js';
@@ -339,6 +340,436 @@ describe('PiRunner', () => {
     expect(result.text).toBe('leaf result');
     expect(createCount).toBe(5);
     expect(prompts).toEqual(['0:parent task', '1:child-0', '2:child-1', '3:child-2', '4:child-3']);
+  });
+
+  it('registers MCP tools, shares them with subagents, and closes connections', async () => {
+    const close = vi.fn(async () => {});
+    const callTool = vi.fn(async (_toolName: string, args: Record<string, unknown>) => `mcp:${String(args.query)}`);
+    const connection: McpConnection = {
+      name: 'executor',
+      tools: [
+        {
+          name: 'mcp__executor__execute',
+          originalName: 'execute',
+          description: 'Run Executor code',
+          parameters: { type: 'object', properties: { query: { type: 'string' } } },
+        },
+      ],
+      callTool,
+      close,
+    };
+    const connect = vi.fn(async () => connection);
+    let createCount = 0;
+
+    piMock.createAgentSession.mockImplementation(async (options) => {
+      const index = createCount++;
+      const messages = [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: '' }],
+          model: 'gpt-5.5',
+          stopReason: 'stop',
+        },
+      ];
+      const mcpTool = options.customTools.find(
+        (candidate: { name: string }) => candidate.name === 'mcp__executor__execute',
+      );
+      expect(mcpTool).toBeTruthy();
+      return {
+        session: {
+          sessionId: `pi-session-${index}`,
+          messages,
+          async prompt() {
+            if (index === 0) {
+              const parentResult = await mcpTool!.execute(
+                'tool-1',
+                { query: 'parent' },
+                undefined,
+                undefined,
+                undefined,
+              );
+              const subagentTool = options.customTools.find(
+                (candidate: { name: string }) => candidate.name === 'subagent',
+              );
+              const childResult = await subagentTool!.execute(
+                'tool-2',
+                { agent: 'explore', task: 'child task' },
+                undefined,
+                undefined,
+                undefined,
+              );
+              messages[0]!.content[0]!.text = `${parentResult.content[0]!.text}\n${childResult.content[0]!.text}`;
+              return;
+            }
+            const childResult = await mcpTool!.execute('tool-3', { query: 'child' }, undefined, undefined, undefined);
+            messages[0]!.content[0]!.text = childResult.content[0]!.text;
+          },
+          abort: vi.fn(),
+          dispose: vi.fn(),
+          subscribe: vi.fn(() => () => {}),
+        },
+        extensionsResult: {},
+      };
+    });
+
+    const result = await new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      mcp: {
+        servers: [{ name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' }],
+        connectTimeoutMs: 10_000,
+        toolTimeoutMs: 60_000,
+        toolResultMaxChars: 100_000,
+        responseMaxBytes: 5 * 1024 * 1024,
+        connect,
+      },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'use executor',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async () => {},
+    });
+
+    expect(result.text).toBe('mcp:parent\nmcp:child');
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledTimes(2);
+    expect(createCount).toBe(2);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Pi runs alive when an MCP server is unavailable and prepends a prompt note', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const prompt = vi.fn();
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'continued without mcp' }],
+            model: 'gpt-5.5',
+            stopReason: 'stop',
+          },
+        ],
+        prompt,
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe: vi.fn(() => () => {}),
+      },
+      extensionsResult: {},
+    });
+    const connect = vi.fn(async () => {
+      throw new Error('secret-token-from-transport');
+    });
+
+    const result = await new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      mcp: {
+        servers: [{ name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' }],
+        connectTimeoutMs: 10_000,
+        toolTimeoutMs: 60_000,
+        toolResultMaxChars: 100_000,
+        responseMaxBytes: 5 * 1024 * 1024,
+        connect,
+      },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'hello',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async () => {},
+    });
+
+    expect(result.text).toBe('continued without mcp');
+    expect(prompt).toHaveBeenCalledWith(
+      expect.stringContaining('Note: MCP tools from server "executor" are unavailable this run.'),
+      { expandPromptTemplates: false },
+    );
+    expect(prompt.mock.calls[0]?.[0]).toContain('\n\nhello');
+    expect(prompt.mock.calls[0]?.[0]).not.toContain('secret-token-from-transport');
+    expect(warn).toHaveBeenCalledWith('MCP server "executor" is unavailable this run (unknown).');
+  });
+
+  it('closes MCP connections when Pi setup fails after connecting', async () => {
+    const close = vi.fn(async () => {});
+    const connection: McpConnection = {
+      name: 'executor',
+      tools: [],
+      callTool: vi.fn(),
+      close,
+    };
+    const connect = vi.fn(async () => connection);
+    const sessionStore = {
+      load: vi.fn(async () => {
+        throw new Error('lease failed');
+      }),
+      save: vi.fn(async () => {}),
+    };
+
+    await expect(
+      new PiRunner({
+        model: 'openai-codex/gpt-5.5',
+        authBase64: Buffer.from('{}').toString('base64'),
+        sessionStore,
+        mcp: {
+          servers: [{ name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' }],
+          connectTimeoutMs: 10_000,
+          toolTimeoutMs: 60_000,
+          toolResultMaxChars: 100_000,
+          responseMaxBytes: 5 * 1024 * 1024,
+          connect,
+        },
+      }).run({
+        sessionId: 'session-1',
+        runId: 'run-1',
+        messageId: 'message-1',
+        prompt: 'hello',
+        context: {},
+        sandbox: createMemorySandbox(),
+        emit: async () => {},
+      }),
+    ).rejects.toThrow('lease failed');
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(piMock.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it('closes MCP connections when a Pi run fails', async () => {
+    const close = vi.fn(async () => {});
+    const connection: McpConnection = {
+      name: 'executor',
+      tools: [],
+      callTool: vi.fn(),
+      close,
+    };
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages: [
+          { role: 'assistant', content: [{ type: 'text', text: '' }], stopReason: 'error', errorMessage: 'Pi failed' },
+        ],
+        prompt: vi.fn(async () => {}),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe: vi.fn(() => () => {}),
+      },
+      extensionsResult: {},
+    });
+
+    await expect(
+      new PiRunner({
+        model: 'openai-codex/gpt-5.5',
+        authBase64: Buffer.from('{}').toString('base64'),
+        mcp: {
+          servers: [{ name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' }],
+          connectTimeoutMs: 10_000,
+          toolTimeoutMs: 60_000,
+          toolResultMaxChars: 100_000,
+          responseMaxBytes: 5 * 1024 * 1024,
+          connect: vi.fn(async () => connection),
+        },
+      }).run({
+        sessionId: 'session-1',
+        runId: 'run-1',
+        messageId: 'message-1',
+        prompt: 'hello',
+        context: {},
+        sandbox: createMemorySandbox(),
+        emit: async () => {},
+      }),
+    ).rejects.toThrow('Pi failed');
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes MCP connections when a Pi run is aborted', async () => {
+    const close = vi.fn(async () => {});
+    const controller = new AbortController();
+    const abort = vi.fn();
+    const connection: McpConnection = {
+      name: 'executor',
+      tools: [],
+      callTool: vi.fn(),
+      close,
+    };
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: 'late' }], stopReason: 'stop' }],
+        prompt: vi.fn(async () => {
+          controller.abort();
+        }),
+        abort,
+        dispose: vi.fn(),
+        subscribe: vi.fn(() => () => {}),
+      },
+      extensionsResult: {},
+    });
+
+    await expect(
+      new PiRunner({
+        model: 'openai-codex/gpt-5.5',
+        authBase64: Buffer.from('{}').toString('base64'),
+        mcp: {
+          servers: [{ name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' }],
+          connectTimeoutMs: 10_000,
+          toolTimeoutMs: 60_000,
+          toolResultMaxChars: 100_000,
+          responseMaxBytes: 5 * 1024 * 1024,
+          connect: vi.fn(async () => connection),
+        },
+      }).run({
+        sessionId: 'session-1',
+        runId: 'run-1',
+        messageId: 'message-1',
+        prompt: 'hello',
+        context: {},
+        sandbox: createMemorySandbox(),
+        emit: async () => {},
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('Operation aborted');
+
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes MCP tool-call abort signals through the Pi tool adapter', async () => {
+    const controller = new AbortController();
+    const callTool = vi.fn(async (_toolName: string, _args: Record<string, unknown>, signal?: AbortSignal) => {
+      expect(signal).toBe(controller.signal);
+      return 'mcp ok';
+    });
+    const connection: McpConnection = {
+      name: 'executor',
+      tools: [
+        {
+          name: 'mcp__executor__execute',
+          originalName: 'execute',
+          description: 'Run Executor code',
+          parameters: { type: 'object', properties: {} },
+        },
+      ],
+      callTool,
+      close: vi.fn(async () => {}),
+    };
+
+    piMock.createAgentSession.mockImplementation(async (options) => {
+      const mcpTool = options.customTools.find(
+        (candidate: { name: string }) => candidate.name === 'mcp__executor__execute',
+      );
+      const messages = [{ role: 'assistant', content: [{ type: 'text', text: '' }], stopReason: 'stop' }];
+      return {
+        session: {
+          sessionId: 'pi-session',
+          messages,
+          async prompt() {
+            const result = await mcpTool!.execute(
+              'tool-1',
+              { query: 'hello' },
+              controller.signal,
+              undefined,
+              undefined,
+            );
+            messages[0]!.content[0]!.text = result.content[0]!.type === 'text' ? result.content[0]!.text : '';
+          },
+          abort: vi.fn(),
+          dispose: vi.fn(),
+          subscribe: vi.fn(() => () => {}),
+        },
+        extensionsResult: {},
+      };
+    });
+
+    const result = await new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      mcp: {
+        servers: [{ name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' }],
+        connectTimeoutMs: 10_000,
+        toolTimeoutMs: 60_000,
+        toolResultMaxChars: 100_000,
+        responseMaxBytes: 5 * 1024 * 1024,
+        connect: vi.fn(async () => connection),
+      },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'hello',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async () => {},
+    });
+
+    expect(result.text).toBe('mcp ok');
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces redacted MCP tool errors at the Pi runner level', async () => {
+    const connection: McpConnection = {
+      name: 'executor',
+      tools: [
+        {
+          name: 'mcp__executor__execute',
+          originalName: 'execute',
+          description: 'Run Executor code',
+          parameters: { type: 'object', properties: {} },
+        },
+      ],
+      callTool: vi.fn(async () => {
+        throw new Error('MCP tool "execute" from server "executor" failed (unauthorized).');
+      }),
+      close: vi.fn(async () => {}),
+    };
+    piMock.createAgentSession.mockImplementation(async (options) => {
+      const mcpTool = options.customTools.find(
+        (candidate: { name: string }) => candidate.name === 'mcp__executor__execute',
+      );
+      return {
+        session: {
+          sessionId: 'pi-session',
+          messages: [{ role: 'assistant', content: [{ type: 'text', text: '' }], stopReason: 'stop' }],
+          async prompt() {
+            await mcpTool!.execute('tool-1', { query: 'hello' }, undefined, undefined, undefined);
+          },
+          abort: vi.fn(),
+          dispose: vi.fn(),
+          subscribe: vi.fn(() => () => {}),
+        },
+        extensionsResult: {},
+      };
+    });
+
+    await expect(
+      new PiRunner({
+        model: 'openai-codex/gpt-5.5',
+        authBase64: Buffer.from('{}').toString('base64'),
+        mcp: {
+          servers: [{ name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' }],
+          connectTimeoutMs: 10_000,
+          toolTimeoutMs: 60_000,
+          toolResultMaxChars: 100_000,
+          responseMaxBytes: 5 * 1024 * 1024,
+          connect: vi.fn(async () => connection),
+        },
+      }).run({
+        sessionId: 'session-1',
+        runId: 'run-1',
+        messageId: 'message-1',
+        prompt: 'hello',
+        context: {},
+        sandbox: createMemorySandbox(),
+        emit: async () => {},
+      }),
+    ).rejects.toThrow('MCP tool "execute" from server "executor" failed (unauthorized).');
   });
 
   it('rehydrates stored sessions and saves the updated Pi session data', async () => {

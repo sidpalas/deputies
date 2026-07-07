@@ -353,6 +353,7 @@ async function withTempGitRepository(run: (repoPath: string) => Promise<void>): 
   const repoPath = await mkdtemp(path.join(tmpdir(), 'deputies-setup-test-'));
   try {
     await git(repoPath, ['init', '-q']);
+    await git(repoPath, ['config', 'commit.gpgsign', 'false']);
     await run(repoPath);
   } finally {
     await rm(repoPath, { recursive: true, force: true });
