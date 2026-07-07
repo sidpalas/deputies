@@ -45,10 +45,14 @@ import { createPiArtifactToolDefinition } from './artifact-tool.js';
 import { createPiDeputyToolDefinition } from './deputy-tool.js';
 import { createPiGitToolDefinition } from './git-tool.js';
 import { createPiGitHubCliToolDefinition } from './github-cli-tool.js';
+import { createPiMcpToolDefinitions } from './mcp-tools.js';
 import { createPiRepositoryToolDefinition } from './repository-tool.js';
 import { createSandboxPiToolDefinitions } from './sandbox-tools.js';
 import { createPiServiceToolDefinition } from './service-tool.js';
 import { createPiWebSearchToolDefinition } from './web-search-tool.js';
+import { connectMcpServer, type ConnectMcpServerOptions } from '../mcp/client.js';
+import { closeMcpConnections, logMcpUnavailable, mcpUnavailableNote } from '../mcp/runner.js';
+import type { McpConnection, McpRuntimeOptions } from '../mcp/types.js';
 import type { WebSearchToolServices } from '../web-search/tool.js';
 import type { DeputyToolBaseServices } from '../sessions/deputy-tool.js';
 import {
@@ -87,6 +91,7 @@ export type PiRunnerOptions = {
   sandboxKeepaliveMaxExtensionMs?: number;
   setupScript?: { enabled: boolean; timeoutMs: number };
   webSearch?: WebSearchToolServices;
+  mcp?: McpRuntimeOptions & { connect?: typeof connectMcpServer };
   deputy?: DeputyToolBaseServices;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
 };
@@ -104,12 +109,19 @@ type PiToolSetContext = {
   subagentDepth: number;
   deputyRunState: { spawns: number };
   runSubagent?: (input: PiSubagentRunInput) => Promise<PiSubagentRunResult>;
+  mcpTools?: ToolDefinition[];
 };
 
 type PiModelSelection = {
   provider: string;
   modelId: string;
   thinkingLevel?: CreateAgentSessionOptions['thinkingLevel'];
+};
+
+type PiMcpSetup = {
+  connections: McpConnection[];
+  tools: ToolDefinition[];
+  note: string | null;
 };
 
 export class PiRunner implements Runner {
@@ -133,17 +145,37 @@ export class PiRunner implements Runner {
     const unavailableReason = this.options.modelUnavailableReason?.(modelName);
     if (unavailableReason) throw new Error(unavailableReason);
 
-    const repositorySetup = await preparePiRepositorySetup(input, this.options);
+    const mcpSetupPromise = connectPiMcpServers(this.options.mcp, input.signal);
+    let mcpSetup: PiMcpSetup | null = null;
+    let repositorySetup: Awaited<ReturnType<typeof preparePiRepositorySetup>>;
+    try {
+      [repositorySetup, mcpSetup] = await Promise.all([preparePiRepositorySetup(input, this.options), mcpSetupPromise]);
+    } catch (error) {
+      mcpSetup = await mcpSetupPromise.catch(() => null);
+      if (mcpSetup) await closeMcpConnections(mcpSetup.connections);
+      throw error;
+    }
     const cwd = repositorySetup?.plan.workspacePath ?? input.sandbox.workspacePath;
-    const lease = await this.getSessionLease(input.sessionId, cwd);
-    const modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.agentDir, 'models.json'));
-    registerAmazonBedrockInferenceProfiles(modelRegistry, modelName);
-    const modelSelection = parseModelSelection(modelName);
-    const model = modelRegistry.find(modelSelection.provider, modelSelection.modelId);
-    if (!model) throw new Error(`Pi model is not available: ${modelName}`);
+    const { lease, modelRegistry, modelSelection, model, resourceLoader } = await (async () => {
+      try {
+        const lease = await this.getSessionLease(input.sessionId, cwd);
+        const modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.agentDir, 'models.json'));
+        registerAmazonBedrockInferenceProfiles(modelRegistry, modelName);
+        const modelSelection = parseModelSelection(modelName);
+        const model = modelRegistry.find(modelSelection.provider, modelSelection.modelId);
+        if (!model) throw new Error(`Pi model is not available: ${modelName}`);
 
-    const resourceLoader = createPiResourceLoader(cwd, this.agentDir, DEPUTIES_SYSTEM_PROMPT);
-    await resourceLoader.reload();
+        const resourceLoader = createPiResourceLoader(cwd, this.agentDir, DEPUTIES_SYSTEM_PROMPT);
+        await resourceLoader.reload();
+        return { lease, modelRegistry, modelSelection, model, resourceLoader };
+      } catch (error) {
+        if (mcpSetup) {
+          await closeMcpConnections(mcpSetup.connections);
+          mcpSetup = null;
+        }
+        throw error;
+      }
+    })();
 
     const repositoryState = createRepositoryState(input.context, repositorySetup);
     const deputyRunState = { spawns: 0 };
@@ -160,18 +192,21 @@ export class PiRunner implements Runner {
         deputyRunState,
         parentCwd: cwd,
         subagentDepth: 0,
+        mcpTools: mcpSetup?.tools ?? [],
         subagentInput,
       });
     const { customTools } = createPiToolSet(input, this.options, repositoryState, cwd, {
       subagentDepth: 0,
       deputyRunState,
       runSubagent,
+      mcpTools: mcpSetup?.tools ?? [],
     });
 
     const pendingEvents: Array<Promise<void>> = [];
     let sawTextDelta = false;
     let responseText = '';
-    let session!: AgentSession;
+    let session: AgentSession | undefined;
+    let unsubscribe: (() => void) | undefined;
     let completed = false;
 
     const emitEvent = (event: AgentSessionEvent) => {
@@ -185,27 +220,27 @@ export class PiRunner implements Runner {
       pendingEvents.push(input.emit(normalized));
     };
 
-    const created = await createAgentSession({
-      cwd,
-      agentDir: this.agentDir,
-      authStorage: this.authStorage,
-      modelRegistry,
-      model,
-      ...(modelSelection.thinkingLevel ? { thinkingLevel: modelSelection.thinkingLevel } : {}),
-      sessionManager: lease.manager,
-      resourceLoader,
-      noTools: PI_NO_TOOLS,
-      customTools,
-    });
-    session = created.session;
-
-    const unsubscribe = session.subscribe(emitEvent);
     const abortSession = () => {
-      void session.abort();
+      void session?.abort();
     };
-    input.signal?.addEventListener('abort', abortSession, { once: true });
 
     try {
+      const created = await createAgentSession({
+        cwd,
+        agentDir: this.agentDir,
+        authStorage: this.authStorage,
+        modelRegistry,
+        model,
+        ...(modelSelection.thinkingLevel ? { thinkingLevel: modelSelection.thinkingLevel } : {}),
+        sessionManager: lease.manager,
+        resourceLoader,
+        noTools: PI_NO_TOOLS,
+        customTools,
+      });
+      session = created.session;
+      unsubscribe = session.subscribe(emitEvent);
+      input.signal?.addEventListener('abort', abortSession, { once: true });
+
       await input.emit({
         sessionId: input.sessionId,
         runId: input.runId,
@@ -219,7 +254,7 @@ export class PiRunner implements Runner {
         ? await completePiRepositorySetup(input, this.options, repositorySetup)
         : null;
       if (setupResult) repositoryState.prepared = setupResult;
-      const setupNote = setupResult?.setupFailureNote ?? null;
+      const setupNote = combineSetupNotes(mcpSetup?.note ?? null, setupResult?.setupFailureNote ?? null);
 
       if (input.signal?.aborted) throw new Error('Operation aborted');
       await session.prompt(withSetupNote(input.prompt, setupNote), { expandPromptTemplates: false });
@@ -246,8 +281,9 @@ export class PiRunner implements Runner {
       return { text: responseText, ...responseMetadata };
     } finally {
       input.signal?.removeEventListener('abort', abortSession);
-      unsubscribe();
-      session.dispose();
+      unsubscribe?.();
+      session?.dispose();
+      if (mcpSetup) await closeMcpConnections(mcpSetup.connections);
       await this.persistAndCleanup(input, lease, completed);
     }
   }
@@ -366,6 +402,8 @@ function createPiToolSet(
 
   if (options.webSearch) customTools.push(createPiWebSearchToolDefinition(options.webSearch));
 
+  if (context.mcpTools?.length) customTools.push(...context.mcpTools);
+
   if (options.deputy) {
     customTools.push(
       createPiDeputyToolDefinition({
@@ -399,6 +437,7 @@ type RunPiSubagentInput = {
   deputyRunState: { spawns: number };
   parentCwd: string;
   subagentDepth: number;
+  mcpTools: ToolDefinition[];
   subagentInput: PiSubagentRunInput;
 };
 
@@ -431,6 +470,7 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
     subagentDepth: childDepth,
     deputyRunState: params.deputyRunState,
     runSubagent,
+    mcpTools: params.mcpTools,
   });
   const created = await createAgentSession({
     cwd,
@@ -604,8 +644,42 @@ async function completePiRepositorySetup(
   });
 }
 
+async function connectPiMcpServers(mcp: PiRunnerOptions['mcp'], signal: AbortSignal | undefined): Promise<PiMcpSetup> {
+  if (!mcp?.servers.length) return { connections: [], tools: [], note: null };
+  const connect = mcp.connect ?? connectMcpServer;
+  const results = await Promise.all(
+    mcp.servers.map(async (server) => {
+      try {
+        const options: ConnectMcpServerOptions = {
+          connectTimeoutMs: mcp.connectTimeoutMs,
+          toolTimeoutMs: mcp.toolTimeoutMs,
+          toolResultMaxChars: mcp.toolResultMaxChars,
+          responseMaxBytes: mcp.responseMaxBytes,
+        };
+        if (signal) options.signal = signal;
+        return { serverName: server.name, connection: await connect(server, options) };
+      } catch (error) {
+        logMcpUnavailable(server.name, error);
+        return { serverName: server.name, error };
+      }
+    }),
+  );
+  const connections = results.flatMap((result) => ('connection' in result ? [result.connection] : []));
+  const tools = connections.flatMap(createPiMcpToolDefinitions);
+  const note = results
+    .filter((result) => !('connection' in result))
+    .map((result) => mcpUnavailableNote(result.serverName))
+    .join('\n');
+  return { connections, tools, note: note || null };
+}
+
 function withSetupNote(prompt: string, setupNote: string | null): string {
   return setupNote ? `${setupNote}\n\n${prompt}` : prompt;
+}
+
+function combineSetupNotes(...notes: Array<string | null>): string | null {
+  const present = notes.filter((note): note is string => Boolean(note));
+  return present.length ? present.join('\n\n') : null;
 }
 
 function createNewSessionManager(sessionId: string, cwd: string): SessionManager {

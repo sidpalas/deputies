@@ -130,6 +130,19 @@ Add both `app.example.com` and `*.example.com` as Railway custom domains. If usi
 
 ## Configure Integrations
 
+Remote MCP / Executor:
+
+```sh
+MCP_SERVERS='[{"name":"executor","url":"https://<executor-host>/mcp","headers":{"Authorization":"Bearer <executor-api-key>"},"transport":"streamable-http","allowedTools":["execute","skills","resume"]}]'
+MCP_CONNECT_TIMEOUT_MS=10000
+MCP_TOOL_TIMEOUT_MS=60000
+MCP_TOOL_RESULT_MAX_CHARS=100000
+MCP_RESPONSE_MAX_BYTES=5242880
+```
+
+Keep the Executor API key in Railway service variables. Deputies attaches the header from the control-plane worker process; it is not copied into sandbox environment variables.
+`MCP_TOOL_TIMEOUT_MS` and `MCP_TOOL_RESULT_MAX_CHARS` are enforced by the Pi/shared MCP client; the deprecated Flue native MCP adapter ignores those two knobs.
+
 GitHub runtime repository access:
 
 ```sh

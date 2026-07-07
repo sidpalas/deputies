@@ -151,8 +151,21 @@ Use `app_secret_values` for model keys and integration secrets, for example:
 app_secret_values = {
   ANTHROPIC_API_KEY = "..."
   GITHUB_APP_PRIVATE_KEY = "..."
+  MCP_SERVERS = jsonencode([
+    {
+      name = "executor"
+      url  = "https://<executor-host>/mcp"
+      headers = {
+        Authorization = "Bearer <executor-api-key>"
+      }
+      transport    = "streamable-http"
+      allowedTools = ["execute", "skills", "resume"]
+    }
+  ])
 }
 ```
+
+Optional MCP runtime knobs can also be set as ECS environment variables or secrets: `MCP_CONNECT_TIMEOUT_MS` defaults to `10000`, `MCP_TOOL_TIMEOUT_MS` defaults to `60000`, `MCP_TOOL_RESULT_MAX_CHARS` defaults to `100000`, and `MCP_RESPONSE_MAX_BYTES` defaults to `5242880`. MCP auth headers are used only by the control-plane worker process and are not copied into sandbox environment variables. `MCP_TOOL_TIMEOUT_MS` and `MCP_TOOL_RESULT_MAX_CHARS` are enforced by the Pi/shared MCP client; the deprecated Flue native MCP adapter ignores those two knobs.
 
 Values supplied through Terraform variables are stored in Terraform state. For stricter production secret handling, create/update the Secrets Manager secret version outside Terraform and pass only secret ARNs/keys into a hardened variant of this module.
 

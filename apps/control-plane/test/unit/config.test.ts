@@ -89,6 +89,11 @@ describe('loadConfig', () => {
       webSearchMaxResults: 10,
       webSearchContentMaxChars: 5000,
       webSearchTimeoutMs: 10000,
+      mcpServers: [],
+      mcpToolTimeoutMs: 60000,
+      mcpConnectTimeoutMs: 10000,
+      mcpToolResultMaxChars: 100000,
+      mcpResponseMaxBytes: 5_242_880,
       deputyToolEnabled: true,
       deputyMaxSpawnDepth: 2,
       deputyMaxChildrenPerSession: 5,
@@ -201,6 +206,19 @@ describe('loadConfig', () => {
         WEB_SEARCH_MAX_RESULTS: '7',
         WEB_SEARCH_CONTENT_MAX_CHARS: '8000',
         WEB_SEARCH_TIMEOUT_MS: '12000',
+        MCP_SERVERS: JSON.stringify([
+          {
+            name: 'executor prod',
+            url: 'https://executor.example/mcp',
+            headers: { Authorization: 'Bearer executor-key' },
+            transport: 'streamable-http',
+            allowedTools: ['execute', 'skills'],
+          },
+        ]),
+        MCP_TOOL_TIMEOUT_MS: '61000',
+        MCP_CONNECT_TIMEOUT_MS: '9000',
+        MCP_TOOL_RESULT_MAX_CHARS: '12345',
+        MCP_RESPONSE_MAX_BYTES: '54321',
         DAYTONA_API_KEY: 'daytona-key',
         DAYTONA_API_URL: 'https://daytona.example',
         DAYTONA_TARGET: 'eu',
@@ -323,6 +341,19 @@ describe('loadConfig', () => {
       webSearchMaxResults: 7,
       webSearchContentMaxChars: 8000,
       webSearchTimeoutMs: 12000,
+      mcpServers: [
+        {
+          name: 'executor_prod',
+          url: 'https://executor.example/mcp',
+          headers: { Authorization: 'Bearer executor-key' },
+          transport: 'streamable-http',
+          allowedTools: ['execute', 'skills'],
+        },
+      ],
+      mcpToolTimeoutMs: 61000,
+      mcpConnectTimeoutMs: 9000,
+      mcpToolResultMaxChars: 12345,
+      mcpResponseMaxBytes: 54321,
       daytonaApiKey: 'daytona-key',
       daytonaApiUrl: 'https://daytona.example',
       daytonaTarget: 'eu',
@@ -571,6 +602,92 @@ describe('loadConfig', () => {
     });
     expect(() => loadConfig({ RUN_MODE: 'worker', WEB_SEARCH_PROVIDER: 'brave' })).toThrow(
       'WEB_SEARCH_BRAVE_API_KEY or BRAVE_API_KEY is required',
+    );
+  });
+
+  it('parses and validates MCP server settings', () => {
+    expect(
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        MCP_SERVERS: JSON.stringify([
+          { name: 'executor', url: 'https://executor.example/mcp' },
+          { name: 'legacy', url: 'https://legacy.example/sse', transport: 'sse', headers: { 'X-API-Key': 'secret' } },
+        ]),
+      }),
+    ).toMatchObject({
+      mcpServers: [
+        { name: 'executor', url: 'https://executor.example/mcp', transport: 'streamable-http' },
+        {
+          name: 'legacy',
+          url: 'https://legacy.example/sse',
+          transport: 'sse',
+          headers: { 'X-API-Key': 'secret' },
+        },
+      ],
+      mcpToolTimeoutMs: 60_000,
+      mcpConnectTimeoutMs: 10_000,
+      mcpToolResultMaxChars: 100_000,
+      mcpResponseMaxBytes: 5_242_880,
+    });
+
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', MCP_SERVERS: '{bad json' })).toThrow(
+      'MCP_SERVERS must be a JSON array',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', MCP_SERVERS: '{}' })).toThrow('MCP_SERVERS must be a JSON array');
+    expect(() =>
+      loadConfig({ API_AUTH_MODE: 'none', MCP_SERVERS: JSON.stringify([{ url: 'https://x.test/mcp' }]) }),
+    ).toThrow('MCP_SERVERS[0].name must be a non-empty string');
+    expect(() =>
+      loadConfig({ API_AUTH_MODE: 'none', MCP_SERVERS: JSON.stringify([{ name: 'x', url: 'not-url' }]) }),
+    ).toThrow('MCP_SERVERS[0].url must be a valid URL');
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        MCP_SERVERS: JSON.stringify([{ name: 'x', url: 'file:///tmp/mcp' }]),
+      }),
+    ).toThrow('MCP_SERVERS[0].url must use http or https');
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        MCP_SERVERS: JSON.stringify([{ name: 'x', url: 'https://x.test/mcp', transport: 'stdio' }]),
+      }),
+    ).toThrow('MCP_SERVERS[0].transport must be one of streamable-http, sse');
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        MCP_SERVERS: JSON.stringify([
+          { name: 'executor prod', url: 'https://one.test/mcp' },
+          { name: 'executor/prod', url: 'https://two.test/mcp' },
+        ]),
+      }),
+    ).toThrow('MCP_SERVERS[1].name duplicates another server after sanitization');
+
+    const secretValue = 'do-not-echo-this-secret';
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        MCP_SERVERS: JSON.stringify([{ name: 'x', url: 'https://x.test/mcp', headers: { Authorization: 123 } }]),
+      }),
+    ).toThrow('MCP_SERVERS[0].headers.Authorization must be a string');
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        MCP_SERVERS: JSON.stringify([{ name: 'x', url: 'https://x.test/mcp', headers: secretValue }]),
+      }),
+    ).toThrow('MCP_SERVERS[0].headers must be a JSON object with string values');
+    try {
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        MCP_SERVERS: JSON.stringify([{ name: 'x', url: 'https://x.test/mcp', headers: secretValue }]),
+      });
+    } catch (error) {
+      expect(error instanceof Error ? error.message : String(error)).not.toContain(secretValue);
+    }
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', MCP_TOOL_TIMEOUT_MS: '0' })).toThrow(
+      'MCP_TOOL_TIMEOUT_MS must be a positive integer',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', MCP_RESPONSE_MAX_BYTES: '0' })).toThrow(
+      'MCP_RESPONSE_MAX_BYTES must be a positive integer',
     );
   });
 

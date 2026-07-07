@@ -1,4 +1,10 @@
-import type { FlueEvent } from '@flue/runtime';
+import {
+  connectMcpServer as connectFlueMcpServer,
+  type FlueEvent,
+  type McpServerConnection as FlueMcpServerConnection,
+  type McpServerOptions as FlueMcpServerOptions,
+  type ToolDefinition,
+} from '@flue/runtime';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ArtifactService } from '../artifacts/service.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
@@ -22,6 +28,9 @@ import { createRepositoryTool, type RepositoryToolServices, type RepositoryToolS
 import type { FlueAgentFactory, FluePromptResponse, FlueSessionPort } from './types.js';
 import { createWebSearchTool, type WebSearchToolServices } from './web-search-tool.js';
 import type { DeputyToolBaseServices } from '../sessions/deputy-tool.js';
+import { createMcpResponseLimitedFetch, createMcpToolName, createStreamableHttpMcpFetch } from '../mcp/client.js';
+import { closeMcpConnections, logMcpUnavailable, mcpUnavailableNote } from '../mcp/runner.js';
+import type { McpRuntimeOptions } from '../mcp/types.js';
 
 export type FlueRunnerOptions = {
   repositoryAccess?: {
@@ -34,8 +43,15 @@ export type FlueRunnerOptions = {
   sandboxKeepaliveMaxExtensionMs?: number;
   setupScript?: { enabled: boolean; timeoutMs: number };
   webSearch?: WebSearchToolServices;
+  mcp?: McpRuntimeOptions & { connect?: typeof connectFlueMcpServer };
   deputy?: DeputyToolBaseServices;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
+};
+
+type FlueMcpSetup = {
+  connections: FlueMcpServerConnection[];
+  tools: ToolDefinition[];
+  note: string | null;
 };
 
 export class FlueRunner implements Runner {
@@ -55,7 +71,23 @@ export class FlueRunner implements Runner {
       sandbox: input.sandbox,
     };
     if (this.options.repositoryAccess?.github) repositorySetupInput.github = this.options.repositoryAccess.github;
-    const repositorySetup = await planRepositoryPreparation(repositorySetupInput);
+    const mcpSetupPromise = connectFlueMcpServers(this.options.mcp, input.signal);
+    let setup: {
+      repositorySetup: Awaited<ReturnType<typeof planRepositoryPreparation>>;
+      mcpSetup: FlueMcpSetup;
+    };
+    try {
+      const [repositorySetup, mcpSetup] = await Promise.all([
+        planRepositoryPreparation(repositorySetupInput),
+        mcpSetupPromise,
+      ]);
+      setup = { repositorySetup, mcpSetup };
+    } catch (error) {
+      const connected = await mcpSetupPromise.catch(() => null);
+      if (connected) await closeMcpConnections(connected.connections);
+      throw error;
+    }
+    const { repositorySetup, mcpSetup } = setup;
     const agentRef: AgentRef = {};
     const repositoryState: RepositoryToolState = { context: structuredClone(input.context) };
     if (repositorySetup) {
@@ -118,6 +150,7 @@ export class FlueRunner implements Runner {
       );
     }
     if (this.options.webSearch) tools.push(createWebSearchTool(this.options.webSearch));
+    if (mcpSetup.tools.length) tools.push(...mcpSetup.tools);
     if (this.options.deputy) {
       tools.push(
         createDeputyTool({
@@ -131,27 +164,28 @@ export class FlueRunner implements Runner {
       );
     }
 
-    const agent = await this.agentFactory.create({
-      agentId: input.sessionId,
-      sessionId: input.sessionId,
-      sandbox: input.sandbox,
-      cwd: repositorySetup?.workspacePath ?? input.sandbox.workspacePath,
-      ...(input.model ? { model: input.model } : {}),
-      tools,
-      onEvent: (event) => {
-        if (input.signal?.aborted) return;
-        const normalized = normalizeFlueEvent(event, input);
-        if (!normalized) return;
-        if (normalized.type === 'agent_text_delta') sawTextDelta = true;
-        pendingEvents.push(input.emit(normalized));
-      },
-    });
-    agentRef.current = agent;
-    const session = await agent.session(input.sessionId);
-    const abortSession = () => session.abort?.();
-    input.signal?.addEventListener('abort', abortSession, { once: true });
-
+    let abortSession: (() => void) | undefined;
     try {
+      const agent = await this.agentFactory.create({
+        agentId: input.sessionId,
+        sessionId: input.sessionId,
+        sandbox: input.sandbox,
+        cwd: repositorySetup?.workspacePath ?? input.sandbox.workspacePath,
+        ...(input.model ? { model: input.model } : {}),
+        tools,
+        onEvent: (event) => {
+          if (input.signal?.aborted) return;
+          const normalized = normalizeFlueEvent(event, input);
+          if (!normalized) return;
+          if (normalized.type === 'agent_text_delta') sawTextDelta = true;
+          pendingEvents.push(input.emit(normalized));
+        },
+      });
+      agentRef.current = agent;
+      const session = await agent.session(input.sessionId);
+      abortSession = () => session.abort?.();
+      input.signal?.addEventListener('abort', abortSession, { once: true });
+
       await input.emit({
         sessionId: input.sessionId,
         runId: input.runId,
@@ -163,7 +197,7 @@ export class FlueRunner implements Runner {
 
       const setupResult = repositorySetup ? await this.runRepositorySetup(input, repositorySetup, session) : null;
       if (setupResult) repositoryState.prepared = setupResult;
-      const setupNote = setupResult?.setupFailureNote ?? null;
+      const setupNote = combineSetupNotes(mcpSetup.note, setupResult?.setupFailureNote ?? null);
 
       // Cancellation must not leave partial Flue turn state in durable history.
       // A prompt-only warning is cheaper but advisory, and models can still continue
@@ -214,7 +248,8 @@ export class FlueRunner implements Runner {
           await this.restoreSessionSnapshot(input.sessionId, sessionSnapshot);
       }
     } finally {
-      input.signal?.removeEventListener('abort', abortSession);
+      if (abortSession) input.signal?.removeEventListener('abort', abortSession);
+      await closeMcpConnections(mcpSetup.connections);
     }
   }
 
@@ -268,6 +303,76 @@ function promptResponseMetadata(response: FluePromptResponse) {
   if (response.model) metadata.model = typeof response.model === 'string' ? response.model : response.model.id;
   if (response.usage) metadata.usage = response.usage;
   return metadata;
+}
+
+async function connectFlueMcpServers(
+  mcp: FlueRunnerOptions['mcp'],
+  signal: AbortSignal | undefined,
+): Promise<FlueMcpSetup> {
+  if (!mcp?.servers.length) return { connections: [], tools: [], note: null };
+  const connect = mcp.connect ?? connectFlueMcpServer;
+  const results = await Promise.all(
+    mcp.servers.map(async (server) => {
+      try {
+        const options: FlueMcpServerOptions = { url: server.url, transport: server.transport };
+        if (server.headers) options.headers = server.headers;
+        options.fetch =
+          server.transport === 'streamable-http'
+            ? createStreamableHttpMcpFetch(undefined, { responseMaxBytes: mcp.responseMaxBytes })
+            : createMcpResponseLimitedFetch(undefined, { responseMaxBytes: mcp.responseMaxBytes });
+        const connection = await withMcpConnectBudget(connect(server.name, options), mcp.connectTimeoutMs, signal);
+        const allowedTools = server.allowedTools?.length
+          ? new Set(server.allowedTools.map((tool) => createMcpToolName(server.name, tool)))
+          : null;
+        const tools = allowedTools ? connection.tools.filter((tool) => allowedTools.has(tool.name)) : connection.tools;
+        return { serverName: server.name, connection, tools };
+      } catch (error) {
+        logMcpUnavailable(server.name, error);
+        return { serverName: server.name, error };
+      }
+    }),
+  );
+  const connections = results.flatMap((result) => ('connection' in result ? [result.connection] : []));
+  const tools = results.flatMap((result) => ('tools' in result ? result.tools : []));
+  const note = results
+    .filter((result) => !('connection' in result))
+    .map((result) => mcpUnavailableNote(result.serverName))
+    .join('\n');
+  return { connections, tools, note: note || null };
+}
+
+async function withMcpConnectBudget<T extends { close(): Promise<void> }>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const budgetSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  let completedInBudget = false;
+  const budget = new Promise<never>((_, reject) => {
+    if (budgetSignal.aborted) {
+      reject(new Error('MCP connection budget exceeded'));
+      return;
+    }
+    budgetSignal.addEventListener('abort', () => reject(new Error('MCP connection budget exceeded')), { once: true });
+  });
+
+  try {
+    const connection = await Promise.race([promise, budget]);
+    completedInBudget = true;
+    return connection;
+  } finally {
+    if (!completedInBudget)
+      void promise.then(
+        (connection) => connection.close().catch(() => undefined),
+        () => undefined,
+      );
+  }
+}
+
+function combineSetupNotes(...notes: Array<string | null>): string | null {
+  const present = notes.filter((note): note is string => Boolean(note));
+  return present.length ? present.join('\n\n') : null;
 }
 
 function withToolGuidance(
