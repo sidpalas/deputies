@@ -1,4 +1,4 @@
-import { getModels, type KnownProvider } from '@earendil-works/pi-ai';
+import { getModels, type KnownProvider } from '@earendil-works/pi-ai/compat';
 import { sanitizeMcpNamePart } from '../mcp/client.js';
 import type { McpServerConfig } from '../mcp/types.js';
 import { AMAZON_BEDROCK_INFERENCE_PROFILE_MODEL_IDS, AMAZON_BEDROCK_PROVIDER } from '../runner/bedrock.js';

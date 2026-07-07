@@ -19,7 +19,7 @@ import {
 import type { ArtifactService } from '../artifacts/service.js';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
-import { getModels, type Api, type Model } from '@earendil-works/pi-ai';
+import { getModels, type Api, type Model } from '@earendil-works/pi-ai/compat';
 import type { RepositoryAccessProvider } from '../repositories/setup.js';
 import {
   checkoutRepositoryPreparation,
