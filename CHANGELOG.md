@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.0](https://github.com/sidpalas/deputies/compare/v0.13.0...v0.14.0) (2026-07-07)
+
+
+### Features
+
+* add remote MCP tools ([#84](https://github.com/sidpalas/deputies/issues/84)) ([084aa3c](https://github.com/sidpalas/deputies/commit/084aa3c0ee8e92266ba6ea5b9815b6ed666704ca))
+
+
+### Documentation
+
+* add executor data tools setup guide ([0c3561a](https://github.com/sidpalas/deputies/commit/0c3561a58c7b3722656e607aca5105a2171a995e))
+
 ## [0.13.0](https://github.com/sidpalas/deputies/compare/v0.12.0...v0.13.0) (2026-07-07)
 
 
