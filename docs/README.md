@@ -12,6 +12,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Sandbox Providers](./sandbox-providers.md): provider contract, lifecycle APIs, capabilities, and conformance expectations.
 - [Flue Persistence](./flue-persistence.md): deprecated Flue runner session store notes kept for legacy deployments and removal work.
 - [Integrations](./integrations.md): generic webhook, GitHub, Slack, Linear, callbacks, auth, and external thread mapping.
+- [Executor Data Tools](./executor-data-tools.md): using Executor Cloud or self-hosted Executor to give agents access to third-party MCP, CLI, API, and data tools.
 - [Web UI](./web-ui.md): separate Vite React operator UI, browser auth, and static deployment notes.
 - [Deputies App Preview](./deputies-app-preview.md): agent runbook for running the Deputies app from a branch inside a sandbox behind the outer service preview.
 - [Repository Setup Scripts](./repository-setup-scripts.md): `.agents/setup` convention for repo-owned sandbox preparation before agent work begins.

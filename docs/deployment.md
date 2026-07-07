@@ -156,7 +156,7 @@ The browser does not export directly to OpenTelemetry. It posts authenticated mi
 
 ## Remote MCP Servers
 
-Workers can expose tools from remote MCP servers to the agent with `MCP_SERVERS`. This is primarily intended for a self-hosted Executor instance, where Executor stores upstream integration credentials and Deputies only receives a streamable-HTTP MCP endpoint.
+Workers can expose tools from remote MCP servers to the agent with `MCP_SERVERS`. This is primarily intended for Executor, where Executor stores upstream integration credentials and Deputies only receives a streamable-HTTP MCP endpoint. See [Executor Data Tools](./executor-data-tools.md) for the end-to-end setup flow.
 
 Executor example:
 
