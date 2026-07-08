@@ -1,12 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import type { SyntheticEvent } from 'react';
 import { Archive, ChevronDown, Monitor, Moon, PanelLeftClose, Plus, RefreshCw, RotateCcw, Sun, X } from 'lucide-react';
-import { type Health, type Session } from '../../api.js';
+import { type Health, type Session, type SessionSearchResult } from '../../api.js';
 import { archivedSessionsOpenStorageKey } from '../../app-helpers.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
-import { filterSessions, formatDate, sessionDisplayStatus, sessionDisplayTooltip, statusTextClass } from './shared.js';
+import { formatDate, sessionDisplayStatus, sessionDisplayTooltip, statusTextClass } from './shared.js';
 import type { ConnectionStatus, ThemePreference } from './types.js';
 
 export function ThreadSidebar(props: {
@@ -20,8 +20,17 @@ export function ThreadSidebar(props: {
   canWriteSession: (session: Session) => boolean;
   connectionStatus: ConnectionStatus;
   health: Health | null;
+  archivedSessionsLoaded: boolean;
+  archivedSessionsLoading: boolean;
+  hasMoreArchivedSessions: boolean;
+  hasMoreSessions: boolean;
   navPage: 'sessions' | 'setup' | 'automations';
   loading: boolean;
+  loadingMoreSessions: boolean;
+  searchQuery: string;
+  searchResults: SessionSearchResult[];
+  searchLoading: boolean;
+  hasMoreSearchResults: boolean;
   sessions: Session[];
   selectedSessionId: string;
   themePreference: ThemePreference;
@@ -29,29 +38,31 @@ export function ThreadSidebar(props: {
   onArchive: (sessionId: string) => void;
   onArchivedSessionsOpenChange: (open: boolean) => void;
   onCollapse: () => void;
+  onLoadMoreArchivedSessions: () => void;
+  onLoadMoreSearchResults: () => void;
+  onLoadMoreSessions: () => void;
   onNewThread: () => void;
   onOpenGroups: () => void;
   onOpenAutomations: () => void;
   onOpenSessions: () => void;
   onOpenSetup: () => void;
   onRefresh: () => void;
+  onSearchChange: (query: string) => void;
   onSelect: (sessionId: string) => void;
   onSignOut: () => void;
   onThemeChange: (value: ThemePreference) => void;
   onUnarchive: (sessionId: string) => void;
 }) {
-  const [search, setSearch] = useState('');
-  const filteredSessions = useMemo(() => filterSessions(props.sessions, search), [props.sessions, search]);
   const activeSessions = useMemo(
-    () => filteredSessions.filter((session) => session.status !== 'archived'),
-    [filteredSessions],
+    () => props.sessions.filter((session) => session.status !== 'archived'),
+    [props.sessions],
   );
   const archivedSessions = useMemo(
-    () => filteredSessions.filter((session) => session.status === 'archived'),
-    [filteredSessions],
+    () => props.sessions.filter((session) => session.status === 'archived'),
+    [props.sessions],
   );
-  const searching = Boolean(search.trim());
-  const archivedOpen = searching || props.archivedSessionsOpen;
+  const searching = Boolean(props.searchQuery.trim());
+  const archivedOpen = props.archivedSessionsOpen;
 
   function handleArchivedToggle(event: SyntheticEvent<HTMLDetailsElement>) {
     if (searching) return;
@@ -92,16 +103,19 @@ export function ThreadSidebar(props: {
       <div className="relative mb-3 shrink-0">
         <Input
           className="pr-9"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          value={props.searchQuery}
+          onChange={(event) => props.onSearchChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') props.onSearchChange('');
+          }}
           placeholder="Search sessions..."
         />
-        {search ? (
+        {props.searchQuery ? (
           <Button
             className="absolute right-1 top-1 h-8 w-8 p-0"
             variant="ghost"
             size="icon"
-            onClick={() => setSearch('')}
+            onClick={() => props.onSearchChange('')}
             aria-label="Clear search"
             title="Clear search"
           >
@@ -110,47 +124,85 @@ export function ThreadSidebar(props: {
         ) : null}
       </div>
       <div className="min-h-0 min-w-0 flex-1 overflow-auto">
-        <div className="grid min-w-0 gap-1">
-          {activeSessions.map((session) => (
-            <SessionButton
-              key={session.id}
-              session={session}
-              selected={session.id === props.selectedSessionId}
-              canWriteSession={props.canWriteSession(session)}
-              onArchive={props.onArchive}
-              onSelect={props.onSelect}
-            />
-          ))}
-          {!activeSessions.length ? (
-            <p className="px-2 py-3 text-sm text-muted-foreground">
-              {search ? 'No matching active sessions.' : 'No active sessions.'}
-            </p>
-          ) : null}
-        </div>
-        {archivedSessions.length || searching ? (
-          <details className="mt-4 border-t border-border pt-3" open={archivedOpen} onToggle={handleArchivedToggle}>
-            <summary className="flex cursor-pointer items-center gap-1 text-sm font-medium text-muted-foreground">
-              <ChevronDown className={cn('h-4 w-4 -rotate-90 transition-transform', archivedOpen && 'rotate-0')} />{' '}
-              Archived · {archivedSessions.length}
-            </summary>
-            {archivedSessions.length ? (
-              <div className="mt-2 grid min-w-0 gap-1 opacity-80">
-                {archivedSessions.map((session) => (
-                  <SessionButton
-                    key={session.id}
-                    session={session}
-                    selected={session.id === props.selectedSessionId}
-                    canWriteSession={props.canWriteSession(session)}
-                    onSelect={props.onSelect}
-                    onUnarchive={props.onUnarchive}
-                  />
-                ))}
-              </div>
-            ) : (
-              <p className="px-2 py-3 text-sm text-muted-foreground">No matching archived sessions.</p>
-            )}
-          </details>
-        ) : null}
+        {searching ? (
+          <SearchResultsList
+            canWriteSession={props.canWriteSession}
+            loading={props.searchLoading}
+            results={props.searchResults}
+            selectedSessionId={props.selectedSessionId}
+            hasMore={props.hasMoreSearchResults}
+            onArchive={props.onArchive}
+            onLoadMore={props.onLoadMoreSearchResults}
+            onSelect={props.onSelect}
+            onUnarchive={props.onUnarchive}
+          />
+        ) : (
+          <>
+            <div className="grid min-w-0 gap-1">
+              {activeSessions.map((session) => (
+                <SessionButton
+                  key={session.id}
+                  session={session}
+                  selected={session.id === props.selectedSessionId}
+                  canWriteSession={props.canWriteSession(session)}
+                  onArchive={props.onArchive}
+                  onSelect={props.onSelect}
+                />
+              ))}
+              {!activeSessions.length ? (
+                <p className="px-2 py-3 text-sm text-muted-foreground">No active sessions.</p>
+              ) : null}
+              {props.hasMoreSessions ? (
+                <Button
+                  className="mt-2 w-full"
+                  variant="secondary"
+                  size="sm"
+                  disabled={props.loadingMoreSessions}
+                  onClick={props.onLoadMoreSessions}
+                >
+                  {props.loadingMoreSessions ? 'Loading...' : 'Load more sessions'}
+                </Button>
+              ) : null}
+            </div>
+            <details className="mt-4 border-t border-border pt-3" open={archivedOpen} onToggle={handleArchivedToggle}>
+              <summary className="flex cursor-pointer items-center gap-1 text-sm font-medium text-muted-foreground">
+                <ChevronDown className={cn('h-4 w-4 -rotate-90 transition-transform', archivedOpen && 'rotate-0')} />{' '}
+                Archived
+              </summary>
+              {archivedSessions.length ? (
+                <div className="mt-2 grid min-w-0 gap-1 opacity-80">
+                  {archivedSessions.map((session) => (
+                    <SessionButton
+                      key={session.id}
+                      session={session}
+                      selected={session.id === props.selectedSessionId}
+                      canWriteSession={props.canWriteSession(session)}
+                      onSelect={props.onSelect}
+                      onUnarchive={props.onUnarchive}
+                    />
+                  ))}
+                  {props.hasMoreArchivedSessions ? (
+                    <Button
+                      className="mt-2 w-full"
+                      variant="secondary"
+                      size="sm"
+                      disabled={props.archivedSessionsLoading}
+                      onClick={props.onLoadMoreArchivedSessions}
+                    >
+                      {props.archivedSessionsLoading ? 'Loading...' : 'Load more archived'}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : props.archivedSessionsLoading ? (
+                <p className="px-2 py-3 text-sm text-muted-foreground">Loading archived sessions...</p>
+              ) : props.archivedSessionsLoaded ? (
+                <p className="px-2 py-3 text-sm text-muted-foreground">No archived sessions.</p>
+              ) : (
+                <p className="px-2 py-3 text-sm text-muted-foreground">Expand to load archived sessions.</p>
+              )}
+            </details>
+          </>
+        )}
       </div>
       <ThemeToggle preference={props.themePreference} onChange={props.onThemeChange} />
       <ApiStatusFooter
@@ -276,22 +328,81 @@ export function ApiStatusFooter(props: {
   );
 }
 
+function SearchResultsList(props: {
+  canWriteSession: (session: Session) => boolean;
+  loading: boolean;
+  results: SessionSearchResult[];
+  selectedSessionId: string;
+  hasMore: boolean;
+  onArchive: (sessionId: string) => void;
+  onLoadMore: () => void;
+  onSelect: (sessionId: string) => void;
+  onUnarchive: (sessionId: string) => void;
+}) {
+  return (
+    <div className="grid min-w-0 gap-1">
+      {props.results.map((result) => (
+        <SessionButton
+          key={result.session.id}
+          session={result.session}
+          selected={result.session.id === props.selectedSessionId}
+          canWriteSession={props.canWriteSession(result.session)}
+          compact
+          matchKind={result.matchKind}
+          snippet={result.snippet}
+          onSelect={props.onSelect}
+          {...(result.session.status === 'archived'
+            ? { onUnarchive: props.onUnarchive }
+            : { onArchive: props.onArchive })}
+        />
+      ))}
+      {!props.results.length ? (
+        <p className="px-2 py-3 text-sm text-muted-foreground">
+          {props.loading ? 'Searching sessions...' : 'No matching sessions.'}
+        </p>
+      ) : null}
+      {props.hasMore ? (
+        <Button
+          className="mt-2 w-full"
+          variant="secondary"
+          size="sm"
+          disabled={props.loading}
+          onClick={props.onLoadMore}
+        >
+          {props.loading ? 'Loading...' : 'Load more results'}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function SessionButton(props: {
   canWriteSession: boolean;
   session: Session;
   selected: boolean;
+  compact?: boolean;
+  matchKind?: SessionSearchResult['matchKind'];
+  snippet?: string;
   onSelect: (sessionId: string) => void;
   onArchive?: (sessionId: string) => void;
   onUnarchive?: (sessionId: string) => void;
 }) {
   const displayStatus = sessionDisplayStatus(props.session);
   const displayTooltip = sessionDisplayTooltip(props.session);
+  const title = props.session.title || 'Untitled session';
+  const snippet = props.snippet ? cleanSnippet(props.snippet) : '';
+  const showSnippet = Boolean(
+    snippet && !(props.matchKind === 'title' && normalizedSearchText(snippet) === normalizedSearchText(title)),
+  );
+  const showContextLine = props.compact && showSnippet && props.matchKind !== 'title';
 
   return (
     <div
       className={cn(
         'group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-transparent p-2 hover:bg-accent',
+        props.compact && 'gap-1.5 p-1.5',
         props.selected && 'border-primary bg-primary/15',
+        props.session.status === 'archived' && 'opacity-75',
       )}
     >
       <button
@@ -299,13 +410,34 @@ function SessionButton(props: {
         type="button"
         onClick={() => props.onSelect(props.session.id)}
       >
-        <strong className="block w-full truncate text-sm font-medium text-foreground">
-          {props.session.title || 'Untitled session'}
+        <strong
+          className={cn('block w-full truncate text-sm font-medium text-foreground', props.compact && 'leading-4')}
+        >
+          {title}
         </strong>
-        <span className="block w-full truncate text-xs text-muted-foreground" title={displayTooltip}>
+        <span
+          className={cn(
+            'block w-full truncate text-xs text-muted-foreground',
+            props.compact && props.matchKind && 'mt-0.5 whitespace-normal leading-4',
+          )}
+          title={displayTooltip}
+        >
           <span className={statusTextClass(displayStatus)}>{displayStatus}</span> ·{' '}
           {formatDate(props.session.updatedAt)}
+          {props.matchKind ? (
+            <>
+              {' '}
+              ·{' '}
+              <span className="rounded border border-border px-1 py-px text-[9px] uppercase tracking-wide text-muted-foreground">
+                {props.matchKind}
+              </span>
+            </>
+          ) : null}
+          {showSnippet && !showContextLine ? <> · {snippet}</> : null}
         </span>
+        {showContextLine ? (
+          <span className="mt-0.5 line-clamp-3 block text-xs leading-4 text-muted-foreground">{snippet}</span>
+        ) : null}
       </button>
       {props.canWriteSession && props.onArchive ? (
         <Button
@@ -333,4 +465,15 @@ function SessionButton(props: {
       ) : null}
     </div>
   );
+}
+
+function cleanSnippet(value: string): string {
+  return value
+    .replace(/<\/?mark>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizedSearchText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, ' ').trim();
 }

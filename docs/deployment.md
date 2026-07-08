@@ -207,6 +207,8 @@ Run migrations before starting Postgres-backed API, worker, or scheduler process
 DATABASE_URL=postgres://... mise run //apps/control-plane:db:migrate
 ```
 
+Session search works with standard Postgres full-text search. If the database role can install extensions, migration 013 also attempts to enable `pg_trgm` and create a trigram index for faster partial-title search. This extension is optional: if extension creation is not permitted, migrations continue and title search falls back to unindexed `ILIKE`.
+
 Memory mode is only for demos/tests:
 
 ```sh

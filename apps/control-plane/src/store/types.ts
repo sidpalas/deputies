@@ -523,8 +523,59 @@ export type SessionTranscriptPage = {
   nextBeforeSequence?: number;
 };
 
+export type SessionListCursor = {
+  updatedAt: Date;
+  createdAt: Date;
+  id: string;
+};
+
+export type SessionListOptions = {
+  visibleTo?: SessionVisibilityFilter;
+  archived: boolean;
+  groupId?: string;
+  limit: number;
+  cursor?: SessionListCursor;
+};
+
+export type SessionWithSandboxPage = {
+  items: SessionWithSandboxRecord[];
+  nextCursor: SessionListCursor | null;
+};
+
+export type SessionSearchMatchKind = 'title' | 'prompt' | 'response';
+
+export type SessionSearchOptions = {
+  query: string;
+  visibleTo?: SessionVisibilityFilter;
+  groupId?: string;
+  limit: number;
+  cursor?: number;
+};
+
+export type SessionSearchResult = {
+  item: SessionWithSandboxRecord;
+  snippet: string;
+  matchKind: SessionSearchMatchKind;
+  score: number;
+};
+
+export type SessionSearchPage = {
+  items: SessionSearchResult[];
+  nextCursor: number | null;
+};
+
+export type SessionSearchDocInput = {
+  sessionId: string;
+  kind: SessionSearchMatchKind;
+  sourceId: string;
+  content: string;
+  createdAt: Date;
+};
+
 // Limits a session listing to what a non-admin user can read: organization-visible
-// sessions plus sessions owned by one of the user's groups.
+// sessions plus sessions owned by one of the user's groups. Keep this in sync
+// with canReadSession in auth/authorization.ts and the SQL predicates in the
+// Postgres session list/search implementations.
 export type SessionVisibilityFilter = {
   groupIds: string[];
 };
@@ -538,10 +589,11 @@ export interface SessionStore {
   listSessions(): Promise<SessionRecord[]>;
   listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]>;
   listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]>;
-  listSessionsWithLatestSandbox(
-    provider: string,
-    visibleTo?: SessionVisibilityFilter,
-  ): Promise<SessionWithSandboxRecord[]>;
+  listSessionsWithLatestSandbox(provider: string, options: SessionListOptions): Promise<SessionWithSandboxPage>;
+  searchSessions(provider: string, options: SessionSearchOptions): Promise<SessionSearchPage>;
+  getSearchIndexCursor(): Promise<number>;
+  setSearchIndexCursor(lastEventId: number): Promise<void>;
+  upsertSessionSearchDocs(docs: SessionSearchDocInput[]): Promise<void>;
   updateSession(record: SessionRecord): Promise<SessionRecord>;
   // Commits the session update and its event atomically, so no event committed
   // after an access change can be notified ahead of the change itself.

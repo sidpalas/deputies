@@ -37,7 +37,14 @@ import type { SandboxProvider } from '../sandbox/types.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { MemoryStore } from '../store/memory.js';
-import type { AppStore, SandboxRecord, SessionRecord, SessionVisibility, SessionWritePolicy } from '../store/types.js';
+import type {
+  AppStore,
+  SandboxRecord,
+  SessionListCursor,
+  SessionRecord,
+  SessionVisibility,
+  SessionWritePolicy,
+} from '../store/types.js';
 import {
   parseSessionVisibility,
   parseSessionWritePolicy,
@@ -117,6 +124,8 @@ export type AppServices = {
   githubOAuthClient?: GitHubOAuthClient;
   modelAvailability: ModelAvailabilityService;
 };
+
+const maxSearchOffset = 500;
 
 export function createServices(
   store: AppStore = new MemoryStore(),
@@ -263,19 +272,76 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.get('/sessions', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const limit = parseBoundedInteger(c.req.query('limit'), 50, 1, 200);
+    const cursor = decodeSessionListCursor(c.req.query('cursor'));
+    const archived = parseOptionalBoolean(c.req.query('archived')) ?? false;
+    const groupId = optionalString(c.req.query('groupId'));
+    if (groupId && !(await canFilterToGroup(auth, services.store, groupId))) {
+      return writeError(c, 403, 'forbidden', 'Group access is required');
+    }
     const visibleTo =
       auth.bypass || isSuperAdmin(auth)
         ? undefined
         : { groupIds: auth.memberships.map((membership) => membership.groupId) };
     const [sessionsWithSandbox, groups] = await Promise.all([
-      services.store.listSessionsWithLatestSandbox(config.sandboxProvider, visibleTo),
+      services.store.listSessionsWithLatestSandbox(config.sandboxProvider, {
+        ...(visibleTo ? { visibleTo } : {}),
+        archived,
+        ...(groupId ? { groupId } : {}),
+        limit,
+        ...(cursor ? { cursor } : {}),
+      }),
+      services.store.listGroups(),
+    ]);
+    const groupNames = new Map(groups.map((group) => [group.id, group.name]));
+    // Keyset pagination is ordered by activity. A session updated while a client
+    // pages can move ahead of the current cursor; the global event stream and
+    // first-page refresh path upsert those live changes back into the sidebar.
+    const visibleSessions = sessionsWithSandbox.items
+      .filter(({ session }) => canReadSession(auth, session))
+      .map(({ session, sandbox }) => serializeSessionView(session, sandbox, groupNames.get(session.ownerGroupId)));
+    return c.json({
+      sessions: visibleSessions,
+      nextCursor: encodeSessionListCursor(sessionsWithSandbox.nextCursor),
+    });
+  });
+
+  app.get('/sessions/search', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const query = optionalString(c.req.query('q'))?.trim() ?? '';
+    const limit = parseBoundedInteger(c.req.query('limit'), 20, 1, 50);
+    const cursor = decodeOffsetCursor(c.req.query('cursor'));
+    const groupId = optionalString(c.req.query('groupId'));
+    if (groupId && !(await canFilterToGroup(auth, services.store, groupId))) {
+      return writeError(c, 403, 'forbidden', 'Group access is required');
+    }
+    if (!query) return c.json({ results: [], nextCursor: null });
+    const visibleTo =
+      auth.bypass || isSuperAdmin(auth)
+        ? undefined
+        : { groupIds: auth.memberships.map((membership) => membership.groupId) };
+    const [page, groups] = await Promise.all([
+      services.store.searchSessions(config.sandboxProvider, {
+        query,
+        ...(visibleTo ? { visibleTo } : {}),
+        ...(groupId ? { groupId } : {}),
+        limit,
+        ...(cursor !== null ? { cursor } : {}),
+      }),
       services.store.listGroups(),
     ]);
     const groupNames = new Map(groups.map((group) => [group.id, group.name]));
     return c.json({
-      sessions: sessionsWithSandbox
-        .filter(({ session }) => canReadSession(auth, session))
-        .map(({ session, sandbox }) => serializeSessionView(session, sandbox, groupNames.get(session.ownerGroupId))),
+      results: page.items
+        .filter(({ item }) => canReadSession(auth, item.session))
+        .map(({ item, snippet, matchKind, score }) => ({
+          session: serializeSessionView(item.session, item.sandbox, groupNames.get(item.session.ownerGroupId)),
+          snippet,
+          matchKind,
+          score,
+        })),
+      nextCursor: encodeSearchOffsetCursor(page.nextCursor),
     });
   });
 
@@ -904,6 +970,10 @@ function sessionAuthorizationMiddleware(
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const sessionId = c.req.param('sessionId');
     if (!sessionId) return writeError(c, 400, 'invalid_request', 'Expected sessionId');
+    if (sessionId === 'search') {
+      await next();
+      return;
+    }
     const session = await services.sessions.get(sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
@@ -922,6 +992,104 @@ function sessionAuthorizationMiddleware(
 function getAuthorizedSession(c: Context<{ Variables: AppVariables }>, sessionId: string): SessionRecord | null {
   const session = c.get('authorizedSession');
   return session && session.id === sessionId ? session : null;
+}
+
+async function canFilterToGroup(auth: RequestAuthorization, store: AppStore, groupId: string): Promise<boolean> {
+  if (!isUuid(groupId)) throw new HttpRequestError(400, 'invalid_request', 'Expected valid groupId');
+  if (!auth.bypass && !isSuperAdmin(auth) && !auth.memberships.some((membership) => membership.groupId === groupId)) {
+    return false;
+  }
+  const group = await store.getGroup(groupId);
+  if (!group) throw new HttpRequestError(404, 'not_found', 'Group not found');
+  return true;
+}
+
+function parseBoundedInteger(raw: string | undefined, fallback: number, min: number, max: number): number {
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new HttpRequestError(400, 'invalid_request', `Expected integer between ${min} and ${max}`);
+  }
+  return value;
+}
+
+function parseOptionalBoolean(raw: string | undefined): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new HttpRequestError(400, 'invalid_request', 'Expected boolean query parameter');
+}
+
+function encodeSessionListCursor(cursor: SessionListCursor | null): string | null {
+  if (!cursor) return null;
+  return encodeCursor({
+    updatedAt: cursor.updatedAt.toISOString(),
+    createdAt: cursor.createdAt.toISOString(),
+    id: cursor.id,
+  });
+}
+
+function decodeSessionListCursor(raw: string | undefined): SessionListCursor | undefined {
+  if (!raw) return undefined;
+  const parsed = decodeCursor(raw);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.updatedAt !== 'string' ||
+    typeof parsed.createdAt !== 'string' ||
+    typeof parsed.id !== 'string'
+  ) {
+    throw new HttpRequestError(400, 'invalid_request', 'Invalid session cursor');
+  }
+  const updatedAt = new Date(parsed.updatedAt);
+  const createdAt = new Date(parsed.createdAt);
+  if (Number.isNaN(updatedAt.getTime()) || Number.isNaN(createdAt.getTime()) || !isUuid(parsed.id)) {
+    throw new HttpRequestError(400, 'invalid_request', 'Invalid session cursor');
+  }
+  return { updatedAt, createdAt, id: parsed.id };
+}
+
+function encodeOffsetCursor(cursor: number | null): string | null {
+  return cursor === null ? null : encodeCursor({ offset: cursor });
+}
+
+function encodeSearchOffsetCursor(cursor: number | null): string | null {
+  if (cursor === null || cursor >= maxSearchOffset) return null;
+  return encodeOffsetCursor(cursor);
+}
+
+function decodeOffsetCursor(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const parsed = decodeCursor(raw);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.offset !== 'number' ||
+    !Number.isInteger(parsed.offset) ||
+    parsed.offset < 0 ||
+    parsed.offset >= maxSearchOffset
+  ) {
+    throw new HttpRequestError(400, 'invalid_request', 'Invalid search cursor');
+  }
+  return parsed.offset;
+}
+
+function encodeCursor(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString('base64url');
+}
+
+function decodeCursor(raw: string): unknown {
+  try {
+    return JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as unknown;
+  } catch {
+    throw new HttpRequestError(400, 'invalid_request', 'Invalid cursor');
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 async function requireRequestAuthorization(

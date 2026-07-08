@@ -7,6 +7,7 @@
     "auth:login:openai-codex": "tsx src/runner/openai-codex-login.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "demo:export": "tsx src/scripts/export-static-demo.ts",
+    "search:backfill": "tsx src/scripts/backfill-session-search.ts",
     "docker-orchestrator:dev": "tsx watch src/sandbox/docker-orchestrator-server.ts",
     "docker-orchestrator:start": "node dist/sandbox/docker-orchestrator-server.js",
     "k8s-agent-sandbox-orchestrator:dev": "tsx watch src/sandbox/k8s-agent-sandbox-orchestrator-server.ts",

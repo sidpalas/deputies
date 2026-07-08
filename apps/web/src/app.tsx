@@ -22,6 +22,7 @@ import {
   getCurrentUser,
   getArtifactPreview,
   getHealth,
+  getSession,
   getModelChoices,
   getSetupStatus,
   listBranches,
@@ -40,6 +41,7 @@ import {
   pauseQueue,
   replayCallback,
   resumeQueue,
+  searchSessions,
   retryMessage,
   streamGlobalEvents,
   unarchiveAutomation,
@@ -54,6 +56,7 @@ import {
   type Group,
   type ModelChoice,
   type RepositoryOption,
+  type SessionSearchResult,
   type SetupStatus,
   type WorkspaceToolId,
 } from './api.js';
@@ -182,6 +185,8 @@ type NavigationState = {
 const activeProgressBatchDelayMs = 100;
 const createdSessionBackfillAttempts = 20;
 const createdSessionBackfillDelayMs = 250;
+const sessionListPageSize = 50;
+const sessionSearchPageSize = 20;
 
 type SessionDetailState = {
   messages: Message[];
@@ -296,6 +301,16 @@ export function App() {
   const [themePreference, setThemePreference] = useState<ThemePreference>(loadThemePreference);
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [sessionsNextCursor, setSessionsNextCursor] = useState<string | null>(null);
+  const [sessionsLoadingMore, setSessionsLoadingMore] = useState(false);
+  const [archivedSessionsNextCursor, setArchivedSessionsNextCursor] = useState<string | null>(null);
+  const [archivedSessionsLoaded, setArchivedSessionsLoaded] = useState(false);
+  const [archivedSessionsLoading, setArchivedSessionsLoading] = useState(false);
+  const [sessionSearchQuery, setSessionSearchQuery] = useState('');
+  const [sessionSearchResults, setSessionSearchResults] = useState<SessionSearchResult[]>([]);
+  const [sessionSearchNextCursor, setSessionSearchNextCursor] = useState<string | null>(null);
+  const [sessionSearchLoading, setSessionSearchLoading] = useState(false);
+  const [sessionSearchLoadingMore, setSessionSearchLoadingMore] = useState(false);
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [automationsLoaded, setAutomationsLoaded] = useState(false);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
@@ -329,12 +344,18 @@ export function App() {
   const selectedSessionIdRef = useRef(selectedSessionId);
   const detailLoadedSessionIdRef = useRef(detailLoadedSessionId);
   const pendingCreatedSessionIdRef = useRef('');
+  const sessionsRef = useRef(sessions);
+  const sessionsNextCursorRef = useRef(sessionsNextCursor);
+  const sessionSearchQueryRef = useRef(sessionSearchQuery);
+  const sessionSearchNextCursorRef = useRef(sessionSearchNextCursor);
   const messagesRef = useRef(messages);
   const createSessionInFlightRef = useRef(false);
   const sendMessageInFlightRef = useRef(false);
   const sessionsRefreshTimerRef = useRef<number | null>(null);
   const sessionsRefreshInFlightRef = useRef(false);
   const sessionsRefreshQueuedRef = useRef(false);
+  const sessionSummaryRefreshInFlightRef = useRef(new Set<string>());
+  const sessionSearchRequestRef = useRef(0);
   const detailRefreshInFlightRef = useRef<string | null>(null);
   const detailRefreshQueuedSessionIdRef = useRef<string | null>(null);
   const sessionMilestoneInteractionRef = useRef<SessionMilestoneInteraction | null>(null);
@@ -514,6 +535,45 @@ export function App() {
   }, [startupLoading, connectionStatus.state]);
 
   useEffect(() => {
+    const query = sessionSearchQuery.trim();
+    const requestId = sessionSearchRequestRef.current + 1;
+    sessionSearchRequestRef.current = requestId;
+    if (!query || !canCallApi) {
+      setSessionSearchResults([]);
+      setSessionSearchNextCursor(null);
+      setSessionSearchLoading(false);
+      return;
+    }
+    setSessionSearchLoading(true);
+    const timeout = window.setTimeout(() => {
+      searchSessions(token, { query, limit: sessionSearchPageSize })
+        .then((page) => {
+          if (sessionSearchRequestRef.current !== requestId) return;
+          setSessionSearchResults(page.results);
+          setSessions((current) =>
+            mergeSessionsById(
+              current,
+              page.results.map((result) => result.session),
+            ),
+          );
+          setSessionSearchNextCursor(page.nextCursor);
+        })
+        .catch((err) => {
+          if (sessionSearchRequestRef.current === requestId) handleApiError(err);
+        })
+        .finally(() => {
+          if (sessionSearchRequestRef.current === requestId) setSessionSearchLoading(false);
+        });
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [sessionSearchQuery, canCallApi, token]);
+
+  useEffect(() => {
+    if (!archivedSessionsOpen || !canCallApi || archivedSessionsLoaded || archivedSessionsLoading) return;
+    loadArchivedSessions(true).catch(() => undefined);
+  }, [archivedSessionsOpen, canCallApi, archivedSessionsLoaded, archivedSessionsLoading, token]);
+
+  useEffect(() => {
     return () => {
       if (sessionsRefreshTimerRef.current !== null) window.clearTimeout(sessionsRefreshTimerRef.current);
       abortCreatedSessionBackfill();
@@ -643,6 +703,22 @@ export function App() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => {
+    sessionsNextCursorRef.current = sessionsNextCursor;
+  }, [sessionsNextCursor]);
+
+  useEffect(() => {
+    sessionSearchQueryRef.current = sessionSearchQuery;
+  }, [sessionSearchQuery]);
+
+  useEffect(() => {
+    sessionSearchNextCursorRef.current = sessionSearchNextCursor;
+  }, [sessionSearchNextCursor]);
 
   useEffect(
     () => () => {
@@ -869,7 +945,10 @@ export function App() {
                 }
               }
 
-              if (shouldRefreshSessions(event.type)) scheduleSessionsRefresh();
+              if (shouldRefreshSessions(event.type)) {
+                refreshLoadedSessionSummary(event.sessionId).catch(() => undefined);
+                scheduleSessionsRefresh();
+              }
             },
           });
         } catch (err: unknown) {
@@ -972,14 +1051,37 @@ export function App() {
     sessionsRefreshInFlightRef.current = true;
     setLoading(true);
     setError('');
+    const refreshStartCursor = sessionsNextCursorRef.current;
     try {
-      const nextSessions = await listSessions(token);
-      setSessions(nextSessions);
+      const page = await listSessions(token, { limit: sessionListPageSize });
+      const selectedId = selectedSessionIdRef.current;
+      let selected: Session | null = null;
+      let selectedRemoved = false;
+      if (selectedId && !page.sessions.some((session) => session.id === selectedId)) {
+        try {
+          selected = await getSession({ sessionId: selectedId, token });
+        } catch (err) {
+          if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+            selectedRemoved = true;
+          } else {
+            throw err;
+          }
+        }
+      }
+      setSessions((current) => {
+        const merged = mergeSessionsById(current, selected ? [...page.sessions, selected] : page.sessions);
+        return selectedRemoved && selectedId ? merged.filter((session) => session.id !== selectedId) : merged;
+      });
+      setSessionsNextCursor((current) => (current !== refreshStartCursor ? current : page.nextCursor));
       setSessionsLoaded(true);
       setSelectedSessionId((current) => {
-        if (current && nextSessions.some((session) => session.id === current)) return current;
+        if (selectedRemoved && current === selectedId) {
+          sessionStorage.removeItem(selectedSessionStorageKey);
+          return '';
+        }
+        if (current) return current;
         if (sessionStorage.getItem(newSessionSelectedStorageKey) === 'true') return '';
-        const next = nextSessions[0]?.id ?? '';
+        const next = page.sessions[0]?.id ?? selected?.id ?? '';
         if (next) {
           pendingSessionMilestoneTriggerRef.current = sessionDetailMilestoneStartedRef.current
             ? 'selection'
@@ -1000,6 +1102,95 @@ export function App() {
         sessionsRefreshQueuedRef.current = false;
         scheduleSessionsRefresh(0);
       }
+    }
+  }
+
+  async function refreshLoadedSessionSummary(sessionId: string) {
+    if (!sessionId || !sessionsRef.current.some((session) => session.id === sessionId)) return;
+    const inFlight = sessionSummaryRefreshInFlightRef.current;
+    if (inFlight.has(sessionId)) return;
+    inFlight.add(sessionId);
+    try {
+      const session = await getSession({ sessionId, token });
+      setSessions((current) => mergeSessionsById(current, [session]));
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+        setSessions((current) => current.filter((session) => session.id !== sessionId));
+        if (selectedSessionIdRef.current === sessionId) setSelectedSessionId('');
+      } else {
+        handleApiError(err);
+      }
+    } finally {
+      inFlight.delete(sessionId);
+    }
+  }
+
+  async function loadMoreSessions() {
+    if (!sessionsNextCursor || sessionsLoadingMore || !canCallApi) return;
+    setSessionsLoadingMore(true);
+    setError('');
+    try {
+      const page = await listSessions(token, { cursor: sessionsNextCursor, limit: sessionListPageSize });
+      setSessions((current) => mergeSessionsById(current, page.sessions));
+      setSessionsNextCursor(page.nextCursor);
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setSessionsLoadingMore(false);
+    }
+  }
+
+  async function loadArchivedSessions(reset = false) {
+    if (archivedSessionsLoading || (!reset && archivedSessionsLoaded && !archivedSessionsNextCursor)) return;
+    setArchivedSessionsLoading(true);
+    setError('');
+    try {
+      const page = await listSessions(token, {
+        archived: true,
+        limit: sessionListPageSize,
+        ...(reset || !archivedSessionsNextCursor ? {} : { cursor: archivedSessionsNextCursor }),
+      });
+      setSessions((current) => mergeSessionsById(current, page.sessions));
+      setArchivedSessionsNextCursor(page.nextCursor);
+      setArchivedSessionsLoaded(true);
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setArchivedSessionsLoading(false);
+    }
+  }
+
+  function handleArchivedSessionsOpenChange(open: boolean) {
+    setArchivedSessionsOpen(open);
+    if (open && canCallApi && !archivedSessionsLoaded) loadArchivedSessions(true).catch(() => undefined);
+  }
+
+  async function loadMoreSessionSearchResults() {
+    const query = sessionSearchQueryRef.current.trim();
+    const cursor = sessionSearchNextCursorRef.current;
+    const requestId = sessionSearchRequestRef.current;
+    if (!query || !cursor || sessionSearchLoadingMore || !canCallApi) return;
+    setSessionSearchLoadingMore(true);
+    setError('');
+    try {
+      const page = await searchSessions(token, {
+        query,
+        cursor,
+        limit: sessionSearchPageSize,
+      });
+      if (sessionSearchRequestRef.current !== requestId || sessionSearchQueryRef.current.trim() !== query) return;
+      setSessionSearchResults((current) => mergeSessionSearchResultsById(current, page.results));
+      setSessions((current) =>
+        mergeSessionsById(
+          current,
+          page.results.map((result) => result.session),
+        ),
+      );
+      setSessionSearchNextCursor(page.nextCursor);
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setSessionSearchLoadingMore(false);
     }
   }
 
@@ -1544,6 +1735,12 @@ export function App() {
     sessionStorage.removeItem(archivedAutomationsOpenStorageKey);
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     setSessions([]);
+    setSessionsNextCursor(null);
+    setArchivedSessionsNextCursor(null);
+    setArchivedSessionsLoaded(false);
+    setSessionSearchQuery('');
+    setSessionSearchResults([]);
+    setSessionSearchNextCursor(null);
     setAutomations([]);
     setAutomationsLoaded(false);
     setGroups([]);
@@ -2188,14 +2385,26 @@ export function App() {
                     canWriteSession={userCanWriteSession}
                     health={health}
                     connectionStatus={connectionStatus}
+                    archivedSessionsLoaded={archivedSessionsLoaded}
+                    archivedSessionsLoading={archivedSessionsLoading}
+                    hasMoreArchivedSessions={Boolean(archivedSessionsNextCursor)}
+                    hasMoreSessions={Boolean(sessionsNextCursor)}
                     loading={loading}
+                    loadingMoreSessions={sessionsLoadingMore}
                     navPage={showingSetupGuide ? 'setup' : sidebarPanel === 'automations' ? 'automations' : 'sessions'}
+                    searchQuery={sessionSearchQuery}
+                    searchResults={sessionSearchResults}
+                    searchLoading={sessionSearchLoading || sessionSearchLoadingMore}
+                    hasMoreSearchResults={Boolean(sessionSearchNextCursor)}
                     sessions={sortedSessions}
                     selectedSessionId={selectedSessionId}
                     token={token}
                     onArchive={fireAndForget(archiveFromList)}
-                    onArchivedSessionsOpenChange={setArchivedSessionsOpen}
+                    onArchivedSessionsOpenChange={handleArchivedSessionsOpenChange}
                     onCollapse={collapseSidebar}
+                    onLoadMoreArchivedSessions={() => void loadArchivedSessions(false)}
+                    onLoadMoreSearchResults={fireAndForget(loadMoreSessionSearchResults)}
+                    onLoadMoreSessions={fireAndForget(loadMoreSessions)}
                     onNewThread={startNewThread}
                     onOpenAutomations={openAutomationsPanel}
                     onOpenGroups={openGroupsPanel}
@@ -2203,6 +2412,7 @@ export function App() {
                     onOpenSetup={openSetupGuide}
                     onRefresh={fireAndForget(refreshSessions)}
                     onSelect={selectSession}
+                    onSearchChange={setSessionSearchQuery}
                     onSignOut={signOut}
                     onThemeChange={setThemePreference}
                     themePreference={themePreference}
@@ -2493,6 +2703,26 @@ function fireAndForget<Args extends unknown[]>(handler: (...args: Args) => Promi
   return (...args) => {
     void handler(...args);
   };
+}
+
+function mergeSessionsById(current: Session[], incoming: Session[]): Session[] {
+  if (!incoming.length) return current;
+  const byId = new Map(current.map((session) => [session.id, session]));
+  for (const session of incoming) byId.set(session.id, session);
+  const incomingIds = new Set(incoming.map((session) => session.id));
+  return [
+    ...incoming,
+    ...current.filter((session) => !incomingIds.has(session.id)).map((session) => byId.get(session.id) ?? session),
+  ];
+}
+
+function mergeSessionSearchResultsById(
+  current: SessionSearchResult[],
+  incoming: SessionSearchResult[],
+): SessionSearchResult[] {
+  if (!incoming.length) return current;
+  const incomingIds = new Set(incoming.map((result) => result.session.id));
+  return [...current.filter((result) => !incomingIds.has(result.session.id)), ...incoming];
 }
 
 function ThreadDetailLoadingPanel() {

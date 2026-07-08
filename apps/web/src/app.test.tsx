@@ -71,6 +71,11 @@ type MockApiOptions = {
   artifactPreview?: unknown;
   artifactPreviewStatus?: number;
   sessions?: unknown[];
+  sessionsNextCursor?: string | null;
+  onListSessionsRequest?: (request: { count: number; url: URL }) => Response | Promise<Response> | undefined;
+  sessionDetailStatusById?: Record<string, number>;
+  searchResults?: unknown[];
+  searchNextCursor?: string | null;
   callbacks?: unknown[];
   sessionOverride?: Partial<typeof session> & {
     context?: Record<string, unknown>;
@@ -617,6 +622,7 @@ it('reopens the sessions side panel when navigating back to sessions from the fo
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
   expect(screen.getByPlaceholderText('Search sessions...')).toBeInTheDocument();
+  expect(screen.getByText('Archived')).toBeInTheDocument();
   expect(screen.queryByPlaceholderText('Search groups...')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Access' })).toBeInTheDocument();
 });
@@ -1117,6 +1123,69 @@ it('refreshes sessions when the global event stream reports an external session'
   expect(await screen.findByText('Slack thread')).toBeInTheDocument();
 });
 
+it('opens search results that are outside the loaded sessions page', async () => {
+  const searchHit = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000088',
+    title: 'Search-only session',
+    updatedAt: '2026-05-05T12:10:00.000Z',
+  };
+  mockApi({
+    sessions: [session],
+    searchResults: [{ session: searchHit, snippet: 'matched prompt text', matchKind: 'prompt', score: 1 }],
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'matched' } });
+  fireEvent.click(await screen.findByRole('button', { name: /Search-only session/ }));
+
+  expect(await screen.findByRole('heading', { name: 'Search-only session' })).toBeInTheDocument();
+});
+
+it('preserves load-more sessions when a refresh resolves later', async () => {
+  const refreshPage = deferred<Response>();
+  const secondPageSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000089',
+    title: 'Loaded later',
+    createdAt: '2026-05-05T11:59:00.000Z',
+    updatedAt: '2026-05-05T11:59:00.000Z',
+  };
+  let refreshStarted = false;
+  mockApi({
+    onListSessionsRequest: ({ count, url }) => {
+      const cursor = url.searchParams.get('cursor');
+      if (count === 1) return jsonResponse({ sessions: [session], nextCursor: 'page-2' });
+      if (cursor === 'page-2') return jsonResponse({ sessions: [secondPageSession], nextCursor: null });
+      refreshStarted = true;
+      return refreshPage.promise;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('button', { name: 'Load more sessions' })).toBeInTheDocument();
+
+  setVisibilityState('hidden');
+  fireEvent(document, new Event('visibilitychange'));
+  setVisibilityState('visible');
+  fireEvent(document, new Event('visibilitychange'));
+  await waitFor(() => expect(refreshStarted).toBe(true));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Load more sessions' }));
+  expect(await screen.findByText('Loaded later')).toBeInTheDocument();
+
+  await act(async () => {
+    refreshPage.resolve(
+      jsonResponse({ sessions: [{ ...session, title: 'Refreshed first page' }], nextCursor: 'page-2' }),
+    );
+    await refreshPage.promise;
+  });
+
+  expect(screen.getByText('Loaded later')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Load more sessions' })).not.toBeInTheDocument();
+});
+
 it('keeps initial global event stream replay disabled to avoid loading old events', async () => {
   let streamUrl: URL | undefined;
   mockApi({
@@ -1148,6 +1217,25 @@ it('refreshes sessions after returning from a hidden tab to catch phone updates'
   fireEvent(document, new Event('visibilitychange'));
 
   expect(await screen.findByText('This session is archived.')).toBeInTheDocument();
+});
+
+it('clears a selected session when refresh fallback loses read access', async () => {
+  const sessions = [{ ...session }];
+  mockApi({ sessions, sessionDetailStatusById: { [session.id]: 403 } });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+
+  setVisibilityState('hidden');
+  fireEvent(document, new Event('visibilitychange'));
+  sessions.length = 0;
+
+  setVisibilityState('visible');
+  fireEvent(document, new Event('visibilitychange'));
+
+  expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Existing session' })).not.toBeInTheDocument();
+  expect(sessionStorage.getItem('deputies-selected-session-id')).toBeNull();
 });
 
 it('refreshes sessions when a queued message starts processing', async () => {
@@ -2669,7 +2757,7 @@ it('preserves selected archived session and archived section after refresh', asy
 
   expect(await screen.findByText('This session is archived.')).toBeInTheDocument();
   expect(screen.getAllByText('Archived chosen')).toHaveLength(2);
-  expect(screen.getByText(/Archived · 1/).closest('details')).toHaveAttribute('open');
+  expect(screen.getByText('Archived').closest('details')).toHaveAttribute('open');
 });
 
 it('keeps the new-session page selected after archiving and refreshing', async () => {
@@ -2792,7 +2880,16 @@ function mockApi(options: MockApiOptions = {}) {
       options.onListSessions?.(sessionsRequestCount);
       if (options.hangSessions) return hangingResponse(init);
       if (options.hangSessionsAfterFirst && sessionsRequestCount > 1) return hangingResponse(init);
-      return jsonResponse({ sessions: options.sessions ?? [currentSession] });
+      const customResponse = options.onListSessionsRequest?.({ count: sessionsRequestCount, url });
+      if (customResponse) return customResponse;
+      return jsonResponse({
+        sessions: options.sessions ?? [currentSession],
+        nextCursor: options.sessionsNextCursor ?? null,
+      });
+    }
+
+    if (url.pathname === '/sessions/search' && method === 'GET') {
+      return jsonResponse({ results: options.searchResults ?? [], nextCursor: options.searchNextCursor ?? null });
     }
 
     if (url.pathname === '/sessions' && method === 'POST') {
@@ -2806,6 +2903,32 @@ function mockApi(options: MockApiOptions = {}) {
         updatedAt: '2026-05-05T12:01:00.000Z',
       };
       return jsonResponse({ session: currentSession });
+    }
+
+    const sessionDetailMatch = url.pathname.match(/^\/sessions\/([^/]+)$/);
+    if (sessionDetailMatch && method === 'GET') {
+      const sessionId = sessionDetailMatch[1]!;
+      const status = options.sessionDetailStatusById?.[sessionId];
+      if (status)
+        return jsonResponse(
+          { error: status === 403 ? 'forbidden' : 'not_found', message: 'Session unavailable' },
+          status,
+        );
+    }
+
+    if (url.pathname === `/sessions/${currentSession.id}` && method === 'GET') {
+      return jsonResponse({ session: currentSession });
+    }
+
+    const requestedSession = (options.sessions ?? [currentSession]).find(
+      (candidate) =>
+        typeof candidate === 'object' &&
+        candidate !== null &&
+        'id' in candidate &&
+        candidate.id === url.pathname.slice('/sessions/'.length),
+    );
+    if (url.pathname.match(/^\/sessions\/[^/]+$/) && method === 'GET' && requestedSession) {
+      return jsonResponse({ session: requestedSession });
     }
 
     if (url.pathname === '/repositories' && method === 'GET') {
@@ -3223,4 +3346,14 @@ function hangingResponse(init: RequestInit | undefined, onAbort?: () => void): P
       { once: true },
     );
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }

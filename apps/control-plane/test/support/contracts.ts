@@ -59,13 +59,43 @@ export function expectSessionResponse(
 
 export function expectSessionsResponse(
   value: unknown,
-): asserts value is { sessions: Array<{ id: string; status: string; title?: string }> } {
+): asserts value is { sessions: Array<{ id: string; status: string; title?: string }>; nextCursor?: string | null } {
   expectResponseSchemaField('sessions', 'sessions');
+  expectResponseSchemaField('sessions', 'nextCursor', 'nullable:string');
   expect(isRecord(value)).toBe(true);
   const sessions = isRecord(value) ? value.sessions : undefined;
   expect(Array.isArray(sessions)).toBe(true);
+  if (isRecord(value) && value.nextCursor !== undefined && value.nextCursor !== null)
+    expect(typeof value.nextCursor).toBe('string');
   if (!Array.isArray(sessions)) return;
   for (const session of sessions) expectSessionRecord(session);
+}
+
+export function expectSessionSearchResponse(value: unknown): asserts value is {
+  results: Array<{
+    session: { id: string; status: string; title?: string };
+    snippet: string;
+    matchKind: string;
+    score: number;
+  }>;
+  nextCursor?: string | null;
+} {
+  expectResponseSchemaField('sessionSearch', 'results');
+  expectResponseSchemaField('sessionSearch', 'nextCursor', 'nullable:string');
+  expect(isRecord(value)).toBe(true);
+  const results = isRecord(value) ? value.results : undefined;
+  expect(Array.isArray(results)).toBe(true);
+  if (isRecord(value) && value.nextCursor !== undefined && value.nextCursor !== null)
+    expect(typeof value.nextCursor).toBe('string');
+  if (!Array.isArray(results)) return;
+  for (const result of results) {
+    expect(isRecord(result)).toBe(true);
+    if (!isRecord(result)) continue;
+    expectSessionRecord(result.session);
+    expect(typeof result.snippet).toBe('string');
+    expect(typeof result.matchKind).toBe('string');
+    expect(typeof result.score).toBe('number');
+  }
 }
 
 export function expectMessageResponse(

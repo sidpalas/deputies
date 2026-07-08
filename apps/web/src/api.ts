@@ -49,6 +49,23 @@ export type Session = {
   };
 };
 
+export type SessionPage = {
+  sessions: Session[];
+  nextCursor: string | null;
+};
+
+export type SessionSearchResult = {
+  session: Session;
+  snippet: string;
+  matchKind: 'title' | 'prompt' | 'response';
+  score: number;
+};
+
+export type SessionSearchPage = {
+  results: SessionSearchResult[];
+  nextCursor: string | null;
+};
+
 export type Automation = {
   id: string;
   kind: 'scheduled';
@@ -326,9 +343,33 @@ export async function logout(): Promise<void> {
   await request<{ ok: true }>('/auth/logout', { method: 'POST', body: {} });
 }
 
-export async function listSessions(token: string): Promise<Session[]> {
-  const body = await request<{ sessions: Session[] }>('/sessions', { token });
-  return body.sessions;
+export async function listSessions(
+  token: string,
+  options: { cursor?: string; limit?: number; archived?: boolean; groupId?: string } = {},
+): Promise<SessionPage> {
+  const query = new URLSearchParams();
+  if (options.cursor) query.set('cursor', options.cursor);
+  if (options.limit !== undefined) query.set('limit', String(options.limit));
+  if (options.archived !== undefined) query.set('archived', String(options.archived));
+  if (options.groupId) query.set('groupId', options.groupId);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  const body = await request<{ sessions: Session[]; nextCursor?: string | null }>(`/sessions${suffix}`, { token });
+  return { sessions: body.sessions, nextCursor: body.nextCursor ?? null };
+}
+
+export async function searchSessions(
+  token: string,
+  options: { query: string; cursor?: string; limit?: number; groupId?: string },
+): Promise<SessionSearchPage> {
+  const query = new URLSearchParams({ q: options.query });
+  if (options.cursor) query.set('cursor', options.cursor);
+  if (options.limit !== undefined) query.set('limit', String(options.limit));
+  if (options.groupId) query.set('groupId', options.groupId);
+  const body = await request<{ results: SessionSearchResult[]; nextCursor?: string | null }>(
+    `/sessions/search?${query.toString()}`,
+    { token },
+  );
+  return { results: body.results, nextCursor: body.nextCursor ?? null };
 }
 
 export async function listAutomations(token: string): Promise<Automation[]> {
@@ -591,6 +632,11 @@ export async function createSession(input: {
       ...(input.writePolicy ? { writePolicy: input.writePolicy } : {}),
     },
   });
+  return body.session;
+}
+
+export async function getSession(input: { sessionId: string; token: string }): Promise<Session> {
+  const body = await request<{ session: Session }>(`/sessions/${input.sessionId}`, { token: input.token });
   return body.session;
 }
 

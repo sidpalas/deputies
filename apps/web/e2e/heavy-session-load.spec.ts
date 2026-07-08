@@ -58,6 +58,8 @@ test.describe('heavy session load', () => {
     await page.goto(`/?session=${lightSessionId}`);
     await expect(page.getByRole('heading', { name: lightSessionTitle })).toBeVisible();
     await waitForMilestones(milestonePosts, 'startup_selection');
+    await page.getByRole('button', { name: 'Load more sessions' }).click();
+    await expect(page.getByRole('button', { name: new RegExp(`^${escapeRegExp(heavySessionTitle)}`) })).toBeVisible();
     milestonePosts.length = 0;
 
     const client = await page.context().newCDPSession(page);
@@ -339,7 +341,12 @@ async function mockApi(
       return;
     }
     if (method === 'GET' && path === '/sessions') {
-      await route.fulfill({ json: { sessions: fixture.sessions } });
+      const secondPage = url.searchParams.has('cursor');
+      await route.fulfill({
+        json: secondPage
+          ? { sessions: [fixture.heavy.session], nextCursor: null }
+          : { sessions: [fixture.light.session], nextCursor: 'heavy-session-page' },
+      });
       return;
     }
 

@@ -28,6 +28,7 @@ import {
   expectGlobalEventsResponse,
   expectMessageResponse,
   expectMessagesResponse,
+  expectSessionSearchResponse,
   expectSessionResponse,
   expectSessionsResponse,
 } from '../support/contracts.js';
@@ -1036,6 +1037,76 @@ describe('core API', () => {
     expect(messagesBody.messages).toMatchObject([{ sessionId: session.id, prompt: 'show this message' }]);
   });
 
+  it('paginates sessions and excludes archived sessions by default', async () => {
+    const first = (await (await postJson(`${baseUrl}/sessions`, { title: 'First listed' })).json()) as {
+      session: { id: string };
+    };
+    const second = (await (await postJson(`${baseUrl}/sessions`, { title: 'Second listed' })).json()) as {
+      session: { id: string };
+    };
+    const archived = (await (await postJson(`${baseUrl}/sessions`, { title: 'Archived listed' })).json()) as {
+      session: { id: string };
+    };
+    await postJson(`${baseUrl}/sessions/${archived.session.id}/archive`, {});
+
+    const firstPageResponse = await fetch(`${baseUrl}/sessions?limit=1`);
+    const firstPage = await firstPageResponse.json();
+    expectSessionsResponse(firstPage);
+    expect(firstPage.sessions).toHaveLength(1);
+    expect(firstPage.nextCursor).toEqual(expect.any(String));
+    const nextCursor = firstPage.nextCursor;
+    if (!nextCursor) throw new Error('Expected a session page cursor');
+
+    const secondPageResponse = await fetch(`${baseUrl}/sessions?limit=5&cursor=${encodeURIComponent(nextCursor)}`);
+    const secondPage = await secondPageResponse.json();
+    expectSessionsResponse(secondPage);
+    const activeIds = [...firstPage.sessions, ...secondPage.sessions].map((session) => session.id);
+    expect(activeIds).toEqual(expect.arrayContaining([first.session.id, second.session.id]));
+    expect(activeIds).not.toContain(archived.session.id);
+
+    const archivedResponse = await fetch(`${baseUrl}/sessions?archived=true`);
+    const archivedPage = await archivedResponse.json();
+    expectSessionsResponse(archivedPage);
+    expect(archivedPage.sessions.map((session) => session.id)).toContain(archived.session.id);
+  });
+
+  it('rejects malformed session list cursors', async () => {
+    const malformedCursors = [
+      'not-json',
+      Buffer.from('not json').toString('base64url'),
+      Buffer.from(JSON.stringify({ updatedAt: 1, createdAt: '2026-01-01T00:00:00.000Z', id: defaultGroupId })).toString(
+        'base64url',
+      ),
+      Buffer.from(
+        JSON.stringify({ updatedAt: '2026-01-01T00:00:00.000Z', createdAt: '2026-01-01T00:00:00.000Z', id: 'nope' }),
+      ).toString('base64url'),
+    ];
+
+    for (const cursor of malformedCursors) {
+      const response = await fetch(`${baseUrl}/sessions?cursor=${encodeURIComponent(cursor)}`);
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expectErrorResponse(body);
+      expect(body).toMatchObject({ error: 'invalid_request' });
+    }
+  });
+
+  it('searches sessions by title and content', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Title needle' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'prompt haystack phrase' });
+
+    const titleSearch = await fetch(`${baseUrl}/sessions/search?q=needle`);
+    const titleBody = await titleSearch.json();
+    expectSessionSearchResponse(titleBody);
+    expect(titleBody.results.map((result) => result.session.id)).toContain(session.id);
+
+    const contentSearch = await fetch(`${baseUrl}/sessions/search?q=haystack`);
+    const contentBody = await contentSearch.json();
+    expectSessionSearchResponse(contentBody);
+    expect(contentBody.results).toMatchObject([{ session: { id: session.id }, matchKind: 'prompt' }]);
+  });
+
   it('lists callback deliveries and requeues failed callbacks for replay', async () => {
     const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Callback replay' });
     const { session } = (await createSession.json()) as { session: { id: string } };
@@ -1227,7 +1298,7 @@ describe('core API', () => {
     expectSessionResponse(archiveBody);
     expect(archiveBody.session.status).toBe('archived');
 
-    const sessionsResponse = await fetch(`${baseUrl}/sessions`);
+    const sessionsResponse = await fetch(`${baseUrl}/sessions?archived=true`);
     const sessionsBody = await sessionsResponse.json();
     expectSessionsResponse(sessionsBody);
     expect(sessionsBody.sessions).toMatchObject([{ id: session.id, status: 'archived' }]);
