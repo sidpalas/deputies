@@ -34,6 +34,7 @@ export type NormalizedEventPayloadMap = {
   session_unarchived: EmptyEventPayload;
   session_updated: {
     title: string | null;
+    tags?: string[];
     context?: Record<string, unknown> | null;
     ownerGroupId?: string;
     visibility?: 'group' | 'organization';

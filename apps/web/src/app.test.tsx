@@ -20,6 +20,9 @@ const session = {
   createdByUserId: '00000000-0000-4000-8000-000000000020',
   createdAt: '2026-05-05T12:00:00.000Z',
   updatedAt: '2026-05-05T12:00:00.000Z',
+  lastActivityAt: '2026-05-05T12:00:00.000Z',
+  tags: [] as string[],
+  starred: false,
 };
 
 const group = {
@@ -71,8 +74,10 @@ type MockApiOptions = {
   artifactPreview?: unknown;
   artifactPreviewStatus?: number;
   sessions?: unknown[];
+  sessionTags?: unknown[];
   sessionsNextCursor?: string | null;
   onListSessionsRequest?: (request: { count: number; url: URL }) => Response | Promise<Response> | undefined;
+  onStarSessionRequest?: (request: { starred: boolean }) => Response | Promise<Response> | undefined;
   sessionDetailStatusById?: Record<string, number>;
   searchResults?: unknown[];
   searchNextCursor?: string | null;
@@ -1123,6 +1128,169 @@ it('refreshes sessions when the global event stream reports an external session'
   expect(await screen.findByText('Slack thread')).toBeInTheDocument();
 });
 
+it('uses the latest filters for the first session refresh after a filter change', async () => {
+  const requests: string[] = [];
+  mockApi({
+    onListSessionsRequest: ({ url }) => {
+      requests.push(url.search);
+      return jsonResponse({ sessions: [session], nextCursor: null });
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.click(
+    screen
+      .getAllByRole('button', { name: 'Starred' })
+      .find((button) => button.getAttribute('aria-pressed') === 'false')!,
+  );
+
+  await waitFor(() => {
+    expect(requests.some((search) => new URLSearchParams(search).get('starred') === 'me')).toBe(true);
+  });
+});
+
+it('keeps loaded archived rows when a filtered active refresh completes', async () => {
+  const activeSession = { ...session, starred: true };
+  const archivedSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000090',
+    title: 'Archived session',
+    status: 'archived',
+    starred: true,
+  };
+  mockApi({
+    sessionOverride: { starred: true },
+    sessions: [activeSession, archivedSession],
+    onListSessionsRequest: ({ url }) =>
+      jsonResponse({
+        sessions: url.searchParams.get('archived') === 'true' ? [archivedSession] : [activeSession],
+        nextCursor: null,
+      }),
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.click(
+    screen
+      .getAllByRole('button', { name: 'Starred' })
+      .find((button) => button.getAttribute('aria-pressed') === 'false')!,
+  );
+  await waitFor(() => expect(screen.getByRole('button', { name: /Existing session/ })).toBeInTheDocument());
+
+  fireEvent.click(screen.getByText('Archived'));
+  expect(await screen.findByRole('button', { name: /Archived session/ })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+  await waitFor(() => expect(screen.getByRole('button', { name: /Archived session/ })).toBeInTheDocument());
+});
+
+it('keeps the selected session open after unstarring it with the starred filter active', async () => {
+  mockApi({ sessionOverride: { starred: true } });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.click(
+    screen
+      .getAllByRole('button', { name: 'Starred' })
+      .find((button) => button.getAttribute('aria-pressed') === 'false')!,
+  );
+
+  await waitFor(() => expect(screen.getAllByTitle('Unstar session').length).toBeGreaterThan(0));
+  fireEvent.click(screen.getAllByTitle('Unstar session')[0]!);
+
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Existing session' })).toBeInTheDocument());
+  expect(screen.queryByText('What needs doing?')).not.toBeInTheDocument();
+});
+
+it('adds a session tag from the thread header tag picker', async () => {
+  mockApi({ sessionTags: [{ tag: 'foo', sessionCount: 1 }] });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Tag' }));
+  fireEvent.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'foo' }));
+
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Remove foo' })).toBeInTheDocument());
+});
+
+it('rolls back a failed star mutation without reverting an interleaved tag edit', async () => {
+  const starResponse = deferred<Response>();
+  mockApi({
+    sessionTags: [{ tag: 'foo', sessionCount: 1 }],
+    onStarSessionRequest: () => starResponse.promise,
+  });
+  render(<App />);
+
+  const heading = await screen.findByRole('heading', { name: 'Existing session' });
+  const header = heading.closest('section');
+  if (!header) throw new Error('Expected thread header');
+  fireEvent.click(within(header).getByTitle('Star session'));
+  await waitFor(() => expect(within(header).getByTitle('Unstar session')).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole('button', { name: 'Tag' }));
+  fireEvent.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'foo' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Remove foo' })).toBeInTheDocument());
+
+  await act(async () => {
+    starResponse.resolve(jsonResponse({ error: 'boom', message: 'Star failed' }, 500));
+    await starResponse.promise;
+  });
+
+  await waitFor(() => expect(within(header).getByTitle('Star session')).toBeInTheDocument());
+  expect(screen.getByRole('button', { name: 'Remove foo' })).toBeInTheDocument();
+});
+
+it('filters sessions with the searchable sidebar tag picker', async () => {
+  const requests: string[] = [];
+  mockApi({
+    sessionTags: [
+      { tag: 'alpha', sessionCount: 10 },
+      { tag: 'beta', sessionCount: 9 },
+      { tag: 'gamma', sessionCount: 8 },
+      { tag: 'delta', sessionCount: 7 },
+      { tag: 'epsilon', sessionCount: 6 },
+      { tag: 'zeta', sessionCount: 5 },
+      { tag: 'eta', sessionCount: 4 },
+      { tag: 'theta', sessionCount: 3 },
+      { tag: 'iota', sessionCount: 2 },
+      { tag: 'kappa', sessionCount: 1 },
+    ],
+    onListSessionsRequest: ({ url }) => {
+      requests.push(url.search);
+      return jsonResponse({ sessions: [session], nextCursor: null });
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Add tag filter' }));
+  const listbox = await screen.findByRole('listbox');
+
+  expect(within(listbox).getByRole('option', { name: 'alpha' })).toBeInTheDocument();
+  expect(within(listbox).getByRole('option', { name: 'theta' })).toBeInTheDocument();
+  expect(within(listbox).queryByRole('option', { name: 'iota' })).not.toBeInTheDocument();
+
+  fireEvent.change(screen.getByPlaceholderText('Search tags...'), { target: { value: 'kap' } });
+  fireEvent.click(within(listbox).getByRole('option', { name: 'kappa' }));
+
+  await waitFor(() => {
+    expect(requests.some((search) => new URLSearchParams(search).get('tags') === 'kappa')).toBe(true);
+  });
+});
+
+it('exposes hidden sidebar tags on the collapsed count badge', async () => {
+  mockApi({ sessionOverride: { tags: ['alpha', 'beta', 'gamma', 'delta', 'epsilon'] } });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  const collapsedTags = screen.getByLabelText('2 more tags: delta, epsilon');
+
+  expect(collapsedTags).toHaveTextContent('+2');
+  expect(collapsedTags).toHaveAttribute('title', 'delta, epsilon');
+});
+
 it('opens search results that are outside the loaded sessions page', async () => {
   const searchHit = {
     ...session,
@@ -1143,6 +1311,37 @@ it('opens search results that are outside the loaded sessions page', async () =>
   expect(await screen.findByRole('heading', { name: 'Search-only session' })).toBeInTheDocument();
 });
 
+it('separates archived sidebar search results from active results', async () => {
+  const activeHit = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000087',
+    title: 'Active search hit',
+  };
+  const archivedHit = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000086',
+    status: 'archived',
+    title: 'Archived search hit',
+  };
+  mockApi({
+    searchResults: [
+      { session: archivedHit, snippet: 'matched archived text', matchKind: 'prompt', score: 2 },
+      { session: activeHit, snippet: 'matched active text', matchKind: 'prompt', score: 1 },
+    ],
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'matched' } });
+
+  const activeButton = await screen.findByRole('button', { name: /Active search hit/ });
+  const archivedDivider = screen.getByText('Archived');
+  const archivedButton = screen.getByRole('button', { name: /Archived search hit/ });
+
+  expect(activeButton.compareDocumentPosition(archivedDivider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(archivedDivider.compareDocumentPosition(archivedButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 it('updates sidebar search result archive controls after archive and restore', async () => {
   mockApi({
     searchResults: [{ session, snippet: 'matched prompt text', matchKind: 'prompt', score: 1 }],
@@ -1152,21 +1351,31 @@ it('updates sidebar search result archive controls after archive and restore', a
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
   fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'matched' } });
 
-  const resultSnippet = await screen.findByText('matched prompt text');
-  const resultRow = resultSnippet.closest('div');
-  if (!resultRow) throw new Error('Expected search result row');
+  function getResultRow() {
+    const resultSnippet = screen.getByText('matched prompt text');
+    const resultRow = resultSnippet.closest('div');
+    if (!resultRow) throw new Error('Expected search result row');
+    return resultRow;
+  }
 
-  fireEvent.click(within(resultRow).getByRole('button', { name: 'Archive session' }));
+  fireEvent.click(within(await waitFor(() => getResultRow())).getByRole('button', { name: 'Archive session' }));
 
-  await waitFor(() => expect(within(resultRow).getByRole('button', { name: 'Restore session' })).toBeInTheDocument());
-  expect(within(resultRow).queryByRole('button', { name: 'Archive session' })).not.toBeInTheDocument();
-  expect(within(resultRow).getByText('archived')).toBeInTheDocument();
+  await waitFor(() =>
+    expect(within(getResultRow()).getByRole('button', { name: 'Restore session' })).toBeInTheDocument(),
+  );
+  const archivedResultRow = getResultRow();
+  expect(screen.getByText('Archived')).toBeInTheDocument();
+  expect(within(archivedResultRow).queryByRole('button', { name: 'Archive session' })).not.toBeInTheDocument();
+  expect(within(archivedResultRow).getByText('archived')).toBeInTheDocument();
 
-  fireEvent.click(within(resultRow).getByRole('button', { name: 'Restore session' }));
+  fireEvent.click(within(archivedResultRow).getByRole('button', { name: 'Restore session' }));
 
-  await waitFor(() => expect(within(resultRow).getByRole('button', { name: 'Archive session' })).toBeInTheDocument());
-  expect(within(resultRow).queryByRole('button', { name: 'Restore session' })).not.toBeInTheDocument();
-  expect(within(resultRow).getByText('idle')).toBeInTheDocument();
+  await waitFor(() =>
+    expect(within(getResultRow()).getByRole('button', { name: 'Archive session' })).toBeInTheDocument(),
+  );
+  const activeResultRow = getResultRow();
+  expect(within(activeResultRow).queryByRole('button', { name: 'Restore session' })).not.toBeInTheDocument();
+  expect(within(activeResultRow).getByText('idle')).toBeInTheDocument();
 });
 
 it('preserves load-more sessions when a refresh resolves later', async () => {
@@ -1210,6 +1419,62 @@ it('preserves load-more sessions when a refresh resolves later', async () => {
 
   expect(screen.getByText('Loaded later')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Load more sessions' })).not.toBeInTheDocument();
+});
+
+it('preserves filtered load-more sessions when a refresh resolves later', async () => {
+  const refreshPage = deferred<Response>();
+  const firstPageSession = { ...session, starred: true, title: 'Filtered first page' };
+  const secondPageSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000098',
+    starred: true,
+    title: 'Filtered loaded later',
+    createdAt: '2026-05-05T11:59:00.000Z',
+    updatedAt: '2026-05-05T11:59:00.000Z',
+  };
+  let filteredFirstPageRequests = 0;
+  let refreshStarted = false;
+  mockApi({
+    sessionOverride: { starred: true, title: firstPageSession.title },
+    onListSessionsRequest: ({ url }) => {
+      const starred = url.searchParams.get('starred') === 'me';
+      const cursor = url.searchParams.get('cursor');
+      if (!starred) return jsonResponse({ sessions: [firstPageSession], nextCursor: null });
+      if (cursor === 'page-2') return jsonResponse({ sessions: [secondPageSession], nextCursor: 'page-3' });
+      filteredFirstPageRequests += 1;
+      if (filteredFirstPageRequests === 1) {
+        return jsonResponse({ sessions: [firstPageSession], nextCursor: 'page-2' });
+      }
+      refreshStarted = true;
+      return refreshPage.promise;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Filtered first page' })).toBeInTheDocument();
+  fireEvent.click(
+    screen
+      .getAllByRole('button', { name: 'Starred' })
+      .find((button) => button.getAttribute('aria-pressed') === 'false')!,
+  );
+  expect(await screen.findByRole('button', { name: 'Load more sessions' })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(refreshStarted).toBe(true));
+  fireEvent.click(screen.getByRole('button', { name: 'Load more sessions' }));
+  expect(await screen.findByText('Filtered loaded later')).toBeInTheDocument();
+
+  await act(async () => {
+    refreshPage.resolve(
+      jsonResponse({
+        sessions: [{ ...firstPageSession, title: 'Filtered refreshed first page' }],
+        nextCursor: 'page-2',
+      }),
+    );
+    await refreshPage.promise;
+  });
+
+  expect(screen.getByText('Filtered loaded later')).toBeInTheDocument();
 });
 
 it('keeps initial global event stream replay disabled to avoid loading old events', async () => {
@@ -2914,6 +3179,10 @@ function mockApi(options: MockApiOptions = {}) {
       });
     }
 
+    if (url.pathname === '/sessions/tags' && method === 'GET') {
+      return jsonResponse({ tags: options.sessionTags ?? [] });
+    }
+
     if (url.pathname === '/sessions/search' && method === 'GET') {
       return jsonResponse({ results: options.searchResults ?? [], nextCursor: options.searchNextCursor ?? null });
     }
@@ -3086,9 +3355,21 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === `/sessions/${currentSession.id}` && method === 'PATCH') {
-      const body = JSON.parse(String(init?.body)) as { title?: string };
-      currentSession = { ...currentSession, ...(body.title ? { title: body.title } : {}) };
+      const body = JSON.parse(String(init?.body)) as { title?: string; tags?: string[] };
+      currentSession = {
+        ...currentSession,
+        ...(body.title ? { title: body.title } : {}),
+        ...(body.tags ? { tags: body.tags } : {}),
+      };
       return jsonResponse({ session: currentSession });
+    }
+
+    if (url.pathname === `/sessions/${currentSession.id}/star` && (method === 'PUT' || method === 'DELETE')) {
+      const starred = method === 'PUT';
+      const customResponse = options.onStarSessionRequest?.({ starred });
+      if (customResponse) return customResponse;
+      currentSession = { ...currentSession, starred };
+      return jsonResponse({ starred });
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/access` && method === 'PATCH') {

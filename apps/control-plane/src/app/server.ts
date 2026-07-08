@@ -36,6 +36,7 @@ import { sandboxRuntimeId } from '../sandbox/runtime.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
+import { normalizeSessionTags } from '../sessions/tags.js';
 import { MemoryStore } from '../store/memory.js';
 import type {
   AppStore,
@@ -173,7 +174,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       origin: allowedCorsOrigin(config),
       credentials: true,
       allowHeaders: ['authorization', 'content-type', 'traceparent', 'tracestate', 'x-request-id'],
-      allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
   );
 
@@ -276,6 +277,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     const cursor = decodeSessionListCursor(c.req.query('cursor'));
     const archived = parseOptionalBoolean(c.req.query('archived')) ?? false;
     const groupId = optionalString(c.req.query('groupId'));
+    const filters = parseSessionListFilters(c, auth);
     if (groupId && !(await canFilterToGroup(auth, services.store, groupId))) {
       return writeError(c, 403, 'forbidden', 'Group access is required');
     }
@@ -288,18 +290,31 @@ export function createApp(config: AppConfig, services = createServices()) {
         ...(visibleTo ? { visibleTo } : {}),
         archived,
         ...(groupId ? { groupId } : {}),
+        ...filters,
         limit,
         ...(cursor ? { cursor } : {}),
       }),
       services.store.listGroups(),
     ]);
     const groupNames = new Map(groups.map((group) => [group.id, group.name]));
+    const starredSessionIds = await listStarredSessionIdsForAuth(
+      services.store,
+      auth,
+      sessionsWithSandbox.items.map(({ session }) => session.id),
+    );
     // Keyset pagination is ordered by activity. A session updated while a client
     // pages can move ahead of the current cursor; the global event stream and
     // first-page refresh path upsert those live changes back into the sidebar.
     const visibleSessions = sessionsWithSandbox.items
       .filter(({ session }) => canReadSession(auth, session))
-      .map(({ session, sandbox }) => serializeSessionView(session, sandbox, groupNames.get(session.ownerGroupId)));
+      .map(({ session, sandbox }) =>
+        serializeSessionView(
+          session,
+          sandbox,
+          groupNames.get(session.ownerGroupId),
+          starredSessionIds?.has(session.id),
+        ),
+      );
     return c.json({
       sessions: visibleSessions,
       nextCursor: encodeSessionListCursor(sessionsWithSandbox.nextCursor),
@@ -313,6 +328,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     const limit = parseBoundedInteger(c.req.query('limit'), 20, 1, 50);
     const cursor = decodeOffsetCursor(c.req.query('cursor'));
     const groupId = optionalString(c.req.query('groupId'));
+    const filters = parseSessionListFilters(c, auth);
     if (groupId && !(await canFilterToGroup(auth, services.store, groupId))) {
       return writeError(c, 403, 'forbidden', 'Group access is required');
     }
@@ -326,17 +342,28 @@ export function createApp(config: AppConfig, services = createServices()) {
         query,
         ...(visibleTo ? { visibleTo } : {}),
         ...(groupId ? { groupId } : {}),
+        ...filters,
         limit,
         ...(cursor !== null ? { cursor } : {}),
       }),
       services.store.listGroups(),
     ]);
     const groupNames = new Map(groups.map((group) => [group.id, group.name]));
+    const starredSessionIds = await listStarredSessionIdsForAuth(
+      services.store,
+      auth,
+      page.items.map(({ item }) => item.session.id),
+    );
     return c.json({
       results: page.items
         .filter(({ item }) => canReadSession(auth, item.session))
         .map(({ item, snippet, matchKind, score }) => ({
-          session: serializeSessionView(item.session, item.sandbox, groupNames.get(item.session.ownerGroupId)),
+          session: serializeSessionView(
+            item.session,
+            item.sandbox,
+            groupNames.get(item.session.ownerGroupId),
+            starredSessionIds?.has(item.session.id),
+          ),
           snippet,
           matchKind,
           score,
@@ -363,27 +390,95 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   registerWebhookRoutes(app, config, services);
 
+  app.get('/sessions/tags', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const visibleTo =
+      auth.bypass || isSuperAdmin(auth)
+        ? undefined
+        : { groupIds: auth.memberships.map((membership) => membership.groupId) };
+    const tags = await services.store.listSessionTags({ ...(visibleTo ? { visibleTo } : {}), limit: 100 });
+    return c.json({ tags });
+  });
+
   app.get('/sessions/:sessionId', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const session = getAuthorizedSession(c, c.req.param('sessionId'));
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
-    return c.json({ session: await serializeSessionWithSandbox(config, services, session) });
+    return c.json({
+      session: await serializeSessionWithSandbox(
+        config,
+        services,
+        session,
+        await readSessionStarredForAuth(services.store, auth, session.id),
+      ),
+    });
   });
 
   app.patch('/sessions/:sessionId', async (c) => {
+    const session = getAuthorizedSession(c, c.req.param('sessionId'));
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+    if (session.status === 'archived') return writeError(c, 409, 'conflict', 'Archived sessions are read-only');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const title = optionalString(body.title);
     if (body.title !== undefined && !title)
       return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: title');
+    let tags: string[] | undefined;
+    if (body.tags !== undefined) {
+      const normalizedTags = normalizeSessionTags(body.tags);
+      if (!normalizedTags) {
+        return writeError(
+          c,
+          400,
+          'invalid_request',
+          'Expected tags to be an array of strings with at most 20 tags, 64 characters each, and no commas, control, or invisible format characters',
+        );
+      }
+      tags = normalizedTags;
+    }
 
     try {
-      const session = await services.sessions.update({ id: c.req.param('sessionId'), ...(title ? { title } : {}) });
-      return c.json({ session: await serializeSessionWithSandbox(config, services, session) });
+      const updated = await services.sessions.update({
+        id: session.id,
+        ...(title ? { title } : {}),
+        ...(tags !== undefined ? { tags } : {}),
+      });
+      const auth = await requireRequestAuthorization(config, services.store, c);
+      return c.json({
+        session: await serializeSessionWithSandbox(
+          config,
+          services,
+          updated,
+          auth ? await readSessionStarredForAuth(services.store, auth, updated.id) : undefined,
+        ),
+      });
     } catch (error) {
       if (error instanceof SessionServiceError && error.code === 'not_found') {
         return writeError(c, 404, 'not_found', 'Session not found');
       }
       throw error;
     }
+  });
+
+  app.put('/sessions/:sessionId/star', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    if (auth.bypass) return writeError(c, 400, 'invalid_request', 'Starring sessions requires a user session');
+    const session = getAuthorizedSession(c, c.req.param('sessionId'));
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+    await services.store.starSession({ sessionId: session.id, userId: auth.user.id, now: new Date() });
+    return c.json({ starred: true });
+  });
+
+  app.delete('/sessions/:sessionId/star', async (c) => {
+    const auth = await requireRequestAuthorization(config, services.store, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    if (auth.bypass) return writeError(c, 400, 'invalid_request', 'Starring sessions requires a user session');
+    const session = getAuthorizedSession(c, c.req.param('sessionId'));
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+    await services.store.unstarSession({ sessionId: session.id, userId: auth.user.id });
+    return c.json({ starred: false });
   });
 
   app.patch('/sessions/:sessionId/access', async (c) => {
@@ -412,7 +507,6 @@ export function createApp(config: AppConfig, services = createServices()) {
 
     const updated = await services.sessions.update({
       id: session.id,
-      ...(session.title ? { title: session.title } : {}),
       ownerGroupId: nextOwnerGroupId,
       visibility,
       writePolicy,
@@ -970,16 +1064,18 @@ function sessionAuthorizationMiddleware(
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const sessionId = c.req.param('sessionId');
     if (!sessionId) return writeError(c, 400, 'invalid_request', 'Expected sessionId');
-    if (sessionId === 'search') {
+    if (sessionId === 'search' || sessionId === 'tags') {
       await next();
       return;
     }
     const session = await services.sessions.get(sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
-    const allowed = unsafeMethods.has(c.req.method.toUpperCase())
-      ? canWriteSession(auth, session)
-      : canReadSession(auth, session);
+    const method = c.req.method.toUpperCase();
+    const pathname = new URL(c.req.url).pathname;
+    const isStarRoute = pathname === `/sessions/${sessionId}/star`;
+    const allowed =
+      unsafeMethods.has(method) && !isStarRoute ? canWriteSession(auth, session) : canReadSession(auth, session);
     if (!allowed) return writeError(c, 403, 'forbidden', 'Session access is required');
     c.set('authorizedSession', session);
     await next();
@@ -1023,7 +1119,7 @@ function parseOptionalBoolean(raw: string | undefined): boolean | undefined {
 function encodeSessionListCursor(cursor: SessionListCursor | null): string | null {
   if (!cursor) return null;
   return encodeCursor({
-    updatedAt: cursor.updatedAt.toISOString(),
+    lastActivityAt: cursor.lastActivityAt.toISOString(),
     createdAt: cursor.createdAt.toISOString(),
     id: cursor.id,
   });
@@ -1032,20 +1128,21 @@ function encodeSessionListCursor(cursor: SessionListCursor | null): string | nul
 function decodeSessionListCursor(raw: string | undefined): SessionListCursor | undefined {
   if (!raw) return undefined;
   const parsed = decodeCursor(raw);
+  const lastActivityAtValue = isRecord(parsed) ? (parsed.lastActivityAt ?? parsed.updatedAt) : undefined;
   if (
     !isRecord(parsed) ||
-    typeof parsed.updatedAt !== 'string' ||
+    typeof lastActivityAtValue !== 'string' ||
     typeof parsed.createdAt !== 'string' ||
     typeof parsed.id !== 'string'
   ) {
     throw new HttpRequestError(400, 'invalid_request', 'Invalid session cursor');
   }
-  const updatedAt = new Date(parsed.updatedAt);
+  const lastActivityAt = new Date(lastActivityAtValue);
   const createdAt = new Date(parsed.createdAt);
-  if (Number.isNaN(updatedAt.getTime()) || Number.isNaN(createdAt.getTime()) || !isUuid(parsed.id)) {
+  if (Number.isNaN(lastActivityAt.getTime()) || Number.isNaN(createdAt.getTime()) || !isUuid(parsed.id)) {
     throw new HttpRequestError(400, 'invalid_request', 'Invalid session cursor');
   }
-  return { updatedAt, createdAt, id: parsed.id };
+  return { lastActivityAt, createdAt, id: parsed.id };
 }
 
 function encodeOffsetCursor(cursor: number | null): string | null {
@@ -1100,6 +1197,57 @@ async function requireRequestAuthorization(
   return readRequestAuthorization(config, store, c);
 }
 
+function parseSessionListFilters(c: Context, auth: RequestAuthorization) {
+  const tags = parseSessionTagFilter(c.req.query('tags'));
+  const createdByUserId = parseMeUserFilter(c.req.query('createdBy'), 'createdBy', auth);
+  const participantUserId = parseMeUserFilter(c.req.query('participant'), 'participant', auth);
+  const starredByUserId = parseMeUserFilter(c.req.query('starred'), 'starred', auth);
+  return {
+    ...(tags.length ? { tags } : {}),
+    ...(createdByUserId ? { createdByUserId } : {}),
+    ...(participantUserId ? { participantUserId } : {}),
+    ...(starredByUserId ? { starredByUserId } : {}),
+  };
+}
+
+function parseSessionTagFilter(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  const tags = normalizeSessionTags(raw.split(','));
+  if (!tags) {
+    throw new HttpRequestError(
+      400,
+      'invalid_request',
+      'Expected tags to be comma-separated strings with at most 20 tags, 64 characters each, and no control characters',
+    );
+  }
+  return tags;
+}
+
+function parseMeUserFilter(raw: string | undefined, name: string, auth: RequestAuthorization): string | undefined {
+  if (raw === undefined) return undefined;
+  if (raw !== 'me') throw new HttpRequestError(400, 'invalid_request', `Expected ${name}=me`);
+  if (auth.bypass) throw new HttpRequestError(400, 'invalid_request', `${name}=me requires a user session`);
+  return auth.user.id;
+}
+
+async function listStarredSessionIdsForAuth(
+  store: AppStore,
+  auth: RequestAuthorization,
+  sessionIds: string[],
+): Promise<Set<string> | undefined> {
+  if (auth.bypass) return undefined;
+  return store.listStarredSessionIds({ userId: auth.user.id, sessionIds });
+}
+
+async function readSessionStarredForAuth(
+  store: AppStore,
+  auth: RequestAuthorization,
+  sessionId: string,
+): Promise<boolean | undefined> {
+  const ids = await listStarredSessionIdsForAuth(store, auth, [sessionId]);
+  return ids?.has(sessionId);
+}
+
 const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 function parseKeepaliveSeconds(value: unknown): number {
@@ -1141,23 +1289,30 @@ function serializeSandboxKeepalive(
 
 type SessionDisplayStatus = { status: string; tooltip: string };
 
-async function serializeSessionWithSandbox(config: AppConfig, services: AppServices, session: SessionRecord) {
+async function serializeSessionWithSandbox(
+  config: AppConfig,
+  services: AppServices,
+  session: SessionRecord,
+  starred?: boolean,
+) {
   const [sandbox, ownerGroup] = await Promise.all([
     services.store.getLatestSandbox(session.id, config.sandboxProvider),
     services.store.getGroup(session.ownerGroupId),
   ]);
-  return serializeSessionView(session, sandbox, ownerGroup?.name);
+  return serializeSessionView(session, sandbox, ownerGroup?.name, starred);
 }
 
 function serializeSessionView(
   session: SessionRecord,
   sandbox: SandboxRecord | null,
   ownerGroupName: string | undefined,
+  starred?: boolean,
 ) {
   const display = sessionDisplayStatus(session, sandbox);
   const serialized = {
     ...session,
     ...(ownerGroupName ? { ownerGroupName } : {}),
+    ...(starred !== undefined ? { starred } : {}),
     displayStatus: display.status,
     displayStatusTooltip: display.tooltip,
   };

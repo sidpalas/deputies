@@ -32,8 +32,8 @@ test.describe('full-stack smoke', () => {
 
 async function latestSessionId(page: Page) {
   const response = await page.request.get('/sessions');
-  const body = (await response.json()) as { sessions: Array<{ id: string; title?: string; updatedAt: string }> };
-  const [session] = body.sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const body = (await response.json()) as { sessions: Array<{ id: string; title?: string; lastActivityAt: string }> };
+  const [session] = body.sessions.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
   if (!session) throw new Error('Expected at least one session');
   return session.id;
 }

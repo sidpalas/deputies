@@ -1168,6 +1168,57 @@ describe('core API', () => {
     expect(eventsBody.events.map((event) => event.type)).toEqual(['session_created', 'session_updated']);
   });
 
+  it('updates session tags and filters list and search results by tag', async () => {
+    const firstResponse = await postJson(`${baseUrl}/sessions`, { title: 'Tag target' });
+    const secondResponse = await postJson(`${baseUrl}/sessions`, { title: 'Tag target' });
+    const first = ((await firstResponse.json()) as { session: { id: string; lastActivityAt: string } }).session;
+    const second = ((await secondResponse.json()) as { session: { id: string } }).session;
+
+    const update = await patchJson(`${baseUrl}/sessions/${first.id}`, { tags: [' Infra ', 'urgent', 'infra'] });
+    expect(update.status).toBe(200);
+    const updateBody = await update.json();
+    expectSessionResponse(updateBody);
+    expect(updateBody.session.tags).toEqual(['infra', 'urgent']);
+    expect(updateBody.session.lastActivityAt).toBe(first.lastActivityAt);
+
+    const tags = await fetch(`${baseUrl}/sessions/tags`);
+    expect(tags.status).toBe(200);
+    await expect(tags.json()).resolves.toEqual({
+      tags: [
+        { tag: 'infra', sessionCount: 1 },
+        { tag: 'urgent', sessionCount: 1 },
+      ],
+    });
+
+    const list = await fetch(`${baseUrl}/sessions?tags=infra,urgent`);
+    const listBody = await list.json();
+    expectSessionsResponse(listBody);
+    expect(listBody.sessions.map((session) => session.id)).toEqual([first.id]);
+
+    const search = await fetch(`${baseUrl}/sessions/search?q=Tag&tags=infra`);
+    const searchBody = await search.json();
+    expectSessionSearchResponse(searchBody);
+    expect(searchBody.results.map((result) => result.session.id)).toEqual([first.id]);
+    expect(searchBody.results.map((result) => result.session.id)).not.toContain(second.id);
+  });
+
+  it('rejects invalid tags and user-scoped filters without a user session', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Invalid tags' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const invalidTags = await patchJson(`${baseUrl}/sessions/${session.id}`, { tags: ['bad,tag'] });
+    expect(invalidTags.status).toBe(400);
+    await expect(invalidTags.json()).resolves.toMatchObject({ error: 'invalid_request' });
+
+    const createdByMe = await fetch(`${baseUrl}/sessions?createdBy=me`);
+    expect(createdByMe.status).toBe(400);
+    await expect(createdByMe.json()).resolves.toMatchObject({ error: 'invalid_request' });
+
+    const star = await fetch(`${baseUrl}/sessions/${session.id}/star`, { method: 'PUT' });
+    expect(star.status).toBe(400);
+    await expect(star.json()).resolves.toMatchObject({ error: 'invalid_request' });
+  });
+
   it('edits and cancels pending messages while queue is paused', async () => {
     const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Queue edits' });
     const { session } = (await createSession.json()) as { session: { id: string } };
@@ -1321,6 +1372,30 @@ describe('core API', () => {
       error: 'conflict',
       message: 'Cannot enqueue messages to an archived session',
     });
+  });
+
+  it('blocks archived session metadata edits without changing other archived operations', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Archived metadata' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+    await postJson(`${baseUrl}/sessions/${session.id}/archive`, {});
+
+    const update = await patchJson(`${baseUrl}/sessions/${session.id}`, { title: 'Blocked' });
+    const access = await patchJson(`${baseUrl}/sessions/${session.id}/access`, { visibility: 'group' });
+    const archiveAgain = await postJson(`${baseUrl}/sessions/${session.id}/archive`, {});
+    const star = await fetch(`${baseUrl}/sessions/${session.id}/star`, { method: 'PUT' });
+    const unarchive = await postJson(`${baseUrl}/sessions/${session.id}/unarchive`, {});
+
+    expect(update.status).toBe(409);
+    await expect(update.json()).resolves.toMatchObject({
+      error: 'conflict',
+      message: 'Archived sessions are read-only',
+    });
+    expect(access.status).toBe(200);
+    expect(archiveAgain.status).toBe(200);
+    expect(star.status).toBe(400);
+    await expect(star.json()).resolves.toMatchObject({ error: 'invalid_request' });
+    expect(unarchive.status).toBe(200);
+    await expect(unarchive.json()).resolves.toMatchObject({ session: { status: 'idle' } });
   });
 
   it('destroys active session sandboxes when archiving', async () => {
@@ -2039,6 +2114,8 @@ describe('core API', () => {
         writePolicy: 'group_members',
         createdAt: new Date(session.createdAt),
         updatedAt: new Date(session.updatedAt),
+        lastActivityAt: new Date(session.updatedAt),
+        tags: [],
         context: { services: [{ port: 3000, providerSandboxId: 'old-sandbox' }] },
       });
       const sandbox = await provider.create({ sessionId: session.id });
@@ -2086,6 +2163,8 @@ describe('core API', () => {
         writePolicy: 'group_members',
         createdAt: new Date(session.createdAt),
         updatedAt: new Date(session.updatedAt),
+        lastActivityAt: new Date(session.updatedAt),
+        tags: [],
         context: { services: [{ port: 3000, providerSandboxId: sandbox.providerSandboxId, runtimeId: 'old-runtime' }] },
       });
       const now = new Date();
@@ -2774,6 +2853,8 @@ describe('core API', () => {
           writePolicy: 'group_members' as const,
           createdAt: new Date('2026-05-01T00:00:00.000Z'),
           updatedAt: new Date('2026-05-01T00:00:00.000Z'),
+          lastActivityAt: new Date('2026-05-01T00:00:00.000Z'),
+          tags: [],
         };
       },
       async createArtifact() {

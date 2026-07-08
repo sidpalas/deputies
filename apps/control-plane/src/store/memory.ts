@@ -38,12 +38,15 @@ import type {
   RunRecord,
   SandboxRecord,
   SandboxSecrets,
+  SessionContextUpdateInput,
   SessionListOptions,
+  SessionMetadataUpdateInput,
   SessionRecord,
   SessionSearchDocInput,
   SessionSearchMatchKind,
   SessionSearchOptions,
   SessionSearchPage,
+  SessionTagSummary,
   SessionWithSandboxPage,
   SessionVisibilityFilter,
   SessionMessageSummary,
@@ -92,6 +95,7 @@ export class MemoryStore implements AppStore {
   private readonly externalThreads = new Map<string, ExternalThreadRecord>();
   private readonly integrationDeliveries = new Map<string, IntegrationDeliveryRecord>();
   private readonly sessionSearchDocs = new Map<string, SessionSearchDocInput>();
+  private readonly sessionStars = new Map<string, Set<string>>();
   private searchIndexCursor = 0;
 
   async upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord> {
@@ -286,7 +290,7 @@ export class MemoryStore implements AppStore {
   }
 
   async listSessions(): Promise<SessionRecord[]> {
-    return [...this.sessions.values()].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    return [...this.sessions.values()].sort(compareSessionsNewestFirst);
   }
 
   async listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]> {
@@ -308,6 +312,7 @@ export class MemoryStore implements AppStore {
       .filter((session) => canListSession(session, options.visibleTo))
       .filter((session) => (options.archived ? session.status === 'archived' : session.status !== 'archived'))
       .filter((session) => !options.groupId || session.ownerGroupId === options.groupId)
+      .filter((session) => sessionMatchesListFilters(session, options, this.messages, this.sessionStars))
       .filter((session) => !options.cursor || isBeforeSessionCursor(session, options.cursor))
       .sort(compareSessionsNewestFirst);
     const page = sessions.slice(0, options.limit);
@@ -321,7 +326,7 @@ export class MemoryStore implements AppStore {
       ),
       nextCursor:
         sessions.length > options.limit && last
-          ? { updatedAt: last.updatedAt, createdAt: last.createdAt, id: last.id }
+          ? { lastActivityAt: last.lastActivityAt, createdAt: last.createdAt, id: last.id }
           : null,
     };
   }
@@ -333,6 +338,7 @@ export class MemoryStore implements AppStore {
     const matches = [...this.sessions.values()]
       .filter((session) => canListSession(session, options.visibleTo))
       .filter((session) => !options.groupId || session.ownerGroupId === options.groupId)
+      .filter((session) => sessionMatchesListFilters(session, options, this.messages, this.sessionStars))
       .map((session) => ({
         session,
         match: bestMemorySearchMatch(session, terms, this.memorySearchDocuments(session)),
@@ -352,6 +358,33 @@ export class MemoryStore implements AppStore {
       ),
       nextCursor: matches.length > offset + options.limit ? offset + options.limit : null,
     };
+  }
+
+  async listSessionTags(options: { visibleTo?: SessionVisibilityFilter; limit: number }): Promise<SessionTagSummary[]> {
+    const counts = new Map<string, number>();
+    for (const session of this.sessions.values()) {
+      if (!canListSession(session, options.visibleTo)) continue;
+      for (const tag of session.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([tag, sessionCount]) => ({ tag, sessionCount }))
+      .sort((left, right) => right.sessionCount - left.sessionCount || compareStringAsc(left.tag, right.tag))
+      .slice(0, options.limit);
+  }
+
+  async starSession(input: { sessionId: string; userId: string; now: Date }): Promise<void> {
+    const starred = this.sessionStars.get(input.userId) ?? new Set<string>();
+    starred.add(input.sessionId);
+    this.sessionStars.set(input.userId, starred);
+  }
+
+  async unstarSession(input: { sessionId: string; userId: string }): Promise<void> {
+    this.sessionStars.get(input.userId)?.delete(input.sessionId);
+  }
+
+  async listStarredSessionIds(input: { userId: string; sessionIds: string[] }): Promise<Set<string>> {
+    const starred = this.sessionStars.get(input.userId) ?? new Set<string>();
+    return new Set(input.sessionIds.filter((sessionId) => starred.has(sessionId)));
   }
 
   async getSearchIndexCursor(): Promise<number> {
@@ -375,12 +408,62 @@ export class MemoryStore implements AppStore {
     return record;
   }
 
+  async updateSessionContext(input: SessionContextUpdateInput): Promise<SessionRecord> {
+    const existing = this.sessions.get(input.id);
+    if (!existing) throw new Error(`Session does not exist: ${input.id}`);
+    const session: SessionRecord = { ...existing, updatedAt: input.updatedAt };
+    if (input.context !== undefined) session.context = input.context;
+    else delete session.context;
+    this.sessions.set(input.id, session);
+    return session;
+  }
+
   async updateSessionWithEvent(
     record: SessionRecord,
     event: NormalizedEvent,
+    options?: { preserveTags?: boolean },
   ): Promise<{ session: SessionRecord; event: EventRecord }> {
-    const session = await this.updateSession(record);
+    const current = this.sessions.get(record.id);
+    const newerActivity = current && current.lastActivityAt > record.lastActivityAt;
+    const next: SessionRecord = { ...record };
+    if (newerActivity) {
+      next.status = current.status;
+      next.lastActivityAt = current.lastActivityAt;
+      if (current.context !== undefined) next.context = current.context;
+      else delete next.context;
+    }
+    if (options?.preserveTags) next.tags = current?.tags ?? record.tags;
+    const session = await this.updateSession(next);
     return { session, event: await this.appendEventWithNextSequence(event) };
+  }
+
+  async updateSessionMetadataWithEvent(
+    input: SessionMetadataUpdateInput,
+  ): Promise<{ session: SessionRecord; event: EventRecord }> {
+    const existing = this.sessions.get(input.id);
+    if (!existing) throw new Error(`Session does not exist: ${input.id}`);
+
+    const session: SessionRecord = { ...existing, updatedAt: input.updatedAt };
+    if (input.title !== undefined) session.title = input.title;
+    if (input.tags !== undefined) session.tags = input.tags;
+    if (input.ownerGroupId !== undefined) session.ownerGroupId = input.ownerGroupId;
+    if (input.visibility !== undefined) session.visibility = input.visibility;
+    if (input.writePolicy !== undefined) session.writePolicy = input.writePolicy;
+    this.sessions.set(input.id, session);
+
+    const event = await this.appendEventWithNextSequence({
+      sessionId: session.id,
+      type: 'session_updated',
+      payload: {
+        title: session.title ?? null,
+        ...(input.tags !== undefined ? { tags: session.tags } : {}),
+        ownerGroupId: session.ownerGroupId,
+        visibility: session.visibility,
+        writePolicy: session.writePolicy,
+      },
+      createdAt: input.updatedAt,
+    });
+    return { session, event };
   }
 
   async archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
@@ -399,7 +482,12 @@ export class MemoryStore implements AppStore {
       cancelledMessages.push(cancelled);
     }
 
-    const session = { ...existing, status: 'archived' as const, updatedAt: input.archivedAt };
+    const session = {
+      ...existing,
+      status: 'archived' as const,
+      updatedAt: input.archivedAt,
+      lastActivityAt: input.archivedAt,
+    };
     this.sessions.set(input.sessionId, session);
     return { session, cancelledMessages };
   }
@@ -427,7 +515,12 @@ export class MemoryStore implements AppStore {
   async pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord> {
     const existing = this.sessions.get(input.sessionId);
     if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
-    const updated = { ...existing, queuePausedAt: input.pausedAt, updatedAt: input.pausedAt };
+    const updated = {
+      ...existing,
+      queuePausedAt: input.pausedAt,
+      updatedAt: input.pausedAt,
+      lastActivityAt: input.pausedAt,
+    };
     this.sessions.set(input.sessionId, updated);
     return updated;
   }
@@ -435,7 +528,8 @@ export class MemoryStore implements AppStore {
   async resumeSessionQueue(input: { sessionId: string }): Promise<SessionRecord> {
     const existing = this.sessions.get(input.sessionId);
     if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
-    const { queuePausedAt: _queuePausedAt, ...updated } = { ...existing, updatedAt: new Date() };
+    const now = new Date();
+    const { queuePausedAt: _queuePausedAt, ...updated } = { ...existing, updatedAt: now, lastActivityAt: now };
     this.sessions.set(input.sessionId, updated);
     return updated;
   }
@@ -666,6 +760,7 @@ export class MemoryStore implements AppStore {
         ...session,
         status: session.status === 'archived' ? 'archived' : session.status === 'active' ? 'active' : 'queued',
         updatedAt: record.createdAt,
+        lastActivityAt: record.createdAt,
       });
     }
 
@@ -770,7 +865,7 @@ export class MemoryStore implements AppStore {
 
       const session = this.sessions.get(sessionId);
       if (!session) throw new Error(`Session does not exist: ${sessionId}`);
-      this.sessions.set(sessionId, { ...session, status: 'active', updatedAt: input.now });
+      this.sessions.set(sessionId, { ...session, status: 'active', updatedAt: input.now, lastActivityAt: input.now });
 
       const run: RunRecord = {
         id: input.runId,
@@ -890,6 +985,7 @@ export class MemoryStore implements AppStore {
                 ? 'queued'
                 : 'idle',
           updatedAt: input.now,
+          lastActivityAt: input.now,
         });
       }
 
@@ -953,6 +1049,15 @@ export class MemoryStore implements AppStore {
       error: input.error,
     };
     this.runs.set(run.id, cancellingRun);
+    const session = this.sessions.get(input.sessionId);
+    if (session) {
+      this.sessions.set(input.sessionId, {
+        ...session,
+        status: session.status === 'archived' ? 'archived' : 'active',
+        updatedAt: input.requestedAt,
+        lastActivityAt: input.requestedAt,
+      });
+    }
     return { messages, run: cancellingRun };
   }
 
@@ -1412,6 +1517,7 @@ export class MemoryStore implements AppStore {
               ? 'queued'
               : 'idle',
       updatedAt: finishedAt,
+      lastActivityAt: finishedAt,
     });
 
     return { messages: terminalMessages, run: terminalRun };
@@ -1421,7 +1527,12 @@ export class MemoryStore implements AppStore {
     const session = this.sessions.get(sessionId);
     if (!session || session.status === 'archived' || session.status === 'active') return;
     const hasPendingMessages = (this.messages.get(sessionId) ?? []).some((message) => message.status === 'pending');
-    this.sessions.set(sessionId, { ...session, status: hasPendingMessages ? 'queued' : 'idle', updatedAt });
+    this.sessions.set(sessionId, {
+      ...session,
+      status: hasPendingMessages ? 'queued' : 'idle',
+      updatedAt,
+      lastActivityAt: updatedAt,
+    });
   }
 
   private memorySearchDocuments(session: SessionRecord): Array<{ kind: SessionSearchMatchKind; content: string }> {
@@ -1462,9 +1573,32 @@ function canListSession(session: SessionRecord, visibleTo: SessionVisibilityFilt
   return !visibleTo || session.visibility === 'organization' || visibleTo.groupIds.includes(session.ownerGroupId);
 }
 
+function sessionMatchesListFilters(
+  session: SessionRecord,
+  options: {
+    tags?: string[];
+    createdByUserId?: string;
+    participantUserId?: string;
+    starredByUserId?: string;
+  },
+  messages: Map<string, MessageRecord[]>,
+  sessionStars: Map<string, Set<string>>,
+): boolean {
+  if (options.tags?.length && !options.tags.every((tag) => session.tags.includes(tag))) return false;
+  if (options.createdByUserId && session.createdByUserId !== options.createdByUserId) return false;
+  if (
+    options.participantUserId &&
+    !(messages.get(session.id) ?? []).some((message) => message.authorUserId === options.participantUserId)
+  ) {
+    return false;
+  }
+  if (options.starredByUserId && !sessionStars.get(options.starredByUserId)?.has(session.id)) return false;
+  return true;
+}
+
 function compareSessionsNewestFirst(a: SessionRecord, b: SessionRecord): number {
   return (
-    b.updatedAt.getTime() - a.updatedAt.getTime() ||
+    b.lastActivityAt.getTime() - a.lastActivityAt.getTime() ||
     b.createdAt.getTime() - a.createdAt.getTime() ||
     compareUuidDesc(a.id, b.id)
   );
@@ -1474,9 +1608,13 @@ function compareUuidDesc(a: string, b: string): number {
   return a < b ? 1 : a > b ? -1 : 0;
 }
 
+function compareStringAsc(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function isBeforeSessionCursor(
   session: SessionRecord,
-  cursor: { updatedAt: Date; createdAt: Date; id: string },
+  cursor: { lastActivityAt: Date; createdAt: Date; id: string },
 ): boolean {
   return compareSessionsNewestFirst(session, { ...session, ...cursor }) > 0;
 }
@@ -1549,7 +1687,7 @@ function isActiveSandbox(sandbox: SandboxRecord): boolean {
 function compareAutomationInvocationsNewestFirst(a: AutomationInvocationRecord, b: AutomationInvocationRecord): number {
   const time = b.createdAt.getTime() - a.createdAt.getTime();
   if (time !== 0) return time;
-  return b.id.localeCompare(a.id);
+  return compareUuidDesc(a.id, b.id);
 }
 
 function isBeforeAutomationInvocationCursor(
@@ -1615,5 +1753,10 @@ function deliveryKey(source: string, dedupeKey: string): string {
 }
 
 function withSessionDefaults(record: CreateSessionRecord): SessionRecord {
-  return { ...record, spawnDepth: record.spawnDepth ?? 0 };
+  return {
+    ...record,
+    spawnDepth: record.spawnDepth ?? 0,
+    lastActivityAt: record.lastActivityAt ?? record.updatedAt,
+    tags: [...(record.tags ?? [])],
+  };
 }

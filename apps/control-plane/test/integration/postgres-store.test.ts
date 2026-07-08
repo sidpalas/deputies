@@ -13,6 +13,7 @@ import { defaultGroupId } from '../../src/store/types.js';
 import { PostgresStore } from '../../src/store/postgres.js';
 import { waitFor } from '../support/http.js';
 import { setupPostgresStoreSuite, testDatabaseUrl } from '../support/postgres-store-suite.js';
+import { defineSessionTagsStoreContract } from '../support/session-tags-store-contract.js';
 
 describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   let pool: Pool;
@@ -24,6 +25,8 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     store = context.store;
     databaseUrl = context.databaseUrl;
   });
+
+  defineSessionTagsStoreContract(() => store);
 
   it('preserves session, message, and event behavior', async () => {
     const services = createServices(store);

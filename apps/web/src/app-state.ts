@@ -249,7 +249,46 @@ export function titleFromPrompt(prompt: string): string {
 }
 
 export function sortSessionsByLastActivity(sessions: Session[]): Session[] {
-  return [...sessions].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  return [...sessions].sort(
+    (a, b) =>
+      sessionActivityTime(b) - sessionActivityTime(a) ||
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
+      compareDescendingStrings(a.id, b.id),
+  );
+}
+
+function compareDescendingStrings(left: string, right: string): number {
+  if (right > left) return 1;
+  if (right < left) return -1;
+  return 0;
+}
+
+export function applyFrozenSessionOrder(
+  sessions: Session[],
+  frozenOrder: string[],
+  options: { frozen: boolean; appendIds?: string[] },
+): { sessions: Session[]; order: string[] } {
+  if (!options.frozen || frozenOrder.length === 0) {
+    const ordered = sortSessionsByLastActivity(sessions);
+    return { sessions: ordered, order: ordered.map((session) => session.id) };
+  }
+
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const ordered = frozenOrder.flatMap((id) => {
+    const session = byId.get(id);
+    return session ? [session] : [];
+  });
+  const orderedIds = new Set(ordered.map((session) => session.id));
+  const appended = (options.appendIds ?? []).flatMap((id) => {
+    const session = byId.get(id);
+    return session && !orderedIds.has(session.id) ? [session] : [];
+  });
+  const nextSessions = [...ordered, ...appended];
+  return { sessions: nextSessions, order: nextSessions.map((session) => session.id) };
+}
+
+function sessionActivityTime(session: Session): number {
+  return new Date(session.lastActivityAt ?? session.updatedAt).getTime();
 }
 
 export function errorMessage(err: unknown): string {

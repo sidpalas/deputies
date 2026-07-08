@@ -448,7 +448,7 @@ export class WorkerService {
           leaseOwner: this.options.leaseOwner,
           now,
         })
-      : await this.options.store.updateSession(record);
+      : await this.options.store.updateSessionContext({ id: record.id, context: record.context, updatedAt: now });
     if (!updated) return null;
     return { parentSessionId: deputyContext.parentSessionId, session: updated };
   }

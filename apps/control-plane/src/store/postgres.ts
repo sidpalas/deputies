@@ -38,7 +38,9 @@ import type {
   RunRecord,
   SandboxRecord,
   SandboxSecrets,
+  SessionContextUpdateInput,
   SessionListOptions,
+  SessionMetadataUpdateInput,
   SessionRecord,
   SessionMessageSummary,
   SessionSearchDocInput,
@@ -47,6 +49,7 @@ import type {
   SessionSearchPage,
   SessionTranscriptOptions,
   SessionTranscriptPage,
+  SessionTagSummary,
   SessionVisibilityFilter,
   SessionWithSandboxPage,
   UpdateAutomationRecord,
@@ -450,11 +453,13 @@ export class PostgresStore implements AppStore {
          owner_group_id,
          visibility,
          write_policy,
-         created_by_user_id,
-         created_at,
-         updated_at
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          created_by_user_id,
+          created_at,
+          updated_at,
+          last_activity_at,
+          tags
+        )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING ${sessionSelectColumns}`,
       [
         record.id,
@@ -469,6 +474,8 @@ export class PostgresStore implements AppStore {
         record.createdByUserId ?? null,
         record.createdAt,
         record.updatedAt,
+        record.lastActivityAt ?? record.updatedAt,
+        record.tags ?? [],
       ],
     );
 
@@ -537,12 +544,14 @@ export class PostgresStore implements AppStore {
            owner_group_id,
            visibility,
            write_policy,
-           created_by_user_id,
-           created_at,
-           updated_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         RETURNING ${sessionSelectColumns}`,
+            created_by_user_id,
+            created_at,
+            updated_at,
+            last_activity_at,
+            tags
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          RETURNING ${sessionSelectColumns}`,
         [
           input.session.id,
           input.session.status,
@@ -556,6 +565,8 @@ export class PostgresStore implements AppStore {
           input.session.createdByUserId ?? null,
           input.session.createdAt,
           input.session.updatedAt,
+          input.session.lastActivityAt ?? input.session.updatedAt,
+          input.session.tags ?? [],
         ],
       );
 
@@ -670,7 +681,7 @@ export class PostgresStore implements AppStore {
 
   async listSessions(): Promise<SessionRecord[]> {
     const result = await this.pool.query<SessionRow>(
-      `SELECT ${sessionSelectColumns} FROM sessions ORDER BY updated_at DESC, created_at DESC`,
+      `SELECT ${sessionSelectColumns} FROM sessions ORDER BY last_activity_at DESC, created_at DESC, id DESC`,
     );
 
     return result.rows.map(toSession);
@@ -686,10 +697,10 @@ export class PostgresStore implements AppStore {
     const result = await this.pool.query<SessionRow>(
       `SELECT ${sessionSelectColumns}
        FROM sessions
-       WHERE ${scopePredicate}
-         AND ($3::text IS NULL OR status = $3)
-       ORDER BY updated_at DESC, created_at DESC
-       LIMIT $4`,
+         WHERE ${scopePredicate}
+           AND ($3::text IS NULL OR status = $3)
+        ORDER BY last_activity_at DESC, created_at DESC, id DESC
+        LIMIT $4`,
       [input.ownerGroupId, input.actingSessionId, input.status ?? null, input.limit],
     );
     return result.rows.map(toSession);
@@ -699,10 +710,10 @@ export class PostgresStore implements AppStore {
     const result = await this.pool.query<SessionRow>(
       `SELECT ${sessionSelectColumns}
        FROM sessions
-       WHERE parent_session_id = $1
-         AND (visibility = 'organization' OR owner_group_id = $2)
-       ORDER BY updated_at DESC, created_at DESC
-       LIMIT $3`,
+        WHERE parent_session_id = $1
+          AND (visibility = 'organization' OR owner_group_id = $2)
+        ORDER BY last_activity_at DESC, created_at DESC, id DESC
+        LIMIT $3`,
       [input.parentSessionId, input.ownerGroupId, input.limit],
     );
     return result.rows.map(toSession);
@@ -716,13 +727,14 @@ export class PostgresStore implements AppStore {
       values.push(options.groupId);
       where.push(`sessions.owner_group_id = $${values.length}::uuid`);
     }
+    appendSessionFilterWhereClauses(options, values, where);
     if (options.cursor) {
-      values.push(options.cursor.updatedAt, options.cursor.createdAt, options.cursor.id);
-      const updatedAtIndex = values.length - 2;
+      values.push(options.cursor.lastActivityAt, options.cursor.createdAt, options.cursor.id);
+      const lastActivityAtIndex = values.length - 2;
       const createdAtIndex = values.length - 1;
       const idIndex = values.length;
       where.push(
-        `(sessions.updated_at, sessions.created_at, sessions.id) < ($${updatedAtIndex}::timestamptz, $${createdAtIndex}::timestamptz, $${idIndex}::uuid)`,
+        `(sessions.last_activity_at, sessions.created_at, sessions.id) < ($${lastActivityAtIndex}::timestamptz, $${createdAtIndex}::timestamptz, $${idIndex}::uuid)`,
       );
     }
     values.push(options.limit + 1);
@@ -742,11 +754,11 @@ export class PostgresStore implements AppStore {
               latest_sandbox.keepalive_until AS sandbox_keepalive_until,
               latest_sandbox.destroyed_at AS sandbox_destroyed_at
        FROM (
-         SELECT ${sessionSelectColumns}
-         FROM sessions
-         WHERE ${where.join(' AND ')}
-         ORDER BY updated_at DESC, created_at DESC, id DESC
-         LIMIT $${limitIndex}
+          SELECT ${sessionSelectColumns}
+          FROM sessions
+          WHERE ${where.join(' AND ')}
+          ORDER BY last_activity_at DESC, created_at DESC, id DESC
+          LIMIT $${limitIndex}
        ) sessions
        LEFT JOIN LATERAL (
          SELECT id, provider, provider_sandbox_id, status, workspace_path, metadata,
@@ -757,7 +769,7 @@ export class PostgresStore implements AppStore {
           ORDER BY updated_at DESC
           LIMIT 1
         ) latest_sandbox ON TRUE
-        ORDER BY sessions.updated_at DESC, sessions.created_at DESC, sessions.id DESC`,
+         ORDER BY sessions.last_activity_at DESC, sessions.created_at DESC, sessions.id DESC`,
       values,
     );
 
@@ -777,6 +789,7 @@ export class PostgresStore implements AppStore {
       values.push(options.groupId);
       where.push(`sessions.owner_group_id = $${values.length}::uuid`);
     }
+    appendSessionFilterWhereClauses(options, values, where);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await this.pool.query<SessionSearchRow>(
       `WITH search_query AS (
@@ -809,8 +822,8 @@ export class PostgresStore implements AppStore {
          FROM best_match
          JOIN sessions ON sessions.id = best_match.session_id
          ${whereSql}
-         ORDER BY best_match.score DESC, sessions.updated_at DESC, sessions.id DESC
-         LIMIT $4 OFFSET $5
+          ORDER BY best_match.score DESC, sessions.last_activity_at DESC, sessions.created_at DESC, sessions.id DESC
+          LIMIT $4 OFFSET $5
        )
        SELECT ${joinedSessionSelectColumns},
               sessions.match_kind,
@@ -843,7 +856,7 @@ export class PostgresStore implements AppStore {
          ORDER BY updated_at DESC
          LIMIT 1
        ) latest_sandbox ON TRUE
-       ORDER BY sessions.score DESC, sessions.updated_at DESC, sessions.id DESC`,
+        ORDER BY sessions.score DESC, sessions.last_activity_at DESC, sessions.created_at DESC, sessions.id DESC`,
       values,
     );
     const rows = result.rows.slice(0, options.limit);
@@ -856,6 +869,52 @@ export class PostgresStore implements AppStore {
       })),
       nextCursor: result.rows.length > options.limit ? (options.cursor ?? 0) + options.limit : null,
     };
+  }
+
+  async listSessionTags(options: { visibleTo?: SessionVisibilityFilter; limit: number }): Promise<SessionTagSummary[]> {
+    const values: unknown[] = [];
+    const where = sessionVisibilityWhereClauses(options.visibleTo, values);
+    values.push(options.limit);
+    const limitIndex = values.length;
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const result = await this.pool.query<{ tag: string; session_count: PgInteger }>(
+      `SELECT session_tags.tag, COUNT(*) AS session_count
+       FROM sessions
+       CROSS JOIN LATERAL unnest(sessions.tags) AS session_tags(tag)
+       ${whereSql}
+       GROUP BY session_tags.tag
+       ORDER BY session_count DESC, session_tags.tag ASC
+       LIMIT $${limitIndex}`,
+      values,
+    );
+    return result.rows.map((row) => ({ tag: row.tag, sessionCount: Number(row.session_count) }));
+  }
+
+  async starSession(input: { sessionId: string; userId: string; now: Date }): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO session_stars (user_id, session_id, created_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, session_id) DO NOTHING`,
+      [input.userId, input.sessionId, input.now],
+    );
+  }
+
+  async unstarSession(input: { sessionId: string; userId: string }): Promise<void> {
+    await this.pool.query('DELETE FROM session_stars WHERE user_id = $1 AND session_id = $2', [
+      input.userId,
+      input.sessionId,
+    ]);
+  }
+
+  async listStarredSessionIds(input: { userId: string; sessionIds: string[] }): Promise<Set<string>> {
+    if (!input.sessionIds.length) return new Set();
+    const result = await this.pool.query<{ session_id: string }>(
+      `SELECT session_id
+       FROM session_stars
+       WHERE user_id = $1 AND session_id = ANY($2::uuid[])`,
+      [input.userId, input.sessionIds],
+    );
+    return new Set(result.rows.map((row) => row.session_id));
   }
 
   async getSearchIndexCursor(): Promise<number> {
@@ -898,15 +957,17 @@ export class PostgresStore implements AppStore {
       `UPDATE sessions
        SET status = $2,
            title = $3,
-           context = $4,
-           created_at = $5,
-           updated_at = $6,
-            parent_session_id = $7,
-            spawn_depth = $8,
-            owner_group_id = $9,
-            visibility = $10,
-            write_policy = $11,
-            created_by_user_id = $12
+            context = $4,
+            created_at = $5,
+            updated_at = $6,
+             parent_session_id = $7,
+             spawn_depth = $8,
+             owner_group_id = $9,
+             visibility = $10,
+             write_policy = $11,
+             created_by_user_id = $12,
+             last_activity_at = $13,
+             tags = $14
         WHERE id = $1
         RETURNING ${sessionSelectColumns}`,
       [
@@ -922,6 +983,8 @@ export class PostgresStore implements AppStore {
         record.visibility,
         record.writePolicy,
         record.createdByUserId ?? null,
+        record.lastActivityAt,
+        record.tags,
       ],
     );
 
@@ -930,26 +993,44 @@ export class PostgresStore implements AppStore {
     return toSession(row);
   }
 
+  async updateSessionContext(input: SessionContextUpdateInput): Promise<SessionRecord> {
+    const result = await this.pool.query<SessionRow>(
+      `UPDATE sessions
+       SET context = $2,
+           updated_at = $3
+       WHERE id = $1
+       RETURNING ${sessionSelectColumns}`,
+      [input.id, input.context ?? null, input.updatedAt],
+    );
+
+    const row = result.rows[0];
+    if (!row) throw new Error(`Session does not exist: ${input.id}`);
+    return toSession(row);
+  }
+
   async updateSessionWithEvent(
     record: SessionRecord,
     event: NormalizedEvent,
+    options?: { preserveTags?: boolean },
   ): Promise<{ session: SessionRecord; event: EventRecord }> {
     return this.transaction(async (client) => {
       const updated = await client.query<SessionRow>(
         `UPDATE sessions
-         SET status = $2,
+         SET status = CASE WHEN last_activity_at > $13 THEN status ELSE $2 END,
              title = $3,
-             context = $4,
-             created_at = $5,
-             updated_at = $6,
-              parent_session_id = $7,
-              spawn_depth = $8,
-              owner_group_id = $9,
-              visibility = $10,
-              write_policy = $11,
-              created_by_user_id = $12
-          WHERE id = $1
-          RETURNING ${sessionSelectColumns}`,
+              context = CASE WHEN last_activity_at > $13 THEN context ELSE $4 END,
+              created_at = $5,
+              updated_at = $6,
+               parent_session_id = $7,
+               spawn_depth = $8,
+               owner_group_id = $9,
+               visibility = $10,
+               write_policy = $11,
+               created_by_user_id = $12,
+               last_activity_at = GREATEST(last_activity_at, $13),
+               tags = CASE WHEN $15 THEN tags ELSE $14 END
+            WHERE id = $1
+           RETURNING ${sessionSelectColumns}`,
         [
           record.id,
           record.status,
@@ -963,6 +1044,9 @@ export class PostgresStore implements AppStore {
           record.visibility,
           record.writePolicy,
           record.createdByUserId ?? null,
+          record.lastActivityAt,
+          record.tags,
+          options?.preserveTags === true,
         ],
       );
       const sessionRow = updated.rows[0];
@@ -999,6 +1083,69 @@ export class PostgresStore implements AppStore {
     });
   }
 
+  async updateSessionMetadataWithEvent(
+    input: SessionMetadataUpdateInput,
+  ): Promise<{ session: SessionRecord; event: EventRecord }> {
+    return this.transaction(async (client) => {
+      const updated = await client.query<SessionRow>(
+        `UPDATE sessions
+         SET title = CASE WHEN $3 THEN $4 ELSE title END,
+             updated_at = $2,
+             tags = CASE WHEN $5 THEN $6::text[] ELSE tags END,
+             owner_group_id = CASE WHEN $7 THEN $8::uuid ELSE owner_group_id END,
+             visibility = CASE WHEN $9 THEN $10::text ELSE visibility END,
+             write_policy = CASE WHEN $11 THEN $12::text ELSE write_policy END
+         WHERE id = $1
+         RETURNING ${sessionSelectColumns}`,
+        [
+          input.id,
+          input.updatedAt,
+          input.title !== undefined,
+          input.title ?? null,
+          input.tags !== undefined,
+          input.tags ?? [],
+          input.ownerGroupId !== undefined,
+          input.ownerGroupId ?? null,
+          input.visibility !== undefined,
+          input.visibility ?? null,
+          input.writePolicy !== undefined,
+          input.writePolicy ?? null,
+        ],
+      );
+      const sessionRow = updated.rows[0];
+      if (!sessionRow) throw new Error(`Session does not exist: ${input.id}`);
+      const session = toSession(sessionRow);
+
+      const payload = {
+        title: session.title ?? null,
+        ...(input.tags !== undefined ? { tags: session.tags } : {}),
+        ownerGroupId: session.ownerGroupId,
+        visibility: session.visibility,
+        writePolicy: session.writePolicy,
+      };
+      const inserted = await client.query<EventRow>(
+        `WITH next_sequence AS (
+           INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
+           VALUES ($1, 'events', 2)
+           ON CONFLICT (session_id, kind)
+           DO UPDATE SET next_sequence = session_sequence_counters.next_sequence + 1
+           RETURNING next_sequence - 1 AS sequence
+         ), inserted AS (
+           INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
+           SELECT $1, NULL, NULL, sequence, 'session_updated', $2, $3
+           FROM next_sequence
+           RETURNING id, session_id, run_id, message_id, sequence, type, payload, created_at
+         )
+         SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at,
+                pg_notify($4, json_build_object('id', id)::text)
+         FROM inserted`,
+        [session.id, payload, input.updatedAt, eventNotificationChannel],
+      );
+
+      return { session, event: toEvent(inserted.rows[0]!) };
+    });
+  }
+
   async archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
     session: SessionRecord;
     cancelledMessages: MessageRecord[];
@@ -1016,7 +1163,7 @@ export class PostgresStore implements AppStore {
 
       const result = await client.query<SessionRow>(
         `UPDATE sessions
-         SET status = 'archived', updated_at = $2
+         SET status = 'archived', updated_at = $2, last_activity_at = $2
          WHERE id = $1
          RETURNING ${sessionSelectColumns}`,
         [input.sessionId, input.archivedAt],
@@ -1041,24 +1188,25 @@ export class PostgresStore implements AppStore {
       `UPDATE sessions
        SET status = $2,
            title = $3,
-           context = $4,
-           created_at = $5,
-           updated_at = $6,
-            parent_session_id = $10,
-            spawn_depth = $11,
-            owner_group_id = $12,
-            visibility = $13,
-            write_policy = $14,
-            created_by_user_id = $15
-       WHERE id = $1
-         AND EXISTS (
-           SELECT 1 FROM runs
-           WHERE id = $7
-              AND session_id = $1
-              AND lease_owner = $8
-              AND status IN ('running', 'cancelling')
-              AND lease_expires_at > $9
-         )
+            context = $4,
+            created_at = $5,
+            updated_at = $6,
+              last_activity_at = $7,
+              parent_session_id = $11,
+              spawn_depth = $12,
+              owner_group_id = $13,
+              visibility = $14,
+              write_policy = $15,
+              created_by_user_id = $16
+         WHERE id = $1
+           AND EXISTS (
+             SELECT 1 FROM runs
+             WHERE id = $8
+                AND session_id = $1
+                AND lease_owner = $9
+                AND status IN ('running', 'cancelling')
+                AND lease_expires_at > $10
+           )
        RETURNING ${sessionSelectColumns}`,
       [
         input.record.id,
@@ -1067,6 +1215,7 @@ export class PostgresStore implements AppStore {
         input.record.context ?? null,
         input.record.createdAt,
         input.record.updatedAt,
+        input.record.lastActivityAt,
         input.runId,
         input.leaseOwner,
         input.now,
@@ -1084,7 +1233,7 @@ export class PostgresStore implements AppStore {
 
   async pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord> {
     const result = await this.pool.query<SessionRow>(
-      `UPDATE sessions SET queue_paused_at = $2, updated_at = $2 WHERE id = $1
+      `UPDATE sessions SET queue_paused_at = $2, updated_at = $2, last_activity_at = $2 WHERE id = $1
        RETURNING ${sessionSelectColumns}`,
       [input.sessionId, input.pausedAt],
     );
@@ -1095,7 +1244,7 @@ export class PostgresStore implements AppStore {
   async resumeSessionQueue(input: { sessionId: string }): Promise<SessionRecord> {
     const now = new Date();
     const result = await this.pool.query<SessionRow>(
-      `UPDATE sessions SET queue_paused_at = NULL, updated_at = $2 WHERE id = $1
+      `UPDATE sessions SET queue_paused_at = NULL, updated_at = $2, last_activity_at = $2 WHERE id = $1
        RETURNING ${sessionSelectColumns}`,
       [input.sessionId, now],
     );
@@ -1466,11 +1615,12 @@ export class PostgresStore implements AppStore {
           `UPDATE sessions
            SET status = CASE
                WHEN status = 'archived' THEN 'archived'
-               WHEN status = 'active' THEN 'active'
-               ELSE 'queued'
-             END,
-             updated_at = $2
-           WHERE id = $1`,
+              WHEN status = 'active' THEN 'active'
+                ELSE 'queued'
+              END,
+              updated_at = $2,
+              last_activity_at = $2
+            WHERE id = $1`,
           [record.sessionId, record.createdAt],
         );
       }
@@ -1590,11 +1740,12 @@ export class PostgresStore implements AppStore {
          SET status = CASE
              WHEN status = 'archived' THEN 'archived'
              WHEN status = 'active' THEN 'active'
-             WHEN EXISTS (SELECT 1 FROM messages WHERE session_id = $1 AND status = 'pending') THEN 'queued'
-             ELSE 'idle'
-           END,
-           updated_at = $2
-         WHERE id = $1`,
+              WHEN EXISTS (SELECT 1 FROM messages WHERE session_id = $1 AND status = 'pending') THEN 'queued'
+              ELSE 'idle'
+            END,
+            updated_at = $2,
+            last_activity_at = $2
+          WHERE id = $1`,
         [input.sessionId, input.cancelledAt],
       );
 
@@ -1673,7 +1824,7 @@ export class PostgresStore implements AppStore {
         ],
       );
 
-      await client.query('UPDATE sessions SET status = $2, updated_at = $3 WHERE id = $1', [
+      await client.query('UPDATE sessions SET status = $2, updated_at = $3, last_activity_at = $3 WHERE id = $1', [
         sessionId,
         'active',
         input.now,
@@ -1778,11 +1929,12 @@ export class PostgresStore implements AppStore {
           `UPDATE sessions
            SET status = CASE
                  WHEN status = 'archived' THEN 'archived'
-                 WHEN EXISTS (SELECT 1 FROM messages WHERE session_id = $1 AND status = 'pending') THEN 'queued'
-                 ELSE 'idle'
-               END,
-               updated_at = $2
-           WHERE id = $1`,
+                  WHEN EXISTS (SELECT 1 FROM messages WHERE session_id = $1 AND status = 'pending') THEN 'queued'
+                  ELSE 'idle'
+                END,
+                updated_at = $2,
+                last_activity_at = $2
+            WHERE id = $1`,
           [staleRun.session_id, input.now],
         );
 
@@ -1847,11 +1999,14 @@ export class PostgresStore implements AppStore {
         [messageIds],
       );
 
-      await client.query('UPDATE sessions SET status = $2, updated_at = $3 WHERE id = $1', [
-        input.sessionId,
-        'active',
-        input.requestedAt,
-      ]);
+      await client.query(
+        `UPDATE sessions
+         SET status = CASE WHEN status = 'archived' THEN status ELSE $2 END,
+             updated_at = $3,
+             last_activity_at = $3
+         WHERE id = $1`,
+        [input.sessionId, 'active', input.requestedAt],
+      );
 
       return { messages: messageResult.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence), run: toRun(run) };
     });
@@ -2620,7 +2775,8 @@ export class PostgresStore implements AppStore {
               WHEN EXISTS (SELECT 1 FROM messages WHERE session_id = $1 AND status = 'pending') THEN 'queued'
               ELSE 'idle'
             END,
-            updated_at = $3
+            updated_at = $3,
+            last_activity_at = $3
         WHERE id = $1`,
         [run.session_id, status, finishedAt],
       );
@@ -2651,13 +2807,47 @@ function sessionVisibilityWhereClauses(visibleTo: SessionVisibilityFilter | unde
   return [`(sessions.visibility = 'organization' OR sessions.owner_group_id = ANY($${values.length}::uuid[]))`];
 }
 
+function appendSessionFilterWhereClauses(
+  options: {
+    tags?: string[];
+    createdByUserId?: string;
+    participantUserId?: string;
+    starredByUserId?: string;
+  },
+  values: unknown[],
+  where: string[],
+): void {
+  if (options.tags?.length) {
+    values.push(options.tags);
+    where.push(`sessions.tags @> $${values.length}::text[]`);
+  }
+  if (options.createdByUserId) {
+    values.push(options.createdByUserId);
+    where.push(`sessions.created_by_user_id = $${values.length}::uuid`);
+  }
+  if (options.participantUserId) {
+    values.push(options.participantUserId);
+    where.push(
+      `EXISTS (SELECT 1 FROM messages WHERE messages.session_id = sessions.id AND messages.author_user_id = $${values.length}::uuid)`,
+    );
+  }
+  if (options.starredByUserId) {
+    values.push(options.starredByUserId);
+    where.push(
+      `EXISTS (SELECT 1 FROM session_stars WHERE session_stars.session_id = sessions.id AND session_stars.user_id = $${values.length}::uuid)`,
+    );
+  }
+}
+
 function pageSessionRows(rows: SessionWithSandboxRow[], limit: number): SessionWithSandboxPage {
   const pageRows = rows.slice(0, limit);
   const last = pageRows.at(-1);
   return {
     items: pageRows.map(toSessionWithSandbox),
     nextCursor:
-      rows.length > limit && last ? { updatedAt: last.updated_at, createdAt: last.created_at, id: last.id } : null,
+      rows.length > limit && last
+        ? { lastActivityAt: last.last_activity_at, createdAt: last.created_at, id: last.id }
+        : null,
   };
 }
 

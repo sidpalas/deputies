@@ -31,6 +31,7 @@ import {
   listAutomations,
   listCallbacks,
   listGroups,
+  listSessionTags,
   listExternalResources,
   listMessages,
   listRepositoryOptions,
@@ -42,6 +43,7 @@ import {
   replayCallback,
   resumeQueue,
   searchSessions,
+  setSessionStarred,
   retryMessage,
   streamGlobalEvents,
   unarchiveAutomation,
@@ -49,6 +51,7 @@ import {
   updateMessage,
   updateSession,
   updateSessionAccess,
+  updateSessionTags,
   type Automation,
   type Health,
   type AuthUser,
@@ -57,6 +60,7 @@ import {
   type ModelChoice,
   type RepositoryOption,
   type SessionSearchResult,
+  type SessionTagSummary,
   type SetupStatus,
   type WorkspaceToolId,
 } from './api.js';
@@ -70,6 +74,7 @@ import {
 import { componentCause, componentName, loadSessionDetailPhases } from './session-detail-loader.js';
 import {
   activeProgressDisplayText,
+  applyFrozenSessionOrder,
   appendActiveProgressEvents,
   buildActiveProgress,
   canWriteSession,
@@ -122,6 +127,7 @@ import {
   realtimeReconnectMaxDelayMs,
   selectedAutomationStorageKey,
   selectedSessionStorageKey,
+  sessionFiltersStorageKey,
   setupGuideOpenStorageKey,
   sidebarPanelStorageKey,
   startupConnectionDelayMs,
@@ -188,6 +194,20 @@ const createdSessionBackfillDelayMs = 250;
 const sessionListPageSize = 50;
 const sessionSearchPageSize = 20;
 
+type SessionFilters = {
+  tags: string[];
+  createdByMe: boolean;
+  participatedByMe: boolean;
+  starredByMe: boolean;
+};
+
+const emptySessionFilters: SessionFilters = {
+  tags: [],
+  createdByMe: false,
+  participatedByMe: false,
+  starredByMe: false,
+};
+
 type SessionDetailState = {
   messages: Message[];
   events: AgentEvent[];
@@ -253,6 +273,41 @@ function loadInitialNavigationState(): NavigationState {
   };
 }
 
+function loadInitialSessionFilters(): SessionFilters {
+  const raw = sessionStorage.getItem(sessionFiltersStorageKey);
+  if (!raw) return emptySessionFilters;
+  try {
+    const parsed = JSON.parse(raw) as Partial<SessionFilters>;
+    return {
+      tags: Array.isArray(parsed.tags) ? parsed.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+      createdByMe: parsed.createdByMe === true,
+      participatedByMe: parsed.participatedByMe === true,
+      starredByMe: parsed.starredByMe === true,
+    };
+  } catch {
+    return emptySessionFilters;
+  }
+}
+
+function sessionFilterRequestOptions(filters: SessionFilters) {
+  return {
+    ...(filters.tags.length ? { tags: filters.tags } : {}),
+    ...(filters.createdByMe ? { createdBy: 'me' as const } : {}),
+    ...(filters.participatedByMe ? { participant: 'me' as const } : {}),
+    ...(filters.starredByMe ? { starred: 'me' as const } : {}),
+  };
+}
+
+function hasActiveSessionFilters(filters: SessionFilters): boolean {
+  return filters.tags.length > 0 || filters.createdByMe || filters.participatedByMe || filters.starredByMe;
+}
+
+function sessionFilterCount(filters: SessionFilters): number {
+  return (
+    filters.tags.length + Number(filters.createdByMe) + Number(filters.participatedByMe) + Number(filters.starredByMe)
+  );
+}
+
 export function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
@@ -311,6 +366,10 @@ export function App() {
   const [sessionSearchNextCursor, setSessionSearchNextCursor] = useState<string | null>(null);
   const [sessionSearchLoading, setSessionSearchLoading] = useState(false);
   const [sessionSearchLoadingMore, setSessionSearchLoadingMore] = useState(false);
+  const [sessionFilters, setSessionFilters] = useState<SessionFilters>(loadInitialSessionFilters);
+  const [sessionTagOptions, setSessionTagOptions] = useState<SessionTagSummary[]>([]);
+  const [sessionListHovered, setSessionListHovered] = useState(false);
+  const [sessionOrderIds, setSessionOrderIds] = useState<string[]>([]);
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [automationsLoaded, setAutomationsLoaded] = useState(false);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
@@ -346,6 +405,7 @@ export function App() {
   const pendingCreatedSessionIdRef = useRef('');
   const sessionsRef = useRef(sessions);
   const sessionsNextCursorRef = useRef(sessionsNextCursor);
+  const sessionFiltersRef = useRef(sessionFilters);
   const sessionSearchQueryRef = useRef(sessionSearchQuery);
   const sessionSearchNextCursorRef = useRef(sessionSearchNextCursor);
   const messagesRef = useRef(messages);
@@ -354,8 +414,11 @@ export function App() {
   const sessionsRefreshTimerRef = useRef<number | null>(null);
   const sessionsRefreshInFlightRef = useRef(false);
   const sessionsRefreshQueuedRef = useRef(false);
+  const sessionsRefreshRequestRef = useRef(0);
+  const archivedSessionsRequestRef = useRef(0);
   const sessionSummaryRefreshInFlightRef = useRef(new Set<string>());
   const sessionSearchRequestRef = useRef(0);
+  const sessionMutationVersionRef = useRef(new Map<string, number>());
   const detailRefreshInFlightRef = useRef<string | null>(null);
   const detailRefreshQueuedSessionIdRef = useRef<string | null>(null);
   const sessionMilestoneInteractionRef = useRef<SessionMilestoneInteraction | null>(null);
@@ -486,6 +549,11 @@ export function App() {
     selectedSessionId && detailLoadedSessionId !== selectedSessionId && !selectedSessionHasMessages,
   );
   const sortedSessions = useMemo(() => sortSessionsByLastActivity(sessions), [sessions]);
+  const displayedSessions = useMemo(
+    () => applyFrozenSessionOrder(sessions, sessionOrderIds, { frozen: sessionListHovered }).sessions,
+    [sessions, sessionOrderIds, sessionListHovered],
+  );
+  const activeSessionFilterCount = sessionFilterCount(sessionFilters);
   const selectedSessionLineage: SessionLineage | undefined = selectedSession
     ? {
         current: selectedSession,
@@ -526,6 +594,30 @@ export function App() {
     }));
   }
 
+  function applySessionFilters(filters: SessionFilters) {
+    sessionFiltersRef.current = filters;
+    sessionStorage.setItem(sessionFiltersStorageKey, JSON.stringify(filters));
+    sessionsRefreshRequestRef.current += 1;
+    archivedSessionsRequestRef.current += 1;
+    sessionSearchRequestRef.current += 1;
+    setSessionFilters(filters);
+  }
+
+  function sessionMutationKey(sessionId: string, kind: 'star' | 'tags'): string {
+    return `${sessionId}:${kind}`;
+  }
+
+  function nextSessionMutationVersion(sessionId: string, kind: 'star' | 'tags'): number {
+    const key = sessionMutationKey(sessionId, kind);
+    const next = (sessionMutationVersionRef.current.get(key) ?? 0) + 1;
+    sessionMutationVersionRef.current.set(key, next);
+    return next;
+  }
+
+  function isCurrentSessionMutation(sessionId: string, kind: 'star' | 'tags', version: number): boolean {
+    return sessionMutationVersionRef.current.get(sessionMutationKey(sessionId, kind)) === version;
+  }
+
   useEffect(() => {
     if (!startupLoading || connectionStatus.state !== 'ok') return;
     const timeout = window.setTimeout(() => {
@@ -533,6 +625,36 @@ export function App() {
     }, startupConnectionDelayMs);
     return () => window.clearTimeout(timeout);
   }, [startupLoading, connectionStatus.state]);
+
+  useEffect(() => {
+    if (sessionListHovered) return;
+    setSessionOrderIds(sortedSessions.map((session) => session.id));
+  }, [sessionListHovered, sortedSessions]);
+
+  useEffect(() => {
+    sessionFiltersRef.current = sessionFilters;
+    sessionStorage.setItem(sessionFiltersStorageKey, JSON.stringify(sessionFilters));
+    sessionsRefreshRequestRef.current += 1;
+    archivedSessionsRequestRef.current += 1;
+    sessionSearchRequestRef.current += 1;
+    if (!canCallApi) return;
+    setSessions([]);
+    setSessionsNextCursor(null);
+    setArchivedSessionsNextCursor(null);
+    setArchivedSessionsLoaded(false);
+    setSessionSearchResults([]);
+    setSessionSearchNextCursor(null);
+    setSessionOrderIds([]);
+    setSessionListHovered(false);
+    refreshSessions().catch(() => undefined);
+  }, [canCallApi, token, sessionFilters]);
+
+  useEffect(() => {
+    if (!canCallApi || sidebarPanel !== 'sessions') return;
+    listSessionTags(token)
+      .then(setSessionTagOptions)
+      .catch(() => undefined);
+  }, [canCallApi, sidebarPanel, token]);
 
   useEffect(() => {
     const query = sessionSearchQuery.trim();
@@ -546,7 +668,7 @@ export function App() {
     }
     setSessionSearchLoading(true);
     const timeout = window.setTimeout(() => {
-      searchSessions(token, { query, limit: sessionSearchPageSize })
+      searchSessions(token, { query, limit: sessionSearchPageSize, ...sessionFilterRequestOptions(sessionFilters) })
         .then((page) => {
           if (sessionSearchRequestRef.current !== requestId) return;
           setSessionSearchResults(page.results);
@@ -566,7 +688,7 @@ export function App() {
         });
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [sessionSearchQuery, canCallApi, token]);
+  }, [sessionSearchQuery, canCallApi, token, sessionFilters]);
 
   useEffect(() => {
     if (!archivedSessionsOpen || !canCallApi || archivedSessionsLoaded || archivedSessionsLoading) return;
@@ -713,6 +835,11 @@ export function App() {
   }, [sessionsNextCursor]);
 
   useEffect(() => {
+    sessionFiltersRef.current = sessionFilters;
+    sessionStorage.setItem(sessionFiltersStorageKey, JSON.stringify(sessionFilters));
+  }, [sessionFilters]);
+
+  useEffect(() => {
     sessionSearchQueryRef.current = sessionSearchQuery;
   }, [sessionSearchQuery]);
 
@@ -815,11 +942,6 @@ export function App() {
       .catch(() => setCurrentUser(null))
       .finally(() => setAuthChecked(true));
   }, [health?.apiAuthMode]);
-
-  useEffect(() => {
-    if (!canCallApi) return;
-    void refreshSessions();
-  }, [canCallApi, token]);
 
   useEffect(() => {
     if (!canCallApi) return;
@@ -1043,6 +1165,8 @@ export function App() {
   }
 
   async function refreshSessions() {
+    const requestId = sessionsRefreshRequestRef.current + 1;
+    sessionsRefreshRequestRef.current = requestId;
     if (sessionsRefreshInFlightRef.current) {
       sessionsRefreshQueuedRef.current = true;
       return;
@@ -1052,8 +1176,11 @@ export function App() {
     setLoading(true);
     setError('');
     const refreshStartCursor = sessionsNextCursorRef.current;
+    const filters = sessionFiltersRef.current;
+    const filterOptions = sessionFilterRequestOptions(filters);
     try {
-      const page = await listSessions(token, { limit: sessionListPageSize });
+      const page = await listSessions(token, { limit: sessionListPageSize, ...filterOptions });
+      if (sessionsRefreshRequestRef.current !== requestId) return;
       const selectedId = selectedSessionIdRef.current;
       let selected: Session | null = null;
       let selectedRemoved = false;
@@ -1068,11 +1195,23 @@ export function App() {
           }
         }
       }
+      if (sessionsRefreshRequestRef.current !== requestId) return;
+      const cursorAdvancedDuringRefresh = sessionsNextCursorRef.current !== refreshStartCursor;
       setSessions((current) => {
-        const merged = mergeSessionsById(current, selected ? [...page.sessions, selected] : page.sessions);
-        return selectedRemoved && selectedId ? merged.filter((session) => session.id !== selectedId) : merged;
+        const incoming = selected ? [...page.sessions, selected] : page.sessions;
+        const next = hasActiveSessionFilters(filters)
+          ? mergeSessionsById(
+              cursorAdvancedDuringRefresh ? current : current.filter((session) => session.status === 'archived'),
+              incoming,
+            )
+          : mergeSessionsById(current, incoming);
+        return selectedRemoved && selectedId ? next.filter((session) => session.id !== selectedId) : next;
       });
-      setSessionsNextCursor((current) => (current !== refreshStartCursor ? current : page.nextCursor));
+      setSessionsNextCursor((current) => {
+        const next = current !== refreshStartCursor ? current : page.nextCursor;
+        sessionsNextCursorRef.current = next;
+        return next;
+      });
       setSessionsLoaded(true);
       setSelectedSessionId((current) => {
         if (selectedRemoved && current === selectedId) {
@@ -1093,10 +1232,12 @@ export function App() {
         return next;
       });
     } catch (err) {
-      setSessionsLoaded(true);
-      handleApiError(err);
+      if (sessionsRefreshRequestRef.current === requestId) {
+        setSessionsLoaded(true);
+        handleApiError(err);
+      }
     } finally {
-      setLoading(false);
+      if (sessionsRefreshRequestRef.current === requestId || !sessionsRefreshQueuedRef.current) setLoading(false);
       sessionsRefreshInFlightRef.current = false;
       if (sessionsRefreshQueuedRef.current) {
         sessionsRefreshQueuedRef.current = false;
@@ -1107,6 +1248,7 @@ export function App() {
 
   async function refreshLoadedSessionSummary(sessionId: string) {
     if (!sessionId || !sessionsRef.current.some((session) => session.id === sessionId)) return;
+    if (hasActiveSessionFilters(sessionFiltersRef.current)) return;
     const inFlight = sessionSummaryRefreshInFlightRef.current;
     if (inFlight.has(sessionId)) return;
     inFlight.add(sessionId);
@@ -1127,11 +1269,25 @@ export function App() {
 
   async function loadMoreSessions() {
     if (!sessionsNextCursor || sessionsLoadingMore || !canCallApi) return;
+    const requestId = sessionsRefreshRequestRef.current;
+    const filters = sessionFiltersRef.current;
     setSessionsLoadingMore(true);
     setError('');
     try {
-      const page = await listSessions(token, { cursor: sessionsNextCursor, limit: sessionListPageSize });
+      const page = await listSessions(token, {
+        cursor: sessionsNextCursor,
+        limit: sessionListPageSize,
+        ...sessionFilterRequestOptions(filters),
+      });
+      if (sessionsRefreshRequestRef.current !== requestId) return;
       setSessions((current) => mergeSessionsById(current, page.sessions));
+      if (sessionListHovered) {
+        setSessionOrderIds((current) => [
+          ...current,
+          ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
+        ]);
+      }
+      sessionsNextCursorRef.current = page.nextCursor;
       setSessionsNextCursor(page.nextCursor);
     } catch (err) {
       handleApiError(err);
@@ -1142,15 +1298,27 @@ export function App() {
 
   async function loadArchivedSessions(reset = false) {
     if (archivedSessionsLoading || (!reset && archivedSessionsLoaded && !archivedSessionsNextCursor)) return;
+    const requestId = archivedSessionsRequestRef.current + 1;
+    archivedSessionsRequestRef.current = requestId;
+    const filters = sessionFiltersRef.current;
+    const cursor = archivedSessionsNextCursor;
     setArchivedSessionsLoading(true);
     setError('');
     try {
       const page = await listSessions(token, {
         archived: true,
         limit: sessionListPageSize,
-        ...(reset || !archivedSessionsNextCursor ? {} : { cursor: archivedSessionsNextCursor }),
+        ...sessionFilterRequestOptions(filters),
+        ...(reset || !cursor ? {} : { cursor }),
       });
+      if (archivedSessionsRequestRef.current !== requestId) return;
       setSessions((current) => mergeSessionsById(current, page.sessions));
+      if (sessionListHovered) {
+        setSessionOrderIds((current) => [
+          ...current,
+          ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
+        ]);
+      }
       setArchivedSessionsNextCursor(page.nextCursor);
       setArchivedSessionsLoaded(true);
     } catch (err) {
@@ -1177,6 +1345,7 @@ export function App() {
         query,
         cursor,
         limit: sessionSearchPageSize,
+        ...sessionFilterRequestOptions(sessionFiltersRef.current),
       });
       if (sessionSearchRequestRef.current !== requestId || sessionSearchQueryRef.current.trim() !== query) return;
       setSessionSearchResults((current) => mergeSessionSearchResultsById(current, page.results));
@@ -1468,7 +1637,12 @@ export function App() {
         ...(newThreadBranch ? { branch: newThreadBranch } : {}),
       });
       setSessions((current) => [
-        { ...session, status: session.status === 'active' ? 'active' : 'queued', updatedAt: message.createdAt },
+        {
+          ...session,
+          status: session.status === 'active' ? 'active' : 'queued',
+          updatedAt: message.createdAt,
+          lastActivityAt: message.createdAt,
+        },
         ...current,
       ]);
       selectSession(session.id);
@@ -1535,7 +1709,7 @@ export function App() {
       setSessions((current) =>
         current.map((session) =>
           session.id === selectedSessionId && session.status !== 'active'
-            ? { ...session, status: 'queued', updatedAt: message.createdAt }
+            ? { ...session, status: 'queued', updatedAt: message.createdAt, lastActivityAt: message.createdAt }
             : session,
         ),
       );
@@ -1568,6 +1742,51 @@ export function App() {
     } catch (err) {
       handleApiError(err);
       return false;
+    }
+  }
+
+  async function handleUpdateSessionTags(tags: string[]): Promise<boolean> {
+    if (!selectedSessionId) return false;
+    const mutationVersion = nextSessionMutationVersion(selectedSessionId, 'tags');
+    const previous = sessionsRef.current.find((session) => session.id === selectedSessionId) ?? null;
+    if (previous) applySessionListUpdate({ ...previous, tags }, { forceKeep: true });
+    setError('');
+    try {
+      const session = await updateSessionTags({ sessionId: selectedSessionId, tags, token });
+      if (!isCurrentSessionMutation(selectedSessionId, 'tags', mutationVersion)) return true;
+      applySessionListUpdate(session);
+      listSessionTags(token)
+        .then(setSessionTagOptions)
+        .catch(() => undefined);
+      return true;
+    } catch (err) {
+      if (!isCurrentSessionMutation(selectedSessionId, 'tags', mutationVersion)) return true;
+      if (previous) {
+        const current = sessionsRef.current.find((session) => session.id === selectedSessionId);
+        applySessionListUpdate({ ...(current ?? previous), tags: previous.tags ?? [] }, { forceKeep: true });
+      }
+      handleApiError(err);
+      return false;
+    }
+  }
+
+  async function handleSetSessionStarred(sessionId: string, starred: boolean) {
+    const mutationVersion = nextSessionMutationVersion(sessionId, 'star');
+    const previous = sessionsRef.current.find((session) => session.id === sessionId) ?? null;
+    if (previous) applySessionListUpdate({ ...previous, starred }, { forceKeep: true });
+    setError('');
+    try {
+      const nextStarred = await setSessionStarred({ sessionId, starred, token });
+      if (!isCurrentSessionMutation(sessionId, 'star', mutationVersion)) return;
+      const current = sessionsRef.current.find((session) => session.id === sessionId);
+      if (current) applySessionListUpdate({ ...current, starred: nextStarred });
+    } catch (err) {
+      if (!isCurrentSessionMutation(sessionId, 'star', mutationVersion)) return;
+      if (previous) {
+        const current = sessionsRef.current.find((session) => session.id === sessionId);
+        applySessionListUpdate({ ...(current ?? previous), starred: previous.starred === true }, { forceKeep: true });
+      }
+      handleApiError(err);
     }
   }
 
@@ -2183,9 +2402,23 @@ export function App() {
     }
   }
 
-  function applySessionListUpdate(session: Session) {
-    setSessions((current) => current.map((candidate) => (candidate.id === session.id ? session : candidate)));
-    setSessionSearchResults((current) => updateSearchResultSession(current, session));
+  function sessionMatchesVisibleFilters(session: Session): boolean {
+    const filters = sessionFiltersRef.current;
+    if (filters.tags.length && !filters.tags.every((tag) => (session.tags ?? []).includes(tag))) return false;
+    if (filters.starredByMe && !session.starred) return false;
+    return true;
+  }
+
+  function applySessionListUpdate(session: Session, options: { forceKeep?: boolean } = {}) {
+    const keepVisible =
+      options.forceKeep || selectedSessionIdRef.current === session.id || sessionMatchesVisibleFilters(session);
+    setSessions((current) =>
+      keepVisible ? mergeSessionsById(current, [session]) : current.filter((candidate) => candidate.id !== session.id),
+    );
+    setSessionSearchResults((current) => {
+      const updated = updateSearchResultSession(current, session);
+      return keepVisible ? updated : updated.filter((result) => result.session.id !== session.id);
+    });
   }
 
   async function handleReplayCallback(callbackId: string) {
@@ -2397,7 +2630,10 @@ export function App() {
                     searchResults={sessionSearchResults}
                     searchLoading={sessionSearchLoading || sessionSearchLoadingMore}
                     hasMoreSearchResults={Boolean(sessionSearchNextCursor)}
-                    sessions={sortedSessions}
+                    sessions={displayedSessions}
+                    sessionFilters={sessionFilters}
+                    sessionFilterCount={activeSessionFilterCount}
+                    sessionTagOptions={sessionTagOptions}
                     selectedSessionId={selectedSessionId}
                     token={token}
                     onArchive={fireAndForget(archiveFromList)}
@@ -2414,6 +2650,10 @@ export function App() {
                     onRefresh={fireAndForget(refreshSessions)}
                     onSelect={selectSession}
                     onSearchChange={setSessionSearchQuery}
+                    onSessionFiltersChange={applySessionFilters}
+                    onSessionFiltersClear={() => applySessionFilters(emptySessionFilters)}
+                    onSessionListHoverChange={setSessionListHovered}
+                    onSessionStarChange={fireAndForget(handleSetSessionStarred)}
                     onSignOut={signOut}
                     onThemeChange={setThemePreference}
                     themePreference={themePreference}
@@ -2556,8 +2796,11 @@ export function App() {
                             : 'Open sessions'
                       }
                       onArchive={fireAndForget(handleArchiveSession)}
+                      onSessionStarChange={fireAndForget(handleSetSessionStarred)}
                       onOpenSidebar={expandSidebar}
+                      onUpdateTags={handleUpdateSessionTags}
                       onUpdateTitle={handleUpdateTitle}
+                      sessionTagOptions={sessionTagOptions}
                       onOpenWorkspaceTool={handleOpenWorkspaceTool}
                     />
                     <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]">

@@ -105,8 +105,8 @@ export async function publishWorkspaceToolService(input: WorkspaceToolPublishInp
   };
   if (input.path) service.path = input.path;
   if (input.runtimeId) service.runtimeId = input.runtimeId;
-  return input.store.updateSession({
-    ...session,
+  return input.store.updateSessionContext({
+    id: session.id,
     context: { ...(session.context ?? {}), services: [...current, service].sort((a, b) => a.port - b.port) },
     updatedAt: new Date(),
   });
