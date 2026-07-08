@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { PanelLeftOpen } from 'lucide-react';
-import type { ArtifactPreview, ModelChoice, Session } from '../api.js';
+import type { ArtifactPreview, ModelChoice, Session, SessionSearchResult } from '../api.js';
 import { MessageComposer, ThreadHeader, ThreadSidebar } from '../components/app-panels.js';
 import type { ThemePreference } from '../components/app-panels.js';
 import { ChatPanel, DesktopContextPanel, MobileContextPanel } from '../components/thread/thread-content.js';
@@ -20,6 +20,7 @@ export function StaticDemoApp() {
   const [sidebarOpen, setSidebarOpen] = useState(() => shouldOpenSessionsOnMobile());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState('');
+  const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const [themePreference, setThemePreference] = useState<ThemePreference>('system');
 
   useEffect(() => {
@@ -47,6 +48,13 @@ export function StaticDemoApp() {
   }, []);
 
   const sessions = useMemo(() => data?.sessions.map((item) => item.session) ?? [], [data]);
+  const searchResults = useMemo<SessionSearchResult[]>(() => {
+    const query = sessionSearchQuery.trim().toLowerCase();
+    if (!query) return [];
+    return sessions
+      .filter((session) => (session.title ?? '').toLowerCase().includes(query))
+      .map((session) => ({ session, snippet: session.title ?? 'Untitled session', matchKind: 'title', score: 1 }));
+  }, [sessions, sessionSearchQuery]);
   const selected = data?.sessions.find((item) => item.session.id === selectedSessionId) ?? data?.sessions[0] ?? null;
 
   if (error) {
@@ -108,8 +116,17 @@ export function StaticDemoApp() {
               canWriteSession={() => false}
               connectionStatus={{ state: 'ok', message: 'Static demo data loaded.' }}
               health={{ status: 'ok', runMode: 'static-demo', apiAuthMode: 'none' }}
+              archivedSessionsLoaded
+              archivedSessionsLoading={false}
+              hasMoreArchivedSessions={false}
+              hasMoreSessions={false}
               loading={false}
+              loadingMoreSessions={false}
               navPage="sessions"
+              searchQuery={sessionSearchQuery}
+              searchResults={searchResults}
+              searchLoading={false}
+              hasMoreSearchResults={false}
               sessions={sessions}
               selectedSessionId={selected.session.id}
               themePreference={themePreference}
@@ -120,12 +137,16 @@ export function StaticDemoApp() {
                 setSidebarOpen(false);
                 if (window.matchMedia('(min-width: 768px)').matches) setSidebarCollapsed(true);
               }}
+              onLoadMoreArchivedSessions={() => undefined}
+              onLoadMoreSearchResults={() => undefined}
+              onLoadMoreSessions={() => undefined}
               onNewThread={() => undefined}
               onOpenAutomations={() => undefined}
               onOpenGroups={() => undefined}
               onOpenSessions={() => undefined}
               onOpenSetup={() => undefined}
               onRefresh={() => undefined}
+              onSearchChange={setSessionSearchQuery}
               onSelect={(sessionId) => {
                 setSelectedSessionId(sessionId);
                 setSidebarOpen(false);

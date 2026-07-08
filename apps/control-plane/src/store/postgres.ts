@@ -38,11 +38,17 @@ import type {
   RunRecord,
   SandboxRecord,
   SandboxSecrets,
+  SessionListOptions,
   SessionRecord,
   SessionMessageSummary,
+  SessionSearchDocInput,
+  SessionSearchMatchKind,
+  SessionSearchOptions,
+  SessionSearchPage,
   SessionTranscriptOptions,
   SessionTranscriptPage,
   SessionVisibilityFilter,
+  SessionWithSandboxPage,
   SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
@@ -98,10 +104,17 @@ import {
 
 const staleCallbackSendingMs = 15 * 60_000;
 const eventNotificationChannel = 'app_events';
+const maxSearchDocContentChars = 16 * 1024;
 const joinedSessionSelectColumns = sessionSelectColumns
   .split(', ')
   .map((column) => `sessions.${column}`)
   .join(', ');
+
+type SessionSearchRow = SessionWithSandboxRow & {
+  snippet: string | null;
+  match_kind: SessionSearchMatchKind;
+  score: number | string;
+};
 
 export type PostgresEventListener = {
   close(): Promise<void>;
@@ -696,12 +709,119 @@ export class PostgresStore implements AppStore {
     return result.rows.map(toSession);
   }
 
-  async listSessionsWithLatestSandbox(
-    provider: string,
-    visibleTo?: SessionVisibilityFilter,
-  ): Promise<SessionWithSandboxRecord[]> {
+  async listSessionsWithLatestSandbox(provider: string, options: SessionListOptions): Promise<SessionWithSandboxPage> {
+    const values: unknown[] = [provider];
+    const where = sessionVisibilityWhereClauses(options.visibleTo, values);
+    where.push(options.archived ? `sessions.status = 'archived'` : `sessions.status <> 'archived'`);
+    if (options.groupId) {
+      values.push(options.groupId);
+      where.push(`sessions.owner_group_id = $${values.length}::uuid`);
+    }
+    if (options.cursor) {
+      values.push(options.cursor.updatedAt, options.cursor.createdAt, options.cursor.id);
+      const updatedAtIndex = values.length - 2;
+      const createdAtIndex = values.length - 1;
+      const idIndex = values.length;
+      where.push(
+        `(sessions.updated_at, sessions.created_at, sessions.id) < ($${updatedAtIndex}::timestamptz, $${createdAtIndex}::timestamptz, $${idIndex}::uuid)`,
+      );
+    }
+    values.push(options.limit + 1);
+    const limitIndex = values.length;
+
     const result = await this.pool.query<SessionWithSandboxRow>(
       `SELECT ${joinedSessionSelectColumns},
+               latest_sandbox.id AS sandbox_id,
+              latest_sandbox.provider AS sandbox_provider,
+              latest_sandbox.provider_sandbox_id AS sandbox_provider_sandbox_id,
+              latest_sandbox.status AS sandbox_status,
+              latest_sandbox.workspace_path AS sandbox_workspace_path,
+              latest_sandbox.metadata AS sandbox_metadata,
+              latest_sandbox.created_at AS sandbox_created_at,
+              latest_sandbox.updated_at AS sandbox_updated_at,
+              latest_sandbox.last_health_check_at AS sandbox_last_health_check_at,
+              latest_sandbox.keepalive_until AS sandbox_keepalive_until,
+              latest_sandbox.destroyed_at AS sandbox_destroyed_at
+       FROM (
+         SELECT ${sessionSelectColumns}
+         FROM sessions
+         WHERE ${where.join(' AND ')}
+         ORDER BY updated_at DESC, created_at DESC, id DESC
+         LIMIT $${limitIndex}
+       ) sessions
+       LEFT JOIN LATERAL (
+         SELECT id, provider, provider_sandbox_id, status, workspace_path, metadata,
+                created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at
+         FROM sandboxes
+         WHERE sandboxes.session_id = sessions.id
+           AND sandboxes.provider = $1
+          ORDER BY updated_at DESC
+          LIMIT 1
+        ) latest_sandbox ON TRUE
+        ORDER BY sessions.updated_at DESC, sessions.created_at DESC, sessions.id DESC`,
+      values,
+    );
+
+    return pageSessionRows(result.rows, options.limit);
+  }
+
+  async searchSessions(provider: string, options: SessionSearchOptions): Promise<SessionSearchPage> {
+    const values: unknown[] = [
+      provider,
+      options.query,
+      likePattern(options.query),
+      options.limit + 1,
+      options.cursor ?? 0,
+    ];
+    const where = sessionVisibilityWhereClauses(options.visibleTo, values);
+    if (options.groupId) {
+      values.push(options.groupId);
+      where.push(`sessions.owner_group_id = $${values.length}::uuid`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const result = await this.pool.query<SessionSearchRow>(
+      `WITH search_query AS (
+         SELECT websearch_to_tsquery('simple', $2) AS tsq
+       ), matches AS (
+         SELECT docs.session_id,
+                docs.kind,
+                docs.content,
+                ts_rank(docs.tsv, search_query.tsq) AS score
+         FROM session_search_docs docs
+         CROSS JOIN search_query
+         WHERE docs.tsv @@ search_query.tsq
+         UNION ALL
+         SELECT sessions.id AS session_id,
+                'title'::text AS kind,
+                COALESCE(sessions.title, '') AS content,
+                 1.0 AS score
+         FROM sessions
+         WHERE sessions.title ILIKE $3 ESCAPE '\\'
+       ), best_match AS (
+         SELECT session_id, kind, content, score
+         FROM (
+           SELECT matches.*,
+                  row_number() OVER (PARTITION BY matches.session_id ORDER BY matches.score DESC, matches.kind ASC) AS rank
+           FROM matches
+         ) ranked
+         WHERE rank = 1
+       ), matched_sessions AS (
+         SELECT sessions.*, best_match.kind AS match_kind, best_match.content, best_match.score
+         FROM best_match
+         JOIN sessions ON sessions.id = best_match.session_id
+         ${whereSql}
+         ORDER BY best_match.score DESC, sessions.updated_at DESC, sessions.id DESC
+         LIMIT $4 OFFSET $5
+       )
+       SELECT ${joinedSessionSelectColumns},
+              sessions.match_kind,
+              sessions.score,
+              ts_headline(
+                'simple',
+                sessions.content,
+                search_query.tsq,
+                'MaxFragments=1, MaxWords=18, StartSel=<mark>, StopSel=</mark>'
+              ) AS snippet,
               latest_sandbox.id AS sandbox_id,
               latest_sandbox.provider AS sandbox_provider,
               latest_sandbox.provider_sandbox_id AS sandbox_provider_sandbox_id,
@@ -713,7 +833,8 @@ export class PostgresStore implements AppStore {
               latest_sandbox.last_health_check_at AS sandbox_last_health_check_at,
               latest_sandbox.keepalive_until AS sandbox_keepalive_until,
               latest_sandbox.destroyed_at AS sandbox_destroyed_at
-       FROM sessions
+       FROM matched_sessions sessions
+       CROSS JOIN search_query
        LEFT JOIN LATERAL (
          SELECT id, provider, provider_sandbox_id, status, workspace_path, metadata,
                 created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at
@@ -723,12 +844,54 @@ export class PostgresStore implements AppStore {
          ORDER BY updated_at DESC
          LIMIT 1
        ) latest_sandbox ON TRUE
-       ${visibleTo ? `WHERE sessions.visibility = 'organization' OR sessions.owner_group_id = ANY($2::uuid[])` : ''}
-       ORDER BY sessions.updated_at DESC, sessions.created_at DESC`,
-      visibleTo ? [provider, visibleTo.groupIds] : [provider],
+       ORDER BY sessions.score DESC, sessions.updated_at DESC, sessions.id DESC`,
+      values,
     );
+    const rows = result.rows.slice(0, options.limit);
+    return {
+      items: rows.map((row) => ({
+        item: toSessionWithSandbox(row),
+        snippet: row.snippet ?? '',
+        matchKind: row.match_kind,
+        score: Number(row.score),
+      })),
+      nextCursor: result.rows.length > options.limit ? (options.cursor ?? 0) + options.limit : null,
+    };
+  }
 
-    return result.rows.map(toSessionWithSandbox);
+  async getSearchIndexCursor(): Promise<number> {
+    const result = await this.pool.query<{ last_event_id: PgInteger }>(
+      'SELECT last_event_id FROM search_index_cursor WHERE id = true',
+    );
+    return Number(result.rows[0]?.last_event_id ?? 0);
+  }
+
+  async setSearchIndexCursor(lastEventId: number): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO search_index_cursor (id, last_event_id)
+       VALUES (true, $1)
+       ON CONFLICT (id) DO UPDATE SET last_event_id = EXCLUDED.last_event_id`,
+      [lastEventId],
+    );
+  }
+
+  async upsertSessionSearchDocs(docs: SessionSearchDocInput[]): Promise<void> {
+    const uniqueDocs = uniqueSessionSearchDocs(docs);
+    if (!uniqueDocs.length) return;
+    await this.pool.query(
+      `INSERT INTO session_search_docs (session_id, kind, source_id, content, created_at)
+       SELECT * FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[], $5::timestamptz[])
+       ON CONFLICT (session_id, kind, source_id) DO UPDATE
+       SET content = EXCLUDED.content,
+           created_at = EXCLUDED.created_at`,
+      [
+        uniqueDocs.map((doc) => doc.sessionId),
+        uniqueDocs.map((doc) => doc.kind),
+        uniqueDocs.map((doc) => doc.sourceId),
+        uniqueDocs.map((doc) => cleanSearchDocContent(doc.content)),
+        uniqueDocs.map((doc) => doc.createdAt),
+      ],
+    );
   }
 
   async updateSession(record: SessionRecord): Promise<SessionRecord> {
@@ -2481,6 +2644,36 @@ export class PostgresStore implements AppStore {
       client.release();
     }
   }
+}
+
+function sessionVisibilityWhereClauses(visibleTo: SessionVisibilityFilter | undefined, values: unknown[]): string[] {
+  if (!visibleTo) return [];
+  values.push(visibleTo.groupIds);
+  return [`(sessions.visibility = 'organization' OR sessions.owner_group_id = ANY($${values.length}::uuid[]))`];
+}
+
+function pageSessionRows(rows: SessionWithSandboxRow[], limit: number): SessionWithSandboxPage {
+  const pageRows = rows.slice(0, limit);
+  const last = pageRows.at(-1);
+  return {
+    items: pageRows.map(toSessionWithSandbox),
+    nextCursor:
+      rows.length > limit && last ? { updatedAt: last.updated_at, createdAt: last.created_at, id: last.id } : null,
+  };
+}
+
+function likePattern(value: string): string {
+  return `%${value.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
+}
+
+function uniqueSessionSearchDocs(docs: SessionSearchDocInput[]): SessionSearchDocInput[] {
+  const byKey = new Map<string, SessionSearchDocInput>();
+  for (const doc of docs) byKey.set(`${doc.sessionId}:${doc.kind}:${doc.sourceId}`, doc);
+  return [...byKey.values()];
+}
+
+function cleanSearchDocContent(value: string): string {
+  return value.replaceAll('\u0000', '').slice(0, maxSearchDocContentChars);
 }
 
 function isUniqueViolation(error: unknown, constraint: string): boolean {

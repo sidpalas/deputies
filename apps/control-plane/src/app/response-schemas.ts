@@ -7,6 +7,7 @@ export type PublicApiResponseField =
   | 'optional:boolean'
   | 'optional:number'
   | 'optional:object'
+  | 'nullable:string'
   | 'record'
   | 'string'
   | 'optional:string';
@@ -46,7 +47,11 @@ export const publicApiResponseSchemas = {
   },
   sessions: {
     description: 'Session list envelope.',
-    fields: { sessions: 'array' },
+    fields: { sessions: 'array', nextCursor: 'nullable:string' },
+  },
+  sessionSearch: {
+    description: 'Session search result envelope.',
+    fields: { results: 'array', nextCursor: 'nullable:string' },
   },
   automation: {
     description: 'Single automation envelope.',

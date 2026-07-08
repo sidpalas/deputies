@@ -38,7 +38,13 @@ import type {
   RunRecord,
   SandboxRecord,
   SandboxSecrets,
+  SessionListOptions,
   SessionRecord,
+  SessionSearchDocInput,
+  SessionSearchMatchKind,
+  SessionSearchOptions,
+  SessionSearchPage,
+  SessionWithSandboxPage,
   SessionVisibilityFilter,
   SessionMessageSummary,
   SessionTranscriptOptions,
@@ -86,6 +92,8 @@ export class MemoryStore implements AppStore {
   private readonly webhookSources = new Map<string, WebhookSourceRecord>();
   private readonly externalThreads = new Map<string, ExternalThreadRecord>();
   private readonly integrationDeliveries = new Map<string, IntegrationDeliveryRecord>();
+  private readonly sessionSearchDocs = new Map<string, SessionSearchDocInput>();
+  private searchIndexCursor = 0;
 
   async upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord> {
     const accountKey = authAccountKey(record.provider, record.providerAccountId);
@@ -296,20 +304,67 @@ export class MemoryStore implements AppStore {
       .slice(0, input.limit);
   }
 
-  async listSessionsWithLatestSandbox(
-    provider: string,
-    visibleTo?: SessionVisibilityFilter,
-  ): Promise<SessionWithSandboxRecord[]> {
-    const sessions = (await this.listSessions()).filter(
-      (session) =>
-        !visibleTo || session.visibility === 'organization' || visibleTo.groupIds.includes(session.ownerGroupId),
-    );
-    return Promise.all(
-      sessions.map(async (session) => ({
+  async listSessionsWithLatestSandbox(provider: string, options: SessionListOptions): Promise<SessionWithSandboxPage> {
+    const sessions = [...this.sessions.values()]
+      .filter((session) => canListSession(session, options.visibleTo))
+      .filter((session) => (options.archived ? session.status === 'archived' : session.status !== 'archived'))
+      .filter((session) => !options.groupId || session.ownerGroupId === options.groupId)
+      .filter((session) => !options.cursor || isBeforeSessionCursor(session, options.cursor))
+      .sort(compareSessionsNewestFirst);
+    const page = sessions.slice(0, options.limit);
+    const last = page.at(-1);
+    return {
+      items: await Promise.all(
+        page.map(async (session) => ({
+          session,
+          sandbox: await this.getLatestSandbox(session.id, provider),
+        })),
+      ),
+      nextCursor:
+        sessions.length > options.limit && last
+          ? { updatedAt: last.updatedAt, createdAt: last.createdAt, id: last.id }
+          : null,
+    };
+  }
+
+  async searchSessions(provider: string, options: SessionSearchOptions): Promise<SessionSearchPage> {
+    const query = options.query.trim().toLowerCase();
+    if (!query) return { items: [], nextCursor: null };
+    const terms = query.split(/\s+/).filter(Boolean);
+    const matches = [...this.sessions.values()]
+      .filter((session) => canListSession(session, options.visibleTo))
+      .filter((session) => !options.groupId || session.ownerGroupId === options.groupId)
+      .map((session) => ({
         session,
-        sandbox: await this.getLatestSandbox(session.id, provider),
-      })),
-    );
+        match: bestMemorySearchMatch(session, terms, this.memorySearchDocuments(session)),
+      }))
+      .filter((item): item is { session: SessionRecord; match: MemorySearchMatch } => item.match !== null)
+      .sort((a, b) => b.match.score - a.match.score || compareSessionsNewestFirst(a.session, b.session));
+    const offset = options.cursor ?? 0;
+    const page = matches.slice(offset, offset + options.limit);
+    return {
+      items: await Promise.all(
+        page.map(async ({ session, match }) => ({
+          item: { session, sandbox: await this.getLatestSandbox(session.id, provider) },
+          snippet: match.snippet,
+          matchKind: match.kind,
+          score: match.score,
+        })),
+      ),
+      nextCursor: matches.length > offset + options.limit ? offset + options.limit : null,
+    };
+  }
+
+  async getSearchIndexCursor(): Promise<number> {
+    return this.searchIndexCursor;
+  }
+
+  async setSearchIndexCursor(lastEventId: number): Promise<void> {
+    this.searchIndexCursor = lastEventId;
+  }
+
+  async upsertSessionSearchDocs(docs: SessionSearchDocInput[]): Promise<void> {
+    for (const doc of docs) this.sessionSearchDocs.set(sessionSearchDocKey(doc), doc);
   }
 
   async updateSession(record: SessionRecord): Promise<SessionRecord> {
@@ -1370,6 +1425,21 @@ export class MemoryStore implements AppStore {
     this.sessions.set(sessionId, { ...session, status: hasPendingMessages ? 'queued' : 'idle', updatedAt });
   }
 
+  private memorySearchDocuments(session: SessionRecord): Array<{ kind: SessionSearchMatchKind; content: string }> {
+    return [
+      { kind: 'title', content: session.title ?? '' },
+      ...(this.messages.get(session.id) ?? []).map((message) => ({ kind: 'prompt' as const, content: message.prompt })),
+      ...(this.events.get(session.id) ?? []).flatMap((event) => {
+        if (event.type !== 'agent_response_final') return [];
+        const payload = event.payload as { text?: unknown };
+        return typeof payload.text === 'string' ? [{ kind: 'response' as const, content: payload.text }] : [];
+      }),
+      ...[...this.sessionSearchDocs.values()]
+        .filter((doc) => doc.sessionId === session.id)
+        .map((doc) => ({ kind: doc.kind, content: doc.content })),
+    ];
+  }
+
   private requireCallback(id: string): CallbackDeliveryRecord {
     const existing = this.callbacks.get(id);
     if (!existing) throw new Error(`Callback delivery does not exist: ${id}`);
@@ -1387,6 +1457,82 @@ function groupMemberKey(groupId: string, userId: string): string {
 
 function normalizedGroupName(name: string): string {
   return name.trim().toLowerCase();
+}
+
+function canListSession(session: SessionRecord, visibleTo: SessionVisibilityFilter | undefined): boolean {
+  return !visibleTo || session.visibility === 'organization' || visibleTo.groupIds.includes(session.ownerGroupId);
+}
+
+function compareSessionsNewestFirst(a: SessionRecord, b: SessionRecord): number {
+  return (
+    b.updatedAt.getTime() - a.updatedAt.getTime() ||
+    b.createdAt.getTime() - a.createdAt.getTime() ||
+    compareUuidDesc(a.id, b.id)
+  );
+}
+
+function compareUuidDesc(a: string, b: string): number {
+  return a < b ? 1 : a > b ? -1 : 0;
+}
+
+function isBeforeSessionCursor(
+  session: SessionRecord,
+  cursor: { updatedAt: Date; createdAt: Date; id: string },
+): boolean {
+  return compareSessionsNewestFirst(session, { ...session, ...cursor }) > 0;
+}
+
+type MemorySearchMatch = {
+  kind: SessionSearchMatchKind;
+  score: number;
+  snippet: string;
+};
+
+function bestMemorySearchMatch(
+  session: SessionRecord,
+  terms: string[],
+  documents: Array<{ kind: SessionSearchMatchKind; content: string }>,
+): MemorySearchMatch | null {
+  let best: MemorySearchMatch | null = null;
+  for (const document of documents) {
+    const lower = document.content.toLowerCase();
+    const score = terms.reduce((total, term) => total + countOccurrences(lower, term), 0);
+    if (score === 0) continue;
+    const match = { kind: document.kind, score, snippet: memorySearchSnippet(document.content, terms) };
+    if (!best || match.score > best.score || (match.score === best.score && document.kind === 'title')) best = match;
+  }
+  if (best) return best;
+  if (session.title?.toLowerCase().includes(terms.join(' '))) {
+    return { kind: 'title', score: 1, snippet: memorySearchSnippet(session.title, terms) };
+  }
+  return null;
+}
+
+function countOccurrences(value: string, term: string): number {
+  if (!term) return 0;
+  let count = 0;
+  let index = value.indexOf(term);
+  while (index !== -1) {
+    count += 1;
+    index = value.indexOf(term, index + term.length);
+  }
+  return count;
+}
+
+function memorySearchSnippet(content: string, terms: string[]): string {
+  const lower = content.toLowerCase();
+  const index = terms.reduce((best, term) => {
+    const match = lower.indexOf(term);
+    return match === -1 || (best !== -1 && best < match) ? best : match;
+  }, -1);
+  if (index === -1) return content.slice(0, 160);
+  const start = Math.max(0, index - 60);
+  const end = Math.min(content.length, index + 120);
+  return `${start > 0 ? '...' : ''}${content.slice(start, end)}${end < content.length ? '...' : ''}`;
+}
+
+function sessionSearchDocKey(doc: Pick<SessionSearchDocInput, 'sessionId' | 'kind' | 'sourceId'>): string {
+  return `${doc.sessionId}:${doc.kind}:${doc.sourceId}`;
 }
 
 function isStaleSendingCallback(delivery: CallbackDeliveryRecord, staleSendingBefore: Date): boolean {

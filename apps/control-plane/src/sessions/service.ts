@@ -36,6 +36,8 @@ export class SessionService {
 
   async create(input: CreateSessionInput = {}): Promise<SessionRecord> {
     const now = new Date();
+    // Session list cursors round-trip JS Date millisecond precision. Do not write
+    // session timestamps with database now(), or keyset pagination can skip rows.
     const record: SessionRecord = {
       id: input.id ?? randomUUID(),
       status: 'created',
@@ -80,6 +82,7 @@ export class SessionService {
 
     const next: SessionRecord = {
       ...existing,
+      // Keep session write timestamps in JS Date precision for list cursor stability.
       updatedAt: new Date(),
     };
     if (input.title) next.title = input.title;

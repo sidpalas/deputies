@@ -12,7 +12,7 @@ export type PostgresStoreSuiteContext = {
 };
 
 const truncateTables =
-  'TRUNCATE pi_sessions, flue_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE';
+  'TRUNCATE pi_sessions, flue_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, session_search_docs, search_index_cursor, events, runs, messages, session_sequence_counters, webhook_sources, sessions RESTART IDENTITY CASCADE';
 
 export function setupPostgresStoreSuite(suiteName: string, assign: (context: PostgresStoreSuiteContext) => void): void {
   let databaseUrl = '';

@@ -50,6 +50,7 @@ import { LocalSandboxProvider } from './sandbox/local.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
 import { TensorlakeSandboxProvider } from './sandbox/tensorlake.js';
 import type { SandboxProvider } from './sandbox/types.js';
+import { startSessionSearchIndexer } from './search/indexer.js';
 import { MemoryStore } from './store/memory.js';
 import { PostgresStore } from './store/postgres.js';
 import { startTelemetry } from './telemetry/index.js';
@@ -89,6 +90,7 @@ const resources: CloseableResource[] = [];
 let server: ReturnType<typeof createServer> | undefined;
 let workerLoop: WorkerLoopHandle | undefined;
 let eventCompactor: ReturnType<typeof startEventCompactor> | undefined;
+let sessionSearchIndexer: ReturnType<typeof startSessionSearchIndexer> | undefined;
 let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
 const processInstanceId = `${hostname()}-${process.pid}-${randomUUID()}`;
 const automationSchedulerLockOwner = `automation-scheduler-${processInstanceId}`;
@@ -173,6 +175,12 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
   console.log(`background-agent worker started (${config.runMode}, concurrency=${config.workerConcurrency})`);
 }
 
+sessionSearchIndexer = startSessionSearchIndexer({
+  store,
+  events: services.events,
+  onError: (error: unknown) => console.error(error instanceof Error ? error.message : error),
+});
+
 function createCallbackSenders(): CompletionCallbackSender[] {
   const senders: CompletionCallbackSender[] = [
     new HttpCompletionCallbackSender({ unsafeAllowLocalNetwork: config.unsafeAllowLocalHttpCallbacks }),
@@ -224,6 +232,7 @@ const lifecycleOptions = {
 if (server) Object.assign(lifecycleOptions, { server });
 if (workerLoop) Object.assign(lifecycleOptions, { workerLoop });
 if (eventCompactor) resources.unshift(eventCompactor);
+if (sessionSearchIndexer) resources.unshift(sessionSearchIndexer);
 if (sandboxReaper) resources.unshift(sandboxReaper);
 installProcessShutdownHandlers(new AppLifecycle(lifecycleOptions));
 

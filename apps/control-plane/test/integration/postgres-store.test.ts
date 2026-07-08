@@ -8,6 +8,8 @@ import {
   PostgresPiSessionStore,
   type PiSessionData,
 } from '../../src/runner-pi/session-store.js';
+import { runSessionSearchIndexerOnce } from '../../src/search/indexer.js';
+import { defaultGroupId } from '../../src/store/types.js';
 import { PostgresStore } from '../../src/store/postgres.js';
 import { waitFor } from '../support/http.js';
 import { setupPostgresStoreSuite, testDatabaseUrl } from '../support/postgres-store-suite.js';
@@ -211,10 +213,12 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       updatedAt: now,
     });
 
-    const listed = await store.listSessionsWithLatestSandbox('fake');
-    const bySessionId = new Map(listed.map((item) => [item.session.id, item]));
+    const listed = await store.listSessionsWithLatestSandbox('fake', { archived: false, limit: 50 });
+    const bySessionId = new Map(listed.items.map((item) => [item.session.id, item]));
 
-    expect(listed.map((item) => item.session)).toEqual(await store.listSessions());
+    expect(listed.items.map((item) => item.session)).toEqual(
+      (await store.listSessions()).filter((session) => session.status !== 'archived'),
+    );
     expect(bySessionId.get(withSandboxes.id)?.sandbox).toMatchObject({
       providerSandboxId: 'fake-sandbox-new',
       status: 'ready',
@@ -263,12 +267,272 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       writePolicy: 'group_members',
     });
 
-    const listed = await store.listSessionsWithLatestSandbox('fake', { groupIds: [memberGroup.id] });
-    const listedIds = listed.map((item) => item.session.id);
+    const listed = await store.listSessionsWithLatestSandbox('fake', {
+      visibleTo: { groupIds: [memberGroup.id] },
+      archived: false,
+      limit: 50,
+    });
+    const listedIds = listed.items.map((item) => item.session.id);
 
     expect(listedIds).toContain(organizationVisible.id);
     expect(listedIds).toContain(ownGroupSession.id);
     expect(listedIds).not.toContain(hiddenSession.id);
+  });
+
+  it('paginates session lists with archived filtering', async () => {
+    const services = createServices(store);
+    const first = await services.sessions.create({ title: 'First page' });
+    const second = await services.sessions.create({ title: 'Second page' });
+    const archived = await services.sessions.create({ title: 'Archived page' });
+    await services.sessions.archive(archived.id);
+
+    const firstPage = await store.listSessionsWithLatestSandbox('fake', { archived: false, limit: 1 });
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.nextCursor).not.toBeNull();
+
+    const secondPage = await store.listSessionsWithLatestSandbox('fake', {
+      archived: false,
+      limit: 5,
+      cursor: firstPage.nextCursor!,
+    });
+    const activeIds = [...firstPage.items, ...secondPage.items].map((item) => item.session.id);
+    expect(activeIds).toEqual(expect.arrayContaining([first.id, second.id]));
+    expect(activeIds).not.toContain(archived.id);
+
+    const archivedPage = await store.listSessionsWithLatestSandbox('fake', { archived: true, limit: 5 });
+    expect(archivedPage.items.map((item) => item.session.id)).toContain(archived.id);
+  });
+
+  it('paginates sessions with identical timestamps using id tie-breaking', async () => {
+    const timestamp = new Date('2026-01-01T00:00:00.000Z');
+    const ids = [
+      '00000000-0000-4000-8000-000000000101',
+      '00000000-0000-4000-8000-000000000102',
+      '00000000-0000-4000-8000-000000000103',
+    ];
+    for (const id of ids) {
+      await store.createSession({
+        id,
+        status: 'created',
+        spawnDepth: 0,
+        ownerGroupId: defaultGroupId,
+        visibility: 'organization',
+        writePolicy: 'group_members',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        title: `Tie ${id}`,
+      });
+    }
+
+    const firstPage = await store.listSessionsWithLatestSandbox('fake', { archived: false, limit: 2 });
+    expect(firstPage.items.map((item) => item.session.id)).toEqual([ids[2], ids[1]]);
+    expect(firstPage.nextCursor).not.toBeNull();
+
+    const secondPage = await store.listSessionsWithLatestSandbox('fake', {
+      archived: false,
+      limit: 2,
+      cursor: firstPage.nextCursor!,
+    });
+    expect(secondPage.items.map((item) => item.session.id)).toEqual([ids[0]]);
+    expect(secondPage.nextCursor).toBeNull();
+  });
+
+  it('paginates session lists with visibility filtering', async () => {
+    const now = new Date('2026-01-02T00:00:00.000Z');
+    const memberGroup = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000741',
+      name: 'Paged member group',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const hiddenGroup = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000742',
+      name: 'Paged hidden group',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const services = createServices(store);
+    const visible = [
+      await services.sessions.create({
+        title: 'Visible org',
+        visibility: 'organization',
+        ownerGroupId: hiddenGroup.id,
+      }),
+      await services.sessions.create({ title: 'Visible group 1', visibility: 'group', ownerGroupId: memberGroup.id }),
+      await services.sessions.create({ title: 'Visible group 2', visibility: 'group', ownerGroupId: memberGroup.id }),
+    ];
+    const hidden = await services.sessions.create({
+      title: 'Hidden group',
+      visibility: 'group',
+      ownerGroupId: hiddenGroup.id,
+    });
+
+    let cursor = undefined as
+      | Awaited<ReturnType<PostgresStore['listSessionsWithLatestSandbox']>>['nextCursor']
+      | undefined;
+    const seen: string[] = [];
+    for (;;) {
+      const page = await store.listSessionsWithLatestSandbox('fake', {
+        archived: false,
+        visibleTo: { groupIds: [memberGroup.id] },
+        limit: 1,
+        ...(cursor ? { cursor } : {}),
+      });
+      seen.push(...page.items.map((item) => item.session.id));
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+
+    expect(seen).toHaveLength(visible.length);
+    expect(new Set(seen)).toEqual(new Set(visible.map((session) => session.id)));
+    expect(seen).not.toContain(hidden.id);
+  });
+
+  it('searches session docs with visibility filtering', async () => {
+    const services = createServices(store);
+    const now = new Date();
+    const memberGroup = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000731',
+      name: 'Search member group',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const otherGroup = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000732',
+      name: 'Search other group',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const visible = await services.sessions.create({
+      title: 'Visible search target',
+      ownerGroupId: memberGroup.id,
+      visibility: 'group',
+      writePolicy: 'group_members',
+    });
+    const hidden = await services.sessions.create({
+      title: 'Hidden search target',
+      ownerGroupId: otherGroup.id,
+      visibility: 'group',
+      writePolicy: 'group_members',
+    });
+    await store.upsertSessionSearchDocs([
+      { sessionId: visible.id, kind: 'prompt', sourceId: 'visible', content: 'needle prompt content', createdAt: now },
+      { sessionId: hidden.id, kind: 'prompt', sourceId: 'hidden', content: 'needle hidden content', createdAt: now },
+    ]);
+
+    const results = await store.searchSessions('fake', {
+      query: 'needle',
+      visibleTo: { groupIds: [memberGroup.id] },
+      limit: 10,
+    });
+    const ids = results.items.map((item) => item.item.session.id);
+    expect(ids).toContain(visible.id);
+    expect(ids).not.toContain(hidden.id);
+    expect(results.items[0]?.matchKind).toBe('prompt');
+  });
+
+  it('deduplicates repeated search docs in one upsert batch', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Duplicate search docs' });
+    await store.upsertSessionSearchDocs([
+      {
+        sessionId: session.id,
+        kind: 'title',
+        sourceId: session.id,
+        content: 'old duplicate content',
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+      },
+      {
+        sessionId: session.id,
+        kind: 'title',
+        sourceId: session.id,
+        content: 'new duplicate content',
+        createdAt: new Date('2026-01-01T00:00:01Z'),
+      },
+    ]);
+
+    const results = await store.searchSessions('fake', { query: 'new', limit: 10 });
+    expect(results.items.map((item) => item.item.session.id)).toContain(session.id);
+  });
+
+  it('deduplicates repeated title docs from one indexer batch', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'initial duplicate title' });
+    await services.sessions.update({ id: session.id, title: 'olderduplicate title' });
+    await services.sessions.update({ id: session.id, title: 'newerduplicate title' });
+
+    await runSessionSearchIndexerOnce({ store, events: services.events });
+
+    expect(
+      (await store.searchSessions('fake', { query: 'newerduplicate', limit: 10 })).items.map(
+        (item) => item.item.session.id,
+      ),
+    ).toContain(session.id);
+    expect(
+      (await store.searchSessions('fake', { query: 'olderduplicate', limit: 10 })).items.map(
+        (item) => item.item.session.id,
+      ),
+    ).not.toContain(session.id);
+  });
+
+  it('reindexes edited prompts from message update events', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Prompt edit search' });
+    const message = await services.messages.enqueue({
+      sessionId: session.id,
+      prompt: 'oldneedle prompt content',
+      source: 'test',
+    });
+
+    await runSessionSearchIndexerOnce({ store, events: services.events });
+    const oldNeedleIds = (await store.searchSessions('fake', { query: 'oldneedle', limit: 10 })).items.map(
+      (item) => item.item.session.id,
+    );
+    expect(oldNeedleIds).toContain(session.id);
+
+    await services.messages.updatePending({
+      sessionId: session.id,
+      messageId: message.id,
+      prompt: 'newneedle prompt content',
+    });
+    await runSessionSearchIndexerOnce({ store, events: services.events });
+
+    const newNeedleIds = (await store.searchSessions('fake', { query: 'newneedle', limit: 10 })).items.map(
+      (item) => item.item.session.id,
+    );
+    const staleNeedleIds = (await store.searchSessions('fake', { query: 'oldneedle', limit: 10 })).items.map(
+      (item) => item.item.session.id,
+    );
+    expect(newNeedleIds).toContain(session.id);
+    expect(staleNeedleIds).not.toContain(session.id);
+  });
+
+  it('indexes final agent responses for search', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Response search' });
+    await services.events.append({
+      sessionId: session.id,
+      type: 'agent_response_final',
+      payload: { text: 'The connected Notion integration works end-to-end.' },
+    });
+
+    await runSessionSearchIndexerOnce({ store, events: services.events });
+
+    const results = await store.searchSessions('fake', { query: 'notion', limit: 10 });
+    expect(results.items.map((item) => item.item.session.id)).toContain(session.id);
+    expect(results.items.find((item) => item.item.session.id === session.id)?.matchKind).toBe('response');
   });
 
   it('limits event reads when a batch size is requested', async () => {
