@@ -587,7 +587,7 @@ it('keeps new-session action available from the sidebar on mobile', async () => 
   expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeInTheDocument();
 });
 
-it('keeps the sidebar archive action exposed on mobile', async () => {
+it('keeps sidebar session actions exposed on mobile', async () => {
   mockApi();
   render(<App />);
 
@@ -1280,15 +1280,16 @@ it('filters sessions with the searchable sidebar tag picker', async () => {
   });
 });
 
-it('exposes hidden sidebar tags on the collapsed count badge', async () => {
+it('omits session tag badges from sidebar rows', async () => {
   mockApi({ sessionOverride: { tags: ['alpha', 'beta', 'gamma', 'delta', 'epsilon'] } });
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
-  const collapsedTags = screen.getByLabelText('2 more tags: delta, epsilon');
+  const sessionRow = screen.getByRole('button', { name: /Existing session/ }).closest('div');
+  expect(sessionRow).toBeInTheDocument();
 
-  expect(collapsedTags).toHaveTextContent('+2');
-  expect(collapsedTags).toHaveAttribute('title', 'delta, epsilon');
+  expect(within(sessionRow as HTMLElement).queryByText('alpha')).not.toBeInTheDocument();
+  expect(within(sessionRow as HTMLElement).queryByText('beta')).not.toBeInTheDocument();
 });
 
 it('opens search results that are outside the loaded sessions page', async () => {
@@ -1360,20 +1361,17 @@ it('updates sidebar search result archive controls after archive and restore', a
 
   fireEvent.click(within(await waitFor(() => getResultRow())).getByRole('button', { name: 'Archive session' }));
 
-  await waitFor(() =>
-    expect(within(getResultRow()).getByRole('button', { name: 'Restore session' })).toBeInTheDocument(),
-  );
+  await waitFor(() => expect(within(getResultRow()).getByText('archived')).toBeInTheDocument());
   const archivedResultRow = getResultRow();
   expect(screen.getByText('Archived')).toBeInTheDocument();
   expect(within(archivedResultRow).queryByRole('button', { name: 'Archive session' })).not.toBeInTheDocument();
-  expect(within(archivedResultRow).getByText('archived')).toBeInTheDocument();
+  expect(within(archivedResultRow).getByRole('button', { name: 'Restore session' })).toBeInTheDocument();
 
   fireEvent.click(within(archivedResultRow).getByRole('button', { name: 'Restore session' }));
 
-  await waitFor(() =>
-    expect(within(getResultRow()).getByRole('button', { name: 'Archive session' })).toBeInTheDocument(),
-  );
+  await waitFor(() => expect(within(getResultRow()).getByText('idle')).toBeInTheDocument());
   const activeResultRow = getResultRow();
+  expect(within(activeResultRow).getByRole('button', { name: 'Archive session' })).toBeInTheDocument();
   expect(within(activeResultRow).queryByRole('button', { name: 'Restore session' })).not.toBeInTheDocument();
   expect(within(activeResultRow).getByText('idle')).toBeInTheDocument();
 });
@@ -3055,9 +3053,9 @@ it('keeps the new-session page selected after archiving and refreshing', async (
   mockApi();
   const first = render(<App />);
 
-  const archiveButton = (await screen.findAllByRole('button', { name: 'Archive session' }))[0];
-  if (!archiveButton) throw new Error('Expected archive session button');
-  fireEvent.click(archiveButton);
+  const sessionRow = (await screen.findByRole('button', { name: /Existing session/ })).closest('div');
+  if (!sessionRow) throw new Error('Expected session row');
+  fireEvent.click(within(sessionRow).getByRole('button', { name: 'Archive session' }));
 
   expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
   expect(sessionStorage.getItem('deputies-selected-session-id')).toBeNull();

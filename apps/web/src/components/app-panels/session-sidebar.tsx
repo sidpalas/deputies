@@ -636,122 +636,126 @@ function SessionButton(props: {
     snippet && !(props.matchKind === 'title' && normalizedSearchText(snippet) === normalizedSearchText(title)),
   );
   const showContextLine = props.compact && showSnippet && props.matchKind !== 'title';
+  const canArchive = props.canWriteSession && Boolean(props.onArchive);
+  const canRestore = props.canWriteSession && Boolean(props.onUnarchive);
+
+  function toggleStar() {
+    props.onStarChange(props.session.id, !props.session.starred);
+  }
+
+  function archiveSession() {
+    props.onArchive?.(props.session.id);
+  }
+
+  function restoreSession() {
+    props.onUnarchive?.(props.session.id);
+  }
 
   return (
     <div
       className={cn(
-        'group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-transparent p-2 hover:bg-accent',
-        props.compact && 'gap-1.5 p-1.5',
+        'group relative w-full min-w-0 rounded-md border border-transparent px-2 py-1.5 hover:bg-accent',
+        props.compact && 'p-1.5',
         props.selected && 'border-primary bg-primary/15',
         props.session.status === 'archived' && 'opacity-75',
       )}
     >
       <button
-        className="block min-w-0 flex-1 overflow-hidden bg-transparent p-0 text-left"
+        className="block w-full min-w-0 overflow-hidden bg-transparent p-0 text-left"
         type="button"
         onClick={() => props.onSelect(props.session.id)}
       >
         <strong
-          className={cn('block w-full truncate text-sm font-medium text-foreground', props.compact && 'leading-4')}
-        >
-          {title}
-        </strong>
-        <span
           className={cn(
-            'block w-full truncate text-xs text-muted-foreground',
-            props.compact && props.matchKind && 'mt-0.5 whitespace-normal leading-4',
+            'flex w-full min-w-0 items-center gap-1.5 text-sm font-medium text-foreground',
+            props.compact && 'leading-4',
           )}
-          title={displayTooltip}
         >
-          <span className={statusTextClass(displayStatus)}>{displayStatus}</span> ·{' '}
-          {formatDate(props.session.lastActivityAt ?? props.session.updatedAt)}
-          {props.matchKind ? (
-            <>
-              {' '}
-              ·{' '}
-              <span className="rounded border border-border px-1 py-px text-[9px] uppercase tracking-wide text-muted-foreground">
-                {props.matchKind}
-              </span>
-            </>
+          <span className="min-w-0 truncate">{title}</span>
+        </strong>
+      </button>
+      <div className="flex min-h-6 min-w-0 items-center gap-2">
+        <button
+          className="block min-w-0 flex-1 overflow-hidden bg-transparent p-0 text-left"
+          type="button"
+          onClick={() => props.onSelect(props.session.id)}
+        >
+          <span
+            className={cn(
+              'block w-full truncate text-xs leading-5 text-muted-foreground',
+              props.compact && props.matchKind && 'mt-0.5 whitespace-normal leading-4',
+            )}
+            title={displayTooltip}
+          >
+            <span className={statusTextClass(displayStatus)}>{displayStatus}</span> ·{' '}
+            {formatDate(props.session.lastActivityAt ?? props.session.updatedAt)}
+            {props.matchKind ? (
+              <>
+                {' '}
+                ·{' '}
+                <span className="rounded border border-border px-1 py-px text-[9px] uppercase tracking-wide text-muted-foreground">
+                  {props.matchKind}
+                </span>
+              </>
+            ) : null}
+            {showSnippet && !showContextLine ? <> · {snippet}</> : null}
+          </span>
+        </button>
+        <div className="flex h-6 shrink-0 items-center gap-1">
+          <Button
+            className={cn(
+              'h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-foreground md:shadow-none',
+              !props.session.starred &&
+                'md:pointer-events-none md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100',
+            )}
+            variant="ghost"
+            size="icon"
+            type="button"
+            onClick={toggleStar}
+            aria-label={props.session.starred ? 'Unstar session' : 'Star session'}
+            aria-pressed={props.session.starred === true}
+            title={props.session.starred ? 'Unstar session' : 'Star session'}
+          >
+            <Star className={cn('h-3.5 w-3.5', props.session.starred && 'fill-current text-warning')} />
+          </Button>
+          {canArchive ? (
+            <Button
+              className="h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-destructive md:pointer-events-none md:opacity-0 md:shadow-none md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
+              variant="ghost"
+              size="icon"
+              type="button"
+              onClick={archiveSession}
+              aria-label="Archive session"
+              title="Archive session"
+            >
+              <Archive className="h-3.5 w-3.5" />
+            </Button>
           ) : null}
-          {showSnippet && !showContextLine ? <> · {snippet}</> : null}
-        </span>
-        <SessionTagBadges tags={props.session.tags ?? []} compact={props.compact} />
+          {canRestore ? (
+            <Button
+              className="h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-foreground md:pointer-events-none md:opacity-0 md:shadow-none md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
+              variant="ghost"
+              size="icon"
+              type="button"
+              onClick={restoreSession}
+              aria-label="Restore session"
+              title="Restore session"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      <button
+        className="block w-full min-w-0 overflow-hidden bg-transparent p-0 text-left"
+        type="button"
+        onClick={() => props.onSelect(props.session.id)}
+      >
         {showContextLine ? (
           <span className="mt-0.5 line-clamp-3 block text-xs leading-4 text-muted-foreground">{snippet}</span>
         ) : null}
       </button>
-      <Button
-        className={cn(
-          'w-8 shrink-0 p-0 md:w-auto md:px-2.5',
-          !props.session.starred && 'md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100',
-        )}
-        variant="ghost"
-        size="sm"
-        onClick={(event) => {
-          event.stopPropagation();
-          props.onStarChange(props.session.id, !props.session.starred);
-        }}
-        aria-label={props.session.starred ? 'Unstar session' : 'Star session'}
-        aria-pressed={props.session.starred === true}
-        title={props.session.starred ? 'Unstar session' : 'Star session'}
-      >
-        <Star className={cn('h-3.5 w-3.5', props.session.starred && 'fill-current text-warning')} />
-      </Button>
-      {props.canWriteSession && props.onArchive ? (
-        <Button
-          className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-          variant="ghost"
-          size="sm"
-          onClick={() => props.onArchive?.(props.session.id)}
-          aria-label="Archive session"
-          title="Archive session"
-        >
-          <Archive className="h-3.5 w-3.5" />
-        </Button>
-      ) : null}
-      {props.canWriteSession && props.onUnarchive ? (
-        <Button
-          className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-          variant="ghost"
-          size="sm"
-          onClick={() => props.onUnarchive?.(props.session.id)}
-          aria-label="Restore session"
-          title="Restore session"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-        </Button>
-      ) : null}
     </div>
-  );
-}
-
-function SessionTagBadges(props: { tags: string[]; compact?: boolean | undefined }) {
-  if (!props.tags.length) return null;
-  const visible = props.tags.slice(0, props.compact ? 2 : 3);
-  const hidden = props.tags.slice(visible.length);
-  const extra = props.tags.length - visible.length;
-  const hiddenLabel = hidden.join(', ');
-  return (
-    <span className="mt-1 flex flex-wrap gap-1">
-      {visible.map((tag) => (
-        <Badge
-          key={tag}
-          className="max-w-[8rem] truncate border border-border bg-background/80 px-1.5 py-0 text-[10px] text-muted-foreground"
-        >
-          {tag}
-        </Badge>
-      ))}
-      {extra > 0 ? (
-        <Badge
-          className="border border-border bg-background/80 px-1.5 py-0 text-[10px] text-muted-foreground"
-          title={hiddenLabel}
-          aria-label={`${extra} more tags: ${hiddenLabel}`}
-        >
-          +{extra}
-        </Badge>
-      ) : null}
-    </span>
   );
 }
 
