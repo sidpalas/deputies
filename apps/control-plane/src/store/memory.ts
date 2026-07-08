@@ -49,7 +49,6 @@ import type {
   SessionMessageSummary,
   SessionTranscriptOptions,
   SessionTranscriptPage,
-  SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,

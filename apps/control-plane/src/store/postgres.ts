@@ -49,7 +49,6 @@ import type {
   SessionTranscriptPage,
   SessionVisibilityFilter,
   SessionWithSandboxPage,
-  SessionWithSandboxRecord,
   UpdateAutomationRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
