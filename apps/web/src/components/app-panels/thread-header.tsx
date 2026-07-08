@@ -162,7 +162,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   }
 
   return (
-    <section className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
+    <section className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
       <div className="flex min-w-0 items-start gap-2">
         {props.showOpenSidebar ? (
           <Button
@@ -218,92 +218,6 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               ) : null}
             </div>
           )}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {sessionTags.map((tag) => (
-              <Badge key={tag} className={sessionTagChipClass}>
-                {tag}
-                {props.canWriteSession && props.selectedSession.status !== 'archived' ? (
-                  <button
-                    type="button"
-                    className="hover:text-foreground"
-                    disabled={savingTags}
-                    onClick={() => {
-                      void saveTags(sessionTags.filter((candidate) => candidate !== tag));
-                    }}
-                    aria-label={`Remove ${tag}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                ) : null}
-              </Badge>
-            ))}
-            {props.canWriteSession && props.selectedSession.status !== 'archived' ? (
-              <div className="relative" ref={tagEditorRef}>
-                <button
-                  className={cn(
-                    sessionTagChipClass,
-                    'border-dashed transition-colors hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
-                  )}
-                  type="button"
-                  disabled={savingTags}
-                  onClick={() => setTagPopoverOpen((open) => !open)}
-                  aria-expanded={tagPopoverOpen}
-                  aria-haspopup="listbox"
-                >
-                  <span aria-hidden="true">+</span>
-                  Tag
-                </button>
-                {tagPopoverOpen ? (
-                  <div className="absolute left-0 top-8 z-40 w-60 rounded-md border border-border bg-card p-2 text-sm text-card-foreground shadow-lg">
-                    <Input
-                      className="h-8 text-xs"
-                      placeholder="Search or create tag..."
-                      value={tagDraft}
-                      disabled={savingTags}
-                      onChange={(event) => setTagDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Enter') return;
-                        event.preventDefault();
-                        void addTag(tagDraft);
-                      }}
-                    />
-                    <div className="mt-2 max-h-52 overflow-auto" role="listbox">
-                      {filteredTagOptions.map((option) => (
-                        <button
-                          key={option.tag}
-                          type="button"
-                          className="flex w-full items-center justify-between gap-3 rounded-sm px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={savingTags}
-                          role="option"
-                          onClick={() => {
-                            void addTag(option.tag);
-                          }}
-                        >
-                          <span className="min-w-0 truncate">{option.tag}</span>
-                        </button>
-                      ))}
-                      {canCreateTag ? (
-                        <button
-                          type="button"
-                          className="mt-1 flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={savingTags}
-                          onClick={() => {
-                            void addTag(tagDraft);
-                          }}
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                          <span className="min-w-0 truncate">Create "{tagQuery}"</span>
-                        </button>
-                      ) : null}
-                      {!filteredTagOptions.length && !canCreateTag ? (
-                        <p className="px-2 py-2 text-xs text-muted-foreground">{tagPickerEmptyMessage}</p>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
         </div>
       </div>
       <div className="grid min-h-9 shrink-0 grid-cols-[auto_auto] items-center justify-items-end gap-2 justify-self-end">
@@ -388,6 +302,92 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             </div>
           ) : null}
         </div>
+      </div>
+      <div className="col-span-2 row-start-2 flex flex-wrap items-center gap-1.5">
+        {sessionTags.map((tag) => (
+          <Badge key={tag} className={sessionTagChipClass}>
+            {tag}
+            {props.canWriteSession && props.selectedSession.status !== 'archived' ? (
+              <button
+                type="button"
+                className="hover:text-foreground"
+                disabled={savingTags}
+                onClick={() => {
+                  void saveTags(sessionTags.filter((candidate) => candidate !== tag));
+                }}
+                aria-label={`Remove ${tag}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            ) : null}
+          </Badge>
+        ))}
+        {props.canWriteSession && props.selectedSession.status !== 'archived' ? (
+          <div className="relative" ref={tagEditorRef}>
+            <button
+              className={cn(
+                sessionTagChipClass,
+                'border-dashed text-xs font-medium leading-none transition-colors hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+              type="button"
+              disabled={savingTags}
+              onClick={() => setTagPopoverOpen((open) => !open)}
+              aria-expanded={tagPopoverOpen}
+              aria-haspopup="listbox"
+            >
+              <span aria-hidden="true">+</span>
+              Tag
+            </button>
+            {tagPopoverOpen ? (
+              <div className="absolute left-0 top-8 z-40 w-60 rounded-md border border-border bg-card p-2 text-sm text-card-foreground shadow-lg">
+                <Input
+                  className="h-8 text-xs"
+                  placeholder="Search or create tag..."
+                  value={tagDraft}
+                  disabled={savingTags}
+                  onChange={(event) => setTagDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return;
+                    event.preventDefault();
+                    void addTag(tagDraft);
+                  }}
+                />
+                <div className="mt-2 max-h-52 overflow-auto" role="listbox">
+                  {filteredTagOptions.map((option) => (
+                    <button
+                      key={option.tag}
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 rounded-sm px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={savingTags}
+                      role="option"
+                      onClick={() => {
+                        void addTag(option.tag);
+                      }}
+                    >
+                      <span className="min-w-0 truncate">{option.tag}</span>
+                    </button>
+                  ))}
+                  {canCreateTag ? (
+                    <button
+                      type="button"
+                      className="mt-1 flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={savingTags}
+                      onClick={() => {
+                        void addTag(tagDraft);
+                      }}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span className="min-w-0 truncate">Create "{tagQuery}"</span>
+                    </button>
+                  ) : null}
+                  {!filteredTagOptions.length && !canCreateTag ? (
+                    <p className="px-2 py-2 text-xs text-muted-foreground">{tagPickerEmptyMessage}</p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </section>
   );
