@@ -37,12 +37,14 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [tagDraft, setTagDraft] = useState('');
   const [tagPopoverOpen, setTagPopoverOpen] = useState(false);
+  const [tagPopoverLeft, setTagPopoverLeft] = useState(0);
   const [savingTags, setSavingTags] = useState(false);
   const [titleDraft, setTitleDraft] = useState(props.selectedSession.title ?? '');
   const [toolsOpen, setToolsOpen] = useState(false);
   const [openingWorkspaceTool, setOpeningWorkspaceTool] = useState<WorkspaceToolId | ''>('');
   const toolsRef = useRef<HTMLDivElement>(null);
   const tagEditorRef = useRef<HTMLDivElement>(null);
+  const tagButtonRef = useRef<HTMLButtonElement>(null);
   const canOpenWorkspaceTools = props.canOpenWorkspaceTools ?? props.canWriteSession;
   const workspaceToolsDisabled = Boolean(props.workspaceToolsDisabled);
   const sessionTags = props.selectedSession.tags ?? [];
@@ -73,6 +75,8 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   useEffect(() => {
     if (!tagPopoverOpen) return;
 
+    updateTagPopoverPosition();
+
     function closeOnOutsideClick(event: MouseEvent) {
       if (event.target instanceof Node && tagEditorRef.current?.contains(event.target)) return;
       setTagPopoverOpen(false);
@@ -87,9 +91,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
 
     document.addEventListener('mousedown', closeOnOutsideClick);
     document.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('resize', updateTagPopoverPosition);
     return () => {
       document.removeEventListener('mousedown', closeOnOutsideClick);
       document.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('resize', updateTagPopoverPosition);
     };
   }, [tagPopoverOpen]);
 
@@ -159,6 +165,19 @@ export function ThreadHeader(props: ThreadHeaderProps) {
     setToolsOpen(false);
     if (!props.canWriteSession) return;
     props.onArchive();
+  }
+
+  function updateTagPopoverPosition() {
+    const row = tagEditorRef.current;
+    const button = tagButtonRef.current;
+    if (!row || !button) return;
+
+    const rowRect = row.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    const popoverWidth = Math.min(320, rowRect.width);
+    const desiredLeft = buttonRect.left - rowRect.left;
+    const maxLeft = Math.max(0, rowRect.width - popoverWidth);
+    setTagPopoverLeft(Math.min(Math.max(0, desiredLeft), maxLeft));
   }
 
   return (
@@ -303,7 +322,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           ) : null}
         </div>
       </div>
-      <div className="col-span-2 row-start-2 flex flex-wrap items-center gap-1.5">
+      <div className="relative col-span-2 row-start-2 flex flex-wrap items-center gap-1.5" ref={tagEditorRef}>
         {sessionTags.map((tag) => (
           <Badge key={tag} className={sessionTagChipClass}>
             {tag}
@@ -323,8 +342,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           </Badge>
         ))}
         {props.canWriteSession && props.selectedSession.status !== 'archived' ? (
-          <div className="relative" ref={tagEditorRef}>
+          <div>
             <button
+              ref={tagButtonRef}
               className={cn(
                 sessionTagChipClass,
                 'border-dashed text-xs font-medium leading-none transition-colors hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
@@ -339,7 +359,10 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               Tag
             </button>
             {tagPopoverOpen ? (
-              <div className="absolute left-0 top-8 z-40 w-60 rounded-md border border-border bg-card p-2 text-sm text-card-foreground shadow-lg">
+              <div
+                className="absolute top-[calc(100%+0.5rem)] z-40 w-80 max-w-full rounded-md border border-border bg-card p-2 text-sm text-card-foreground shadow-lg"
+                style={{ left: tagPopoverLeft }}
+              >
                 <Input
                   className="h-8 text-xs"
                   placeholder="Search or create tag..."
