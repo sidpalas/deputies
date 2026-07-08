@@ -15,16 +15,13 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 ## Web UI
 
-- Session tagging, filtering, and grouping.
-- Session filters for all sessions, started by me, participated in, and tag-based views.
+- Saved session views/grouping for common filters, sources, repositories, and teams.
 - User-selectable model, repository, branch, and execution settings.
 - Repository picker with saved defaults per user/team/source.
-- Session list pagination and server-side search.
-- Pin/favorite sessions.
 - Audit and document preview-origin isolation after signed preview auth, including whether separate eTLD+1 deployment remains required for defense-in-depth against untrusted preview content.
 - Surface sandbox cleanup events and failures more clearly.
 - Expand callback delivery UI with filtering and clearer retry/failure history.
-- Improve archived-session browsing and bulk cleanup.
+- Bulk cleanup and retention workflows for archived sessions.
 - Broader Playwright smoke tests for desktop/mobile flows beyond the existing responsive context-panel coverage.
 
 ## Agent Runtime
@@ -55,23 +52,22 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 - Provider conformance test suite.
 - Sandbox metrics for create/connect/start/stop/destroy latency.
-- Repository-aware, auto-refreshing sandbox images/snapshots for common repos that keep up with main, preinstall dependencies, precompile the app, and still use Flue startup refresh for stale or missing worktrees.
+- Repository-aware, auto-refreshing sandbox images/snapshots for common repos that keep up with main, preinstall dependencies, precompile the app, and still use runner startup refresh for stale or missing worktrees.
 - Automate building and publishing the Tensorlake sandbox image, including refreshing the registered Tensorlake image after base image changes.
 - Remote Docker host bridge reachability: the current Docker provider publishes each sandbox bridge on the Docker host loopback (`127.0.0.1::3584`). In in-process mode with a remote Docker daemon, the control plane needs bridge reachability for exec, filesystem, and previews. In split mode, exec/filesystem can flow through the orchestrator, but previews still require direct bridge reachability today. Add orchestrator-side preview proxying, or make bridge bind/private-network configuration explicit and safe.
 
 ## Scale And Operations
 
 - Generate `docs/configuration.md` from `apps/control-plane/src/config/index.ts` as the env source of truth, with `Name`, `Required When`, `Default`, `Values`, and `Description` columns, including conditional requirements such as `SANDBOX_SECRET_ENCRYPTION_KEY` for Postgres-backed Docker sandboxes, `GITHUB_WEBHOOK_TRIGGER_PHRASES` when GitHub webhooks are enabled, and Slack allowlists when `SLACK_SIGNING_SECRET` is set.
-- Multiple product users and organizations with separate auth, session ownership, quotas, and audit trails.
-- Session participants, including `createdByUserId` and users who send messages or otherwise participate.
-- Session tags as a general metadata layer, starting with API/manual tags and later integration-derived tags such as `github:owner/repo`, `slack:channel`, and `repo:owner/name`.
-- `GET /sessions` filters for `createdBy=me`, `participation=mine`, `tag=...`, and eventually source/repository filters.
-- Preserve the shared workspace model: session filtering is for discovery and noise reduction, not an RBAC or visibility boundary.
+- User/org quotas and audit trails beyond the current auth, access-group, and session ownership model.
+- Richer participant metadata beyond creator/message-author participation, such as tool-run actors and external integration actors.
+- Source/repository-derived session tag dimensions such as `github:owner/repo`, `slack:channel`, and `repo:owner/name`.
+- Additional `GET /sessions` filters for source/repository dimensions once those tags or fields exist.
 - Per-user/per-team integration authorization policies for Slack, GitHub, Linear, and web UI entry points, beyond the current global allowlists.
 - Metrics endpoint or structured timing logs.
 - Observability pass across control-plane, workers, sandbox orchestrators, and sandbox bridge: structured request/lifecycle logs with session/run/sandbox correlation IDs, sandbox create/connect/exec/preview/destroy audit events, useful latency/error metrics, and optional trace propagation for HTTP orchestrator and provider calls.
 - Pending-message, active-run, and worker-throughput dashboards.
-- Session/event table pagination and retention policies.
+- Event table pagination and session/event retention policies.
 - Deployment guides for Railway, Docker-Compose, and Kubernetes.
 - Migration/release runbooks.
 - Production readiness checklist.
@@ -85,4 +81,4 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Opt-in credentialed UAT for the real Pi runner, sandbox provider, model credentials, and artifact-tool creation/download, separate from the deterministic fake-runner full-stack smoke.
 - Real-provider smoke tests for Daytona on a schedule.
 - Load profiles for session listing, event replay, SSE fanout, and worker throughput.
-- Contract schemas for public API responses and normalized events.
+- Contract schemas for normalized event payloads.

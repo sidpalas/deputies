@@ -9,15 +9,16 @@ Deputies is a control plane for delegating engineering work to [background agent
 
 ## What It Does
 
-- Runs agent work in background sessions with a searchable activity history.
-- Streams progress, tool diagnostics, and final responses into the web UI.
+- Runs agent work in durable background sessions with searchable, paginated activity history.
+- Streams progress, tool diagnostics, artifacts, and final responses into the web UI.
+- Lets users star, tag, filter, search, archive, and resume sessions.
 - Built on [Pi](https://pi.dev/) for real agent work; the legacy Flue runner is deprecated and remains temporarily available during removal.
-- Supports Slack and GitHub integrations for issue, thread, and callback-driven workflows.
-- Supports GitHub OAuth login for browser access control.
-- Works with [Daytona](https://www.daytona.io/) and Docker as sandbox providers, plus fake and unsafe local providers for tests and trusted development.
+- Supports Slack, GitHub, generic webhook, and scheduled automation workflows with callback delivery tracking.
+- Supports GitHub OAuth login, static login, access groups, and session ownership controls for browser access.
+- Works with [Daytona](https://www.daytona.io/), Docker, Tensorlake, Kubernetes Agent Sandbox, and AWS Lambda MicroVM sandbox providers, plus fake and unsafe local providers for tests and trusted development.
 - Runs repo-owned `.agents/setup` scripts to prepare sandbox workspaces before agents start.
 - Supports standard LLM API-key configuration and OpenAI Codex/ChatGPT subscriptions.
-- Tracks artifacts, callback deliveries, repositories, sandbox status, and queued messages.
+- Tracks artifacts, callback deliveries, repositories, sandbox status, automations, and queued messages.
 - Deploys as portable Node, Caddy, Postgres, and optional S3-compatible object storage services.
 
 ## Deployment
@@ -30,6 +31,8 @@ Specific deployment targets:
 
 - Railway: the public template at `https://railway.com/deploy/deputies-monolith` provisions the app services and supporting infrastructure.
 - Docker Compose: `deploy/docker-compose/` contains local production-style Compose stacks for combined and split API/worker/orchestrator deployments.
+- Kubernetes: `deploy/kubernetes/` contains Helm charts for Kubernetes deployments.
+- AWS: `deploy/aws/` contains a Terraform reference deployment for ECS Fargate, RDS, S3, and Lambda MicroVM sandboxes.
 
 More deployment targets are expected over time. See `deploy/README.md`, `docs/deployment.md`, and target-specific docs for details.
 
