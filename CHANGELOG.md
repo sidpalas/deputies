@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.15.0](https://github.com/sidpalas/deputies/compare/v0.14.0...v0.15.0) (2026-07-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* paginate sessions and add search ([#87](https://github.com/sidpalas/deputies/issues/87))
+
+### Features
+
+* add session tags and filters ([#88](https://github.com/sidpalas/deputies/issues/88)) ([d394ce1](https://github.com/sidpalas/deputies/commit/d394ce17821ef4660aa5b319e68cf22eea842355))
+* add source tags and auth caching ([2533722](https://github.com/sidpalas/deputies/commit/2533722c998228e87843d869189239961a29dab3))
+* paginate sessions and add search ([#87](https://github.com/sidpalas/deputies/issues/87)) ([5cdd405](https://github.com/sidpalas/deputies/commit/5cdd405df60bd28b13a514292103cff2a81ab707))
+
+
+### Bug Fixes
+
+* remove unused session type imports ([a74b2ce](https://github.com/sidpalas/deputies/commit/a74b2ced0d313c51ef96a566a96a41ff75b918e3))
+* sync session search archive state ([e8e60d8](https://github.com/sidpalas/deputies/commit/e8e60d89c4717931c954cf6464a765260580a106))
+
+
+### Chores
+
+* update Pi packages ([b7047e8](https://github.com/sidpalas/deputies/commit/b7047e8aca06bd3956d2d0ae411f53271bf208c0))
+
+
+### Code Refactoring
+
+* inline tag chip classes ([ecabc45](https://github.com/sidpalas/deputies/commit/ecabc45d074bf6b5ddba7da2ef2389030bdcd37e))
+
+
+### Tests
+
+* update tag picker labels ([3a7083e](https://github.com/sidpalas/deputies/commit/3a7083e2904db6a4cbb2cc6893d318745ea5da3d))
+
 ## [0.14.0](https://github.com/sidpalas/deputies/compare/v0.13.0...v0.14.0) (2026-07-07)
 
 
