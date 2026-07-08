@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.1](https://github.com/sidpalas/deputies/compare/v0.15.0...v0.15.1) (2026-07-08)
+
+
+### Bug Fixes
+
+* improve session sidebar row actions ([d9e98ac](https://github.com/sidpalas/deputies/commit/d9e98ace1ca8b2a1eaa10cd5d6e33f67e5589a60))
+
+
+### Documentation
+
+* refresh feature backlog and readme ([4eaf9ee](https://github.com/sidpalas/deputies/commit/4eaf9ee6e498c86c2ffdb29a9e9c951e9008dbbd))
+
 ## [0.15.0](https://github.com/sidpalas/deputies/compare/v0.14.0...v0.15.0) (2026-07-08)
 
 
