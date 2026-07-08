@@ -4,7 +4,6 @@ import {
   ApiError,
   AgentEvent,
   Artifact,
-  archiveAutomation,
   CallbackDelivery,
   ExternalResource,
   Message,
@@ -28,7 +27,6 @@ import {
   listBranches,
   login,
   listArtifacts,
-  listAutomations,
   listCallbacks,
   listGroups,
   listSessionTags,
@@ -46,7 +44,6 @@ import {
   setSessionStarred,
   retryMessage,
   streamGlobalEvents,
-  unarchiveAutomation,
   unarchiveSession,
   updateMessage,
   updateSession,
@@ -65,6 +62,7 @@ import {
   type WorkspaceToolId,
 } from './api.js';
 import { useAccessGroupsAdmin } from './access-groups-admin.js';
+import { useAutomationsAdmin } from './automations-admin.js';
 import { isInlineDisplayableArtifact } from './artifact-display.js';
 import {
   startSessionMilestoneInteraction,
@@ -314,7 +312,6 @@ export function App() {
   const [token, setToken] = useState(loadStoredToken);
   const [groups, setGroups] = useState<Group[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [automations, setAutomations] = useState<Automation[]>([]);
   const [navigation, setNavigation] = useState<NavigationState>(loadInitialNavigationState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -350,9 +347,6 @@ export function App() {
   const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(
     () => sessionStorage.getItem(archivedSessionsOpenStorageKey) === 'true',
   );
-  const [archivedAutomationsOpen, setArchivedAutomationsOpen] = useState(
-    () => sessionStorage.getItem(archivedAutomationsOpenStorageKey) === 'true',
-  );
   const [themePreference, setThemePreference] = useState<ThemePreference>(loadThemePreference);
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -370,8 +364,6 @@ export function App() {
   const [sessionTagOptions, setSessionTagOptions] = useState<SessionTagSummary[]>([]);
   const [sessionListHovered, setSessionListHovered] = useState(false);
   const [sessionOrderIds, setSessionOrderIds] = useState<string[]>([]);
-  const [automationsLoading, setAutomationsLoading] = useState(false);
-  const [automationsLoaded, setAutomationsLoaded] = useState(false);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [detailLoadedSessionId, setDetailLoadedSessionId] = useState('');
   const [healthChecked, setHealthChecked] = useState(false);
@@ -453,6 +445,13 @@ export function App() {
     : activeGroups;
   const manageableGroups = groups.filter((group) => group.canManage);
   const canManageAllGroups = canCallApi && (!sessionAuthRequired || currentUser?.role === 'super_admin');
+  const canCreateThread =
+    canCallApi &&
+    (!sessionAuthRequired ||
+      (currentUser?.role === 'super_admin' && activeGroups.length > 0) ||
+      creatableGroups.length > 0);
+  const canViewAutomations = canCreateThread;
+  const canCreateAutomations = canCallApi && (!sessionAuthRequired || automationCreatableGroups.length > 0);
   const {
     currentSuperAdminUsers,
     groupForm,
@@ -494,23 +493,34 @@ export function App() {
     setError,
     setGroups,
   });
+  const {
+    automations,
+    selectedAutomation,
+    archivedAutomationsOpen,
+    setArchivedAutomationsOpen,
+    automationsLoading,
+    automationsLoaded,
+    refreshAutomations,
+    handleAutomationChanged,
+    handleArchiveAutomation,
+    handleUnarchiveAutomation,
+    reset: resetAutomationsAdmin,
+  } = useAutomationsAdmin({
+    token,
+    canViewAutomations,
+    selectedAutomationId,
+    initialAutomationDeepLinkRef,
+    clearResourceSearchParams,
+    handleApiError,
+    setError,
+    setSelectedAutomationId,
+  });
   const canManageGroups = canManageAllGroups || (canCallApi && manageableGroups.length > 0);
   const canViewGroups = canManageGroups || (canCallApi && sessionAuthRequired && groups.length > 0);
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) ?? null,
     [sessions, selectedSessionId],
   );
-  const selectedAutomation = useMemo(
-    () => automations.find((automation) => automation.id === selectedAutomationId) ?? null,
-    [automations, selectedAutomationId],
-  );
-  const canCreateThread =
-    canCallApi &&
-    (!sessionAuthRequired ||
-      (currentUser?.role === 'super_admin' && activeGroups.length > 0) ||
-      creatableGroups.length > 0);
-  const canViewAutomations = canCreateThread;
-  const canCreateAutomations = canCallApi && (!sessionAuthRequired || automationCreatableGroups.length > 0);
   const canWriteSelectedSession = selectedSession ? userCanWriteSession(selectedSession) : canCreateThread;
   const canManageSelectedSessionAccess = Boolean(
     selectedSession &&
@@ -1394,28 +1404,6 @@ export function App() {
     }
   }
 
-  async function refreshAutomations() {
-    if (!canViewAutomations) return;
-    setAutomationsLoading(true);
-    setError('');
-    try {
-      const nextAutomations = await listAutomations(token);
-      setAutomations(nextAutomations);
-      setSelectedAutomationId((current) => {
-        if (!current || nextAutomations.some((automation) => automation.id === current)) return current;
-        if (initialAutomationDeepLinkRef.current) return current;
-        sessionStorage.removeItem(selectedAutomationStorageKey);
-        clearResourceSearchParams();
-        return '';
-      });
-    } catch (err) {
-      handleApiError(err);
-    } finally {
-      setAutomationsLoaded(true);
-      setAutomationsLoading(false);
-    }
-  }
-
   async function refreshSessionDetail(sessionId: string, trigger?: BrowserMilestoneTrigger) {
     setError('');
     if (!trigger) {
@@ -1960,8 +1948,7 @@ export function App() {
     setSessionSearchQuery('');
     setSessionSearchResults([]);
     setSessionSearchNextCursor(null);
-    setAutomations([]);
-    setAutomationsLoaded(false);
+    resetAutomationsAdmin();
     setGroups([]);
     resetAccessGroupsAdmin();
     setSessionsLoaded(false);
@@ -2098,32 +2085,6 @@ export function App() {
       selectedAutomationId: automationId,
     });
     if (!isDesktopViewport()) setSidebarOpen(false);
-  }
-
-  function handleAutomationChanged(automation: Automation) {
-    setAutomations((current) => [automation, ...current.filter((candidate) => candidate.id !== automation.id)]);
-  }
-
-  async function handleArchiveAutomation(automationId: string) {
-    const automation = automations.find((candidate) => candidate.id === automationId);
-    if (!automation?.canManage || automation.archivedAt) return;
-    setError('');
-    try {
-      handleAutomationChanged(await archiveAutomation({ automationId, token }));
-    } catch (err) {
-      handleApiError(err);
-    }
-  }
-
-  async function handleUnarchiveAutomation(automationId: string) {
-    const automation = automations.find((candidate) => candidate.id === automationId);
-    if (!automation?.canManage || !automation.archivedAt) return;
-    setError('');
-    try {
-      handleAutomationChanged(await unarchiveAutomation({ automationId, token }));
-    } catch (err) {
-      handleApiError(err);
-    }
   }
 
   function handleAutomationSaved(automation: Automation) {

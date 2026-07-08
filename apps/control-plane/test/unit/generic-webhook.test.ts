@@ -39,6 +39,7 @@ describe('GenericWebhookService', () => {
     });
 
     expect(first.session?.id).toBe(second.session?.id);
+    expect(first.session?.tags).toEqual(['webhook']);
     await expect(services.messages.list(first.session!.id)).resolves.toMatchObject([
       { prompt: 'bar baz\n\ndo work', source: 'generic:foo' },
       { prompt: 'bar baz\n\nfollow up', source: 'generic:foo' },

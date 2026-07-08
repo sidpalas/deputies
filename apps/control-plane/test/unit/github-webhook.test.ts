@@ -42,6 +42,7 @@ describe('GitHub webhook integration', () => {
     expect(comment.type).toBe('accepted');
     if (issue.type !== 'accepted' || comment.type !== 'accepted') throw new Error('Expected accepted GitHub events');
     expect(issue.session.id).toBe(comment.session.id);
+    expect(issue.session.tags).toEqual(['github']);
 
     const messages = await services.messages.list(issue.session.id);
     expect(messages).toHaveLength(2);

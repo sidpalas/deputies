@@ -2,7 +2,7 @@
 
 ## Summary
 
-The system is a portable background-agent control plane with Flue as the agent runtime. Flue already provides agent sessions, tools, skills, tasks/subagents, live events, and sandbox connector abstractions. This service provides the product control plane around those capabilities: durable queueing, leases, integrations, artifacts, replayable events, and portable deployment state.
+The system is a portable background-agent control plane with Pi as the agent runtime; the deprecated legacy Flue runner remains temporarily available during removal. This service provides the product control plane around those capabilities: durable queueing, leases, integrations, artifacts, replayable events, and portable deployment state.
 
 The system should be deployable to:
 

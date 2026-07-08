@@ -41,6 +41,7 @@ describe('deputies tool', () => {
       ownerGroupId: defaultGroupId,
       visibility: 'group',
       writePolicy: 'group_members',
+      tags: ['deputy'],
       createdByUserId: creatorUserId,
       context: { deputy: expect.objectContaining({ notifyParentOnComplete: true, parentSessionId: parentId }) },
     });

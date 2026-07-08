@@ -31,6 +31,7 @@ import type {
 const defaultBridgePort = 3584;
 const defaultHooksPort = 9000;
 const defaultReadyTimeoutMs = 60_000;
+const authTokenRefreshSkewCapMs = 5 * 60_000;
 
 export const lambdaMicrovmCapabilities: SandboxCapabilities = {
   persistentFilesystem: true,
@@ -112,12 +113,15 @@ type LambdaMicrovmFileInput = LambdaMicrovmRef & { path: string };
 type LambdaMicrovmWriteFileInput = LambdaMicrovmFileInput & { content: string | Uint8Array };
 type LambdaMicrovmMkdirInput = LambdaMicrovmFileInput & { recursive?: boolean };
 type LambdaMicrovmRmInput = LambdaMicrovmFileInput & { recursive?: boolean; force?: boolean };
+type AuthTokenOptions = { forceRefresh?: boolean };
+type CachedAuthToken = { token: string; expiresAt: number };
 
 export class LambdaMicrovmSandboxProvider implements SandboxProvider {
   readonly name = 'lambda-microvm';
   readonly capabilities = lambdaMicrovmCapabilities;
   private readonly client: LambdaMicrovmClientLike;
   private readonly descriptors = new Map<string, LambdaMicrovmDescriptor>();
+  private readonly authTokens = new Map<string, CachedAuthToken>();
 
   constructor(private readonly options: LambdaMicrovmSandboxProviderOptions) {
     this.client = options.client ?? createLambdaMicrovmClient(options);
@@ -143,7 +147,7 @@ export class LambdaMicrovmSandboxProvider implements SandboxProvider {
     try {
       await waitForBridge(
         descriptor,
-        (port) => this.authToken(descriptor.providerSandboxId, port),
+        (port, options) => this.authToken(descriptor.providerSandboxId, port, options),
         this.readyTimeoutMs,
       );
       this.descriptors.set(descriptor.providerSandboxId, descriptor);
@@ -164,7 +168,11 @@ export class LambdaMicrovmSandboxProvider implements SandboxProvider {
     if (!bridgeToken) throw new Error('Lambda MicroVM sandbox secrets are missing bridgeToken');
     const info = await this.client.get(input.providerSandboxId);
     const descriptor = this.descriptor(info, input.sessionId, bridgeToken, input.metadata ?? {});
-    await waitForBridge(descriptor, (port) => this.authToken(descriptor.providerSandboxId, port), this.readyTimeoutMs);
+    await waitForBridge(
+      descriptor,
+      (port, options) => this.authToken(descriptor.providerSandboxId, port, options),
+      this.readyTimeoutMs,
+    );
     this.descriptors.set(descriptor.providerSandboxId, descriptor);
     return this.toHandle(descriptor);
   }
@@ -181,6 +189,7 @@ export class LambdaMicrovmSandboxProvider implements SandboxProvider {
     try {
       await this.client.terminate(input.providerSandboxId);
       this.descriptors.delete(input.providerSandboxId);
+      this.clearAuthTokens(input.providerSandboxId);
     } catch (error) {
       if (isLambdaMicrovmMissingError(error)) return;
       throw error;
@@ -306,20 +315,36 @@ export class LambdaMicrovmSandboxProvider implements SandboxProvider {
     path: string,
     init: RequestInit = {},
   ): Promise<Response> {
-    const response = await fetch(`${microvmBaseUrl(descriptor.endpoint)}${path}`, {
+    const response = await this.bridgeFetchOnce(descriptor, path, init);
+    if (isAuthRejectedStatus(response.status)) {
+      this.invalidateAuthToken(descriptor.providerSandboxId, descriptor.bridgePort);
+      const retry = await this.bridgeFetchOnce(descriptor, path, init, { forceRefresh: true });
+      if (!retry.ok) {
+        throw await bridgeRequestError(retry);
+      }
+      return retry;
+    }
+    if (!response.ok) {
+      throw await bridgeRequestError(response);
+    }
+    return response;
+  }
+
+  private async bridgeFetchOnce(
+    descriptor: LambdaMicrovmDescriptor,
+    path: string,
+    init: RequestInit,
+    authOptions?: AuthTokenOptions,
+  ): Promise<Response> {
+    return fetch(`${microvmBaseUrl(descriptor.endpoint)}${path}`, {
       ...init,
       headers: {
         ...headersToRecord(init.headers),
         authorization: `Bearer ${descriptor.bridgeToken}`,
-        'x-aws-proxy-auth': await this.authToken(descriptor.providerSandboxId, descriptor.bridgePort),
+        'x-aws-proxy-auth': await this.authToken(descriptor.providerSandboxId, descriptor.bridgePort, authOptions),
         'x-aws-proxy-port': String(descriptor.bridgePort),
       },
     });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || `Lambda MicroVM bridge request failed: ${response.status}`);
-    }
-    return response;
   }
 
   private runInput(input: CreateSandboxInput, bridgeToken: string): LambdaMicrovmRunInput {
@@ -394,12 +419,31 @@ export class LambdaMicrovmSandboxProvider implements SandboxProvider {
     };
   }
 
-  private async authToken(microvmId: string, port: number): Promise<string> {
-    return this.client.createAuthToken({
+  private async authToken(microvmId: string, port: number, options: AuthTokenOptions = {}): Promise<string> {
+    const key = authTokenCacheKey(microvmId, port);
+    const cached = this.authTokens.get(key);
+    if (!options.forceRefresh && cached && Date.now() < cached.expiresAt) return cached.token;
+
+    const ttlMinutes = this.options.authTokenTtlMinutes ?? 30;
+    const ttlMs = ttlMinutes * 60_000;
+    const refreshSkewMs = Math.min(ttlMs * 0.2, authTokenRefreshSkewCapMs);
+    const token = await this.client.createAuthToken({
       microvmId,
       port,
-      expirationInMinutes: this.options.authTokenTtlMinutes ?? 30,
+      expirationInMinutes: ttlMinutes,
     });
+    this.authTokens.set(key, { token, expiresAt: Date.now() + ttlMs - refreshSkewMs });
+    return token;
+  }
+
+  private invalidateAuthToken(microvmId: string, port: number): void {
+    this.authTokens.delete(authTokenCacheKey(microvmId, port));
+  }
+
+  private clearAuthTokens(microvmId: string): void {
+    for (const key of this.authTokens.keys()) {
+      if (key.startsWith(`${microvmId}:`)) this.authTokens.delete(key);
+    }
   }
 
   private get workspacePath(): string {
@@ -413,6 +457,14 @@ export class LambdaMicrovmSandboxProvider implements SandboxProvider {
   private get readyTimeoutMs(): number {
     return this.options.readyTimeoutMs ?? defaultReadyTimeoutMs;
   }
+}
+
+function authTokenCacheKey(microvmId: string, port: number): string {
+  return `${microvmId}:${port}`;
+}
+
+function isAuthRejectedStatus(status: number): boolean {
+  return status === 401 || status === 403;
 }
 
 function isInternalMicrovmPort(port: number, bridgePort: number): boolean {
@@ -528,28 +580,36 @@ function createLambdaMicrovmFileSystem(
 
 async function waitForBridge(
   descriptor: LambdaMicrovmDescriptor,
-  authToken: (port: number) => Promise<string>,
+  authToken: (port: number, options?: AuthTokenOptions) => Promise<string>,
   timeoutMs: number,
 ): Promise<void> {
   const startedAt = Date.now();
   let lastError: unknown;
+  let forceRefresh = false;
   while (Date.now() - startedAt < timeoutMs) {
     try {
       const response = await fetch(`${microvmBaseUrl(descriptor.endpoint)}/health`, {
         headers: {
           authorization: `Bearer ${descriptor.bridgeToken}`,
-          'x-aws-proxy-auth': await authToken(descriptor.bridgePort),
+          'x-aws-proxy-auth': await authToken(descriptor.bridgePort, forceRefresh ? { forceRefresh: true } : undefined),
           'x-aws-proxy-port': String(descriptor.bridgePort),
         },
       });
       if (response.ok) return;
+      forceRefresh = isAuthRejectedStatus(response.status);
       lastError = new Error(await response.text());
     } catch (error) {
+      forceRefresh = false;
       lastError = error;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw lastError instanceof Error ? lastError : new Error('Lambda MicroVM sandbox bridge did not become ready');
+}
+
+async function bridgeRequestError(response: Response): Promise<Error> {
+  const text = await response.text();
+  return new Error(text || `Lambda MicroVM bridge request failed: ${response.status}`);
 }
 
 function lambdaMicrovmHealth(info: LambdaMicrovmInfo): SandboxHealth {

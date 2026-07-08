@@ -196,7 +196,8 @@ function proxyServiceRequest(
       return;
     }
 
-    upstream.end(Object.prototype.toString.call(requestBody));
+    upstream.destroy();
+    reject(new Error('Unsupported service proxy request body type'));
   });
 }
 

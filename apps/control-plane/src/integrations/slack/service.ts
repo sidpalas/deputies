@@ -440,6 +440,7 @@ export class SlackIntegrationService {
     return getOrCreateExternalThreadSession(this.store, this.sessions, {
       ...slackIntegrationThread(event),
       title: slackSessionTitle(event),
+      tags: ['slack'],
     });
   }
 }

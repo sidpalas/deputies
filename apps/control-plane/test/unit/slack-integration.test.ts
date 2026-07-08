@@ -354,6 +354,7 @@ describe('Slack integration', () => {
     expect(followUp.type).toBe('accepted');
     if (first.type !== 'accepted' || followUp.type !== 'accepted') throw new Error('Expected accepted Slack events');
     expect(first.session.id).toBe(followUp.session.id);
+    expect(first.session.tags).toEqual(['slack']);
 
     const messages = await services.messages.list(first.session.id);
     expect(messages).toHaveLength(2);

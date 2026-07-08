@@ -6,6 +6,7 @@ import type { SessionRecord, SessionStore, SessionVisibility, SessionWritePolicy
 export type CreateSessionInput = {
   id?: string;
   title?: string;
+  tags?: string[];
   parentSessionId?: string;
   spawnDepth?: number;
   ownerGroupId?: string;
@@ -49,7 +50,7 @@ export class SessionService {
       createdAt: now,
       updatedAt: now,
       lastActivityAt: now,
-      tags: [],
+      tags: input.tags ?? [],
     };
 
     if (input.title) record.title = input.title;

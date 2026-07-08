@@ -17,6 +17,7 @@ const vitestGlobals = {
 export default tseslint.config(
   {
     ignores: [
+      '.claude/',
       '**/dist/',
       '**/node_modules/',
       '**/*.d.ts',

@@ -41,9 +41,9 @@ Implemented so far:
 
 Still open from the early phases:
 
-- Contract schemas for public API responses and events.
+- Public API response schemas are implemented in `src/app/response-schemas.ts`; event payload schemas remain open.
 
-The next implementation phase should focus on operational polish and the remaining GitHub/artifact integration gaps: collaborator permission checks, label-based triggers, provider-owned branch/PR helpers, artifact retention cleanup, richer UI observability for sandbox cleanup, sandbox cancellation conformance coverage, release/migration commands, Railway/ECS/Kubernetes guidance, and contract schemas for public API/events.
+The next implementation phase should focus on operational polish and the remaining GitHub/artifact integration gaps: collaborator permission checks, label-based triggers, provider-owned branch/PR helpers, artifact retention cleanup, richer UI observability for sandbox cleanup, sandbox cancellation conformance coverage, release/migration commands, Railway/ECS/Kubernetes guidance, and event payload schemas.
 
 ## Phase 0: Repository And Agent Context
 
@@ -103,7 +103,7 @@ Deliverables:
   - `POST /sessions/:id/messages`
   - `GET /sessions/:id/events`
   - `GET /sessions/:id/events/stream`
-- Contract schemas for API responses and events.
+- API response schemas and event payload schemas.
 
 Acceptance criteria:
 
@@ -112,7 +112,7 @@ Acceptance criteria:
 - Event replay by cursor works.
 - SSE stream receives appended events.
 
-Status: implemented beyond the original scope. Session/message/event routes, cursor replay, SSE streaming, title updates, archive/restore, queued follow-up edit/cancel, and active-run cancellation routes exist. Contract schemas remain open.
+Status: implemented beyond the original scope. Session/message/event routes, cursor replay, SSE streaming, title updates, archive/restore, queued follow-up edit/cancel, active-run cancellation routes, and API response schemas exist. Event payload schemas remain open.
 
 ## Phase 3: Worker, Runs, Leases
 

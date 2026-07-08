@@ -383,10 +383,10 @@ function SessionFilterControls(props: {
           onClick={() => setTagPickerOpen((open) => !open)}
           aria-expanded={tagPickerOpen}
           aria-haspopup="listbox"
-          aria-label="Add tag filter"
-          title={availableTags.length ? 'Add tag filter' : 'No additional tags available'}
+          aria-label="Filter by tags"
+          title={availableTags.length ? 'Filter by tags' : 'No additional tags available'}
         >
-          <span>Add tag</span>
+          <span>Tags</span>
           <ChevronDown className="h-3 w-3" />
         </button>
         {tagPickerOpen ? (

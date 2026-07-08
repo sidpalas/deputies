@@ -217,7 +217,7 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
     createdAt: now,
     updatedAt: now,
     lastActivityAt: now,
-    tags: [],
+    tags: ['deputy'],
     ...(Object.keys(context).length ? { context } : {}),
   };
   if (title) child.title = title;

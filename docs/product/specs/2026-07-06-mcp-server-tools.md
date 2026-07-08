@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft — implementation plan, ready for handoff. No code has been written.
+Implemented — shipped in PR #84 (`feat: add remote MCP tools`, 2026-07-06). Kept for design rationale; see `docs/executor-data-tools.md` for the operator guide.
 
 ## Context
 

@@ -251,6 +251,7 @@ export class GitHubWebhookService {
     return getOrCreateExternalThreadSession(this.store, this.sessions, {
       ...githubIntegrationThread(event),
       title: githubSessionTitle(event),
+      tags: ['github'],
     });
   }
 

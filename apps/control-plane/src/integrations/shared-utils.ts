@@ -36,6 +36,7 @@ export type IntegrationThreadRef = {
 export type IntegrationIngress = {
   source: string;
   messageSource?: string;
+  sessionTags?: string[];
   thread: IntegrationThreadRef;
   title: string;
   prompt: string;
@@ -50,6 +51,14 @@ export type IntegrationIngress = {
 export type IntegrationIngressResult = {
   session: SessionRecord;
   message: MessageRecord;
+};
+
+type ExternalThreadSessionInput = {
+  source: string;
+  externalId: string;
+  metadata: Record<string, unknown>;
+  title: string;
+  tags?: string[];
 };
 
 export async function receiveIntegrationDelivery(
@@ -88,12 +97,7 @@ export async function markIntegrationDeliveryFailed(
 export async function getOrCreateExternalThreadSession(
   store: IntegrationStore,
   sessions: SessionService,
-  input: {
-    source: string;
-    externalId: string;
-    metadata: Record<string, unknown>;
-    title: string;
-  },
+  input: ExternalThreadSessionInput,
 ): Promise<SessionRecord> {
   if (store.withExternalThreadLock) {
     return store.withExternalThreadLock(input.source, input.externalId, () =>
@@ -116,6 +120,7 @@ export async function enqueueIntegrationIngress(
     externalId: input.thread.externalId,
     metadata: input.thread.metadata,
     title: input.title,
+    ...(input.sessionTags ? { tags: input.sessionTags } : {}),
   });
   const message = await enqueueIntegrationMessage(messages, session, input);
   return { session, message };
@@ -155,12 +160,7 @@ export function integrationMessageContext(input: IntegrationIngress): Record<str
 async function getOrCreateExternalThreadSessionUnlocked(
   store: IntegrationStore,
   sessions: SessionService,
-  input: {
-    source: string;
-    externalId: string;
-    metadata: Record<string, unknown>;
-    title: string;
-  },
+  input: ExternalThreadSessionInput,
 ): Promise<SessionRecord> {
   const existingThread = await store.getExternalThread(input.source, input.externalId);
   if (existingThread) {
@@ -173,6 +173,7 @@ async function getOrCreateExternalThreadSessionUnlocked(
     ownerGroupId: defaultGroupId,
     visibility: 'group',
     writePolicy: 'creator_only',
+    ...(input.tags ? { tags: input.tags } : {}),
   });
   const thread = await store.createExternalThread({
     id: randomUUID(),

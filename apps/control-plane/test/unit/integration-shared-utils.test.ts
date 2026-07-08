@@ -44,6 +44,7 @@ describe('integration shared utils', () => {
       thread: { source: 'github', externalId: 'acme/widget#42', metadata: { owner: 'acme', repo: 'widget' } },
       title: 'GitHub Issue #42',
       prompt: 'please fix this',
+      sessionTags: ['github'],
       dedupeKey: 'delivery-1',
       actor: { type: 'user', externalId: 'octocat', displayName: 'Octo Cat' },
       repository: { provider: 'github', owner: 'acme', repo: 'widget' },
@@ -58,6 +59,7 @@ describe('integration shared utils', () => {
     });
 
     expect(followUp.session.id).toBe(first.session.id);
+    expect(first.session.tags).toEqual(['github']);
     expect(first.message.context).toMatchObject({
       source: 'github',
       integration: {

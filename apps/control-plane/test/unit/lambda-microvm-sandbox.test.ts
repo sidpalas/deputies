@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { vi } from 'vitest';
 import { LambdaMicrovmSandboxProvider, type LambdaMicrovmClientLike } from '../../src/sandbox/lambda-microvm.js';
+
+type AuthTokenRequest = { microvmId: string; port: number; expirationInMinutes: number };
 
 describe('LambdaMicrovmSandboxProvider', () => {
   it('creates handles that use the MicroVM endpoint as a bridge transport', async () => {
@@ -138,7 +141,149 @@ describe('LambdaMicrovmSandboxProvider', () => {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });
+
+  it('caches bridge auth tokens across requests for the same MicroVM port', async () => {
+    const fetchCalls: Array<{ url: string; headers: Headers }> = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = fetchUrl(input);
+      const headers = new Headers(init?.headers);
+      fetchCalls.push({ url, headers });
+      if (url.endsWith('/health')) return fetchJson({ status: 'ok' });
+      if (url.endsWith('/exec')) return execJson();
+      if (url.includes('/fs/exists?')) return fetchJson({ exists: true });
+      return fetchJson({ error: 'not_found' }, 404);
+    });
+    const { client, authTokenRequests } = mockClient();
+    const provider = new LambdaMicrovmSandboxProvider({ client, imageIdentifier: 'deputies-sandbox' });
+
+    try {
+      const handle = await provider.create({ sessionId: 'session-1' });
+      if (!handle.fs) throw new Error('Expected Lambda MicroVM handle to expose filesystem');
+
+      await expect(handle.exec({ command: 'echo ok' })).resolves.toMatchObject({ exitCode: 0 });
+      await expect(handle.fs.exists('/tmp/ready')).resolves.toBe(true);
+      await expect(
+        provider.getServiceEndpoint({ providerSandboxId: 'mvm-1', sessionId: 'session-1', port: 3000 }),
+      ).resolves.toMatchObject({ targetHeaders: { 'x-aws-proxy-auth': 'proxy-token-1' } });
+
+      expect(authTokenRequests).toEqual([{ microvmId: 'mvm-1', port: 3584, expirationInMinutes: 30 }]);
+      expect(fetchCalls.map((call) => call.headers.get('x-aws-proxy-auth'))).toEqual([
+        'proxy-token-1',
+        'proxy-token-1',
+        'proxy-token-1',
+      ]);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('refreshes bridge auth tokens before cached expiry', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(0));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = fetchUrl(input);
+      if (url.endsWith('/health')) return fetchJson({ status: 'ok' });
+      if (url.endsWith('/exec')) return execJson();
+      return fetchJson({ error: 'not_found' }, 404);
+    });
+    const { client, authTokenRequests } = mockClient();
+    const provider = new LambdaMicrovmSandboxProvider({
+      client,
+      imageIdentifier: 'deputies-sandbox',
+      authTokenTtlMinutes: 1,
+    });
+
+    try {
+      const handle = await provider.create({ sessionId: 'session-1' });
+      await handle.exec({ command: 'echo first' });
+      vi.setSystemTime(new Date(47_000));
+      await handle.exec({ command: 'echo cached' });
+      expect(authTokenRequests).toHaveLength(1);
+
+      vi.setSystemTime(new Date(49_000));
+      await handle.exec({ command: 'echo refreshed' });
+      expect(authTokenRequests).toHaveLength(2);
+      expect(authTokenRequests.map((request) => request.expirationInMinutes)).toEqual([1, 1]);
+    } finally {
+      fetchSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('invalidates cached bridge auth tokens and retries once on auth rejection', async () => {
+    let execRequests = 0;
+    const execAuthHeaders: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = fetchUrl(input);
+      const headers = new Headers(init?.headers);
+      if (url.endsWith('/health')) return fetchJson({ status: 'ok' });
+      if (url.endsWith('/exec')) {
+        execRequests += 1;
+        execAuthHeaders.push(headers.get('x-aws-proxy-auth') ?? '');
+        if (execRequests === 1) return fetchJson({ error: 'expired' }, 401);
+        return execJson();
+      }
+      return fetchJson({ error: 'not_found' }, 404);
+    });
+    const { client, authTokenRequests } = mockClient();
+    const provider = new LambdaMicrovmSandboxProvider({ client, imageIdentifier: 'deputies-sandbox' });
+
+    try {
+      const handle = await provider.create({ sessionId: 'session-1' });
+
+      await expect(handle.exec({ command: 'echo retry' })).resolves.toMatchObject({ exitCode: 0 });
+      expect(execRequests).toBe(2);
+      expect(execAuthHeaders).toEqual(['proxy-token-1', 'proxy-token-2']);
+      expect(authTokenRequests).toHaveLength(2);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });
+
+function mockClient(): {
+  client: LambdaMicrovmClientLike;
+  authTokenRequests: AuthTokenRequest[];
+} {
+  const authTokenRequests: AuthTokenRequest[] = [];
+  return {
+    authTokenRequests,
+    client: {
+      async checkImage() {},
+      async run() {
+        return { microvmId: 'mvm-1', endpoint: 'http://lambda-microvm.localhost', state: 'RUNNING' };
+      },
+      async get(microvmId) {
+        return { microvmId, endpoint: 'http://lambda-microvm.localhost', state: 'RUNNING' };
+      },
+      async createAuthToken(input) {
+        authTokenRequests.push(input);
+        return `proxy-token-${authTokenRequests.length}`;
+      },
+      async suspend() {},
+      async resume() {},
+      async terminate() {},
+    },
+  };
+}
+
+function fetchUrl(input: Parameters<typeof fetch>[0]): string {
+  return input instanceof Request ? input.url : String(input);
+}
+
+function fetchJson(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
+}
+
+function execJson(): Response {
+  return fetchJson({
+    exitCode: 0,
+    stdout: 'ok',
+    stderr: '',
+    startedAt: new Date(0).toISOString(),
+    completedAt: new Date(1).toISOString(),
+  });
+}
 
 function handleBridgeRequest(request: IncomingMessage, response: ServerResponse): void {
   void (async () => {

@@ -15,4 +15,10 @@ overrides:
   '@opentelemetry/exporter-metrics-otlp-grpc@0.217.0>@grpc/grpc-js': 1.14.4
   '@opentelemetry/exporter-trace-otlp-grpc@0.217.0>@grpc/grpc-js': 1.14.4
   '@opentelemetry/otlp-grpc-exporter-base@0.217.0>@grpc/grpc-js': 1.14.4
-  '@opentelemetry/otlp-transformer@0.217.0>protobufjs': 8.2.0
+  '@opentelemetry/otlp-transformer@0.217.0>protobufjs': 8.4.1
+  '@google/genai>protobufjs': 7.6.3
+  '@grpc/proto-loader>protobufjs': 7.6.3
+  form-data: '>=4.0.6'
+  hono: '>=4.12.25'
+  'tensorlake>undici': '>=8.5.0'
+  ws: '>=8.21.0'

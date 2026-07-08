@@ -30,8 +30,11 @@ const workspaceToolOptions = [
   { id: 'diff' as const, label: 'Hunk Diff', Icon: GitCompare },
 ];
 
-const sessionTagChipClass =
-  'inline-flex h-[22px] items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0 text-xs font-medium leading-none text-muted-foreground';
+const sessionTagChipClass = 'gap-1 border border-border bg-background text-foreground';
+const sessionTagAddButtonClass =
+  'inline-flex rounded-md border-0 bg-transparent p-0 disabled:cursor-not-allowed disabled:opacity-50';
+const sessionTagAddChipClass =
+  'border border-dashed border-muted-foreground/40 bg-muted/30 text-muted-foreground group-hover:border-muted-foreground/70 group-hover:bg-muted/60 group-hover:text-foreground';
 
 export function ThreadHeader(props: ThreadHeaderProps) {
   const [editingTitle, setEditingTitle] = useState(false);
@@ -58,12 +61,12 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   const canCreateTag = Boolean(
     tagQuery && !sessionTags.includes(tagQuery) && !availableTagOptions.some((option) => option.tag === tagQuery),
   );
-  const tagPickerEmptyMessage =
-    tagQuery && sessionTags.includes(tagQuery)
-      ? 'Tag is already on this session.'
-      : props.sessionTagOptions.length && !availableTagOptions.length
-        ? 'All known tags are already on this session. Type a tag name to create it.'
-        : 'Type a tag name to create it.';
+  let tagPickerEmptyMessage = 'Type a tag name to create it.';
+  if (tagQuery && sessionTags.includes(tagQuery)) {
+    tagPickerEmptyMessage = 'Tag is already on this session.';
+  } else if (props.sessionTagOptions.length && !availableTagOptions.length) {
+    tagPickerEmptyMessage = 'All known tags are already on this session. Type a tag name to create it.';
+  }
 
   useEffect(() => {
     setEditingTitle(false);
@@ -342,21 +345,17 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           </Badge>
         ))}
         {props.canWriteSession && props.selectedSession.status !== 'archived' ? (
-          <div>
+          <>
             <button
               ref={tagButtonRef}
-              className={cn(
-                sessionTagChipClass,
-                'border-dashed text-xs font-medium leading-none transition-colors hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
-              )}
+              className={cn('group', sessionTagAddButtonClass)}
               type="button"
               disabled={savingTags}
               onClick={() => setTagPopoverOpen((open) => !open)}
               aria-expanded={tagPopoverOpen}
               aria-haspopup="listbox"
             >
-              <span aria-hidden="true">+</span>
-              Tag
+              <Badge className={sessionTagAddChipClass}>+ Tag</Badge>
             </button>
             {tagPopoverOpen ? (
               <div
@@ -409,7 +408,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                 </div>
               </div>
             ) : null}
-          </div>
+          </>
         ) : null}
       </div>
     </section>

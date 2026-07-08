@@ -365,6 +365,7 @@ export class AutomationService {
           ownerGroupId: input.automation.ownerGroupId,
           visibility: input.automation.visibility,
           writePolicy: input.automation.writePolicy,
+          tags: ['automation'],
           ...effectiveSessionCreator(input.automation, input.requestedByUserId),
         }));
       const existingMessage = (await this.store.getMessages(createdSession.id)).find(

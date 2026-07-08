@@ -59,6 +59,7 @@ export class GenericWebhookService {
     const { session, message } = await enqueueIntegrationIngress(this.store, this.sessions, this.messages, {
       source: source.key,
       messageSource: `generic:${source.key}`,
+      sessionTags: ['webhook'],
       thread: { source: source.key, externalId: parsed.thread.externalId, metadata: parsed.thread.metadata },
       title: parsed.title ?? `Webhook: ${source.name}`,
       prompt: renderPrompt(source, parsed.prompt),

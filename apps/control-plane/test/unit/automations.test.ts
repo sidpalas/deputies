@@ -34,7 +34,11 @@ describe('scheduled automations', () => {
 
     const result = await services.automations.invokeManual({ automationId: automation.id, allowDisabled: true });
     expect(result.invocation).toMatchObject({ trigger: 'manual', status: 'created' });
-    expect(result.session).toMatchObject({ title: expect.stringContaining('Nightly check'), status: 'queued' });
+    expect(result.session).toMatchObject({
+      title: expect.stringContaining('Nightly check'),
+      status: 'queued',
+      tags: ['automation'],
+    });
     expect(result.message).toMatchObject({ prompt: 'Check the repository', source: 'automation' });
   });
 
@@ -58,7 +62,7 @@ describe('scheduled automations', () => {
     expect(invocations[0]).toMatchObject({ trigger: 'scheduled', status: 'created' });
     expect(invocations[0]?.sessionId).toBeTruthy();
     await expect(services.sessions.list()).resolves.toMatchObject([
-      { title: 'Weekday check - 2026-06-08 09:00 UTC', status: 'queued' },
+      { title: 'Weekday check - 2026-06-08 09:00 UTC', status: 'queued', tags: ['automation'] },
     ]);
   });
 
