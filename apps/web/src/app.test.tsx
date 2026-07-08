@@ -1143,6 +1143,32 @@ it('opens search results that are outside the loaded sessions page', async () =>
   expect(await screen.findByRole('heading', { name: 'Search-only session' })).toBeInTheDocument();
 });
 
+it('updates sidebar search result archive controls after archive and restore', async () => {
+  mockApi({
+    searchResults: [{ session, snippet: 'matched prompt text', matchKind: 'prompt', score: 1 }],
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'matched' } });
+
+  const resultSnippet = await screen.findByText('matched prompt text');
+  const resultRow = resultSnippet.closest('div');
+  if (!resultRow) throw new Error('Expected search result row');
+
+  fireEvent.click(within(resultRow).getByRole('button', { name: 'Archive session' }));
+
+  await waitFor(() => expect(within(resultRow).getByRole('button', { name: 'Restore session' })).toBeInTheDocument());
+  expect(within(resultRow).queryByRole('button', { name: 'Archive session' })).not.toBeInTheDocument();
+  expect(within(resultRow).getByText('archived')).toBeInTheDocument();
+
+  fireEvent.click(within(resultRow).getByRole('button', { name: 'Restore session' }));
+
+  await waitFor(() => expect(within(resultRow).getByRole('button', { name: 'Archive session' })).toBeInTheDocument());
+  expect(within(resultRow).queryByRole('button', { name: 'Restore session' })).not.toBeInTheDocument();
+  expect(within(resultRow).getByText('idle')).toBeInTheDocument();
+});
+
 it('preserves load-more sessions when a refresh resolves later', async () => {
   const refreshPage = deferred<Response>();
   const secondPageSession = {

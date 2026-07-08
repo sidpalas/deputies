@@ -2104,9 +2104,7 @@ export function App() {
   }
 
   function restoreSessionStatusRollback(rollback: SessionStatusRollback) {
-    setSessions((current) =>
-      current.map((candidate) => (candidate.id === rollback.session.id ? rollback.session : candidate)),
-    );
+    applySessionListUpdate(rollback.session);
     if (rollback.selectedSessionId === rollback.session.id) {
       sessionStorage.setItem(selectedSessionStorageKey, rollback.selectedSessionId);
       setSessionSearchParam(rollback.selectedSessionId);
@@ -2128,14 +2126,12 @@ export function App() {
       sessionDetail,
       session,
     };
-    setSessions((current) =>
-      current.map((candidate) => (candidate.id === sessionId ? { ...candidate, status: 'idle' } : candidate)),
-    );
+    applySessionListUpdate({ ...session, status: 'idle' });
     return rollback;
   }
 
   function applyArchivedSession(session: Session) {
-    setSessions((current) => current.map((candidate) => (candidate.id === session.id ? session : candidate)));
+    applySessionListUpdate(session);
     if (selectedSessionId === session.id) {
       sessionStorage.removeItem(selectedSessionStorageKey);
       clearSessionSearchParam();
@@ -2167,7 +2163,7 @@ export function App() {
     const rollback = unarchiveOptimistically(sessionId);
     try {
       const session = await unarchiveSession({ sessionId, token });
-      setSessions((current) => current.map((candidate) => (candidate.id === session.id ? session : candidate)));
+      applySessionListUpdate(session);
     } catch (err) {
       if (rollback) restoreSessionStatusRollback(rollback);
       handleApiError(err);
@@ -2180,11 +2176,16 @@ export function App() {
     const rollback = unarchiveOptimistically(selectedSessionId);
     try {
       const session = await unarchiveSession({ sessionId: selectedSessionId, token });
-      setSessions((current) => current.map((candidate) => (candidate.id === session.id ? session : candidate)));
+      applySessionListUpdate(session);
     } catch (err) {
       if (rollback) restoreSessionStatusRollback(rollback);
       handleApiError(err);
     }
+  }
+
+  function applySessionListUpdate(session: Session) {
+    setSessions((current) => current.map((candidate) => (candidate.id === session.id ? session : candidate)));
+    setSessionSearchResults((current) => updateSearchResultSession(current, session));
   }
 
   async function handleReplayCallback(callbackId: string) {
@@ -2723,6 +2724,16 @@ function mergeSessionSearchResultsById(
   if (!incoming.length) return current;
   const incomingIds = new Set(incoming.map((result) => result.session.id));
   return [...current.filter((result) => !incomingIds.has(result.session.id)), ...incoming];
+}
+
+function updateSearchResultSession(current: SessionSearchResult[], session: Session): SessionSearchResult[] {
+  let changed = false;
+  const next = current.map((result) => {
+    if (result.session.id !== session.id) return result;
+    changed = true;
+    return { ...result, session };
+  });
+  return changed ? next : current;
 }
 
 function ThreadDetailLoadingPanel() {
