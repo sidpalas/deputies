@@ -1209,7 +1209,7 @@ it('adds a session tag from the thread header tag picker', async () => {
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Tag' }));
+  fireEvent.click(screen.getByRole('button', { name: '+ Tag' }));
   fireEvent.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'foo' }));
 
   await waitFor(() => expect(screen.getByRole('button', { name: 'Remove foo' })).toBeInTheDocument());
@@ -1229,7 +1229,7 @@ it('rolls back a failed star mutation without reverting an interleaved tag edit'
   fireEvent.click(within(header).getByTitle('Star session'));
   await waitFor(() => expect(within(header).getByTitle('Unstar session')).toBeInTheDocument());
 
-  fireEvent.click(screen.getByRole('button', { name: 'Tag' }));
+  fireEvent.click(screen.getByRole('button', { name: '+ Tag' }));
   fireEvent.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'foo' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Remove foo' })).toBeInTheDocument());
 
@@ -1265,7 +1265,7 @@ it('filters sessions with the searchable sidebar tag picker', async () => {
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Add tag filter' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Filter by tags' }));
   const listbox = await screen.findByRole('listbox');
 
   expect(within(listbox).getByRole('option', { name: 'alpha' })).toBeInTheDocument();
