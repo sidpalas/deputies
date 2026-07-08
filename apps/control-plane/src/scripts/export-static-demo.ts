@@ -33,6 +33,8 @@ type SessionRow = QueryResultRow & {
   created_by_user_id: string | null;
   created_at: Date;
   updated_at: Date;
+  last_activity_at: Date;
+  tags: string[];
   queue_paused_at: Date | null;
 };
 
@@ -201,7 +203,7 @@ function requiredValue(values: string[], index: number, flag: string): string {
 async function loadSessions(pool: Pool, args: Args): Promise<SessionRow[]> {
   if (args.sessionIds.length) {
     const result = await pool.query<SessionRow>(
-      `SELECT id, status, title, context, parent_session_id, spawn_depth, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, queue_paused_at
+      `SELECT id, status, title, context, parent_session_id, spawn_depth, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at
        FROM sessions
        WHERE id = ANY($1::uuid[])
        ORDER BY array_position($1::uuid[], id) ASC`,
@@ -211,9 +213,9 @@ async function loadSessions(pool: Pool, args: Args): Promise<SessionRow[]> {
   }
 
   const result = await pool.query<SessionRow>(
-    `SELECT id, status, title, context, parent_session_id, spawn_depth, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, queue_paused_at
+    `SELECT id, status, title, context, parent_session_id, spawn_depth, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at
      FROM sessions
-     ORDER BY updated_at DESC, created_at DESC
+     ORDER BY last_activity_at DESC, created_at DESC, id DESC
      LIMIT $1`,
     [args.limit],
   );
@@ -301,6 +303,8 @@ function toSession(row: SessionRow) {
     createdByUserId: row.created_by_user_id ?? undefined,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+    lastActivityAt: row.last_activity_at.toISOString(),
+    tags: row.tags ?? [],
     queuePausedAt: row.queue_paused_at?.toISOString(),
   });
 }

@@ -42,9 +42,18 @@ const eventTypes = new Set([
   'callback_replay_requested',
 ]);
 
-export function expectSessionResponse(
-  value: unknown,
-): asserts value is { session: { id: string; status: string; title?: string } } {
+export function expectSessionResponse(value: unknown): asserts value is {
+  session: {
+    id: string;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+    lastActivityAt: string;
+    tags: string[];
+    title?: string;
+    starred?: boolean;
+  };
+} {
   expectResponseSchemaField('session', 'session');
   expect(isRecord(value)).toBe(true);
   const session = isRecord(value) ? value.session : undefined;
@@ -57,9 +66,19 @@ export function expectSessionResponse(
   if (session.title !== undefined) expect(typeof session.title).toBe('string');
 }
 
-export function expectSessionsResponse(
-  value: unknown,
-): asserts value is { sessions: Array<{ id: string; status: string; title?: string }>; nextCursor?: string | null } {
+export function expectSessionsResponse(value: unknown): asserts value is {
+  sessions: Array<{
+    id: string;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+    lastActivityAt: string;
+    tags: string[];
+    title?: string;
+    starred?: boolean;
+  }>;
+  nextCursor?: string | null;
+} {
   expectResponseSchemaField('sessions', 'sessions');
   expectResponseSchemaField('sessions', 'nextCursor', 'nullable:string');
   expect(isRecord(value)).toBe(true);
@@ -73,7 +92,16 @@ export function expectSessionsResponse(
 
 export function expectSessionSearchResponse(value: unknown): asserts value is {
   results: Array<{
-    session: { id: string; status: string; title?: string };
+    session: {
+      id: string;
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+      lastActivityAt: string;
+      tags: string[];
+      title?: string;
+      starred?: boolean;
+    };
     snippet: string;
     matchKind: string;
     score: number;
@@ -266,6 +294,9 @@ function expectSessionRecord(value: unknown): void {
   expect(typeof value.status).toBe('string');
   expect(typeof value.createdAt).toBe('string');
   expect(typeof value.updatedAt).toBe('string');
+  expect(typeof value.lastActivityAt).toBe('string');
+  expect(Array.isArray(value.tags)).toBe(true);
+  if (value.starred !== undefined) expect(typeof value.starred).toBe('boolean');
   if (value.title !== undefined) expect(typeof value.title).toBe('string');
 }
 

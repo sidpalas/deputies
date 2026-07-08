@@ -36,6 +36,9 @@ export type Session = {
   createdByUserId?: string;
   createdAt: string;
   updatedAt: string;
+  lastActivityAt: string;
+  tags: string[];
+  starred?: boolean;
   title?: string;
   queuePausedAt?: string;
   context?: Record<string, unknown>;
@@ -64,6 +67,18 @@ export type SessionSearchResult = {
 export type SessionSearchPage = {
   results: SessionSearchResult[];
   nextCursor: string | null;
+};
+
+export type SessionTagSummary = {
+  tag: string;
+  sessionCount: number;
+};
+
+export type SessionListFilters = {
+  tags?: string[];
+  createdBy?: 'me';
+  participant?: 'me';
+  starred?: 'me';
 };
 
 export type Automation = {
@@ -345,13 +360,14 @@ export async function logout(): Promise<void> {
 
 export async function listSessions(
   token: string,
-  options: { cursor?: string; limit?: number; archived?: boolean; groupId?: string } = {},
+  options: { cursor?: string; limit?: number; archived?: boolean; groupId?: string } & SessionListFilters = {},
 ): Promise<SessionPage> {
   const query = new URLSearchParams();
   if (options.cursor) query.set('cursor', options.cursor);
   if (options.limit !== undefined) query.set('limit', String(options.limit));
   if (options.archived !== undefined) query.set('archived', String(options.archived));
   if (options.groupId) query.set('groupId', options.groupId);
+  appendSessionFilterParams(query, options);
   const suffix = query.toString() ? `?${query.toString()}` : '';
   const body = await request<{ sessions: Session[]; nextCursor?: string | null }>(`/sessions${suffix}`, { token });
   return { sessions: body.sessions, nextCursor: body.nextCursor ?? null };
@@ -359,12 +375,13 @@ export async function listSessions(
 
 export async function searchSessions(
   token: string,
-  options: { query: string; cursor?: string; limit?: number; groupId?: string },
+  options: { query: string; cursor?: string; limit?: number; groupId?: string } & SessionListFilters,
 ): Promise<SessionSearchPage> {
   const query = new URLSearchParams({ q: options.query });
   if (options.cursor) query.set('cursor', options.cursor);
   if (options.limit !== undefined) query.set('limit', String(options.limit));
   if (options.groupId) query.set('groupId', options.groupId);
+  appendSessionFilterParams(query, options);
   const body = await request<{ results: SessionSearchResult[]; nextCursor?: string | null }>(
     `/sessions/search?${query.toString()}`,
     { token },
@@ -649,6 +666,32 @@ export async function updateSession(input: { sessionId: string; title: string; t
   return body.session;
 }
 
+export async function updateSessionTags(input: { sessionId: string; tags: string[]; token: string }): Promise<Session> {
+  const body = await request<{ session: Session }>(`/sessions/${input.sessionId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: { tags: input.tags },
+  });
+  return body.session;
+}
+
+export async function listSessionTags(token: string): Promise<SessionTagSummary[]> {
+  const body = await request<{ tags: SessionTagSummary[] }>('/sessions/tags', { token });
+  return body.tags;
+}
+
+export async function setSessionStarred(input: {
+  sessionId: string;
+  starred: boolean;
+  token: string;
+}): Promise<boolean> {
+  const body = await request<{ starred: boolean }>(`/sessions/${input.sessionId}/star`, {
+    method: input.starred ? 'PUT' : 'DELETE',
+    token: input.token,
+  });
+  return body.starred;
+}
+
 export async function updateSessionAccess(input: {
   sessionId: string;
   ownerGroupId: string;
@@ -899,6 +942,13 @@ export async function streamEvents(input: {
   onEvent: (event: AgentEvent) => void;
 }): Promise<void> {
   await streamEventResponse(`/sessions/${input.sessionId}/events/stream?after=${input.after}`, input);
+}
+
+function appendSessionFilterParams(query: URLSearchParams, options: SessionListFilters): void {
+  if (options.tags?.length) query.set('tags', options.tags.join(','));
+  if (options.createdBy) query.set('createdBy', options.createdBy);
+  if (options.participant) query.set('participant', options.participant);
+  if (options.starred) query.set('starred', options.starred);
 }
 
 export async function streamGlobalEvents(input: {

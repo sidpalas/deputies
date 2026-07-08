@@ -1,13 +1,36 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SyntheticEvent } from 'react';
-import { Archive, ChevronDown, Monitor, Moon, PanelLeftClose, Plus, RefreshCw, RotateCcw, Sun, X } from 'lucide-react';
-import { type Health, type Session, type SessionSearchResult } from '../../api.js';
+import {
+  Archive,
+  ChevronDown,
+  FilePlus2,
+  MessageCircle,
+  Monitor,
+  Moon,
+  PanelLeftClose,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Star,
+  Sun,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
+import { type Health, type Session, type SessionSearchResult, type SessionTagSummary } from '../../api.js';
 import { archivedSessionsOpenStorageKey } from '../../app-helpers.js';
 import { cn } from '../../lib/utils.js';
+import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
 import { formatDate, sessionDisplayStatus, sessionDisplayTooltip, statusTextClass } from './shared.js';
 import type { ConnectionStatus, ThemePreference } from './types.js';
+
+type SessionFilters = {
+  tags: string[];
+  createdByMe: boolean;
+  participatedByMe: boolean;
+  starredByMe: boolean;
+};
 
 export function ThreadSidebar(props: {
   archivedSessionsOpen: boolean;
@@ -31,6 +54,9 @@ export function ThreadSidebar(props: {
   searchResults: SessionSearchResult[];
   searchLoading: boolean;
   hasMoreSearchResults: boolean;
+  sessionFilters: SessionFilters;
+  sessionFilterCount: number;
+  sessionTagOptions: SessionTagSummary[];
   sessions: Session[];
   selectedSessionId: string;
   themePreference: ThemePreference;
@@ -49,6 +75,10 @@ export function ThreadSidebar(props: {
   onRefresh: () => void;
   onSearchChange: (query: string) => void;
   onSelect: (sessionId: string) => void;
+  onSessionFiltersChange: (filters: SessionFilters) => void;
+  onSessionFiltersClear: () => void;
+  onSessionListHoverChange: (hovered: boolean) => void;
+  onSessionStarChange: (sessionId: string, starred: boolean) => void;
   onSignOut: () => void;
   onThemeChange: (value: ThemePreference) => void;
   onUnarchive: (sessionId: string) => void;
@@ -63,6 +93,8 @@ export function ThreadSidebar(props: {
   );
   const searching = Boolean(props.searchQuery.trim());
   const archivedOpen = props.archivedSessionsOpen;
+
+  useEffect(() => () => props.onSessionListHoverChange(false), [props.onSessionListHoverChange]);
 
   function handleArchivedToggle(event: SyntheticEvent<HTMLDetailsElement>) {
     if (searching) return;
@@ -123,10 +155,22 @@ export function ThreadSidebar(props: {
           </Button>
         ) : null}
       </div>
-      <div className="min-h-0 min-w-0 flex-1 overflow-auto">
+      <SessionFilterControls
+        count={props.sessionFilterCount}
+        filters={props.sessionFilters}
+        tagOptions={props.sessionTagOptions}
+        onChange={props.onSessionFiltersChange}
+        onClear={props.onSessionFiltersClear}
+      />
+      <div
+        className="min-h-0 min-w-0 flex-1 overflow-auto"
+        onPointerEnter={() => props.onSessionListHoverChange(true)}
+        onPointerLeave={() => props.onSessionListHoverChange(false)}
+      >
         {searching ? (
           <SearchResultsList
             canWriteSession={props.canWriteSession}
+            filterCount={props.sessionFilterCount}
             loading={props.searchLoading}
             results={props.searchResults}
             selectedSessionId={props.selectedSessionId}
@@ -134,6 +178,7 @@ export function ThreadSidebar(props: {
             onArchive={props.onArchive}
             onLoadMore={props.onLoadMoreSearchResults}
             onSelect={props.onSelect}
+            onStarChange={props.onSessionStarChange}
             onUnarchive={props.onUnarchive}
           />
         ) : (
@@ -147,10 +192,13 @@ export function ThreadSidebar(props: {
                   canWriteSession={props.canWriteSession(session)}
                   onArchive={props.onArchive}
                   onSelect={props.onSelect}
+                  onStarChange={props.onSessionStarChange}
                 />
               ))}
               {!activeSessions.length ? (
-                <p className="px-2 py-3 text-sm text-muted-foreground">No active sessions.</p>
+                <p className="px-2 py-3 text-sm text-muted-foreground">
+                  {props.sessionFilterCount ? 'No sessions match the current filters.' : 'No active sessions.'}
+                </p>
               ) : null}
               {props.hasMoreSessions ? (
                 <Button
@@ -178,6 +226,7 @@ export function ThreadSidebar(props: {
                       selected={session.id === props.selectedSessionId}
                       canWriteSession={props.canWriteSession(session)}
                       onSelect={props.onSelect}
+                      onStarChange={props.onSessionStarChange}
                       onUnarchive={props.onUnarchive}
                     />
                   ))}
@@ -220,6 +269,179 @@ export function ThreadSidebar(props: {
         onSignOut={props.onSignOut}
       />
     </div>
+  );
+}
+
+function SessionFilterControls(props: {
+  count: number;
+  filters: SessionFilters;
+  tagOptions: SessionTagSummary[];
+  onChange: (filters: SessionFilters) => void;
+  onClear: () => void;
+}) {
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagQueryDraft, setTagQueryDraft] = useState('');
+  const tagPickerRef = useRef<HTMLDivElement>(null);
+  const selectedTags = new Set(props.filters.tags);
+  const availableTags = props.tagOptions.filter((option) => !selectedTags.has(option.tag));
+  const tagQuery = normalizeTagQuery(tagQueryDraft);
+  const filteredTags = availableTags.filter((option) => !tagQuery || option.tag.includes(tagQuery)).slice(0, 8);
+
+  useEffect(() => {
+    if (!tagPickerOpen) return;
+
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (event.target instanceof Node && tagPickerRef.current?.contains(event.target)) return;
+      setTagPickerOpen(false);
+      setTagQueryDraft('');
+    }
+
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      setTagPickerOpen(false);
+      setTagQueryDraft('');
+    }
+
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [tagPickerOpen]);
+
+  function update(next: Partial<SessionFilters>) {
+    props.onChange({ ...props.filters, ...next });
+  }
+
+  function addTagFilter(tag: string) {
+    if (!tag || selectedTags.has(tag)) return;
+    update({ tags: [...props.filters.tags, tag].sort(compareTagNames) });
+    setTagPickerOpen(false);
+    setTagQueryDraft('');
+  }
+
+  function toggle(key: 'createdByMe' | 'participatedByMe' | 'starredByMe') {
+    update({ [key]: !props.filters[key] });
+  }
+
+  return (
+    <div className="mb-3 grid gap-2 rounded-md border border-border bg-muted/30 p-2 text-xs">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-muted-foreground">Filters{props.count ? ` (${props.count})` : ''}</span>
+        {props.count ? (
+          <button
+            className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            type="button"
+            onClick={props.onClear}
+          >
+            Clear all
+          </button>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-3 gap-1">
+        <FilterChip
+          active={props.filters.starredByMe}
+          icon={Star}
+          label="Starred"
+          title="Sessions you starred"
+          onClick={() => toggle('starredByMe')}
+        />
+        <FilterChip
+          active={props.filters.createdByMe}
+          icon={FilePlus2}
+          label="Created"
+          title="Sessions you created"
+          onClick={() => toggle('createdByMe')}
+        />
+        <FilterChip
+          active={props.filters.participatedByMe}
+          icon={MessageCircle}
+          label="Joined"
+          title="Sessions where you sent a message"
+          onClick={() => toggle('participatedByMe')}
+        />
+      </div>
+      <div className="relative flex flex-wrap items-center gap-1.5" ref={tagPickerRef}>
+        {props.filters.tags.map((tag) => (
+          <Badge key={tag} className="gap-1 border border-border bg-background text-foreground">
+            {tag}
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => update({ tags: props.filters.tags.filter((candidate) => candidate !== tag) })}
+              aria-label={`Remove ${tag} filter`}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </Badge>
+        ))}
+        <button
+          className="inline-flex h-[22px] min-w-0 items-center gap-1 rounded-md border border-border bg-background px-2 py-0 text-xs font-medium leading-none text-muted-foreground hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          type="button"
+          disabled={!availableTags.length}
+          onClick={() => setTagPickerOpen((open) => !open)}
+          aria-expanded={tagPickerOpen}
+          aria-haspopup="listbox"
+          aria-label="Add tag filter"
+          title={availableTags.length ? 'Add tag filter' : 'No additional tags available'}
+        >
+          <span>Add tag</span>
+          <ChevronDown className="h-3 w-3" />
+        </button>
+        {tagPickerOpen ? (
+          <div className="absolute left-0 top-[calc(100%+0.25rem)] z-40 w-full rounded-md border border-border bg-card p-2 text-sm text-card-foreground shadow-lg">
+            <Input
+              className="h-8 text-xs"
+              placeholder="Search tags..."
+              value={tagQueryDraft}
+              onChange={(event) => setTagQueryDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') return;
+                event.preventDefault();
+                const firstTag = filteredTags[0]?.tag;
+                if (firstTag) addTagFilter(firstTag);
+              }}
+            />
+            <div className="mt-2 max-h-52 overflow-auto" role="listbox">
+              {filteredTags.map((option) => (
+                <button
+                  key={option.tag}
+                  type="button"
+                  className="flex w-full items-center rounded-sm px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground"
+                  role="option"
+                  onClick={() => addTagFilter(option.tag)}
+                >
+                  <span className="min-w-0 truncate">{option.tag}</span>
+                </button>
+              ))}
+              {!filteredTags.length ? (
+                <p className="px-2 py-2 text-xs text-muted-foreground">No matching tags.</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function FilterChip(props: { active: boolean; icon: LucideIcon; label: string; title: string; onClick: () => void }) {
+  const Icon = props.icon;
+  return (
+    <button
+      className={cn(
+        'inline-flex min-w-0 items-center justify-center gap-1 rounded-full border border-border px-1.5 py-1 text-muted-foreground transition-colors hover:text-foreground',
+        props.active && 'border-primary bg-primary/15 text-foreground',
+      )}
+      type="button"
+      onClick={props.onClick}
+      aria-pressed={props.active}
+      title={props.title}
+    >
+      <Icon className={cn('h-3.5 w-3.5', props.active && props.icon === Star && 'fill-current text-warning')} />
+      <span className="min-w-0 truncate">{props.label}</span>
+    </button>
   );
 }
 
@@ -330,6 +552,7 @@ export function ApiStatusFooter(props: {
 
 function SearchResultsList(props: {
   canWriteSession: (session: Session) => boolean;
+  filterCount: number;
   loading: boolean;
   results: SessionSearchResult[];
   selectedSessionId: string;
@@ -337,28 +560,45 @@ function SearchResultsList(props: {
   onArchive: (sessionId: string) => void;
   onLoadMore: () => void;
   onSelect: (sessionId: string) => void;
+  onStarChange: (sessionId: string, starred: boolean) => void;
   onUnarchive: (sessionId: string) => void;
 }) {
+  const activeResults = props.results.filter((result) => result.session.status !== 'archived');
+  const archivedResults = props.results.filter((result) => result.session.status === 'archived');
+
+  function renderResult(result: SessionSearchResult) {
+    return (
+      <SessionButton
+        key={result.session.id}
+        session={result.session}
+        selected={result.session.id === props.selectedSessionId}
+        canWriteSession={props.canWriteSession(result.session)}
+        compact
+        matchKind={result.matchKind}
+        snippet={result.snippet}
+        onSelect={props.onSelect}
+        onStarChange={props.onStarChange}
+        {...(result.session.status === 'archived'
+          ? { onUnarchive: props.onUnarchive }
+          : { onArchive: props.onArchive })}
+      />
+    );
+  }
+
   return (
     <div className="grid min-w-0 gap-1">
-      {props.results.map((result) => (
-        <SessionButton
-          key={result.session.id}
-          session={result.session}
-          selected={result.session.id === props.selectedSessionId}
-          canWriteSession={props.canWriteSession(result.session)}
-          compact
-          matchKind={result.matchKind}
-          snippet={result.snippet}
-          onSelect={props.onSelect}
-          {...(result.session.status === 'archived'
-            ? { onUnarchive: props.onUnarchive }
-            : { onArchive: props.onArchive })}
-        />
-      ))}
+      {activeResults.map(renderResult)}
+      {archivedResults.length ? (
+        <div className="mt-3 border-t border-border pt-3 text-sm font-medium text-muted-foreground">Archived</div>
+      ) : null}
+      {archivedResults.map(renderResult)}
       {!props.results.length ? (
         <p className="px-2 py-3 text-sm text-muted-foreground">
-          {props.loading ? 'Searching sessions...' : 'No matching sessions.'}
+          {props.loading
+            ? 'Searching sessions...'
+            : props.filterCount
+              ? 'No sessions match the current filters.'
+              : 'No matching sessions.'}
         </p>
       ) : null}
       {props.hasMore ? (
@@ -380,10 +620,11 @@ function SessionButton(props: {
   canWriteSession: boolean;
   session: Session;
   selected: boolean;
-  compact?: boolean;
+  compact?: boolean | undefined;
   matchKind?: SessionSearchResult['matchKind'];
   snippet?: string;
   onSelect: (sessionId: string) => void;
+  onStarChange: (sessionId: string, starred: boolean) => void;
   onArchive?: (sessionId: string) => void;
   onUnarchive?: (sessionId: string) => void;
 }) {
@@ -423,7 +664,7 @@ function SessionButton(props: {
           title={displayTooltip}
         >
           <span className={statusTextClass(displayStatus)}>{displayStatus}</span> ·{' '}
-          {formatDate(props.session.updatedAt)}
+          {formatDate(props.session.lastActivityAt ?? props.session.updatedAt)}
           {props.matchKind ? (
             <>
               {' '}
@@ -435,10 +676,28 @@ function SessionButton(props: {
           ) : null}
           {showSnippet && !showContextLine ? <> · {snippet}</> : null}
         </span>
+        <SessionTagBadges tags={props.session.tags ?? []} compact={props.compact} />
         {showContextLine ? (
           <span className="mt-0.5 line-clamp-3 block text-xs leading-4 text-muted-foreground">{snippet}</span>
         ) : null}
       </button>
+      <Button
+        className={cn(
+          'w-8 shrink-0 p-0 md:w-auto md:px-2.5',
+          !props.session.starred && 'md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100',
+        )}
+        variant="ghost"
+        size="sm"
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onStarChange(props.session.id, !props.session.starred);
+        }}
+        aria-label={props.session.starred ? 'Unstar session' : 'Star session'}
+        aria-pressed={props.session.starred === true}
+        title={props.session.starred ? 'Unstar session' : 'Star session'}
+      >
+        <Star className={cn('h-3.5 w-3.5', props.session.starred && 'fill-current text-warning')} />
+      </Button>
       {props.canWriteSession && props.onArchive ? (
         <Button
           className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
@@ -467,6 +726,35 @@ function SessionButton(props: {
   );
 }
 
+function SessionTagBadges(props: { tags: string[]; compact?: boolean | undefined }) {
+  if (!props.tags.length) return null;
+  const visible = props.tags.slice(0, props.compact ? 2 : 3);
+  const hidden = props.tags.slice(visible.length);
+  const extra = props.tags.length - visible.length;
+  const hiddenLabel = hidden.join(', ');
+  return (
+    <span className="mt-1 flex flex-wrap gap-1">
+      {visible.map((tag) => (
+        <Badge
+          key={tag}
+          className="max-w-[8rem] truncate border border-border bg-background/80 px-1.5 py-0 text-[10px] text-muted-foreground"
+        >
+          {tag}
+        </Badge>
+      ))}
+      {extra > 0 ? (
+        <Badge
+          className="border border-border bg-background/80 px-1.5 py-0 text-[10px] text-muted-foreground"
+          title={hiddenLabel}
+          aria-label={`${extra} more tags: ${hiddenLabel}`}
+        >
+          +{extra}
+        </Badge>
+      ) : null}
+    </span>
+  );
+}
+
 function cleanSnippet(value: string): string {
   return value
     .replace(/<\/?mark>/g, '')
@@ -476,4 +764,12 @@ function cleanSnippet(value: string): string {
 
 function normalizedSearchText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function normalizeTagQuery(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function compareTagNames(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

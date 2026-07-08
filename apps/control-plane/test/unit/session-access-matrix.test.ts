@@ -349,6 +349,146 @@ describe('session object-level authorization matrix', () => {
     }
   });
 
+  it('allows viewers to star readable sessions without granting write access', async () => {
+    const readable = fixture.sessions['organization/group_members'];
+    const privateSession = fixture.sessions['group/group_members'];
+
+    const starReadable = await fetch(`${baseUrl}/sessions/${readable.id}/star`, {
+      method: 'PUT',
+      headers: { cookie: fixture.cookies.aViewer },
+    });
+    expect(starReadable.status).toBe(200);
+    await expect(starReadable.json()).resolves.toEqual({ starred: true });
+
+    const patchReadable = await patchJson(`/sessions/${readable.id}`, fixture.cookies.aViewer, {
+      title: 'viewer edit',
+    });
+    expect(patchReadable.status).toBe(403);
+    await patchReadable.arrayBuffer();
+
+    const starPrivate = await fetch(`${baseUrl}/sessions/${privateSession.id}/star`, {
+      method: 'PUT',
+      headers: { cookie: fixture.cookies.bMember },
+    });
+    expect(starPrivate.status).toBe(403);
+    await starPrivate.arrayBuffer();
+  });
+
+  it('filters sessions by participant=me and starred=me for real users', async () => {
+    const participantSession = fixture.sessions['organization/group_members'];
+    const starredSession = fixture.sessions['organization/creator_only'];
+    await services.messages.enqueue({
+      sessionId: participantSession.id,
+      prompt: 'participant route filter',
+      authorUserId: fixture.users.aMember.id,
+    });
+    await fetch(`${baseUrl}/sessions/${starredSession.id}/star`, {
+      method: 'PUT',
+      headers: { cookie: fixture.cookies.aMember },
+    });
+
+    const participant = await fetch(`${baseUrl}/sessions?participant=me`, {
+      headers: { cookie: fixture.cookies.aMember },
+    });
+    const participantBody = (await participant.json()) as { sessions: Array<{ id: string }> };
+    expect(participant.status).toBe(200);
+    expect(participantBody.sessions.map((session) => session.id)).toContain(participantSession.id);
+    expect(participantBody.sessions.map((session) => session.id)).not.toContain(starredSession.id);
+
+    const starred = await fetch(`${baseUrl}/sessions?starred=me`, { headers: { cookie: fixture.cookies.aMember } });
+    const starredBody = (await starred.json()) as { sessions: Array<{ id: string; starred?: boolean }> };
+    expect(starred.status).toBe(200);
+    expect(starredBody.sessions.map((session) => session.id)).toEqual([starredSession.id]);
+    expect(starredBody.sessions[0]).toMatchObject({ starred: true });
+  });
+
+  it('keeps starred decoration private per user on list, search, and detail routes', async () => {
+    const target = fixture.sessions['organization/group_members'];
+    await services.store.upsertSessionSearchDocs([
+      {
+        sessionId: target.id,
+        kind: 'title',
+        sourceId: target.id,
+        content: 'Private star target',
+        createdAt: target.createdAt,
+      },
+    ]);
+    const star = await fetch(`${baseUrl}/sessions/${target.id}/star`, {
+      method: 'PUT',
+      headers: { cookie: fixture.cookies.aMember },
+    });
+    expect(star.status).toBe(200);
+
+    const memberList = await fetch(`${baseUrl}/sessions`, { headers: { cookie: fixture.cookies.aMember } });
+    const memberListBody = (await memberList.json()) as { sessions: Array<{ id: string; starred?: boolean }> };
+    expect(memberListBody.sessions.find((session) => session.id === target.id)).toMatchObject({ starred: true });
+
+    const viewerList = await fetch(`${baseUrl}/sessions`, { headers: { cookie: fixture.cookies.aViewer } });
+    const viewerListBody = (await viewerList.json()) as { sessions: Array<{ id: string; starred?: boolean }> };
+    expect(viewerListBody.sessions.find((session) => session.id === target.id)).toMatchObject({ starred: false });
+
+    const memberSearch = await fetch(`${baseUrl}/sessions/search?q=Private`, {
+      headers: { cookie: fixture.cookies.aMember },
+    });
+    const memberSearchBody = (await memberSearch.json()) as {
+      results: Array<{ session: { id: string; starred?: boolean } }>;
+    };
+    expect(memberSearchBody.results.find((result) => result.session.id === target.id)?.session).toMatchObject({
+      starred: true,
+    });
+
+    const viewerSearch = await fetch(`${baseUrl}/sessions/search?q=Private`, {
+      headers: { cookie: fixture.cookies.aViewer },
+    });
+    const viewerSearchBody = (await viewerSearch.json()) as {
+      results: Array<{ session: { id: string; starred?: boolean } }>;
+    };
+    expect(viewerSearchBody.results.find((result) => result.session.id === target.id)?.session).toMatchObject({
+      starred: false,
+    });
+
+    const memberDetail = await fetch(`${baseUrl}/sessions/${target.id}`, {
+      headers: { cookie: fixture.cookies.aMember },
+    });
+    await expect(memberDetail.json()).resolves.toMatchObject({ session: { id: target.id, starred: true } });
+
+    const viewerDetail = await fetch(`${baseUrl}/sessions/${target.id}`, {
+      headers: { cookie: fixture.cookies.aViewer },
+    });
+    await expect(viewerDetail.json()).resolves.toMatchObject({ session: { id: target.id, starred: false } });
+  });
+
+  it('makes star and unstar API calls idempotent', async () => {
+    const target = fixture.sessions['organization/group_members'];
+
+    for (const method of ['PUT', 'PUT', 'DELETE', 'DELETE'] as const) {
+      const response = await fetch(`${baseUrl}/sessions/${target.id}/star`, {
+        method,
+        headers: { cookie: fixture.cookies.aMember },
+      });
+      expect(response.status, method).toBe(200);
+      await expect(response.json()).resolves.toEqual({ starred: method === 'PUT' });
+    }
+
+    const starred = await fetch(`${baseUrl}/sessions?starred=me`, { headers: { cookie: fixture.cookies.aMember } });
+    await expect(starred.json()).resolves.toMatchObject({ sessions: [] });
+  });
+
+  it('hides group-only tags from non-members', async () => {
+    const groupSession = await services.sessions.update({
+      id: fixture.sessions['group/group_members'].id,
+      title: fixture.sessions['group/group_members'].title ?? 'Group session',
+      tags: ['private-tag'],
+    });
+    expect(groupSession.tags).toEqual(['private-tag']);
+
+    const orgUserTags = await fetch(`${baseUrl}/sessions/tags`, { headers: { cookie: fixture.cookies.orgUser } });
+    await expect(orgUserTags.json()).resolves.toEqual({ tags: [] });
+
+    const memberTags = await fetch(`${baseUrl}/sessions/tags`, { headers: { cookie: fixture.cookies.aMember } });
+    await expect(memberTags.json()).resolves.toEqual({ tags: [{ tag: 'private-tag', sessionCount: 1 }] });
+  });
+
   it('hides cross-group group listings', async () => {
     const expectedGroupIds: Record<PersonaName, string[]> = {
       aAdmin: [groupAId],

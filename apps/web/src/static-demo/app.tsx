@@ -47,7 +47,7 @@ export function StaticDemoApp() {
     };
   }, []);
 
-  const sessions = useMemo(() => data?.sessions.map((item) => item.session) ?? [], [data]);
+  const sessions = useMemo(() => data?.sessions.map((item) => withSessionDefaults(item.session)) ?? [], [data]);
   const searchResults = useMemo<SessionSearchResult[]>(() => {
     const query = sessionSearchQuery.trim().toLowerCase();
     if (!query) return [];
@@ -55,7 +55,8 @@ export function StaticDemoApp() {
       .filter((session) => (session.title ?? '').toLowerCase().includes(query))
       .map((session) => ({ session, snippet: session.title ?? 'Untitled session', matchKind: 'title', score: 1 }));
   }, [sessions, sessionSearchQuery]);
-  const selected = data?.sessions.find((item) => item.session.id === selectedSessionId) ?? data?.sessions[0] ?? null;
+  const selectedRaw = data?.sessions.find((item) => item.session.id === selectedSessionId) ?? data?.sessions[0] ?? null;
+  const selected = selectedRaw ? { ...selectedRaw, session: withSessionDefaults(selectedRaw.session) } : null;
 
   if (error) {
     return (
@@ -127,6 +128,9 @@ export function StaticDemoApp() {
               searchResults={searchResults}
               searchLoading={false}
               hasMoreSearchResults={false}
+              sessionFilters={{ tags: [], createdByMe: false, participatedByMe: false, starredByMe: false }}
+              sessionFilterCount={0}
+              sessionTagOptions={[]}
               sessions={sessions}
               selectedSessionId={selected.session.id}
               themePreference={themePreference}
@@ -147,6 +151,10 @@ export function StaticDemoApp() {
               onOpenSetup={() => undefined}
               onRefresh={() => undefined}
               onSearchChange={setSessionSearchQuery}
+              onSessionFiltersChange={() => undefined}
+              onSessionFiltersClear={() => undefined}
+              onSessionListHoverChange={() => undefined}
+              onSessionStarChange={() => undefined}
               onSelect={(sessionId) => {
                 setSelectedSessionId(sessionId);
                 setSidebarOpen(false);
@@ -181,9 +189,12 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
         showOpenSidebar
         workspaceToolsUnavailableReason=""
         onArchive={() => undefined}
+        onSessionStarChange={() => undefined}
         onOpenSidebar={props.onOpenSidebar}
+        onUpdateTags={async () => false}
         onUpdateTitle={async () => false}
         onOpenWorkspaceTool={async () => undefined}
+        sessionTagOptions={[]}
       />
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_20rem]">
         <section className="flex min-h-0 min-w-0 flex-col overflow-hidden px-3 pt-4 md:px-8 xl:px-16">
@@ -294,6 +305,14 @@ function repositoryLabel(value: unknown): string | null {
 
 function modelChoice(model: string): ModelChoice {
   return { value: model, label: formatModelLabel(model), available: true };
+}
+
+function withSessionDefaults(session: Session): Session {
+  return {
+    ...session,
+    lastActivityAt: session.lastActivityAt ?? session.updatedAt,
+    tags: session.tags ?? [],
+  };
 }
 
 function formatModelLabel(model: string): string {

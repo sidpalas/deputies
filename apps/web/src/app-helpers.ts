@@ -8,6 +8,7 @@ export const groupsPanelViewStorageKey = 'deputies-groups-panel-view';
 export const groupsPanelSelectedGroupStorageKey = 'deputies-groups-panel-selected-group-id';
 export const selectedAutomationStorageKey = 'deputies-selected-automation-id';
 export const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
+export const sessionFiltersStorageKey = 'deputies-session-filters';
 export const archivedAutomationsOpenStorageKey = 'deputies-archived-automations-open';
 export const themeStorageKey = 'deputies-theme';
 

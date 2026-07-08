@@ -112,6 +112,8 @@ export type SessionRecord = {
   status: SessionStatus;
   createdAt: Date;
   updatedAt: Date;
+  lastActivityAt: Date;
+  tags: string[];
   parentSessionId?: string;
   spawnDepth: number;
   ownerGroupId: string;
@@ -325,6 +327,8 @@ export type CreateSessionRecord = {
   status: SessionStatus;
   createdAt: Date;
   updatedAt: Date;
+  lastActivityAt?: Date;
+  tags?: string[];
   parentSessionId?: string;
   spawnDepth?: number;
   ownerGroupId: string;
@@ -524,7 +528,7 @@ export type SessionTranscriptPage = {
 };
 
 export type SessionListCursor = {
-  updatedAt: Date;
+  lastActivityAt: Date;
   createdAt: Date;
   id: string;
 };
@@ -533,6 +537,10 @@ export type SessionListOptions = {
   visibleTo?: SessionVisibilityFilter;
   archived: boolean;
   groupId?: string;
+  tags?: string[];
+  createdByUserId?: string;
+  participantUserId?: string;
+  starredByUserId?: string;
   limit: number;
   cursor?: SessionListCursor;
 };
@@ -548,8 +556,17 @@ export type SessionSearchOptions = {
   query: string;
   visibleTo?: SessionVisibilityFilter;
   groupId?: string;
+  tags?: string[];
+  createdByUserId?: string;
+  participantUserId?: string;
+  starredByUserId?: string;
   limit: number;
   cursor?: number;
+};
+
+export type SessionTagSummary = {
+  tag: string;
+  sessionCount: number;
 };
 
 export type SessionSearchResult = {
@@ -572,6 +589,22 @@ export type SessionSearchDocInput = {
   createdAt: Date;
 };
 
+export type SessionMetadataUpdateInput = {
+  id: string;
+  updatedAt: Date;
+  title?: string;
+  tags?: string[];
+  ownerGroupId?: string;
+  visibility?: SessionVisibility;
+  writePolicy?: SessionWritePolicy;
+};
+
+export type SessionContextUpdateInput = {
+  id: string;
+  context?: Record<string, unknown>;
+  updatedAt: Date;
+};
+
 // Limits a session listing to what a non-admin user can read: organization-visible
 // sessions plus sessions owned by one of the user's groups. Keep this in sync
 // with canReadSession in auth/authorization.ts and the SQL predicates in the
@@ -591,15 +624,24 @@ export interface SessionStore {
   listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]>;
   listSessionsWithLatestSandbox(provider: string, options: SessionListOptions): Promise<SessionWithSandboxPage>;
   searchSessions(provider: string, options: SessionSearchOptions): Promise<SessionSearchPage>;
+  listSessionTags(options: { visibleTo?: SessionVisibilityFilter; limit: number }): Promise<SessionTagSummary[]>;
+  starSession(input: { sessionId: string; userId: string; now: Date }): Promise<void>;
+  unstarSession(input: { sessionId: string; userId: string }): Promise<void>;
+  listStarredSessionIds(input: { userId: string; sessionIds: string[] }): Promise<Set<string>>;
   getSearchIndexCursor(): Promise<number>;
   setSearchIndexCursor(lastEventId: number): Promise<void>;
   upsertSessionSearchDocs(docs: SessionSearchDocInput[]): Promise<void>;
   updateSession(record: SessionRecord): Promise<SessionRecord>;
+  updateSessionContext(input: SessionContextUpdateInput): Promise<SessionRecord>;
   // Commits the session update and its event atomically, so no event committed
   // after an access change can be notified ahead of the change itself.
   updateSessionWithEvent(
     record: SessionRecord,
     event: NormalizedEvent,
+    options?: { preserveTags?: boolean },
+  ): Promise<{ session: SessionRecord; event: EventRecord }>;
+  updateSessionMetadataWithEvent(
+    input: SessionMetadataUpdateInput,
   ): Promise<{ session: SessionRecord; event: EventRecord }>;
   archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
     session: SessionRecord;
@@ -618,6 +660,7 @@ export interface SessionStore {
 export interface MessageStore {
   getSession(id: string): Promise<SessionRecord | null>;
   updateSession(record: SessionRecord): Promise<SessionRecord>;
+  updateSessionContext(input: SessionContextUpdateInput): Promise<SessionRecord>;
   nextMessageSequence(sessionId: string): Promise<number>;
   createMessage(record: CreateMessageRecord): Promise<MessageRecord>;
   getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null>;

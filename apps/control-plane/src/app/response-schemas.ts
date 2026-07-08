@@ -53,6 +53,14 @@ export const publicApiResponseSchemas = {
     description: 'Session search result envelope.',
     fields: { results: 'array', nextCursor: 'nullable:string' },
   },
+  sessionTags: {
+    description: 'Available session tag summaries.',
+    fields: { tags: 'array' },
+  },
+  sessionStar: {
+    description: 'Session star state.',
+    fields: { starred: 'boolean' },
+  },
   automation: {
     description: 'Single automation envelope.',
     fields: { automation: 'object' },

@@ -148,6 +148,8 @@ function buildSessionFixture(input: {
     writePolicy: 'group_members',
     createdAt,
     updatedAt: timestamp(input.messageCount * 120_000),
+    lastActivityAt: timestamp(input.messageCount * 120_000),
+    tags: [],
     title: input.title,
     context: { repository: { provider: 'github', owner: 'synthetic', repo: 'large-session' } },
   };

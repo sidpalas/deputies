@@ -49,11 +49,13 @@ export type SessionRow = QueryResultRow & {
   created_by_user_id: string | null;
   created_at: Date;
   updated_at: Date;
+  last_activity_at: Date;
+  tags: string[];
   queue_paused_at: Date | null;
 };
 
 export const sessionSelectColumns =
-  'id, status, title, context, parent_session_id, spawn_depth, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, queue_paused_at';
+  'id, status, title, context, parent_session_id, spawn_depth, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at';
 
 export type AuthUserRow = QueryResultRow & {
   id: string;
@@ -364,6 +366,8 @@ export function toSession(row: SessionRow): SessionRecord {
     spawnDepth: Number(row.spawn_depth ?? 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lastActivityAt: row.last_activity_at ?? row.updated_at,
+    tags: row.tags ?? [],
   };
   if (row.parent_session_id) record.parentSessionId = row.parent_session_id;
   if (row.title) record.title = row.title;

@@ -291,6 +291,8 @@ function sessionRecord(input: Partial<SessionRecord> & { id: string }): SessionR
     writePolicy: 'group_members',
     createdAt: now,
     updatedAt: now,
+    lastActivityAt: now,
+    tags: [],
     ...input,
   };
 }
@@ -316,6 +318,8 @@ async function createDeputyServices(
     title: 'Parent',
     createdAt: now,
     updatedAt: now,
+    lastActivityAt: now,
+    tags: [],
     ...options.parent,
   };
   await store.createSession(parent);

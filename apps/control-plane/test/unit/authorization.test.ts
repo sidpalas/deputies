@@ -153,6 +153,8 @@ function session(input: Partial<SessionRecord> = {}): SessionRecord {
     writePolicy: 'group_members',
     createdAt: now,
     updatedAt: now,
+    lastActivityAt: now,
+    tags: [],
     ...input,
   };
 }

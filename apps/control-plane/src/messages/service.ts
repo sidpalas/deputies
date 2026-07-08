@@ -34,8 +34,8 @@ export class MessageService {
     const context = mergeMessageContext(session.context, input.context);
     const sessionContext = mergeSessionContext(session.context, input.context);
     if (sessionContext) {
-      const updatedSession = await this.store.updateSession({
-        ...session,
+      const updatedSession = await this.store.updateSessionContext({
+        id: session.id,
         context: sessionContext,
         updatedAt: new Date(),
       });
