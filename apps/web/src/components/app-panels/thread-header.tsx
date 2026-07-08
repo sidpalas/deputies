@@ -30,12 +30,6 @@ const workspaceToolOptions = [
   { id: 'diff' as const, label: 'Hunk Diff', Icon: GitCompare },
 ];
 
-const sessionTagChipClass = 'gap-1 border border-border bg-background text-foreground';
-const sessionTagAddButtonClass =
-  'inline-flex rounded-md border-0 bg-transparent p-0 disabled:cursor-not-allowed disabled:opacity-50';
-const sessionTagAddChipClass =
-  'border border-dashed border-muted-foreground/40 bg-muted/30 text-muted-foreground group-hover:border-muted-foreground/70 group-hover:bg-muted/60 group-hover:text-foreground';
-
 export function ThreadHeader(props: ThreadHeaderProps) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [tagDraft, setTagDraft] = useState('');
@@ -327,7 +321,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
       </div>
       <div className="relative col-span-2 row-start-2 flex flex-wrap items-center gap-1.5" ref={tagEditorRef}>
         {sessionTags.map((tag) => (
-          <Badge key={tag} className={sessionTagChipClass}>
+          <Badge key={tag} className="gap-1 border border-border bg-background text-foreground">
             {tag}
             {props.canWriteSession && props.selectedSession.status !== 'archived' ? (
               <button
@@ -348,14 +342,16 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           <>
             <button
               ref={tagButtonRef}
-              className={cn('group', sessionTagAddButtonClass)}
+              className="group inline-flex rounded-md border-0 bg-transparent p-0 disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
               disabled={savingTags}
               onClick={() => setTagPopoverOpen((open) => !open)}
               aria-expanded={tagPopoverOpen}
               aria-haspopup="listbox"
             >
-              <Badge className={sessionTagAddChipClass}>+ Tag</Badge>
+              <Badge className="border border-dashed border-muted-foreground/40 bg-muted/30 text-muted-foreground group-hover:border-muted-foreground/70 group-hover:bg-muted/60 group-hover:text-foreground">
+                + Tag
+              </Badge>
             </button>
             {tagPopoverOpen ? (
               <div
