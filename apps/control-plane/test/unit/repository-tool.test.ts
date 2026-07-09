@@ -57,7 +57,7 @@ describe('repository Flue tool', () => {
     });
   });
 
-  it('clears environment context when setting a direct repository', async () => {
+  it('preserves environment context when switching the active repository', async () => {
     const updates: Record<string, unknown>[] = [];
     const services = repositoryServices({
       updateSessionContext: async (context) => {
@@ -70,19 +70,29 @@ describe('repository Flue tool', () => {
         id: 'env-1',
         name: 'Product surface',
         codebase: {
-          repositories: [{ provider: 'github', owner: 'manaflow-ai', repo: 'api', primary: true }],
+          repositories: [
+            { provider: 'github', owner: 'manaflow-ai', repo: 'api', primary: true },
+            { provider: 'github', owner: 'manaflow-ai', repo: 'web', primary: false },
+          ],
         },
       },
       environmentBranchOverrides: [{ provider: 'github', owner: 'manaflow-ai', repo: 'api', branch: 'release' }],
     };
     const tool = createRepositoryTool(services);
 
-    await tool.execute({ action: 'set', owner: 'manaflow-ai', repo: 'manaflow' });
+    await tool.execute({ action: 'set', owner: 'manaflow-ai', repo: 'web' });
 
-    expect(updates).toEqual([{ repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } }]);
-    expect(services.state.context).toEqual({
-      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
+    expect(updates[0]).toMatchObject({
+      environment: { id: 'env-1' },
+      activeRepository: { provider: 'github', owner: 'manaflow-ai', repo: 'web' },
     });
+    expect(services.state.context).toMatchObject({
+      environment: { id: 'env-1' },
+      activeRepository: { provider: 'github', owner: 'manaflow-ai', repo: 'web' },
+    });
+    await expect(tool.execute({ action: 'set', owner: 'manaflow-ai', repo: 'outside' })).rejects.toThrow(
+      'must belong to the session environment codebase',
+    );
   });
 
   it('clears prepared state when changing repositories', async () => {

@@ -73,6 +73,8 @@ describe('scheduled automations', () => {
       model: 'anthropic/claude-sonnet',
       environment: {
         id: environment.id,
+        revisionId: environment.currentRevisionId,
+        revisionNumber: 1,
         name: 'Product surface',
         ownerGroupId: defaultGroupId,
         codebase: {
@@ -111,12 +113,109 @@ describe('scheduled automations', () => {
     expect(result.message?.context).toEqual({
       environment: {
         id: environment.id,
+        revisionId: environment.currentRevisionId,
+        revisionNumber: 1,
         name: 'Product surface',
         ownerGroupId: defaultGroupId,
         codebase: {
           repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
         },
       },
+    });
+  });
+
+  it('pins automation invocations to an immutable environment revision', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Pinned codebase',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const automation = await services.automations.createScheduled({
+      name: 'Pinned automation',
+      prompt: 'Use the pinned revision',
+      scheduleCron: '0 9 * * *',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      environmentId: environment.id,
+      environmentRevisionPolicy: 'pinned',
+      environmentRevisionId: environment.currentRevisionId,
+    });
+    await services.environments.update({
+      id: environment.id,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'web', primary: true }],
+    });
+
+    const result = await services.automations.invokeManual({ automationId: automation.id });
+
+    expect(result.invocation).toMatchObject({
+      environmentId: environment.id,
+      environmentRevisionId: environment.currentRevisionId,
+    });
+    expect(
+      (result.message?.context?.environment as { codebase: { repositories: Array<{ repo: string }> } }).codebase
+        .repositories,
+    ).toMatchObject([{ repo: 'api' }]);
+  });
+
+  it('can switch a pinned automation back to following the latest revision', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Policy transition codebase',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const pinned = await services.automations.createScheduled({
+      name: 'Policy transition automation',
+      prompt: 'Use the selected revision policy',
+      scheduleCron: '0 9 * * *',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      environmentId: environment.id,
+      environmentRevisionPolicy: 'pinned',
+      environmentRevisionId: environment.currentRevisionId,
+    });
+
+    const following = await services.automations.updateScheduled({
+      id: pinned.id,
+      environmentRevisionPolicy: 'follow_latest',
+    });
+
+    expect(following.environmentRevisionPolicy).toBe('follow_latest');
+    expect(following.environmentRevisionId).toBeUndefined();
+  });
+
+  it('resolves follow-latest automation revisions when each invocation is recorded', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Latest codebase',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const automation = await services.automations.createScheduled({
+      name: 'Latest automation',
+      prompt: 'Use the latest revision',
+      scheduleCron: '0 9 * * *',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      environmentId: environment.id,
+    });
+    const revised = await services.environments.update({
+      id: environment.id,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'web', primary: true }],
+    });
+
+    const result = await services.automations.invokeManual({ automationId: automation.id });
+
+    expect(result.invocation).toMatchObject({
+      environmentId: environment.id,
+      environmentRevisionId: revised.currentRevisionId,
     });
   });
 

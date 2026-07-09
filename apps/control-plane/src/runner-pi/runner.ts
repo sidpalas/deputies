@@ -24,7 +24,7 @@ import type { RepositoryAccessProvider } from '../repositories/setup.js';
 import {
   checkoutRepositoryPreparation,
   completeRepositoryPreparation,
-  planRepositoryPreparations,
+  planActiveFirstRepositoryPreparations,
   preparedRepositoryFromPlan,
   type RepositoryCheckoutResult,
   type RepositoryPreparationPlan,
@@ -155,8 +155,8 @@ export class PiRunner implements Runner {
       if (mcpSetup) await closeMcpConnections(mcpSetup.connections);
       throw error;
     }
-    const primaryRepositorySetup = repositorySetup?.[0] ?? null;
-    const cwd = primaryRepositorySetup?.plan.workspacePath ?? input.sandbox.workspacePath;
+    const activeRepositorySetup = repositorySetup?.[0] ?? null;
+    const cwd = activeRepositorySetup?.plan.workspacePath ?? input.sandbox.workspacePath;
     const { lease, modelRegistry, modelSelection, model, resourceLoader } = await (async () => {
       try {
         const lease = await this.getSessionLease(input.sessionId, cwd);
@@ -252,8 +252,8 @@ export class PiRunner implements Runner {
       });
 
       const setupResults = repositorySetup ? await completePiRepositorySetup(input, this.options, repositorySetup) : [];
-      const primarySetupResult = setupResults.find((result) => result.primary) ?? setupResults[0] ?? null;
-      if (primarySetupResult) repositoryState.prepared = primarySetupResult;
+      repositoryState.preparedRepositories = setupResults;
+      if (setupResults[0]) repositoryState.prepared = setupResults[0];
       const setupNote = combineSetupNotes(
         mcpSetup?.note ?? null,
         ...setupResults.map((result) => result.setupFailureNote),
@@ -592,9 +592,9 @@ function resolveSubagentCwd(parentCwd: string, cwd: string | undefined): string 
 
 function createRepositoryState(context: Record<string, unknown>, setup: PiRepositorySetup): RepositoryToolState {
   const state: RepositoryToolState = { context: structuredClone(context) };
-  const primarySetup = setup?.[0];
-  if (primarySetup) {
-    state.prepared = preparedRepositoryFromPlan(primarySetup.plan);
+  if (setup?.length) {
+    state.preparedRepositories = setup.map((item) => preparedRepositoryFromPlan(item.plan));
+    state.prepared = state.preparedRepositories[0]!;
   }
   return state;
 }
@@ -618,12 +618,12 @@ function createPiRepositoryServices(
 }
 
 async function preparePiRepositorySetup(input: RunnerInput, options: PiRunnerOptions) {
-  const repositorySetupInput: Parameters<typeof planRepositoryPreparations>[0] = {
+  const repositorySetupInput: Parameters<typeof planActiveFirstRepositoryPreparations>[0] = {
     context: input.context,
     sandbox: input.sandbox,
   };
   if (options.repositoryAccess?.github) repositorySetupInput.github = options.repositoryAccess.github;
-  const plans = await planRepositoryPreparations(repositorySetupInput);
+  const plans = await planActiveFirstRepositoryPreparations(repositorySetupInput);
   if (!plans.length) return null;
   const setups = [];
   for (const plan of plans) {

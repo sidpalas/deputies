@@ -28,6 +28,8 @@ import type {
   EventRecord,
   EventDeltaCompactionInput,
   EnvironmentWithDetailsRecord,
+  EnvironmentActivityRecord,
+  EnvironmentRevisionRecord,
   CreateMessageRecord,
   CreateSessionRecord,
   CreateSessionWithFirstMessageInput,
@@ -95,6 +97,8 @@ export class MemoryStore implements AppStore {
   private readonly automations = new Map<string, AutomationRecord>();
   private readonly automationInvocations = new Map<string, AutomationInvocationRecord>();
   private readonly environments = new Map<string, EnvironmentWithDetailsRecord>();
+  private readonly environmentRevisions = new Map<string, EnvironmentRevisionRecord>();
+  private readonly environmentActivity = new Map<string, EnvironmentActivityRecord[]>();
   private readonly webhookSources = new Map<string, WebhookSourceRecord>();
   private readonly externalThreads = new Map<string, ExternalThreadRecord>();
   private readonly integrationDeliveries = new Map<string, IntegrationDeliveryRecord>();
@@ -540,6 +544,7 @@ export class MemoryStore implements AppStore {
 
   async createAutomation(record: CreateAutomationRecord): Promise<AutomationRecord> {
     if (this.automations.has(record.id)) throw new Error(`Automation already exists: ${record.id}`);
+    this.assertAutomationEnvironmentAvailable(record.environmentId, record.ownerGroupId);
     this.automations.set(record.id, record);
     return record;
   }
@@ -555,6 +560,10 @@ export class MemoryStore implements AppStore {
   async updateAutomation(input: UpdateAutomationRecord): Promise<AutomationRecord> {
     const existing = this.automations.get(input.id);
     if (!existing) throw new Error(`Automation does not exist: ${input.id}`);
+    this.assertAutomationEnvironmentAvailable(
+      input.environmentId === undefined ? existing.environmentId : (input.environmentId ?? undefined),
+      input.ownerGroupId ?? existing.ownerGroupId,
+    );
     const updated: AutomationRecord = {
       ...existing,
       updatedAt: input.updatedAt,
@@ -574,6 +583,14 @@ export class MemoryStore implements AppStore {
       if (input.environmentId) updated.environmentId = input.environmentId;
       else delete updated.environmentId;
     }
+    if (input.environmentRevisionPolicy !== undefined) {
+      if (input.environmentRevisionPolicy) updated.environmentRevisionPolicy = input.environmentRevisionPolicy;
+      else delete updated.environmentRevisionPolicy;
+    }
+    if (input.environmentRevisionId !== undefined) {
+      if (input.environmentRevisionId) updated.environmentRevisionId = input.environmentRevisionId;
+      else delete updated.environmentRevisionId;
+    }
     if (input.nextInvocationAt !== undefined && input.nextInvocationAt !== null)
       updated.nextInvocationAt = input.nextInvocationAt;
     else if (input.nextInvocationAt === null) delete updated.nextInvocationAt;
@@ -587,6 +604,8 @@ export class MemoryStore implements AppStore {
     this.assertEnvironmentNameAvailable(record.environment.name, record.environment.ownerGroupId);
     const created = this.environmentWithDetails(record);
     this.environments.set(created.id, created);
+    this.environmentRevisions.set(record.revision.id, cloneEnvironmentRevision(record.revision));
+    this.environmentActivity.set(created.id, record.activities.map(cloneEnvironmentActivity));
     return created;
   }
 
@@ -600,9 +619,47 @@ export class MemoryStore implements AppStore {
       .map((environment) => cloneEnvironment(environment)!);
   }
 
+  async getEnvironmentRevision(id: string): Promise<EnvironmentRevisionRecord | null> {
+    const revision = this.environmentRevisions.get(id);
+    return revision ? cloneEnvironmentRevision(revision) : null;
+  }
+
+  async listEnvironmentRevisions(environmentId: string): Promise<EnvironmentRevisionRecord[]> {
+    return [...this.environmentRevisions.values()]
+      .filter((revision) => revision.environmentId === environmentId)
+      .sort((left, right) => right.revisionNumber - left.revisionNumber)
+      .map(cloneEnvironmentRevision);
+  }
+
+  async listEnvironmentActivity(environmentId: string): Promise<EnvironmentActivityRecord[]> {
+    return (this.environmentActivity.get(environmentId) ?? [])
+      .slice()
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+      .map(cloneEnvironmentActivity);
+  }
+
   async updateEnvironment(record: UpdateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord> {
     const existing = this.environments.get(record.environment.id);
     if (!existing) throw new Error(`Environment does not exist: ${record.environment.id}`);
+    if (existing.updatedAt.getTime() !== record.expectedUpdatedAt.getTime()) {
+      throw new StoreConflictError('environment_update_conflict', 'Environment changed while it was being edited');
+    }
+    if (record.automationAccessAllowedGroupIds) {
+      const allowed = new Set(record.automationAccessAllowedGroupIds);
+      const conflicts = [...this.automations.values()].filter(
+        (automation) =>
+          automation.environmentId === record.environment.id &&
+          !automation.archivedAt &&
+          !allowed.has(automation.ownerGroupId),
+      );
+      if (conflicts.length) {
+        throw new StoreConflictError(
+          'environment_automation_conflict',
+          'Environment access is used by active automations',
+          { automations: conflicts.map(automationConflictDetail) },
+        );
+      }
+    }
     if (
       !existing.archivedAt &&
       !record.environment.archivedAt &&
@@ -616,30 +673,47 @@ export class MemoryStore implements AppStore {
     }
     const updated = this.environmentWithDetails(record);
     this.environments.set(updated.id, updated);
+    if (record.revision) this.environmentRevisions.set(record.revision.id, cloneEnvironmentRevision(record.revision));
+    this.appendEnvironmentActivity(updated.id, record.activities);
     return cloneEnvironment(updated)!;
   }
 
   async archiveEnvironment(input: {
     environmentId: string;
     archivedAt: Date;
+    activity: EnvironmentActivityRecord;
   }): Promise<EnvironmentWithDetailsRecord | null> {
     const existing = this.environments.get(input.environmentId);
     if (!existing) return null;
+    if (existing.archivedAt) return cloneEnvironment(existing)!;
+    const conflicts = [...this.automations.values()].filter(
+      (automation) => automation.environmentId === input.environmentId && !automation.archivedAt,
+    );
+    if (conflicts.length) {
+      throw new StoreConflictError('environment_automation_conflict', 'Environment is used by active automations', {
+        automations: conflicts.map(automationConflictDetail),
+      });
+    }
     const archived: EnvironmentWithDetailsRecord = {
       ...existing,
       archivedAt: existing.archivedAt ?? input.archivedAt,
       updatedAt: input.archivedAt,
     };
     this.environments.set(input.environmentId, archived);
+    this.appendEnvironmentActivity(input.environmentId, [
+      { ...input.activity, revisionId: existing.currentRevisionId },
+    ]);
     return cloneEnvironment(archived)!;
   }
 
   async unarchiveEnvironment(input: {
     environmentId: string;
     updatedAt: Date;
+    activity: EnvironmentActivityRecord;
   }): Promise<EnvironmentWithDetailsRecord | null> {
     const existing = this.environments.get(input.environmentId);
     if (!existing) return null;
+    if (!existing.archivedAt) return cloneEnvironment(existing)!;
     this.assertEnvironmentNameAvailable(existing.name, existing.ownerGroupId, existing.id);
     const { archivedAt: _archivedAt, ...withoutArchive } = existing;
     const unarchived: EnvironmentWithDetailsRecord = {
@@ -647,6 +721,9 @@ export class MemoryStore implements AppStore {
       updatedAt: input.updatedAt,
     };
     this.environments.set(input.environmentId, unarchived);
+    this.appendEnvironmentActivity(input.environmentId, [
+      { ...input.activity, revisionId: existing.currentRevisionId },
+    ]);
     return cloneEnvironment(unarchived)!;
   }
 
@@ -667,6 +744,7 @@ export class MemoryStore implements AppStore {
   async unarchiveAutomation(input: { automationId: string; updatedAt: Date }): Promise<AutomationRecord | null> {
     const automation = this.automations.get(input.automationId);
     if (!automation) return null;
+    this.assertAutomationEnvironmentAvailable(automation.environmentId, automation.ownerGroupId);
     const {
       archivedAt: _archivedAt,
       schedulerLockOwner: _lockOwner,
@@ -1645,6 +1723,17 @@ export class MemoryStore implements AppStore {
     if (conflict) throw new StoreConflictError('environment_name_exists', 'Environment name already exists');
   }
 
+  private assertAutomationEnvironmentAvailable(environmentId: string | undefined, ownerGroupId: string): void {
+    if (!environmentId) return;
+    const environment = this.environments.get(environmentId);
+    if (!environment || environment.archivedAt || !memoryEnvironmentAvailableToGroup(environment, ownerGroupId)) {
+      throw new StoreConflictError(
+        'automation_environment_unavailable',
+        'Environment is no longer available to the automation owner group',
+      );
+    }
+  }
+
   private environmentWithDetails(
     record: CreateEnvironmentRecord | UpdateEnvironmentRecord,
   ): EnvironmentWithDetailsRecord {
@@ -1656,10 +1745,31 @@ export class MemoryStore implements AppStore {
       sharedGroupIds: [...record.sharedGroupIds].sort(compareStringAsc),
     };
   }
+
+  private appendEnvironmentActivity(environmentId: string, activity: EnvironmentActivityRecord[]): void {
+    const existing = this.environmentActivity.get(environmentId) ?? [];
+    this.environmentActivity.set(environmentId, [...existing, ...activity.map(cloneEnvironmentActivity)]);
+  }
 }
 
 function authAccountKey(provider: string, providerAccountId: string): string {
   return `${provider}:${providerAccountId}`;
+}
+
+function memoryEnvironmentAvailableToGroup(environment: EnvironmentWithDetailsRecord, groupId: string): boolean {
+  return (
+    environment.ownerGroupId === groupId ||
+    environment.shareMode === 'all_groups' ||
+    (environment.shareMode === 'selected_groups' && environment.sharedGroupIds.includes(groupId))
+  );
+}
+
+function automationConflictDetail(automation: AutomationRecord): {
+  id: string;
+  name: string;
+  ownerGroupId: string;
+} {
+  return { id: automation.id, name: automation.name, ownerGroupId: automation.ownerGroupId };
 }
 
 function groupMemberKey(groupId: string, userId: string): string {
@@ -1675,6 +1785,14 @@ function cloneEnvironment(
     repositories: environment.repositories.map((repository) => ({ ...repository })),
     sharedGroupIds: [...environment.sharedGroupIds],
   };
+}
+
+function cloneEnvironmentRevision(revision: EnvironmentRevisionRecord): EnvironmentRevisionRecord {
+  return { ...revision, repositories: revision.repositories.map((repository) => ({ ...repository })) };
+}
+
+function cloneEnvironmentActivity(activity: EnvironmentActivityRecord): EnvironmentActivityRecord {
+  return { ...activity, payload: structuredClone(activity.payload) };
 }
 
 function normalizedGroupName(name: string): string {

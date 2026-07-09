@@ -5,6 +5,7 @@ import type {
   ArtifactRecord,
   AutomationInvocationRecord,
   AutomationInvocationStatus,
+  AuditActorType,
   AutomationInvocationTrigger,
   AutomationKind,
   AutomationRecord,
@@ -13,7 +14,12 @@ import type {
   CallbackDeliveryRecord,
   CallbackDeliveryStatus,
   EnvironmentRecord,
+  EnvironmentActivityRecord,
   EnvironmentRepositoryRecord,
+  EnvironmentRevisionRecord,
+  EnvironmentRevisionPolicy,
+  EnvironmentRevisionRepository,
+  EnvironmentActivityType,
   EnvironmentShareMode,
   EventRecord,
   ExternalResourceRecord,
@@ -237,6 +243,8 @@ export type AutomationRow = QueryResultRow & {
   created_by_user_id: string | null;
   archived_at: Date | null;
   environment_id: string | null;
+  environment_revision_policy: EnvironmentRevisionPolicy | null;
+  environment_revision_id: string | null;
   next_invocation_at: Date | null;
   scheduler_lock_owner: string | null;
   scheduler_locked_until: Date | null;
@@ -245,23 +253,52 @@ export type AutomationRow = QueryResultRow & {
 };
 
 export const automationSelectColumns =
-  'id, kind, name, prompt, schedule_cron, enabled, owner_group_id, visibility, write_policy, context, created_by_user_id, archived_at, environment_id, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
+  'id, kind, name, prompt, schedule_cron, enabled, owner_group_id, visibility, write_policy, context, created_by_user_id, archived_at, environment_id, environment_revision_policy, environment_revision_id, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
 
 export type EnvironmentRow = QueryResultRow & {
   id: string;
   name: string;
   owner_group_id: string;
   share_mode: EnvironmentShareMode;
+  current_revision_id: string;
+  current_revision_number: PgInteger;
   archived_at: Date | null;
   created_at: Date;
   updated_at: Date;
 };
 
-export const environmentSelectColumns = 'id, name, owner_group_id, share_mode, archived_at, created_at, updated_at';
+export const environmentSelectColumns =
+  'id, name, owner_group_id, share_mode, current_revision_id, current_revision_number, archived_at, created_at, updated_at';
+
+export type EnvironmentRevisionRow = QueryResultRow & {
+  id: string;
+  environment_id: string;
+  revision_number: PgInteger;
+  actor_type: AuditActorType;
+  actor_user_id: string | null;
+  created_at: Date;
+};
+
+export const environmentRevisionSelectColumns =
+  'id, environment_id, revision_number, actor_type, actor_user_id, created_at';
+
+export type EnvironmentActivityRow = QueryResultRow & {
+  id: string;
+  environment_id: string;
+  type: EnvironmentActivityType;
+  actor_type: AuditActorType;
+  actor_user_id: string | null;
+  revision_id: string | null;
+  payload: Record<string, unknown>;
+  created_at: Date;
+};
+
+export const environmentActivitySelectColumns =
+  'id, environment_id, type, actor_type, actor_user_id, revision_id, payload, created_at';
 
 export type EnvironmentRepositoryRow = QueryResultRow & {
   id: string;
-  environment_id: string;
+  revision_id: string;
   provider: EnvironmentRepositoryRecord['provider'];
   owner: string;
   repo: string;
@@ -273,7 +310,7 @@ export type EnvironmentRepositoryRow = QueryResultRow & {
 };
 
 export const environmentRepositorySelectColumns =
-  'id, environment_id, provider, owner, repo, branch, is_primary, position, created_at, updated_at';
+  'id, revision_id, provider, owner, repo, branch, is_primary, position, created_at, updated_at';
 
 export type AutomationInvocationRow = QueryResultRow & {
   id: string;
@@ -286,6 +323,8 @@ export type AutomationInvocationRow = QueryResultRow & {
   reserved_session_id: string | null;
   reserved_message_id: string | null;
   requested_by_user_id: string | null;
+  environment_id: string | null;
+  environment_revision_id: string | null;
   reason: string | null;
   error: string | null;
   metadata: Record<string, unknown>;
@@ -294,7 +333,7 @@ export type AutomationInvocationRow = QueryResultRow & {
 };
 
 export const automationInvocationSelectColumns =
-  'id, automation_id, trigger, status, scheduled_at, session_id, message_id, reserved_session_id, reserved_message_id, requested_by_user_id, reason, error, metadata, created_at, completed_at';
+  'id, automation_id, trigger, status, scheduled_at, session_id, message_id, reserved_session_id, reserved_message_id, requested_by_user_id, environment_id, environment_revision_id, reason, error, metadata, created_at, completed_at';
 
 export type WebhookSourceRow = QueryResultRow & {
   id: string;
@@ -574,6 +613,8 @@ export function toAutomation(row: AutomationRow): AutomationRecord {
     updatedAt: row.updated_at,
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
     ...(row.environment_id ? { environmentId: row.environment_id } : {}),
+    ...(row.environment_revision_policy ? { environmentRevisionPolicy: row.environment_revision_policy } : {}),
+    ...(row.environment_revision_id ? { environmentRevisionId: row.environment_revision_id } : {}),
     ...(row.next_invocation_at ? { nextInvocationAt: row.next_invocation_at } : {}),
     ...(row.created_by_user_id ? { createdByUserId: row.created_by_user_id } : {}),
     ...(row.context ? { context: row.context } : {}),
@@ -588,6 +629,8 @@ export function toEnvironment(row: EnvironmentRow): EnvironmentRecord {
     name: row.name,
     ownerGroupId: row.owner_group_id,
     shareMode: row.share_mode,
+    currentRevisionId: row.current_revision_id,
+    currentRevisionNumber: Number(row.current_revision_number),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
@@ -597,7 +640,7 @@ export function toEnvironment(row: EnvironmentRow): EnvironmentRecord {
 export function toEnvironmentRepository(row: EnvironmentRepositoryRow): EnvironmentRepositoryRecord {
   return {
     id: row.id,
-    environmentId: row.environment_id,
+    revisionId: row.revision_id,
     provider: row.provider,
     owner: row.owner,
     repo: row.repo,
@@ -606,6 +649,34 @@ export function toEnvironmentRepository(row: EnvironmentRepositoryRow): Environm
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.branch ? { branch: row.branch } : {}),
+  };
+}
+
+export function toEnvironmentRevision(
+  row: EnvironmentRevisionRow,
+  repositories: EnvironmentRevisionRepository[],
+): EnvironmentRevisionRecord {
+  return {
+    id: row.id,
+    environmentId: row.environment_id,
+    revisionNumber: Number(row.revision_number),
+    repositories: repositories.map((repository) => ({ ...repository })),
+    actorType: row.actor_type,
+    createdAt: row.created_at,
+    ...(row.actor_user_id ? { actorUserId: row.actor_user_id } : {}),
+  };
+}
+
+export function toEnvironmentActivity(row: EnvironmentActivityRow): EnvironmentActivityRecord {
+  return {
+    id: row.id,
+    environmentId: row.environment_id,
+    type: row.type,
+    actorType: row.actor_type,
+    payload: row.payload,
+    createdAt: row.created_at,
+    ...(row.actor_user_id ? { actorUserId: row.actor_user_id } : {}),
+    ...(row.revision_id ? { revisionId: row.revision_id } : {}),
   };
 }
 
@@ -624,6 +695,8 @@ export function toAutomationInvocation(row: AutomationInvocationRow): Automation
     ...(row.reserved_session_id ? { reservedSessionId: row.reserved_session_id } : {}),
     ...(row.reserved_message_id ? { reservedMessageId: row.reserved_message_id } : {}),
     ...(row.requested_by_user_id ? { requestedByUserId: row.requested_by_user_id } : {}),
+    ...(row.environment_id ? { environmentId: row.environment_id } : {}),
+    ...(row.environment_revision_id ? { environmentRevisionId: row.environment_revision_id } : {}),
     ...(row.reason ? { reason: row.reason } : {}),
     ...(row.error ? { error: row.error } : {}),
   };

@@ -2,7 +2,8 @@ import type { RunnerInput } from '../runner/types.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 import {
   prepareRepositoryShellSetups,
-  prepareRepositoryShellSetup,
+  parseRepositoryContext,
+  sameRepositoryIdentity,
   type GitHubRepository,
   type GitHubRepositoryAccess,
   type RepositoryAccessProvider,
@@ -50,24 +51,33 @@ export async function planRepositoryPreparation(input: {
   sandbox: SandboxHandle;
   github?: RepositoryAccessProvider;
 }): Promise<RepositoryPreparationPlan | null> {
-  const setup = await prepareRepositoryShellSetup(input);
+  const setups = await prepareRepositoryShellSetups(input);
+  const active = parseRepositoryContext(input.context);
+  const setup = active ? setups.find((candidate) => sameRepositoryIdentity(candidate.access, active)) : undefined;
   if (!setup) return null;
   return {
     ...setup,
-    repository: { provider: 'github', owner: setup.access.owner, repo: setup.access.repo },
+    repository: { provider: 'github' as const, owner: setup.access.owner, repo: setup.access.repo },
   };
 }
 
-export async function planRepositoryPreparations(input: {
+export async function planActiveFirstRepositoryPreparations(input: {
   context: Record<string, unknown>;
   sandbox: SandboxHandle;
   github?: RepositoryAccessProvider;
 }): Promise<RepositoryPreparationPlan[]> {
   const setups = await prepareRepositoryShellSetups(input);
-  return setups.map((setup) => ({
+  const plans = setups.map((setup) => ({
     ...setup,
-    repository: { provider: 'github', owner: setup.access.owner, repo: setup.access.repo },
+    repository: { provider: 'github' as const, owner: setup.access.owner, repo: setup.access.repo },
   }));
+  const active = parseRepositoryContext(input.context);
+  if (!active) return plans;
+  return plans.sort(
+    (left, right) =>
+      Number(sameRepositoryIdentity(right.repository, active)) -
+      Number(sameRepositoryIdentity(left.repository, active)),
+  );
 }
 
 export async function executeRepositoryPreparation(input: {

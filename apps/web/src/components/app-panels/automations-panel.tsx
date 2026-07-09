@@ -44,6 +44,8 @@ type AutomationForm = {
   name: string;
   scheduleCron: string;
   environmentId: string;
+  environmentRevisionPolicy: 'follow_latest' | 'pinned';
+  environmentRevisionId: string;
   environmentBranchOverrides: EnvironmentBranchOverrides;
   repository: string;
   branch: string;
@@ -600,6 +602,29 @@ export function AutomationsPanel(props: {
                   />
                 ) : null}
 
+                {selectedEnvironment ? (
+                  <label className="flex items-start gap-2 rounded-md border border-border bg-background/70 p-3 text-sm text-muted-foreground">
+                    <input
+                      className="mt-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                      type="checkbox"
+                      checked={form.environmentRevisionPolicy === 'pinned'}
+                      onChange={(event) =>
+                        setForm({
+                          ...form,
+                          environmentRevisionPolicy: event.target.checked ? 'pinned' : 'follow_latest',
+                          environmentRevisionId: event.target.checked ? selectedEnvironment.currentRevisionId : '',
+                        })
+                      }
+                      disabled={!canEditDefinition}
+                    />
+                    <span>
+                      {form.environmentRevisionPolicy === 'pinned'
+                        ? `Pinned to environment revision ${revisionNumberForId(selectedEnvironment, form.environmentRevisionId)}.`
+                        : 'Follow the latest environment revision for each invocation.'}
+                    </span>
+                  </label>
+                ) : null}
+
                 <Field label="Prompt" htmlFor="automation-prompt">
                   <Textarea
                     id="automation-prompt"
@@ -790,6 +815,8 @@ function emptyForm(groups: Group[]): AutomationForm {
     name: '',
     scheduleCron: '0 9 * * 1-5',
     environmentId: '',
+    environmentRevisionPolicy: 'follow_latest',
+    environmentRevisionId: '',
     environmentBranchOverrides: {},
     repository: '',
     branch: '',
@@ -810,6 +837,8 @@ function formFromAutomation(automation: Automation): AutomationForm {
     name: automation.name,
     scheduleCron: automation.scheduleCron,
     environmentId: automation.environmentId ?? '',
+    environmentRevisionPolicy: automation.environmentRevisionPolicy ?? 'follow_latest',
+    environmentRevisionId: automation.environmentRevisionId ?? '',
     environmentBranchOverrides: environmentBranchOverridesContextValue(automation.context?.environmentBranchOverrides),
     repository: repositoryContextLabel(automation.context?.repository),
     branch: typeof automation.context?.branch === 'string' ? automation.context.branch : '',
@@ -830,6 +859,14 @@ function automationFormInput(form: AutomationForm, token: string, environment: E
     environmentId: form.environmentId,
     ...(form.environmentId
       ? {
+          environmentRevisionPolicy: form.environmentRevisionPolicy,
+          ...(form.environmentRevisionPolicy === 'pinned'
+            ? { environmentRevisionId: form.environmentRevisionId || environment?.currentRevisionId || '' }
+            : {}),
+        }
+      : {}),
+    ...(form.environmentId
+      ? {
           environmentBranchOverrides: automationEnvironmentBranchOverrideInput(
             form.environmentBranchOverrides,
             environment,
@@ -844,15 +881,48 @@ function automationFormInput(form: AutomationForm, token: string, environment: E
 
 function automationCodebaseFormPatch(
   value: string,
-): Pick<AutomationForm, 'environmentId' | 'environmentBranchOverrides' | 'repository' | 'branch'> {
+): Pick<
+  AutomationForm,
+  | 'environmentId'
+  | 'environmentRevisionPolicy'
+  | 'environmentRevisionId'
+  | 'environmentBranchOverrides'
+  | 'repository'
+  | 'branch'
+> {
   const selection = parseCodebasePickerValue(value);
   if (selection?.kind === 'environment') {
-    return { environmentId: selection.environmentId, environmentBranchOverrides: {}, repository: '', branch: '' };
+    return {
+      environmentId: selection.environmentId,
+      environmentRevisionPolicy: 'follow_latest',
+      environmentRevisionId: '',
+      environmentBranchOverrides: {},
+      repository: '',
+      branch: '',
+    };
   }
   if (selection?.kind === 'repository') {
-    return { environmentId: '', environmentBranchOverrides: {}, repository: selection.repository, branch: '' };
+    return {
+      environmentId: '',
+      environmentRevisionPolicy: 'follow_latest',
+      environmentRevisionId: '',
+      environmentBranchOverrides: {},
+      repository: selection.repository,
+      branch: '',
+    };
   }
-  return { environmentId: '', environmentBranchOverrides: {}, repository: '', branch: '' };
+  return {
+    environmentId: '',
+    environmentRevisionPolicy: 'follow_latest',
+    environmentRevisionId: '',
+    environmentBranchOverrides: {},
+    repository: '',
+    branch: '',
+  };
+}
+
+function revisionNumberForId(environment: Environment, revisionId: string): number | string {
+  return revisionId === environment.currentRevisionId ? environment.currentRevisionNumber : revisionId.slice(0, 8);
 }
 
 function environmentAvailableToGroup(environment: Environment, groupId: string): boolean {

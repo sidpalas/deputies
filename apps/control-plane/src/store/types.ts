@@ -26,6 +26,16 @@ export type AutomationKind = 'scheduled';
 export type AutomationInvocationTrigger = 'scheduled' | 'manual';
 export type AutomationInvocationStatus = 'creating' | 'created' | 'skipped' | 'failed';
 export type EnvironmentShareMode = 'private' | 'selected_groups' | 'all_groups';
+export type EnvironmentRevisionPolicy = 'follow_latest' | 'pinned';
+export type EnvironmentActivityType =
+  | 'environment_created'
+  | 'revision_published'
+  | 'sharing_changed'
+  | 'owner_transferred'
+  | 'environment_renamed'
+  | 'environment_archived'
+  | 'environment_unarchived';
+export type AuditActorType = 'user' | 'system';
 export type RepositoryProvider = 'github';
 
 export const defaultGroupId = '00000000-0000-4000-8000-000000000001';
@@ -77,8 +87,14 @@ export type GroupRecord = {
 
 export class StoreConflictError extends Error {
   constructor(
-    readonly code: 'group_name_exists' | 'environment_name_exists',
+    readonly code:
+      | 'group_name_exists'
+      | 'environment_name_exists'
+      | 'environment_update_conflict'
+      | 'environment_automation_conflict'
+      | 'automation_environment_unavailable',
     message: string,
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -290,6 +306,8 @@ export type AutomationRecord = {
   updatedAt: Date;
   archivedAt?: Date;
   environmentId?: string;
+  environmentRevisionPolicy?: EnvironmentRevisionPolicy;
+  environmentRevisionId?: string;
   nextInvocationAt?: Date;
   createdByUserId?: string;
   context?: Record<string, unknown>;
@@ -302,6 +320,8 @@ export type EnvironmentRecord = {
   name: string;
   ownerGroupId: string;
   shareMode: EnvironmentShareMode;
+  currentRevisionId: string;
+  currentRevisionNumber: number;
   createdAt: Date;
   updatedAt: Date;
   archivedAt?: Date;
@@ -309,7 +329,7 @@ export type EnvironmentRecord = {
 
 export type EnvironmentRepositoryRecord = {
   id: string;
-  environmentId: string;
+  revisionId: string;
   provider: RepositoryProvider;
   owner: string;
   repo: string;
@@ -318,6 +338,36 @@ export type EnvironmentRepositoryRecord = {
   createdAt: Date;
   updatedAt: Date;
   branch?: string;
+};
+
+export type EnvironmentRevisionRepository = {
+  provider: RepositoryProvider;
+  owner: string;
+  repo: string;
+  primary: boolean;
+  position: number;
+  branch?: string;
+};
+
+export type EnvironmentRevisionRecord = {
+  id: string;
+  environmentId: string;
+  revisionNumber: number;
+  repositories: EnvironmentRevisionRepository[];
+  createdAt: Date;
+  actorType: AuditActorType;
+  actorUserId?: string;
+};
+
+export type EnvironmentActivityRecord = {
+  id: string;
+  environmentId: string;
+  type: EnvironmentActivityType;
+  actorType: AuditActorType;
+  actorUserId?: string;
+  revisionId?: string;
+  payload: Record<string, unknown>;
+  createdAt: Date;
 };
 
 export type EnvironmentWithDetailsRecord = EnvironmentRecord & {
@@ -338,6 +388,8 @@ export type AutomationInvocationRecord = {
   reservedSessionId?: string;
   reservedMessageId?: string;
   requestedByUserId?: string;
+  environmentId?: string;
+  environmentRevisionId?: string;
   reason?: string;
   error?: string;
   metadata: Record<string, unknown>;
@@ -480,6 +532,8 @@ export type CreateAutomationRecord = {
   updatedAt: Date;
   nextInvocationAt?: Date;
   environmentId?: string;
+  environmentRevisionPolicy?: EnvironmentRevisionPolicy;
+  environmentRevisionId?: string;
   createdByUserId?: string;
   context?: Record<string, unknown>;
 };
@@ -488,6 +542,8 @@ export type CreateEnvironmentRecord = {
   environment: EnvironmentRecord;
   repositories: EnvironmentRepositoryRecord[];
   sharedGroupIds: string[];
+  revision: EnvironmentRevisionRecord;
+  activities: EnvironmentActivityRecord[];
 };
 
 export type CreateAutomationInvocationRecord = {
@@ -504,6 +560,8 @@ export type CreateAutomationInvocationRecord = {
   reservedSessionId?: string;
   reservedMessageId?: string;
   requestedByUserId?: string;
+  environmentId?: string;
+  environmentRevisionId?: string;
   reason?: string;
   error?: string;
 };
@@ -520,13 +578,19 @@ export type UpdateAutomationRecord = {
   writePolicy?: SessionWritePolicy;
   context?: Record<string, unknown> | null;
   environmentId?: string | null;
+  environmentRevisionPolicy?: EnvironmentRevisionPolicy | null;
+  environmentRevisionId?: string | null;
   nextInvocationAt?: Date | null;
 };
 
 export type UpdateEnvironmentRecord = {
+  expectedUpdatedAt: Date;
   environment: EnvironmentRecord;
   repositories: EnvironmentRepositoryRecord[];
   sharedGroupIds: string[];
+  automationAccessAllowedGroupIds: string[] | null;
+  revision?: EnvironmentRevisionRecord;
+  activities: EnvironmentActivityRecord[];
 };
 
 export type SessionWithSandboxRecord = {
@@ -849,9 +913,20 @@ export interface EnvironmentStore {
   createEnvironment(record: CreateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord>;
   getEnvironment(id: string): Promise<EnvironmentWithDetailsRecord | null>;
   listEnvironments(): Promise<EnvironmentWithDetailsRecord[]>;
+  getEnvironmentRevision(id: string): Promise<EnvironmentRevisionRecord | null>;
+  listEnvironmentRevisions(environmentId: string): Promise<EnvironmentRevisionRecord[]>;
+  listEnvironmentActivity(environmentId: string): Promise<EnvironmentActivityRecord[]>;
   updateEnvironment(record: UpdateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord>;
-  archiveEnvironment(input: { environmentId: string; archivedAt: Date }): Promise<EnvironmentWithDetailsRecord | null>;
-  unarchiveEnvironment(input: { environmentId: string; updatedAt: Date }): Promise<EnvironmentWithDetailsRecord | null>;
+  archiveEnvironment(input: {
+    environmentId: string;
+    archivedAt: Date;
+    activity: EnvironmentActivityRecord;
+  }): Promise<EnvironmentWithDetailsRecord | null>;
+  unarchiveEnvironment(input: {
+    environmentId: string;
+    updatedAt: Date;
+    activity: EnvironmentActivityRecord;
+  }): Promise<EnvironmentWithDetailsRecord | null>;
 }
 
 export interface EventStore {

@@ -1,4 +1,5 @@
 import {
+  parseRepositoryContext,
   prepareRepositoryShellSetups,
   RepositorySetupError,
   type GitHubRepository,
@@ -7,6 +8,23 @@ import {
 import type { SandboxHandle } from '../../src/sandbox/types.js';
 
 describe('prepareRepositoryShellSetups', () => {
+  it('uses the primary repository as the initial active repository regardless of input order', () => {
+    expect(
+      parseRepositoryContext({
+        environment: {
+          id: 'env-1',
+          name: 'Product surface',
+          codebase: {
+            repositories: [
+              { provider: 'github', owner: 'acme', repo: 'web', primary: false },
+              { provider: 'github', owner: 'acme', repo: 'api', primary: true },
+            ],
+          },
+        },
+      }),
+    ).toMatchObject({ owner: 'acme', repo: 'api', primary: true });
+  });
+
   it('expands environment codebases into primary-first repository setup plans', async () => {
     const setups = await prepareRepositoryShellSetups({
       context: {

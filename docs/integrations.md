@@ -171,24 +171,25 @@ Repository-scoped messages can carry context in either shape:
 
 When a message provides repository context through the product API, the repository is also persisted as durable session context. Later messages inherit that repository automatically. Supplying a different repository on a later message updates the session default and overrides the effective context for that message and future follow-ups. Only durable repository context should be promoted to the session; transient integration metadata, callbacks, delivery IDs, and webhook payloads remain message-scoped.
 
-Future multi-repository context should distinguish repository roles instead of treating every cloned repo as equally writable:
+Multi-repository context should distinguish the stable primary repository from the session/run-scoped active repository without using either designation as a writability boundary:
 
 ```json
 {
   "repositories": [
-    { "provider": "github", "owner": "org", "repo": "app", "role": "primary", "writable": true },
-    { "provider": "github", "owner": "org", "repo": "shared-lib", "role": "auxiliary", "writable": false }
+    { "provider": "github", "owner": "org", "repo": "app", "primary": true },
+    { "provider": "github", "owner": "org", "repo": "shared-lib", "primary": false }
   ]
 }
 ```
 
 Planned semantics:
 
-- Exactly one `primary` repository is the default `cwd`, branch target, and expected edit location for normal tasks.
-- `auxiliary` repositories are cloned as sibling worktrees for context/reference and are read-only by default.
-- A task that intentionally spans multiple repositories should mark each modified repo as `writable: true`; each writable repo should get its own branch/PR artifact plus a summary artifact linking the PR set.
-- Snapshot/image baking can pre-populate common primary and auxiliary repositories, but startup refresh still verifies each requested worktree exists and is current enough for the run.
-- Prompt context should list each repository role and sandbox path so the agent knows which repo is safe to modify.
+- Exactly one `primary` repository is the initial default `cwd` and branch target.
+- Non-primary repositories are cloned as sibling worktrees and may be modified when work spans repositories.
+- Repository-aware actions target the active repository, which starts as primary and may move within the environment codebase.
+- Agent work that intentionally spans multiple repositories should produce a branch/PR artifact for each modified repository plus a summary artifact linking the PR set.
+- Snapshot/image baking can pre-populate common primary and non-primary repositories, but startup refresh still verifies each requested worktree exists and is current enough for the run.
+- Prompt context should identify the primary and active repositories and list every repository's sandbox path.
 
 Current webhook triggers:
 

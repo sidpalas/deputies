@@ -12,7 +12,7 @@ import type { SandboxKeepaliveService } from '../sandbox/service.js';
 import { type RepositoryAccessProvider } from '../repositories/setup.js';
 import {
   executeRepositoryPreparations,
-  planRepositoryPreparations,
+  planActiveFirstRepositoryPreparations,
   preparedRepositoryFromPlan,
   type RepositoryPreparationPlan,
   type RepositoryPreparationResult,
@@ -66,19 +66,19 @@ export class FlueRunner implements Runner {
 
     const pendingEvents: Array<Promise<void>> = [];
     let sawTextDelta = false;
-    const repositorySetupInput: Parameters<typeof planRepositoryPreparations>[0] = {
+    const repositorySetupInput: Parameters<typeof planActiveFirstRepositoryPreparations>[0] = {
       context: input.context,
       sandbox: input.sandbox,
     };
     if (this.options.repositoryAccess?.github) repositorySetupInput.github = this.options.repositoryAccess.github;
     const mcpSetupPromise = connectFlueMcpServers(this.options.mcp, input.signal);
     let setup: {
-      repositorySetups: Awaited<ReturnType<typeof planRepositoryPreparations>>;
+      repositorySetups: Awaited<ReturnType<typeof planActiveFirstRepositoryPreparations>>;
       mcpSetup: FlueMcpSetup;
     };
     try {
       const [repositorySetups, mcpSetup] = await Promise.all([
-        planRepositoryPreparations(repositorySetupInput),
+        planActiveFirstRepositoryPreparations(repositorySetupInput),
         mcpSetupPromise,
       ]);
       setup = { repositorySetups, mcpSetup };
@@ -88,11 +88,12 @@ export class FlueRunner implements Runner {
       throw error;
     }
     const { repositorySetups, mcpSetup } = setup;
-    const primaryRepositorySetup = repositorySetups[0] ?? null;
+    const activeRepositorySetup = repositorySetups[0] ?? null;
     const agentRef: AgentRef = {};
     const repositoryState: RepositoryToolState = { context: structuredClone(input.context) };
-    if (primaryRepositorySetup) {
-      repositoryState.prepared = preparedRepositoryFromPlan(primaryRepositorySetup);
+    if (repositorySetups.length) {
+      repositoryState.preparedRepositories = repositorySetups.map(preparedRepositoryFromPlan);
+      repositoryState.prepared = repositoryState.preparedRepositories[0]!;
     }
     const repositoryServices = this.options.repositoryAccess?.github
       ? ({
@@ -171,7 +172,7 @@ export class FlueRunner implements Runner {
         agentId: input.sessionId,
         sessionId: input.sessionId,
         sandbox: input.sandbox,
-        cwd: primaryRepositorySetup?.workspacePath ?? input.sandbox.workspacePath,
+        cwd: activeRepositorySetup?.workspacePath ?? input.sandbox.workspacePath,
         ...(input.model ? { model: input.model } : {}),
         tools,
         onEvent: (event) => {
@@ -199,8 +200,8 @@ export class FlueRunner implements Runner {
       const setupResults = repositorySetups.length
         ? await this.runRepositorySetup(input, repositorySetups, session)
         : [];
-      const primarySetupResult = setupResults.find((result) => result.primary) ?? setupResults[0] ?? null;
-      if (primarySetupResult) repositoryState.prepared = primarySetupResult;
+      repositoryState.preparedRepositories = setupResults;
+      if (setupResults[0]) repositoryState.prepared = setupResults[0];
       const setupNote = combineSetupNotes(mcpSetup.note, ...setupResults.map((result) => result.setupFailureNote));
 
       // Cancellation must not leave partial Flue turn state in durable history.

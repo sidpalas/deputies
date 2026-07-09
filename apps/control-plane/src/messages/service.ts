@@ -219,8 +219,10 @@ function clearOppositeCodebaseContext(
   if (Object.prototype.hasOwnProperty.call(messageContext, 'environment')) {
     delete context.repository;
     delete context.branch;
+    delete context.activeRepository;
   } else if (Object.prototype.hasOwnProperty.call(messageContext, 'repository')) {
     delete context.environment;
+    delete context.activeRepository;
   }
   return context;
 }

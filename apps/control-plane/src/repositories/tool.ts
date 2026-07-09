@@ -1,5 +1,6 @@
 import {
   parseRepositoryContext,
+  sameRepositoryIdentity,
   type GitHubRepository,
   type GitHubRepositoryAccess,
   type RepositoryAccessProvider,
@@ -20,6 +21,7 @@ export type PreparedRepository = PreparedRepositoryType;
 export type RepositoryToolState = {
   context: Record<string, unknown>;
   prepared?: PreparedRepository;
+  preparedRepositories?: PreparedRepository[];
 };
 
 export type RepositoryToolServices = {
@@ -87,16 +89,13 @@ export function getPreparedRepository(services: RepositoryToolServices): Prepare
   const repository = getActiveRepository(services.state);
   if (!repository)
     throw new Error('No active repository is set. Use repository({ action: "set", owner, repo }) first.');
-  if (
-    !services.state.prepared ||
-    services.state.prepared.repository.owner !== repository.owner ||
-    services.state.prepared.repository.repo !== repository.repo
-  ) {
+  const prepared = preparedRepositoryFor(services.state, repository);
+  if (!prepared) {
     throw new Error(
       'The active repository has not been prepared in the sandbox. Use repository({ action: "prepare" }) first.',
     );
   }
-  return services.state.prepared;
+  return prepared;
 }
 
 export async function prepareActiveRepository(services: RepositoryToolServices, signal?: AbortSignal): Promise<string> {
@@ -123,7 +122,7 @@ export async function prepareActiveRepository(services: RepositoryToolServices, 
     ...(signal ? { signal } : {}),
   });
 
-  services.state.prepared = result;
+  rememberPreparedRepository(services.state, result);
   return repositoryPreparationSummary(result);
 }
 
@@ -136,7 +135,7 @@ function repositoryStatus(services: RepositoryToolServices): string {
       'If the repo is unclear, use repository({ action: "list" }) and ask the user to choose.',
     ].join('\n');
   }
-  const prepared = services.state.prepared;
+  const prepared = preparedRepositoryFor(services.state, repository);
   const lines = [`Active repository: ${repository.owner}/${repository.repo}`];
   if (prepared && prepared.repository.owner === repository.owner && prepared.repository.repo === repository.repo) {
     lines.push(`Prepared workspace: ${prepared.workspacePath}`);
@@ -147,6 +146,15 @@ function repositoryStatus(services: RepositoryToolServices): string {
 }
 
 function repositoryList(services: RepositoryToolServices): string {
+  const environmentRepositories = environmentCodebaseRepositories(services.state.context);
+  if (environmentRepositories.length) {
+    return [
+      'Environment repositories:',
+      ...environmentRepositories.map(
+        (repository) => `- ${repository.owner}/${repository.repo}${repository.primary ? ' (primary)' : ''}`,
+      ),
+    ].join('\n');
+  }
   const allowed = services.github.listAllowedRepositories?.() ?? [];
   if (!allowed.length)
     return 'No explicit repository allowlist is configured. Ask the user for a GitHub repo in owner/repo form.';
@@ -172,22 +180,67 @@ async function setRepositoryContext(
   if (!owner || !repo) throw new Error('repository set requires owner and repo');
   const repository = { provider: 'github' as const, owner, repo };
   const previousRepository = getActiveRepository(services.state);
+  const environmentRepositories = environmentCodebaseRepositories(services.state.context);
+  if (
+    environmentRepositories.length &&
+    !environmentRepositories.some((candidate) => sameRepositoryIdentity(candidate, repository))
+  ) {
+    throw new Error('Active repository must belong to the session environment codebase');
+  }
   await services.github.getRepositoryAccess(repository);
-  const nextContext: Record<string, unknown> = { ...services.state.context, repository };
-  delete nextContext.environment;
-  delete nextContext.environmentBranchOverrides;
-  if (previousRepository?.owner !== owner || previousRepository?.repo !== repo) {
-    delete nextContext.branch;
+  const nextContext: Record<string, unknown> = { ...services.state.context };
+  if (environmentRepositories.length) {
+    nextContext.activeRepository = repository;
+  } else {
+    nextContext.repository = repository;
+    delete nextContext.environment;
+    delete nextContext.activeRepository;
+    delete nextContext.environmentBranchOverrides;
+    if (previousRepository?.owner !== owner || previousRepository?.repo !== repo) {
+      delete nextContext.branch;
+    }
   }
   services.state.context = services.updateSessionContext
     ? await services.updateSessionContext(nextContext)
     : nextContext;
-  if (
-    services.state.prepared &&
-    (services.state.prepared.repository.owner !== owner || services.state.prepared.repository.repo !== repo)
-  ) {
-    delete services.state.prepared;
-  }
+  const prepared = preparedRepositoryFor(services.state, repository);
+  if (prepared) services.state.prepared = prepared;
+  else delete services.state.prepared;
   const reason = typeof params.reason === 'string' && params.reason.trim() ? `\nReason: ${params.reason.trim()}` : '';
   return `Active repository set to ${owner}/${repo}.${reason}\nNext step: use repository({ action: "prepare" }) now if the user intends any work in this repository.`;
+}
+
+function preparedRepositoryFor(
+  state: RepositoryToolState,
+  repository: GitHubRepository,
+): PreparedRepository | undefined {
+  return [state.prepared, ...(state.preparedRepositories ?? [])].find(
+    (candidate) => candidate && sameRepositoryIdentity(candidate.repository, repository),
+  );
+}
+
+function rememberPreparedRepository(state: RepositoryToolState, prepared: PreparedRepository): void {
+  const repositories = (state.preparedRepositories ?? []).filter(
+    (candidate) => !sameRepositoryIdentity(candidate.repository, prepared.repository),
+  );
+  state.preparedRepositories = [...repositories, prepared];
+  state.prepared = prepared;
+}
+
+function environmentCodebaseRepositories(
+  context: Record<string, unknown>,
+): Array<GitHubRepository & { provider: 'github'; primary: boolean }> {
+  const environment = context.environment;
+  if (!environment || typeof environment !== 'object' || Array.isArray(environment)) return [];
+  const codebase = (environment as Record<string, unknown>).codebase;
+  if (!codebase || typeof codebase !== 'object' || Array.isArray(codebase)) return [];
+  const repositories = (codebase as Record<string, unknown>).repositories;
+  if (!Array.isArray(repositories)) return [];
+  return repositories.flatMap((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    const owner = typeof record.owner === 'string' ? record.owner.trim() : '';
+    const repo = typeof record.repo === 'string' ? record.repo.trim() : '';
+    return owner && repo ? [{ provider: 'github' as const, owner, repo, primary: record.primary === true }] : [];
+  });
 }

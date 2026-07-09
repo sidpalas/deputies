@@ -6,6 +6,10 @@ export type GitHubRepository = {
   repo: string;
 };
 
+export function sameRepositoryIdentity(left: GitHubRepository, right: GitHubRepository): boolean {
+  return left.owner.toLowerCase() === right.owner.toLowerCase() && left.repo.toLowerCase() === right.repo.toLowerCase();
+}
+
 export type GitHubRepositoryAccess = GitHubRepository & {
   provider: 'github';
   cloneUrl: string;
@@ -82,7 +86,12 @@ type RepositoryContext = GitHubRepository & {
 };
 
 export function parseRepositoryContext(context: Record<string, unknown>): RepositoryContext | null {
-  return parseRepositoryContexts(context)[0] ?? null;
+  const repositories = parseRepositoryContexts(context);
+  if (!repositories.length) return null;
+  const active = parseRepositoryValue(context.activeRepository);
+  const primary = repositories.find((repository) => repository.primary) ?? repositories[0]!;
+  if (!active) return primary;
+  return repositories.find((repository) => sameRepositoryIdentity(repository, active)) ?? primary;
 }
 
 export function parseRepositoryContexts(context: Record<string, unknown>): RepositoryContext[] {

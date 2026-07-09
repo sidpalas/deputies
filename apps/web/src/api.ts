@@ -96,6 +96,8 @@ export type Automation = {
   writePolicy: SessionWritePolicy;
   createdByUserId?: string;
   environmentId?: string;
+  environmentRevisionPolicy?: 'follow_latest' | 'pinned';
+  environmentRevisionId?: string;
   context?: Record<string, unknown>;
   nextInvocationAt?: string;
   archivedAt?: string;
@@ -120,6 +122,8 @@ export type AutomationInvocation = {
   messageId?: string;
   messageStatus?: Message['status'];
   requestedByUserId?: string;
+  environmentId?: string;
+  environmentRevisionId?: string;
   reason?: string;
   error?: string;
 };
@@ -206,6 +210,8 @@ export type Environment = {
   ownerGroupId: string;
   ownerGroupName?: string;
   shareMode: EnvironmentShareMode;
+  currentRevisionId: string;
+  currentRevisionNumber: number;
   sharedGroupIds: string[];
   repositories: EnvironmentRepository[];
   archivedAt?: string;
@@ -441,6 +447,8 @@ export async function createAutomation(input: {
   ownerGroupId?: string;
   enabled?: boolean;
   environmentId?: string;
+  environmentRevisionPolicy?: 'follow_latest' | 'pinned';
+  environmentRevisionId?: string;
   environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
@@ -463,6 +471,8 @@ export async function updateAutomation(input: {
   enabled?: boolean;
   ownerGroupId?: string;
   environmentId?: string;
+  environmentRevisionPolicy?: 'follow_latest' | 'pinned';
+  environmentRevisionId?: string;
   environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
@@ -596,6 +606,8 @@ function automationRequestBody(input: {
   ownerGroupId?: string;
   enabled?: boolean;
   environmentId?: string;
+  environmentRevisionPolicy?: 'follow_latest' | 'pinned';
+  environmentRevisionId?: string;
   environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
@@ -608,6 +620,10 @@ function automationRequestBody(input: {
     ...(input.ownerGroupId ? { ownerGroupId: input.ownerGroupId } : {}),
     ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
     ...(input.environmentId !== undefined ? { environmentId: input.environmentId } : {}),
+    ...(input.environmentRevisionPolicy !== undefined
+      ? { environmentRevisionPolicy: input.environmentRevisionPolicy }
+      : {}),
+    ...(input.environmentRevisionId !== undefined ? { environmentRevisionId: input.environmentRevisionId } : {}),
     ...(input.environmentBranchOverrides !== undefined
       ? { environmentBranchOverrides: input.environmentBranchOverrides }
       : {}),

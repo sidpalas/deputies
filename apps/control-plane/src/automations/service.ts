@@ -8,6 +8,7 @@ import type {
   AutomationInvocationRecord,
   AutomationInvocationTrigger,
   AutomationRecord,
+  EnvironmentRevisionPolicy,
   MessageRecord,
   SessionRecord,
   SessionVisibility,
@@ -26,6 +27,8 @@ export type CreateScheduledAutomationInput = {
   createdByUserId?: string;
   context?: Record<string, unknown>;
   environmentId?: string;
+  environmentRevisionPolicy?: EnvironmentRevisionPolicy;
+  environmentRevisionId?: string;
 };
 
 export type UpdateScheduledAutomationInput = {
@@ -39,6 +42,8 @@ export type UpdateScheduledAutomationInput = {
   writePolicy?: SessionWritePolicy;
   context?: Record<string, unknown> | null;
   environmentId?: string | null;
+  environmentRevisionPolicy?: EnvironmentRevisionPolicy | null;
+  environmentRevisionId?: string | null;
 };
 
 export type ManualAutomationInvocationInput = {
@@ -95,6 +100,11 @@ export class AutomationService {
     const prompt = requiredTrimmed(input.prompt, 'prompt');
     const scheduleCron = parseScheduleCron(input.scheduleCron);
     const nextInvocationAt = nextScheduledInvocation(scheduleCron, now);
+    const revisionSelection = await this.validateEnvironmentRevisionSelection({
+      environmentId: input.environmentId,
+      policy: input.environmentRevisionPolicy,
+      revisionId: input.environmentRevisionId,
+    });
     return this.store.createAutomation({
       id: randomUUID(),
       kind: 'scheduled',
@@ -111,6 +121,7 @@ export class AutomationService {
       ...(input.createdByUserId ? { createdByUserId: input.createdByUserId } : {}),
       ...(input.context ? { context: input.context } : {}),
       ...(input.environmentId ? { environmentId: input.environmentId } : {}),
+      ...revisionSelection,
     });
   }
 
@@ -135,6 +146,24 @@ export class AutomationService {
     const enabledChanged = input.enabled !== undefined && input.enabled !== existing.enabled;
     const shouldRecalculateNextInvocation =
       scheduleChanged || (enabled && enabledChanged) || !existing.nextInvocationAt;
+    const environmentId =
+      input.environmentId === undefined ? existing.environmentId : (input.environmentId ?? undefined);
+    const environmentChanged = input.environmentId !== undefined && environmentId !== existing.environmentId;
+    const revisionSelection = await this.validateEnvironmentRevisionSelection({
+      environmentId,
+      policy:
+        input.environmentRevisionPolicy === undefined
+          ? environmentChanged
+            ? undefined
+            : existing.environmentRevisionPolicy
+          : (input.environmentRevisionPolicy ?? undefined),
+      revisionId:
+        input.environmentRevisionId === undefined
+          ? environmentChanged || input.environmentRevisionPolicy === 'follow_latest'
+            ? undefined
+            : existing.environmentRevisionId
+          : (input.environmentRevisionId ?? undefined),
+    });
 
     const update = {
       id: input.id,
@@ -147,6 +176,14 @@ export class AutomationService {
       ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
       ...(input.writePolicy !== undefined ? { writePolicy: input.writePolicy } : {}),
       ...(input.environmentId !== undefined ? { environmentId: input.environmentId } : {}),
+      ...(input.environmentId !== undefined ||
+      input.environmentRevisionPolicy !== undefined ||
+      input.environmentRevisionId !== undefined
+        ? {
+            environmentRevisionPolicy: revisionSelection.environmentRevisionPolicy ?? null,
+            environmentRevisionId: revisionSelection.environmentRevisionId ?? null,
+          }
+        : {}),
       ...(shouldRecalculateNextInvocation ? { nextInvocationAt: nextScheduledInvocation(scheduleCron, now) } : {}),
     };
     return this.store.updateAutomation({
@@ -343,6 +380,13 @@ export class AutomationService {
     allowDisabled?: boolean;
   }): Promise<AutomationInvocationResult> {
     const now = new Date();
+    const environmentReference =
+      input.invocation?.environmentId && input.invocation.environmentRevisionId
+        ? {
+            environmentId: input.invocation.environmentId,
+            environmentRevisionId: input.invocation.environmentRevisionId,
+          }
+        : await this.resolveAutomationEnvironmentReference(input.automation);
     const initialInvocation =
       input.invocation ??
       (await this.store.createAutomationInvocation({
@@ -352,6 +396,7 @@ export class AutomationService {
         status: 'creating',
         createdAt: now,
         metadata: input.metadata ?? {},
+        ...environmentReference,
         reservedSessionId: randomUUID(),
         reservedMessageId: randomUUID(),
         ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
@@ -377,7 +422,10 @@ export class AutomationService {
       const existingMessage = (await this.store.getMessages(createdSession.id)).find(
         (message) => message.id === messageId,
       );
-      const messageContext = await this.resolveAutomationMessageContext(input.automation);
+      const messageContext = await this.resolveAutomationMessageContext(
+        input.automation,
+        invocation.environmentRevisionId,
+      );
       const message =
         existingMessage ??
         (await this.messages.enqueue({
@@ -453,6 +501,7 @@ export class AutomationService {
     metadata?: Record<string, unknown>;
   }): Promise<AutomationInvocationRecord> {
     const now = new Date();
+    const environmentReference = await this.resolveAutomationEnvironmentReference(input.automation);
     return this.store.createAutomationInvocation({
       id: randomUUID(),
       automationId: input.automation.id,
@@ -461,6 +510,7 @@ export class AutomationService {
       createdAt: now,
       completedAt: now,
       metadata: input.metadata ?? {},
+      ...environmentReference,
       ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
       ...(input.reason ? { reason: input.reason } : {}),
       ...(input.error ? { error: input.error } : {}),
@@ -476,8 +526,13 @@ export class AutomationService {
   }): Promise<AutomationInvocationRecord> {
     const now = new Date();
     if (input.invocation) {
+      const environmentReference =
+        input.invocation.environmentId && input.invocation.environmentRevisionId
+          ? {}
+          : await this.resolveAutomationEnvironmentReference(input.automation);
       return this.store.updateAutomationInvocation({
         ...input.invocation,
+        ...environmentReference,
         status: 'skipped',
         reason: input.reason,
         metadata: { ...input.invocation.metadata, ...(input.metadata ?? {}) },
@@ -520,17 +575,66 @@ export class AutomationService {
 
   private async resolveAutomationMessageContext(
     automation: AutomationRecord,
+    environmentRevisionId: string | undefined,
   ): Promise<Record<string, unknown> | undefined> {
     if (!automation.environmentId) return automation.context;
     const context = automation.context ?? {};
     const environment = await this.environments.resolveForGroup({
       environmentId: automation.environmentId,
       groupId: automation.ownerGroupId,
+      ...(environmentRevisionId ? { revisionId: environmentRevisionId } : {}),
       branchOverrides: storedEnvironmentBranchOverrides(context.environmentBranchOverrides),
     });
     return {
       environment,
       ...(typeof context.model === 'string' && context.model ? { model: context.model } : {}),
+    };
+  }
+
+  private async validateEnvironmentRevisionSelection(input: {
+    environmentId: string | undefined;
+    policy: EnvironmentRevisionPolicy | undefined;
+    revisionId: string | undefined;
+  }): Promise<Pick<AutomationRecord, 'environmentRevisionPolicy' | 'environmentRevisionId'>> {
+    if (!input.environmentId) {
+      if (input.policy || input.revisionId) {
+        throw new AutomationServiceError('invalid_request', 'Environment revision selection requires environmentId');
+      }
+      return {};
+    }
+    const policy = input.policy ?? 'follow_latest';
+    if (policy === 'follow_latest') {
+      if (input.revisionId) {
+        throw new AutomationServiceError('invalid_request', 'Follow-latest automations cannot pin a revision');
+      }
+      return { environmentRevisionPolicy: policy };
+    }
+    if (!input.revisionId) {
+      throw new AutomationServiceError('invalid_request', 'Pinned automations require environmentRevisionId');
+    }
+    const revision = await this.store.getEnvironmentRevision(input.revisionId);
+    if (!revision || revision.environmentId !== input.environmentId) {
+      throw new AutomationServiceError('invalid_request', 'Environment revision does not belong to the environment');
+    }
+    return { environmentRevisionPolicy: policy, environmentRevisionId: revision.id };
+  }
+
+  private async resolveAutomationEnvironmentReference(
+    automation: AutomationRecord,
+  ): Promise<Pick<AutomationInvocationRecord, 'environmentId' | 'environmentRevisionId'>> {
+    if (!automation.environmentId) return {};
+    if (automation.environmentRevisionPolicy === 'pinned') {
+      if (!automation.environmentRevisionId) throw new Error('Pinned automation is missing its environment revision');
+      return {
+        environmentId: automation.environmentId,
+        environmentRevisionId: automation.environmentRevisionId,
+      };
+    }
+    const environment = await this.environments.get(automation.environmentId);
+    if (!environment) throw new Error(`Environment not found: ${automation.environmentId}`);
+    return {
+      environmentId: environment.id,
+      environmentRevisionId: environment.currentRevisionId,
     };
   }
 }

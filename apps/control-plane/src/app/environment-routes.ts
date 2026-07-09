@@ -47,6 +47,7 @@ export function registerEnvironmentRoutes(
         ...(shareMode ? { shareMode } : {}),
         repositories: parseRepositories(body.repositories),
         sharedGroupIds: parseSharedGroupIds(body.sharedGroupIds),
+        actor: environmentMutationActor(auth),
       });
       return c.json({ environment: await serializeEnvironment(services, auth, environment) }, 201);
     } catch (error) {
@@ -62,6 +63,26 @@ export function registerEnvironmentRoutes(
     if (!canReadEnvironment(auth, environment))
       return writeError(c, 403, 'forbidden', 'Environment access is required');
     return c.json({ environment: await serializeEnvironment(services, auth, environment) });
+  });
+
+  app.get('/environments/:environmentId/revisions', async (c) => {
+    const auth = await requireRequestAuthorization(config, services, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const environment = await services.environments.get(c.req.param('environmentId'));
+    if (!environment) return writeError(c, 404, 'not_found', 'Environment not found');
+    if (!canReadEnvironment(auth, environment))
+      return writeError(c, 403, 'forbidden', 'Environment access is required');
+    return c.json({ revisions: await services.environments.listRevisions(environment.id) });
+  });
+
+  app.get('/environments/:environmentId/activity', async (c) => {
+    const auth = await requireRequestAuthorization(config, services, c);
+    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+    const environment = await services.environments.get(c.req.param('environmentId'));
+    if (!environment) return writeError(c, 404, 'not_found', 'Environment not found');
+    if (!canManageEnvironment(auth, environment))
+      return writeError(c, 403, 'forbidden', 'Environment management access is required');
+    return c.json({ activity: await services.environments.listActivity(environment.id) });
   });
 
   app.patch('/environments/:environmentId', async (c) => {
@@ -87,6 +108,7 @@ export function registerEnvironmentRoutes(
         ...(shareMode ? { shareMode } : {}),
         ...(body.repositories !== undefined ? { repositories: parseRepositories(body.repositories) } : {}),
         ...(body.sharedGroupIds !== undefined ? { sharedGroupIds: parseSharedGroupIds(body.sharedGroupIds) } : {}),
+        actor: environmentMutationActor(auth),
       });
       return c.json({ environment: await serializeEnvironment(services, auth, updated) });
     } catch (error) {
@@ -102,7 +124,7 @@ export function registerEnvironmentRoutes(
     if (!canManageEnvironment(auth, existing))
       return writeError(c, 403, 'forbidden', 'Environment management access is required');
     try {
-      const archived = await services.environments.archive(existing.id);
+      const archived = await services.environments.archive(existing.id, environmentMutationActor(auth));
       return c.json({ environment: await serializeEnvironment(services, auth, archived) });
     } catch (error) {
       return environmentErrorResponse(c, error);
@@ -117,7 +139,7 @@ export function registerEnvironmentRoutes(
     if (!canManageEnvironment(auth, existing))
       return writeError(c, 403, 'forbidden', 'Environment management access is required');
     try {
-      const unarchived = await services.environments.unarchive(existing.id);
+      const unarchived = await services.environments.unarchive(existing.id, environmentMutationActor(auth));
       return c.json({ environment: await serializeEnvironment(services, auth, unarchived) });
     } catch (error) {
       return environmentErrorResponse(c, error);
@@ -145,6 +167,8 @@ async function serializeEnvironment(
     ownerGroupId: environment.ownerGroupId,
     ...(ownerGroup ? { ownerGroupName: ownerGroup.name } : {}),
     shareMode: environment.shareMode,
+    currentRevisionId: environment.currentRevisionId,
+    currentRevisionNumber: environment.currentRevisionNumber,
     sharedGroupIds: environment.sharedGroupIds,
     repositories: environment.repositories.map((repository) => ({
       id: repository.id,
@@ -160,6 +184,10 @@ async function serializeEnvironment(
     updatedAt: environment.updatedAt,
     canManage: canManageEnvironment(auth, environment),
   };
+}
+
+function environmentMutationActor(auth: RequestAuthorization) {
+  return auth.bypass ? ({ type: 'system' } as const) : ({ type: 'user', userId: auth.user.id } as const);
 }
 
 function parseShareMode(value: unknown): EnvironmentShareMode | undefined {
@@ -199,6 +227,12 @@ function parseSharedGroupIds(value: unknown): string[] {
 function environmentErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof StoreConflictError && error.code === 'environment_name_exists') {
     return writeError(c, 409, error.code, error.message);
+  }
+  if (error instanceof StoreConflictError && error.code === 'environment_update_conflict') {
+    return writeError(c, 409, error.code, error.message);
+  }
+  if (error instanceof StoreConflictError && error.code === 'environment_automation_conflict') {
+    return writeError(c, 409, error.code, error.message, error.details);
   }
   if (error instanceof EnvironmentServiceError) {
     if (error.code === 'not_found') return writeError(c, 404, 'not_found', error.message);

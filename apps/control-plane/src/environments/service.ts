@@ -3,6 +3,9 @@ import type {
   AppStore,
   AutomationRecord,
   EnvironmentRepositoryRecord,
+  EnvironmentRevisionRecord,
+  EnvironmentActivityRecord,
+  AuditActorType,
   EnvironmentShareMode,
   EnvironmentWithDetailsRecord,
   RepositoryProvider,
@@ -34,6 +37,8 @@ export type EnvironmentSnapshotRepository = {
 
 export type EnvironmentSnapshot = {
   id: string;
+  revisionId: string;
+  revisionNumber: number;
   name: string;
   ownerGroupId: string;
   codebase: {
@@ -47,6 +52,7 @@ export type EnvironmentCreateInput = {
   shareMode?: EnvironmentShareMode;
   repositories: EnvironmentRepositoryInput[];
   sharedGroupIds?: string[];
+  actor?: EnvironmentMutationActor;
 };
 
 export type EnvironmentUpdateInput = {
@@ -56,6 +62,12 @@ export type EnvironmentUpdateInput = {
   shareMode?: EnvironmentShareMode;
   repositories?: EnvironmentRepositoryInput[];
   sharedGroupIds?: string[];
+  actor?: EnvironmentMutationActor;
+};
+
+export type EnvironmentMutationActor = {
+  type: AuditActorType;
+  userId?: string;
 };
 
 export class EnvironmentServiceError extends Error {
@@ -84,23 +96,46 @@ export class EnvironmentService {
     if (ownerGroup.archivedAt)
       throw new EnvironmentServiceError('archived_group', 'Cannot create environments in an archived group');
     const id = randomUUID();
+    const revisionId = randomUUID();
     const shareMode = input.shareMode ?? 'private';
     const sharedGroupIds = await this.normalizeSharedGroupIds(
       shareMode,
       input.sharedGroupIds ?? [],
       input.ownerGroupId,
     );
+    const repositories = normalizeRepositories(input.repositories, revisionId, now);
+    const revision = environmentRevision({
+      id: revisionId,
+      environmentId: id,
+      revisionNumber: 1,
+      repositories,
+      actor: input.actor,
+      createdAt: now,
+    });
     return this.store.createEnvironment({
       environment: {
         id,
         name: requiredName(input.name),
         ownerGroupId: input.ownerGroupId,
         shareMode,
+        currentRevisionId: revision.id,
+        currentRevisionNumber: revision.revisionNumber,
         createdAt: now,
         updatedAt: now,
       },
-      repositories: normalizeRepositories(input.repositories, id, now),
+      repositories,
       sharedGroupIds,
+      revision,
+      activities: [
+        environmentActivity({
+          environmentId: id,
+          type: 'environment_created',
+          actor: input.actor,
+          revisionId: revision.id,
+          payload: { ownerGroupId: input.ownerGroupId, shareMode, sharedGroupIds },
+          createdAt: now,
+        }),
+      ],
     });
   }
 
@@ -112,12 +147,20 @@ export class EnvironmentService {
     return this.store.listEnvironments();
   }
 
+  async listRevisions(environmentId: string): Promise<EnvironmentRevisionRecord[]> {
+    return this.store.listEnvironmentRevisions(environmentId);
+  }
+
+  async listActivity(environmentId: string): Promise<EnvironmentActivityRecord[]> {
+    return this.store.listEnvironmentActivity(environmentId);
+  }
+
   async update(input: EnvironmentUpdateInput): Promise<EnvironmentWithDetailsRecord> {
     const existing = await this.store.getEnvironment(input.id);
     if (!existing) throw new EnvironmentServiceError('not_found', 'Environment not found');
     if (existing.archivedAt) throw new EnvironmentServiceError('archived', 'Archived environments are read-only');
 
-    const now = new Date();
+    const now = new Date(Math.max(Date.now(), existing.updatedAt.getTime() + 1));
     const ownerGroupId = input.ownerGroupId ?? existing.ownerGroupId;
     const ownerGroup = await this.store.getGroup(ownerGroupId);
     if (!ownerGroup) throw new EnvironmentServiceError('group_not_found', 'Group not found');
@@ -130,12 +173,30 @@ export class EnvironmentService {
       input.sharedGroupIds ?? existing.sharedGroupIds,
       ownerGroupId,
     );
-    const repositories = normalizeRepositories(input.repositories ?? existing.repositories, existing.id, now);
+    const candidateRevisionId = randomUUID();
+    const candidateRepositories = input.repositories
+      ? normalizeRepositories(input.repositories, candidateRevisionId, now)
+      : existing.repositories;
+    const repositoriesChanged =
+      input.repositories !== undefined && !sameRepositoryConfiguration(existing.repositories, candidateRepositories);
+    const revision = repositoriesChanged
+      ? environmentRevision({
+          id: candidateRevisionId,
+          environmentId: existing.id,
+          revisionNumber: existing.currentRevisionNumber + 1,
+          repositories: candidateRepositories,
+          actor: input.actor,
+          createdAt: now,
+        })
+      : undefined;
+    const repositories = repositoriesChanged ? candidateRepositories : existing.repositories;
     const next: EnvironmentWithDetailsRecord = {
       ...existing,
       name: input.name === undefined ? existing.name : requiredName(input.name),
       ownerGroupId,
       shareMode,
+      currentRevisionId: revision?.id ?? existing.currentRevisionId,
+      currentRevisionNumber: revision?.revisionNumber ?? existing.currentRevisionNumber,
       updatedAt: now,
       repositories,
       sharedGroupIds,
@@ -143,36 +204,57 @@ export class EnvironmentService {
 
     await this.assertNoAutomationAccessLoss(existing, next);
     await this.assertNoAutomationOverrideRepositoryLoss(existing, next);
+    const activities = environmentUpdateActivities(existing, next, input.actor, now, revision);
+    if (!revision && !activities.length) return existing;
     return this.store.updateEnvironment({
+      expectedUpdatedAt: existing.updatedAt,
       environment: {
         id: next.id,
         name: next.name,
         ownerGroupId: next.ownerGroupId,
         shareMode: next.shareMode,
+        currentRevisionId: next.currentRevisionId,
+        currentRevisionNumber: next.currentRevisionNumber,
         createdAt: next.createdAt,
         updatedAt: next.updatedAt,
         ...(next.archivedAt ? { archivedAt: next.archivedAt } : {}),
       },
       repositories: next.repositories,
       sharedGroupIds: next.sharedGroupIds,
+      automationAccessAllowedGroupIds:
+        next.shareMode === 'all_groups' ? null : [next.ownerGroupId, ...next.sharedGroupIds],
+      ...(revision ? { revision } : {}),
+      activities,
     });
   }
 
-  async archive(id: string): Promise<EnvironmentWithDetailsRecord> {
+  async archive(id: string, actor?: EnvironmentMutationActor): Promise<EnvironmentWithDetailsRecord> {
     const existing = await this.store.getEnvironment(id);
     if (!existing) throw new EnvironmentServiceError('not_found', 'Environment not found');
+    if (existing.archivedAt) return existing;
     const affected = await this.activeAutomationsReferencingEnvironment(id);
     if (affected.length) {
       throw new EnvironmentServiceError('automation_conflict', 'Environment is used by active automations', {
         automations: affected,
       });
     }
-    const archived = await this.store.archiveEnvironment({ environmentId: id, archivedAt: new Date() });
+    const archivedAt = new Date();
+    const archived = await this.store.archiveEnvironment({
+      environmentId: id,
+      archivedAt,
+      activity: environmentActivity({
+        environmentId: id,
+        type: 'environment_archived',
+        actor,
+        payload: {},
+        createdAt: archivedAt,
+      }),
+    });
     if (!archived) throw new EnvironmentServiceError('not_found', 'Environment not found');
     return archived;
   }
 
-  async unarchive(id: string): Promise<EnvironmentWithDetailsRecord> {
+  async unarchive(id: string, actor?: EnvironmentMutationActor): Promise<EnvironmentWithDetailsRecord> {
     const existing = await this.store.getEnvironment(id);
     if (!existing) throw new EnvironmentServiceError('not_found', 'Environment not found');
     const ownerGroup = await this.store.getGroup(existing.ownerGroupId);
@@ -180,7 +262,18 @@ export class EnvironmentService {
     if (ownerGroup.archivedAt)
       throw new EnvironmentServiceError('archived_group', 'Cannot restore environments in an archived group');
     if (!existing.archivedAt) return existing;
-    const unarchived = await this.store.unarchiveEnvironment({ environmentId: id, updatedAt: new Date() });
+    const updatedAt = new Date();
+    const unarchived = await this.store.unarchiveEnvironment({
+      environmentId: id,
+      updatedAt,
+      activity: environmentActivity({
+        environmentId: id,
+        type: 'environment_unarchived',
+        actor,
+        payload: {},
+        createdAt: updatedAt,
+      }),
+    });
     if (!unarchived) throw new EnvironmentServiceError('not_found', 'Environment not found');
     return unarchived;
   }
@@ -188,6 +281,7 @@ export class EnvironmentService {
   async resolveForGroup(input: {
     environmentId: string;
     groupId: string;
+    revisionId?: string;
     branchOverrides?: EnvironmentBranchOverride[];
   }): Promise<EnvironmentSnapshot> {
     const environment = await this.store.getEnvironment(input.environmentId);
@@ -198,6 +292,11 @@ export class EnvironmentService {
     if (group.archivedAt) throw new EnvironmentServiceError('archived_group', 'Group is archived');
     if (!environmentAvailableToGroup(environment, input.groupId)) {
       throw new EnvironmentServiceError('not_found', 'Environment not found');
+    }
+    const revisionId = input.revisionId ?? environment.currentRevisionId;
+    const revision = await this.store.getEnvironmentRevision(revisionId);
+    if (!revision || revision.environmentId !== environment.id) {
+      throw new EnvironmentServiceError('not_found', 'Environment revision not found');
     }
 
     const overrides = new Map(
@@ -211,7 +310,7 @@ export class EnvironmentService {
       ]),
     );
     for (const key of overrides.keys()) {
-      if (!environment.repositories.some((repository) => repositoryKey(repository) === key)) {
+      if (!revision.repositories.some((repository) => repositoryKey(repository) === key)) {
         throw new EnvironmentServiceError(
           'invalid_request',
           'Branch override references a repository outside the environment',
@@ -221,14 +320,16 @@ export class EnvironmentService {
 
     return {
       id: environment.id,
+      revisionId: revision.id,
+      revisionNumber: revision.revisionNumber,
       name: environment.name,
       ownerGroupId: environment.ownerGroupId,
       codebase: {
-        repositories: environment.repositories.map((repository) => ({
+        repositories: revision.repositories.map((repository) => ({
           provider: repository.provider,
           owner: repository.owner,
           repo: repository.repo,
-          primary: repository.isPrimary,
+          primary: repository.primary,
           ...(overrides.has(repositoryKey(repository))
             ? optionalBranch(overrides.get(repositoryKey(repository)))
             : optionalBranch(repository.branch)),
@@ -274,17 +375,19 @@ export class EnvironmentService {
     next: EnvironmentWithDetailsRecord,
   ): Promise<void> {
     const nextRepositories = new Set(next.repositories.map(repositoryKey));
-    const affected = (await this.activeAutomationRecordsReferencingEnvironment(current.id)).filter((automation) =>
-      storedEnvironmentBranchOverrides(automation.context?.environmentBranchOverrides).some(
-        (override) =>
-          !nextRepositories.has(
-            repositoryKey({
-              provider: override.provider ?? 'github',
-              owner: override.owner,
-              repo: override.repo,
-            }),
-          ),
-      ),
+    const affected = (await this.activeAutomationRecordsReferencingEnvironment(current.id)).filter(
+      (automation) =>
+        automation.environmentRevisionPolicy !== 'pinned' &&
+        storedEnvironmentBranchOverrides(automation.context?.environmentBranchOverrides).some(
+          (override) =>
+            !nextRepositories.has(
+              repositoryKey({
+                provider: override.provider ?? 'github',
+                owner: override.owner,
+                repo: override.repo,
+              }),
+            ),
+        ),
     );
     if (affected.length) {
       throw new EnvironmentServiceError(
@@ -317,8 +420,8 @@ export function environmentAvailableToGroup(environment: EnvironmentWithDetailsR
 }
 
 function normalizeRepositories(
-  repositories: EnvironmentRepositoryInput[] | EnvironmentRepositoryRecord[],
-  environmentId: string,
+  repositories: EnvironmentRepositoryInput[],
+  revisionId: string,
   now: Date,
 ): EnvironmentRepositoryRecord[] {
   if (!Array.isArray(repositories) || repositories.length < 1) {
@@ -334,14 +437,14 @@ function normalizeRepositories(
       throw new EnvironmentServiceError('invalid_request', 'Expected valid GitHub repository owner and name');
     }
     return {
-      id: 'id' in repository ? repository.id : randomUUID(),
-      environmentId,
+      id: randomUUID(),
+      revisionId,
       provider,
       owner,
       repo,
-      isPrimary: Boolean('isPrimary' in repository ? repository.isPrimary : repository.primary),
+      isPrimary: Boolean(repository.primary),
       position: index,
-      createdAt: 'createdAt' in repository ? repository.createdAt : now,
+      createdAt: now,
       updatedAt: now,
       ...optionalBranch(normalizeBranch(repository.branch)),
     };
@@ -357,6 +460,135 @@ function normalizeRepositories(
     );
   }
   return normalized;
+}
+
+function environmentRevision(input: {
+  id: string;
+  environmentId: string;
+  revisionNumber: number;
+  repositories: EnvironmentRepositoryRecord[];
+  actor: EnvironmentMutationActor | undefined;
+  createdAt: Date;
+}): EnvironmentRevisionRecord {
+  const actor = normalizedActor(input.actor);
+  return {
+    id: input.id,
+    environmentId: input.environmentId,
+    revisionNumber: input.revisionNumber,
+    repositories: input.repositories.map((repository) => ({
+      provider: repository.provider,
+      owner: repository.owner,
+      repo: repository.repo,
+      primary: repository.isPrimary,
+      position: repository.position,
+      ...(repository.branch ? { branch: repository.branch } : {}),
+    })),
+    actorType: actor.type,
+    ...(actor.userId ? { actorUserId: actor.userId } : {}),
+    createdAt: input.createdAt,
+  };
+}
+
+function environmentActivity(input: {
+  environmentId: string;
+  type: EnvironmentActivityRecord['type'];
+  actor: EnvironmentMutationActor | undefined;
+  revisionId?: string;
+  payload: Record<string, unknown>;
+  createdAt: Date;
+}): EnvironmentActivityRecord {
+  const actor = normalizedActor(input.actor);
+  return {
+    id: randomUUID(),
+    environmentId: input.environmentId,
+    type: input.type,
+    actorType: actor.type,
+    ...(actor.userId ? { actorUserId: actor.userId } : {}),
+    ...(input.revisionId ? { revisionId: input.revisionId } : {}),
+    payload: input.payload,
+    createdAt: input.createdAt,
+  };
+}
+
+function environmentUpdateActivities(
+  current: EnvironmentWithDetailsRecord,
+  next: EnvironmentWithDetailsRecord,
+  actor: EnvironmentMutationActor | undefined,
+  createdAt: Date,
+  revision: EnvironmentRevisionRecord | undefined,
+): EnvironmentActivityRecord[] {
+  const activities: EnvironmentActivityRecord[] = [];
+  if (revision) {
+    activities.push(
+      environmentActivity({
+        environmentId: current.id,
+        type: 'revision_published',
+        actor,
+        revisionId: revision.id,
+        payload: { revisionNumber: revision.revisionNumber },
+        createdAt,
+      }),
+    );
+  }
+  if (current.shareMode !== next.shareMode || current.sharedGroupIds.join('\0') !== next.sharedGroupIds.join('\0')) {
+    activities.push(
+      environmentActivity({
+        environmentId: current.id,
+        type: 'sharing_changed',
+        actor,
+        revisionId: next.currentRevisionId,
+        payload: {
+          before: { shareMode: current.shareMode, sharedGroupIds: current.sharedGroupIds },
+          after: { shareMode: next.shareMode, sharedGroupIds: next.sharedGroupIds },
+        },
+        createdAt,
+      }),
+    );
+  }
+  if (current.ownerGroupId !== next.ownerGroupId) {
+    activities.push(
+      environmentActivity({
+        environmentId: current.id,
+        type: 'owner_transferred',
+        actor,
+        revisionId: next.currentRevisionId,
+        payload: { beforeOwnerGroupId: current.ownerGroupId, afterOwnerGroupId: next.ownerGroupId },
+        createdAt,
+      }),
+    );
+  }
+  if (current.name !== next.name) {
+    activities.push(
+      environmentActivity({
+        environmentId: current.id,
+        type: 'environment_renamed',
+        actor,
+        revisionId: next.currentRevisionId,
+        payload: { beforeName: current.name, afterName: next.name },
+        createdAt,
+      }),
+    );
+  }
+  return activities;
+}
+
+function sameRepositoryConfiguration(
+  current: EnvironmentRepositoryRecord[],
+  candidate: EnvironmentRepositoryRecord[],
+): boolean {
+  const shape = (repository: EnvironmentRepositoryRecord) => ({
+    provider: repository.provider,
+    owner: repository.owner.toLowerCase(),
+    repo: repository.repo.toLowerCase(),
+    branch: repository.branch ?? null,
+    primary: repository.isPrimary,
+    position: repository.position,
+  });
+  return JSON.stringify(current.map(shape)) === JSON.stringify(candidate.map(shape));
+}
+
+function normalizedActor(actor: EnvironmentMutationActor | undefined): EnvironmentMutationActor {
+  return actor?.type === 'user' && actor.userId ? actor : { type: 'system' };
 }
 
 function requiredName(value: string): string {

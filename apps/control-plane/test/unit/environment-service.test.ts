@@ -28,6 +28,8 @@ describe('environment service', () => {
 
     expect(snapshot).toEqual({
       id: environment.id,
+      revisionId: environment.currentRevisionId,
+      revisionNumber: 1,
       name: 'Product surface',
       ownerGroupId: defaultGroupId,
       codebase: {
@@ -40,6 +42,74 @@ describe('environment service', () => {
     await expect(
       services.environments.resolveForGroup({ environmentId: environment.id, groupId: unsharedGroup.id }),
     ).rejects.toMatchObject({ code: 'not_found' } satisfies Partial<EnvironmentServiceError>);
+  });
+
+  it('publishes immutable revisions only when executable configuration changes', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Versioned codebase',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+      actor: { type: 'system' },
+    });
+
+    const renamed = await services.environments.update({
+      id: environment.id,
+      name: 'Renamed codebase',
+      actor: { type: 'system' },
+    });
+    expect(renamed.currentRevisionId).toBe(environment.currentRevisionId);
+    expect(renamed.currentRevisionNumber).toBe(1);
+
+    const revised = await services.environments.update({
+      id: environment.id,
+      repositories: [
+        { provider: 'github', owner: 'acme', repo: 'api', primary: true },
+        { provider: 'github', owner: 'acme', repo: 'web' },
+      ],
+      actor: { type: 'system' },
+    });
+    expect(revised.currentRevisionId).not.toBe(environment.currentRevisionId);
+    expect(revised.currentRevisionNumber).toBe(2);
+
+    const original = await services.environments.resolveForGroup({
+      environmentId: environment.id,
+      groupId: defaultGroupId,
+      revisionId: environment.currentRevisionId,
+    });
+    expect(original.codebase.repositories.map((repository) => repository.repo)).toEqual(['api']);
+    expect(
+      (await services.environments.listRevisions(environment.id)).map((revision) => revision.revisionNumber),
+    ).toEqual([2, 1]);
+    expect((await services.environments.listActivity(environment.id)).map((activity) => activity.type)).toEqual(
+      expect.arrayContaining(['revision_published', 'environment_renamed', 'environment_created']),
+    );
+  });
+
+  it('rejects concurrent environment edits based on the current revision', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Concurrent codebase',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const first = services.environments.update({
+      id: environment.id,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'web', primary: true }],
+    });
+    const second = services.environments.update({
+      id: environment.id,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'worker', primary: true }],
+    });
+
+    const results = await Promise.allSettled([first, second]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toMatchObject([
+      { reason: { code: 'environment_update_conflict' } },
+    ]);
   });
 
   it('blocks archiving an environment while active automations reference it', async () => {
@@ -144,6 +214,28 @@ describe('environment service', () => {
     await expect(
       services.environments.resolveForGroup({ environmentId: environment.id, groupId: defaultGroupId }),
     ).resolves.toMatchObject({ id: environment.id, name: 'Restorable codebase' });
+  });
+
+  it('records archive and restore activity only for actual lifecycle transitions', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Idempotent lifecycle codebase',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'app', primary: true }],
+    });
+
+    await services.environments.archive(environment.id);
+    await services.environments.archive(environment.id);
+    await services.environments.unarchive(environment.id);
+    await services.environments.unarchive(environment.id);
+
+    const activity = await services.environments.listActivity(environment.id);
+    expect(activity.filter((entry) => entry.type === 'environment_archived')).toHaveLength(1);
+    expect(activity.filter((entry) => entry.type === 'environment_unarchived')).toHaveLength(1);
+    expect(activity.find((entry) => entry.type === 'environment_archived')?.revisionId).toBe(
+      environment.currentRevisionId,
+    );
   });
 });
 
