@@ -224,13 +224,11 @@ describe('DaytonaSandboxProvider', () => {
     expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
       expect.stringContaining('/opt/deputies/sandbox-bridge/dist/server.js'),
       undefined,
-      undefined,
-      10,
-    );
-    expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
-      expect.stringContaining('http://127.0.0.1:3584/health'),
-      undefined,
-      undefined,
+      {
+        DEPUTIES_SANDBOX_TOKEN: 'bridge-token',
+        DEPUTIES_WORKSPACE: '/workspace',
+        DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES: '',
+      },
       10,
     );
   });
@@ -259,15 +257,11 @@ describe('DaytonaSandboxProvider', () => {
     });
 
     expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
-      expect.stringContaining(`SKIP_COOKIE_NAMES='inner_deputies_preview,inner_deputies_session'`),
+      expect.stringContaining('/opt/deputies/sandbox-bridge/dist/server.js'),
       undefined,
-      undefined,
-      10,
-    );
-    expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
-      expect.stringContaining('DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES="$SKIP_COOKIE_NAMES"'),
-      undefined,
-      undefined,
+      expect.objectContaining({
+        DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES: 'inner_deputies_preview,inner_deputies_session',
+      }),
       10,
     );
   });

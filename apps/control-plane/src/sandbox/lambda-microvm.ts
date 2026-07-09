@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { sandboxBridgePreviewUrl } from './bridge.js';
 import {
   CreateMicrovmAuthTokenCommand,
   GetMicrovmCommand,
@@ -210,7 +211,7 @@ export class LambdaMicrovmSandboxProvider implements SandboxProvider {
     if (isInternalMicrovmPort(input.port, descriptor.bridgePort)) return null;
     return {
       port: input.port,
-      targetUrl: `${microvmBaseUrl(descriptor.endpoint)}/preview/${input.port}`,
+      targetUrl: sandboxBridgePreviewUrl(microvmBaseUrl(descriptor.endpoint), input.port),
       targetHeaders: {
         authorization: `Bearer ${descriptor.bridgeToken}`,
         'x-aws-proxy-auth': await this.authToken(descriptor.providerSandboxId, descriptor.bridgePort),

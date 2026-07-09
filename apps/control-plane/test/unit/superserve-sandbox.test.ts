@@ -71,6 +71,10 @@ describe('SuperserveSandboxProvider', () => {
     await expect(handle.fs?.exists('file.txt')).resolves.toBe(true);
     await expect(handle.fs?.exists('missing.txt')).resolves.toBe(false);
     await expect(handle.fs?.readFile('../outside.txt')).rejects.toThrow('Superserve path escapes workspace');
+    expect(sandbox.commandsRun.map(({ command }) => command)).toContain(
+      'node /opt/deputies/sandbox-bridge/dist/filesystem.js stat',
+    );
+    expect(sandbox.commandsRun.some(({ command }) => command.includes('node -e'))).toBe(false);
   });
 
   it('checks connectivity, maps lifecycle health, and treats missing destroy as idempotent', async () => {
@@ -203,15 +207,15 @@ function createMockSuperserveSandbox(): MockSuperserveSandbox {
       async run(command, options) {
         commandsRun.push({ command, ...(options ? { options } : {}) });
         const path = options?.env?.DEPUTIES_PATH;
-        if (command.includes('readdirSync')) {
+        if (command.endsWith('filesystem.js readdir')) {
           const prefix = `${path?.replace(/\/$/, '')}/`;
           const entries = Array.from(files.keys())
             .filter((file) => file.startsWith(prefix))
             .map((file) => file.slice(prefix.length).split('/')[0])
             .filter((name, index, all) => name && all.indexOf(name) === index);
-          return { exitCode: 0, stdout: JSON.stringify(entries), stderr: '' };
+          return { exitCode: 0, stdout: JSON.stringify({ entries }), stderr: '' };
         }
-        if (command.includes('lstatSync')) {
+        if (command.endsWith('filesystem.js stat')) {
           const file = path ? files.get(path) : undefined;
           if (!file) return { exitCode: 1, stdout: '', stderr: 'not found' };
           return {
@@ -226,8 +230,8 @@ function createMockSuperserveSandbox(): MockSuperserveSandbox {
             stderr: '',
           };
         }
-        if (command.includes('existsSync')) {
-          return { exitCode: 0, stdout: String(Boolean(path && files.has(path))), stderr: '' };
+        if (command.endsWith('filesystem.js exists')) {
+          return { exitCode: 0, stdout: JSON.stringify({ exists: Boolean(path && files.has(path)) }), stderr: '' };
         }
         return { exitCode: 0, stdout: `ran: ${command}`, stderr: '' };
       },

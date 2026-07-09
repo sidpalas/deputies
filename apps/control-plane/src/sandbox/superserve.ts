@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, normalize, relative } from 'node:path/posix';
 import { ConflictError, NotFoundError, Sandbox } from '@superserve/sdk';
-import { sandboxBridgeSkipCookieNamesEnv } from './bridge-env.js';
+import {
+  sandboxBridgeEnvironment,
+  sandboxBridgePort,
+  sandboxBridgePreviewUrl,
+  sandboxBridgeStartupCommand,
+} from './bridge.js';
 import type {
   ConnectSandboxInput,
   CreateSandboxInput,
@@ -19,7 +24,6 @@ import type {
   SandboxServiceEndpointInput,
 } from './types.js';
 
-const superserveBridgePort = 3584;
 const superserveActivationRetryAttempts = 4;
 const superserveActivationRetryDelayMs = 100;
 
@@ -52,6 +56,7 @@ type SuperserveCommandOptions = {
 };
 
 type SuperserveCommandResult = { exitCode: number; stdout: string; stderr: string };
+type SuperserveFilesystemOperation = 'stat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
 
 export type SuperserveSandboxLike = SuperserveSandboxInfoLike & {
   commands: {
@@ -170,13 +175,13 @@ export class SuperserveSandboxProvider implements SandboxProvider {
   }
 
   async getServiceEndpoint(input: SandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {
-    if (input.port === superserveBridgePort) return null;
+    if (input.port === sandboxBridgePort) return null;
     const sandbox = await this.connectSandbox(input.providerSandboxId);
     const bridgeToken = input.secrets?.bridgeToken ?? randomUUID();
     await ensureSuperserveBridge(sandbox, this.workspacePath, bridgeToken, this.options.bridgeSkippedCookieNames);
     return {
       port: input.port,
-      targetUrl: superserveBridgePreviewUrl(sandbox.getPreviewUrl(superserveBridgePort), input.port),
+      targetUrl: sandboxBridgePreviewUrl(sandbox.getPreviewUrl(sandboxBridgePort), input.port),
       targetHeaders: { authorization: `Bearer ${bridgeToken}` },
       preserveTargetHost: true,
       forwardPreviewHost: true,
@@ -199,7 +204,7 @@ export class SuperserveSandboxProvider implements SandboxProvider {
         ...(this.options.envVars ?? {}),
         DEPUTIES_WORKSPACE: this.workspacePath,
         DEPUTIES_SANDBOX_BRIDGE_HOST: '0.0.0.0',
-        DEPUTIES_SANDBOX_BRIDGE_PORT: String(superserveBridgePort),
+        DEPUTIES_SANDBOX_BRIDGE_PORT: String(sandboxBridgePort),
       },
     };
     if (this.options.template) options.fromTemplate = this.options.template;
@@ -281,30 +286,30 @@ function createSuperserveFileSystem(sandbox: SuperserveSandboxLike, workspacePat
     },
     async stat(path) {
       const resolved = resolveSuperservePath(path, workspacePath);
-      const result = await runSuperserveFsCommand(sandbox, statScript, resolved);
+      const result = await runSuperserveFsCommand(sandbox, 'stat', resolved);
       if (result.exitCode !== 0)
         throw Object.assign(new Error(result.stderr || `Superserve file not found: ${resolved}`), { statusCode: 404 });
       const value = JSON.parse(result.stdout) as Omit<FileStat, 'mtime'> & { mtimeMs: number };
       return { ...value, mtime: new Date(value.mtimeMs) };
     },
     async readdir(path) {
-      const result = await runSuperserveFsCommand(sandbox, readdirScript, resolveSuperservePath(path, workspacePath));
+      const result = await runSuperserveFsCommand(sandbox, 'readdir', resolveSuperservePath(path, workspacePath));
       if (result.exitCode !== 0) throw new Error(result.stderr || 'Superserve directory listing failed');
-      return JSON.parse(result.stdout) as string[];
+      return (JSON.parse(result.stdout) as { entries: string[] }).entries;
     },
     async exists(path) {
-      const result = await runSuperserveFsCommand(sandbox, existsScript, resolveSuperservePath(path, workspacePath));
+      const result = await runSuperserveFsCommand(sandbox, 'exists', resolveSuperservePath(path, workspacePath));
       if (result.exitCode !== 0) throw new Error(result.stderr || 'Superserve existence check failed');
-      return result.stdout.trim() === 'true';
+      return (JSON.parse(result.stdout) as { exists: boolean }).exists;
     },
     async mkdir(path, options) {
-      const result = await runSuperserveFsCommand(sandbox, mkdirScript, resolveSuperservePath(path, workspacePath), {
+      const result = await runSuperserveFsCommand(sandbox, 'mkdir', resolveSuperservePath(path, workspacePath), {
         DEPUTIES_RECURSIVE: String(options?.recursive === true),
       });
       if (result.exitCode !== 0) throw new Error(result.stderr || 'Superserve directory creation failed');
     },
     async rm(path, options) {
-      const result = await runSuperserveFsCommand(sandbox, rmScript, resolveSuperservePath(path, workspacePath), {
+      const result = await runSuperserveFsCommand(sandbox, 'rm', resolveSuperservePath(path, workspacePath), {
         DEPUTIES_RECURSIVE: String(options?.recursive === true),
         DEPUTIES_FORCE: String(options?.force === true),
       });
@@ -315,11 +320,13 @@ function createSuperserveFileSystem(sandbox: SuperserveSandboxLike, workspacePat
 
 async function runSuperserveFsCommand(
   sandbox: SuperserveSandboxLike,
-  command: string,
+  operation: SuperserveFilesystemOperation,
   path: string,
   env: Record<string, string> = {},
 ): Promise<SuperserveCommandResult> {
-  return sandbox.commands.run(command, { env: { DEPUTIES_PATH: path, ...env } });
+  return sandbox.commands.run(`node /opt/deputies/sandbox-bridge/dist/filesystem.js ${operation}`, {
+    env: { DEPUTIES_PATH: path, ...env },
+  });
 }
 
 async function execSuperserveCommand(
@@ -359,47 +366,12 @@ async function ensureSuperserveBridge(
   bridgeToken: string,
   skippedCookieNames?: string,
 ): Promise<void> {
-  const command = [
-    'PID_FILE=/tmp/deputies-sandbox-bridge.pid;',
-    'LOG_FILE=/tmp/deputies-sandbox-bridge.log;',
-    `HEALTH_URL=http://127.0.0.1:${superserveBridgePort}/health;`,
-    'export HEALTH_URL;',
-    `HEALTH_CHECK=${quoteShell(
-      'const http=require("node:http");const req=http.get(process.env.HEALTH_URL,{headers:{Authorization:"Bearer "+process.env.DEPUTIES_SANDBOX_TOKEN}},res=>{res.resume();process.exit(res.statusCode===200?0:1);});req.on("error",()=>process.exit(1));req.setTimeout(1000,()=>{req.destroy();process.exit(1);});',
-    )};`,
-    'health() { node -e "$HEALTH_CHECK" >/dev/null 2>&1; };',
-    'start_bridge() {',
-    `DEPUTIES_SANDBOX_BRIDGE_HOST=0.0.0.0 DEPUTIES_SANDBOX_BRIDGE_PORT=${superserveBridgePort}`,
-    'nohup node /opt/deputies/sandbox-bridge/dist/server.js >> "$LOG_FILE" 2>&1 & echo $! > "$PID_FILE";',
-    '};',
-    'if ! health; then',
-    '[ -f "$PID_FILE" ] && kill "$(cat "$PID_FILE")" 2>/dev/null || true;',
-    'start_bridge;',
-    'fi;',
-    'for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do',
-    'health && exit 0;',
-    'sleep 0.25;',
-    'done;',
-    'echo "deputies sandbox bridge did not become ready" >&2;',
-    'exit 1;',
-  ].join(' ');
-  const response = await sandbox.commands.run(command, {
-    env: {
-      DEPUTIES_SANDBOX_TOKEN: bridgeToken,
-      DEPUTIES_WORKSPACE: workspacePath,
-      [sandboxBridgeSkipCookieNamesEnv]: skippedCookieNames ?? '',
-    },
+  const response = await sandbox.commands.run(sandboxBridgeStartupCommand(), {
+    env: sandboxBridgeEnvironment({ bridgeToken, workspacePath, skippedCookieNames }),
     timeoutMs: 10_000,
   });
   if (response.exitCode !== 0)
     throw new Error(response.stderr || response.stdout || 'Superserve sandbox bridge did not become ready');
-}
-
-function superserveBridgePreviewUrl(targetUrl: string, port: number): string {
-  const target = new URL(targetUrl);
-  const base = target.pathname.endsWith('/') ? target.pathname.slice(0, -1) : target.pathname;
-  target.pathname = `${base}/preview/${port}`;
-  return target.toString();
 }
 
 function superserveHealth(info: SuperserveSandboxInfoLike): SandboxHealth {
@@ -424,6 +396,10 @@ function normalizeAbsolutePath(path: string): string {
   return isAbsolute(normalized) ? normalized : `/${normalized}`;
 }
 
+function quoteShell(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 function stringMetadata(metadata: Record<string, unknown>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(metadata).map(([key, value]) => {
@@ -431,10 +407,6 @@ function stringMetadata(metadata: Record<string, unknown>): Record<string, strin
       return [key, JSON.stringify(value) ?? String(value)];
     }),
   );
-}
-
-function quoteShell(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function safeId(value: string): string {
@@ -470,14 +442,3 @@ function isSuperserveNotFoundError(error: unknown): boolean {
     named.name.includes('NotFound') || named.statusCode === 404 || named.status === 404 || named.code === 'not_found'
   );
 }
-
-const statScript =
-  'node -e \'const fs=require("node:fs");const s=fs.lstatSync(process.env.DEPUTIES_PATH);process.stdout.write(JSON.stringify({isFile:s.isFile(),isDirectory:s.isDirectory(),isSymbolicLink:s.isSymbolicLink(),size:s.size,mtimeMs:s.mtimeMs}))\'';
-const readdirScript =
-  'node -e \'const fs=require("node:fs");process.stdout.write(JSON.stringify(fs.readdirSync(process.env.DEPUTIES_PATH)))\'';
-const existsScript =
-  'node -e \'const fs=require("node:fs");process.stdout.write(String(fs.existsSync(process.env.DEPUTIES_PATH)))\'';
-const mkdirScript =
-  'node -e \'const fs=require("node:fs");fs.mkdirSync(process.env.DEPUTIES_PATH,{recursive:process.env.DEPUTIES_RECURSIVE==="true"})\'';
-const rmScript =
-  'node -e \'const fs=require("node:fs");fs.rmSync(process.env.DEPUTIES_PATH,{recursive:process.env.DEPUTIES_RECURSIVE==="true",force:process.env.DEPUTIES_FORCE==="true"})\'';

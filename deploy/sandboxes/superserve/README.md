@@ -18,6 +18,13 @@ When not explicitly set, `SUPERSERVE_IMAGE` inherits `DAYTONA_IMAGE` and otherwi
 
 The image reference is stored when a template is first created. Subsequent syncs rebuild that stored reference. Use a stable mutable tag for in-place rebuilds, or a new template name when moving to a different pinned image reference.
 
+When the shared Daytona image changes, publish it first and then sync the Superserve template so it receives the new bridge payload:
+
+```sh
+mise run //deploy/sandboxes/daytona:image:publish
+mise run //deploy/sandboxes/superserve:template:sync
+```
+
 Configure Deputies with that template name or ID:
 
 ```sh

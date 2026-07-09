@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import { sandboxBridgePreviewUrl } from './bridge.js';
 import { sandboxBridgeSkipCookieNamesEnv } from './bridge-env.js';
 import type {
   ConnectSandboxInput,
@@ -318,7 +319,7 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
     const descriptor = await this.connectedDescriptor(input);
     return {
       port: input.port,
-      targetUrl: `${descriptor.bridgeUrl}/preview/${input.port}`,
+      targetUrl: sandboxBridgePreviewUrl(descriptor.bridgeUrl, input.port),
       targetHeaders: { authorization: `Bearer ${descriptor.bridgeToken}` },
       forwardPreviewHost: true,
     };
