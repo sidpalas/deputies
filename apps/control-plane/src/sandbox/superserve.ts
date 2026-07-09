@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, normalize, relative } from 'node:path/posix';
 import { ConflictError, NotFoundError, Sandbox } from '@superserve/sdk';
+import type { SandboxFilesystemOperation } from '@deputies/sandbox-bridge/filesystem';
 import {
   sandboxBridgeEnvironment,
   sandboxBridgePort,
@@ -56,7 +57,6 @@ type SuperserveCommandOptions = {
 };
 
 type SuperserveCommandResult = { exitCode: number; stdout: string; stderr: string };
-type SuperserveFilesystemOperation = 'stat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
 
 export type SuperserveSandboxLike = SuperserveSandboxInfoLike & {
   commands: {
@@ -320,7 +320,7 @@ function createSuperserveFileSystem(sandbox: SuperserveSandboxLike, workspacePat
 
 async function runSuperserveFsCommand(
   sandbox: SuperserveSandboxLike,
-  operation: SuperserveFilesystemOperation,
+  operation: SandboxFilesystemOperation,
   path: string,
   env: Record<string, string> = {},
 ): Promise<SuperserveCommandResult> {
