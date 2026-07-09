@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/sidpalas/deputies/compare/v0.15.1...v0.16.0) (2026-07-09)
+
+
+### Features
+
+* add reusable codebase environments ([#90](https://github.com/sidpalas/deputies/issues/90)) ([a3c1482](https://github.com/sidpalas/deputies/commit/a3c148266f1e713d22a31d5fb82e88812d88031c))
+
 ## [0.15.1](https://github.com/sidpalas/deputies/compare/v0.15.0...v0.15.1) (2026-07-08)
 
 
