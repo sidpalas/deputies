@@ -179,6 +179,8 @@ export class SuperserveSandboxProvider implements SandboxProvider {
     const sandbox = await this.connectSandbox(input.providerSandboxId);
     const bridgeToken = input.secrets?.bridgeToken ?? randomUUID();
     await ensureSuperserveBridge(sandbox, this.workspacePath, bridgeToken, this.options.bridgeSkippedCookieNames);
+    // Superserve preview URLs are internet-reachable. Deputies keeps the bridge
+    // behind its service authorization and supplies this per-sandbox token.
     return {
       port: input.port,
       targetUrl: sandboxBridgePreviewUrl(sandbox.getPreviewUrl(sandboxBridgePort), input.port),

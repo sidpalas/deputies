@@ -45,7 +45,7 @@ Keep Tensorlake's native SDK APIs for lifecycle, exec, and filesystem work. The 
 
 Do not change Tensorlake behavior as part of the Superserve or shared-bridge work; this plan is intentionally deferred until its dedicated PR.
 
-Superserve sandboxes require `SUPERSERVE_TEMPLATE` to name a ready Superserve template. Templates use the published Daytona image, which satisfies Superserve's Linux/amd64 glibc requirement and contains the Deputies bridge. Deputies exposes only the authenticated bridge port through Superserve's public preview URL and forwards requested application ports through `/preview/<port>`. The bridge token protects the public endpoint from external callers but is a sandbox-visible capability, so sandbox code must be trusted with preview access.
+Superserve sandboxes require `SUPERSERVE_TEMPLATE` to name a ready Superserve template. Templates use the published Daytona image, which satisfies Superserve's Linux/amd64 glibc requirement and contains the Deputies bridge. Superserve preview URLs are public internet endpoints; Deputies protects the bridge with service authorization plus a per-sandbox bridge token, then forwards requested application ports through `/preview/<port>`. The bridge token protects the public endpoint from external callers but is a sandbox-visible capability, so sandbox code must be trusted with preview access.
 
 > **Warning:** `SANDBOX_PROVIDER=unsafe-local` is for trusted local development only. It is not a security boundary; agent commands run on the API/worker host runtime in a temporary workspace.
 
