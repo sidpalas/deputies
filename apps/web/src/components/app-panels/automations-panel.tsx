@@ -619,8 +619,8 @@ export function AutomationsPanel(props: {
                     />
                     <span>
                       {form.environmentRevisionPolicy === 'pinned'
-                        ? `Pinned to environment revision ${revisionNumberForId(selectedEnvironment, form.environmentRevisionId)}.`
-                        : 'Follow the latest environment revision for each invocation.'}
+                        ? `Pin to environment revision ${revisionNumberForId(selectedEnvironment, form.environmentRevisionId)} when you save.`
+                        : 'Follow the latest environment revision after you save.'}
                     </span>
                   </label>
                 ) : null}
