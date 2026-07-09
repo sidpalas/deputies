@@ -40,6 +40,7 @@
     "@opentelemetry/resources": "^2.2.0",
     "@opentelemetry/sdk-metrics": "^2.2.0",
     "@opentelemetry/sdk-node": "^0.217.0",
+    "@superserve/sdk": "0.7.7",
     "hono": "^4.12.25",
     "pg": "^8.20.0",
     "tensorlake": "^0.5.40"

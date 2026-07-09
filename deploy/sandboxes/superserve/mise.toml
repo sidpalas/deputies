@@ -1,0 +1,57 @@
+[tasks."image:build"]
+description = "Build the linux/amd64 glibc Superserve sandbox image"
+run = "bash build-image.sh --load"
+
+[tasks."image:push"]
+description = "Build and push the linux/amd64 glibc Superserve sandbox image"
+run = "bash build-image.sh --push"
+
+[tasks."image:publish"]
+description = "Build and push the Superserve sandbox image"
+depends = ["image:push"]
+
+[tasks."template:sync"]
+description = "Create or rebuild the Superserve template and wait until it is ready"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -f ../../../.env.local ]]; then
+  set -a
+  source ../../../.env.local
+  set +a
+fi
+
+export SUPERSERVE_IMAGE=${SUPERSERVE_IMAGE:-ghcr.io/sidpalas/deputies-superserve-sandbox:latest}
+export SUPERSERVE_TEMPLATE=${SUPERSERVE_TEMPLATE:-deputies}
+
+pnpm --dir ../../../apps/control-plane exec tsx src/scripts/sync-superserve-template.ts
+'''
+
+[tasks.publish]
+description = "Push the Superserve image, sync its template, and wait until ready"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+mise run //deploy/sandboxes/superserve:image:push
+mise run //deploy/sandboxes/superserve:template:sync
+'''
+
+[tasks.uat]
+description = "Run the live Superserve provider UAT and clean up its sandbox"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -f ../../../.env.local ]]; then
+  set -a
+  source ../../../.env.local
+  set +a
+fi
+
+export SUPERSERVE_TEMPLATE=${SUPERSERVE_TEMPLATE:-deputies}
+export RUN_REAL_SUPERSERVE_SANDBOX_UAT=true
+
+mise run //apps/control-plane:test:uat -- test/uat/real-superserve-sandbox.test.ts
+'''

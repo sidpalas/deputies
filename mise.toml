@@ -13,6 +13,7 @@ config_roots = [
   "deploy/sandboxes/daytona",
   "deploy/sandboxes/lambda-microvm",
   "deploy/sandboxes/tensorlake",
+  "deploy/sandboxes/superserve",
   "packages/sandbox-bridge",
 ]
 

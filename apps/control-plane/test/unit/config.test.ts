@@ -1,4 +1,9 @@
-import { loadConfig, requireTensorlakeRegisteredImage } from '../../src/config/index.js';
+import {
+  loadConfig,
+  requireSuperserveApiKey,
+  requireSuperserveTemplate,
+  requireTensorlakeRegisteredImage,
+} from '../../src/config/index.js';
 
 describe('loadConfig', () => {
   it('requires API_AUTH_MODE to be explicit', () => {
@@ -234,6 +239,9 @@ describe('loadConfig', () => {
         TENSORLAKE_SANDBOX_MEMORY_MB: '4096',
         TENSORLAKE_SANDBOX_DISK_MB: '20480',
         TENSORLAKE_ALLOW_INTERNET_ACCESS: 'false',
+        SUPERSERVE_API_KEY: 'superserve-key',
+        SUPERSERVE_BASE_URL: 'https://superserve.example',
+        SUPERSERVE_TEMPLATE: 'deputies-sandbox',
         LAMBDA_MICROVM_REGION: 'us-east-2',
         LAMBDA_MICROVM_IMAGE_IDENTIFIER: 'arn:aws:lambda:us-east-2:123456789012:microvm-image:deputies',
         LAMBDA_MICROVM_IMAGE_VERSION: '1.0',
@@ -369,6 +377,9 @@ describe('loadConfig', () => {
       tensorlakeSandboxMemoryMb: 4096,
       tensorlakeSandboxDiskMb: 20480,
       tensorlakeAllowInternetAccess: false,
+      superserveApiKey: 'superserve-key',
+      superserveBaseUrl: 'https://superserve.example',
+      superserveTemplate: 'deputies-sandbox',
       lambdaMicrovmRegion: 'us-east-2',
       lambdaMicrovmImageIdentifier: 'arn:aws:lambda:us-east-2:123456789012:microvm-image:deputies',
       lambdaMicrovmImageVersion: '1.0',
@@ -472,6 +483,31 @@ describe('loadConfig', () => {
           SANDBOX_PROVIDER: 'tensorlake',
           TENSORLAKE_API_KEY: 'key',
           TENSORLAKE_REGISTERED_IMAGE: 'deputies-sandbox',
+        }),
+      ),
+    ).toBe('deputies-sandbox');
+  });
+
+  it('requires a Superserve template for the Superserve provider', () => {
+    expect(() =>
+      requireSuperserveApiKey(
+        loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'superserve', SUPERSERVE_TEMPLATE: 'deputies' }),
+      ),
+    ).toThrow('SUPERSERVE_API_KEY is required when SANDBOX_PROVIDER=superserve');
+
+    expect(() =>
+      requireSuperserveTemplate(
+        loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'superserve', SUPERSERVE_API_KEY: 'key' }),
+      ),
+    ).toThrow('SUPERSERVE_TEMPLATE is required when SANDBOX_PROVIDER=superserve');
+
+    expect(
+      requireSuperserveTemplate(
+        loadConfig({
+          API_AUTH_MODE: 'none',
+          SANDBOX_PROVIDER: 'superserve',
+          SUPERSERVE_API_KEY: 'key',
+          SUPERSERVE_TEMPLATE: 'deputies-sandbox',
         }),
       ),
     ).toBe('deputies-sandbox');
@@ -881,7 +917,7 @@ describe('loadConfig', () => {
   it('rejects invalid enum values', () => {
     expect(() => loadConfig({ RUN_MODE: 'cloudflare' })).toThrow('Expected one of combined, all, api, worker');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'local' })).toThrow(
-      'Expected one of fake, unsafe-local, docker, daytona, tensorlake, lambda-microvm, k8s-agent-sandbox',
+      'Expected one of fake, unsafe-local, docker, daytona, tensorlake, superserve, lambda-microvm, k8s-agent-sandbox',
     );
     expect(loadConfig({ API_AUTH_MODE: 'none', RUNNER: 'pi' }).runner).toBe('pi');
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_COOKIE_SAME_SITE: 'strict' })).toThrow(

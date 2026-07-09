@@ -11,6 +11,7 @@ export type SandboxProviderKind =
   | 'docker'
   | 'daytona'
   | 'tensorlake'
+  | 'superserve'
   | 'lambda-microvm'
   | 'k8s-agent-sandbox';
 export type DockerOrchestratorMode = 'in-process' | 'http';
@@ -139,6 +140,9 @@ export type AppConfig = {
   tensorlakeSandboxMemoryMb?: number;
   tensorlakeSandboxDiskMb?: number;
   tensorlakeAllowInternetAccess?: boolean;
+  superserveApiKey?: string;
+  superserveBaseUrl?: string;
+  superserveTemplate?: string;
   lambdaMicrovmRegion?: string;
   lambdaMicrovmImageIdentifier?: string;
   lambdaMicrovmImageVersion?: string;
@@ -238,7 +242,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
-      ['fake', 'unsafe-local', 'docker', 'daytona', 'tensorlake', 'lambda-microvm', 'k8s-agent-sandbox'],
+      ['fake', 'unsafe-local', 'docker', 'daytona', 'tensorlake', 'superserve', 'lambda-microvm', 'k8s-agent-sandbox'],
       'fake',
     ),
     localSandboxAllowedCommands: parseStringList(env.LOCAL_SANDBOX_ALLOWED_COMMANDS),
@@ -412,6 +416,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       'TENSORLAKE_ALLOW_INTERNET_ACCESS',
     );
   }
+  if (env.SUPERSERVE_API_KEY) config.superserveApiKey = env.SUPERSERVE_API_KEY;
+  if (env.SUPERSERVE_BASE_URL) config.superserveBaseUrl = env.SUPERSERVE_BASE_URL;
+  if (env.SUPERSERVE_TEMPLATE) config.superserveTemplate = env.SUPERSERVE_TEMPLATE;
   if (env.LAMBDA_MICROVM_REGION) config.lambdaMicrovmRegion = env.LAMBDA_MICROVM_REGION;
   else if (env.AWS_REGION) config.lambdaMicrovmRegion = env.AWS_REGION;
   else if (env.AWS_DEFAULT_REGION) config.lambdaMicrovmRegion = env.AWS_DEFAULT_REGION;
@@ -624,6 +631,22 @@ export function requireTensorlakeRegisteredImage(config: AppConfig): string {
   }
 
   return config.tensorlakeRegisteredImage;
+}
+
+export function requireSuperserveApiKey(config: AppConfig): string {
+  if (!config.superserveApiKey) {
+    throw new Error('SUPERSERVE_API_KEY is required when SANDBOX_PROVIDER=superserve');
+  }
+
+  return config.superserveApiKey;
+}
+
+export function requireSuperserveTemplate(config: AppConfig): string {
+  if (!config.superserveTemplate) {
+    throw new Error('SUPERSERVE_TEMPLATE is required when SANDBOX_PROVIDER=superserve');
+  }
+
+  return config.superserveTemplate;
 }
 
 export function requireLambdaMicrovmImageIdentifier(config: AppConfig): string {
