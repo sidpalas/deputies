@@ -1,6 +1,6 @@
-import { useEffect, useId, useState } from 'react';
+import { Fragment, useEffect, useId, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import type { BranchOption, RepositoryOption } from '../../api.js';
+import type { BranchOption, Environment, RepositoryOption } from '../../api.js';
 import { cn } from '../../lib/utils.js';
 import { Input } from '../ui/input.js';
 
@@ -9,6 +9,9 @@ const optionPickerOpenEvent = 'deputies-option-picker-open';
 export type OptionPickerOption = {
   value: string;
   label: string;
+  description?: string;
+  title?: string;
+  section?: string;
   available?: boolean;
   unavailableReason?: string;
   action?: string;
@@ -20,6 +23,7 @@ export function RepositoryPicker(props: {
   triggerClassName?: string;
   menuClassName?: string;
   direction?: 'up' | 'down';
+  label?: string;
   value: string;
   repositories: RepositoryOption[];
   loading: boolean;
@@ -33,9 +37,9 @@ export function RepositoryPicker(props: {
       {...(props.id ? { id: props.id } : {})}
       {...(props.className ? { className: props.className } : {})}
       {...(props.triggerClassName ? { triggerClassName: props.triggerClassName } : {})}
-      menuClassName="min-w-72"
+      menuClassName={props.menuClassName ?? 'min-w-72'}
       {...(props.direction ? { direction: props.direction } : {})}
-      label="Repository"
+      label={props.label ?? 'Repository'}
       value={props.value}
       options={props.repositories.map((repository) => ({ value: repository.fullName, label: repository.fullName }))}
       emptyLabel={props.loading ? 'Loading repositories...' : props.placeholder}
@@ -55,6 +59,7 @@ export function BranchPicker(props: {
   triggerClassName?: string;
   menuClassName?: string;
   direction?: 'up' | 'down';
+  label?: string;
   value: string;
   branches: BranchOption[];
   loading: boolean;
@@ -68,9 +73,9 @@ export function BranchPicker(props: {
       {...(props.id ? { id: props.id } : {})}
       {...(props.className ? { className: props.className } : {})}
       {...(props.triggerClassName ? { triggerClassName: props.triggerClassName } : {})}
-      menuClassName="min-w-72"
+      menuClassName={props.menuClassName ?? 'min-w-72'}
       {...(props.direction ? { direction: props.direction } : {})}
-      label="Branch"
+      label={props.label ?? 'Branch'}
       value={props.value}
       options={props.branches.map((branch) => ({ value: branch.name, label: branch.name }))}
       emptyLabel={
@@ -88,6 +93,163 @@ export function BranchPicker(props: {
   );
 }
 
+export function EnvironmentPicker(props: {
+  id?: string;
+  className?: string;
+  triggerClassName?: string;
+  menuClassName?: string;
+  direction?: 'up' | 'down';
+  label?: string;
+  emptyOptionLabel?: string;
+  value: string;
+  environments: Environment[];
+  loading: boolean;
+  error: string;
+  placeholder: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <OptionPicker
+      {...(props.id ? { id: props.id } : {})}
+      {...(props.className ? { className: props.className } : {})}
+      {...(props.triggerClassName ? { triggerClassName: props.triggerClassName } : {})}
+      menuClassName={props.menuClassName ?? 'min-w-80'}
+      {...(props.direction ? { direction: props.direction } : {})}
+      label={props.label ?? 'Environment'}
+      value={props.value}
+      options={props.environments.map((environment) => ({
+        value: environment.id,
+        label: `${environment.name} · ${environment.repositories.length} repo${
+          environment.repositories.length === 1 ? '' : 's'
+        }`,
+        description: environmentRepositorySummary(environment),
+      }))}
+      emptyLabel={props.loading ? 'Loading environments...' : props.placeholder}
+      loading={props.loading}
+      error={props.error ? 'Could not load environments.' : ''}
+      searchable
+      allowEmpty={Boolean(props.value)}
+      {...(props.emptyOptionLabel ? { emptyOptionLabel: props.emptyOptionLabel } : {})}
+      onChange={props.onChange}
+      disabled={props.disabled}
+    />
+  );
+}
+
+export function CodebasePicker(props: {
+  id?: string;
+  className?: string;
+  triggerClassName?: string;
+  menuClassName?: string;
+  direction?: 'up' | 'down';
+  value: string;
+  environments: Environment[];
+  environmentsLoading: boolean;
+  environmentsError: string;
+  repositories: RepositoryOption[];
+  repositoriesLoading: boolean;
+  repositoriesError: string;
+  placeholder: string;
+  allowEmpty?: boolean;
+  emptyOptionLabel?: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const dataOptions: OptionPickerOption[] = [
+    ...props.environments.map((environment) => ({
+      value: codebaseEnvironmentValue(environment.id),
+      label: `${environment.name} · ${environment.repositories.length} repo${
+        environment.repositories.length === 1 ? '' : 's'
+      }`,
+      description: environmentRepositorySummary(environment),
+      title: `${environment.name}: ${environmentRepositorySummary(environment)}`,
+      section: 'Environments',
+    })),
+    ...props.repositories.map((repository) => ({
+      value: codebaseRepositoryValue(repository.fullName),
+      label: repository.fullName,
+      ...(repository.defaultBranch ? { description: `Default: ${repository.defaultBranch}` } : {}),
+      section: 'Repositories',
+    })),
+  ];
+  const options: OptionPickerOption[] = [
+    ...(props.environmentsLoading && !props.environments.length
+      ? [
+          {
+            value: '__loading-environments',
+            label: 'Loading environments...',
+            section: 'Environments',
+            available: false,
+            unavailableReason: 'Environment options are still loading.',
+          },
+        ]
+      : []),
+    ...dataOptions,
+    ...(props.repositoriesLoading && !props.repositories.length
+      ? [
+          {
+            value: '__loading-repositories',
+            label: 'Loading repositories...',
+            section: 'Repositories',
+            available: false,
+            unavailableReason: 'Repository options are still loading.',
+          },
+        ]
+      : []),
+  ];
+  const loading = props.environmentsLoading && props.repositoriesLoading && dataOptions.length === 0;
+  const error = props.environmentsError || props.repositoriesError ? 'Could not load codebases.' : '';
+
+  return (
+    <OptionPicker
+      {...(props.id ? { id: props.id } : {})}
+      {...(props.className ? { className: props.className } : {})}
+      {...(props.triggerClassName ? { triggerClassName: props.triggerClassName } : {})}
+      menuClassName={props.menuClassName ?? 'min-w-80'}
+      {...(props.direction ? { direction: props.direction } : {})}
+      label="Codebase"
+      value={props.value}
+      options={options}
+      emptyLabel={loading ? 'Loading codebases...' : props.placeholder}
+      loading={loading}
+      error={error}
+      searchable
+      allowEmpty={props.allowEmpty ?? Boolean(props.value)}
+      {...(props.emptyOptionLabel ? { emptyOptionLabel: props.emptyOptionLabel } : {})}
+      onChange={props.onChange}
+      disabled={props.disabled}
+    />
+  );
+}
+
+export type CodebasePickerSelection =
+  | { kind: 'environment'; environmentId: string }
+  | { kind: 'repository'; repository: string };
+
+const codebaseEnvironmentPrefix = 'environment:';
+const codebaseRepositoryPrefix = 'repository:';
+
+export function codebaseEnvironmentValue(environmentId: string): string {
+  return `${codebaseEnvironmentPrefix}${environmentId}`;
+}
+
+export function codebaseRepositoryValue(repository: string): string {
+  return `${codebaseRepositoryPrefix}${repository}`;
+}
+
+export function parseCodebasePickerValue(value: string): CodebasePickerSelection | null {
+  if (value.startsWith(codebaseEnvironmentPrefix)) {
+    const environmentId = value.slice(codebaseEnvironmentPrefix.length);
+    return environmentId ? { kind: 'environment', environmentId } : null;
+  }
+  if (value.startsWith(codebaseRepositoryPrefix)) {
+    const repository = value.slice(codebaseRepositoryPrefix.length);
+    return repository ? { kind: 'repository', repository } : null;
+  }
+  return null;
+}
+
 export function OptionPicker(props: {
   id?: string;
   className?: string;
@@ -103,6 +265,7 @@ export function OptionPicker(props: {
   searchable?: boolean;
   allowCustom?: boolean;
   allowEmpty?: boolean;
+  emptyOptionLabel?: string;
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
@@ -111,8 +274,11 @@ export function OptionPicker(props: {
   const [search, setSearch] = useState('');
   const selected = props.options.find((option) => option.value === props.value);
   const displayLabel = selected?.label ?? (props.value && props.allowCustom ? props.value : props.emptyLabel);
+  const displayTitle = selected?.title ?? selected?.description ?? displayLabel;
   const filteredOptions = props.options.filter((option) =>
-    `${option.label} ${option.value}`.toLowerCase().includes(search.trim().toLowerCase()),
+    `${option.section ?? ''} ${option.label} ${option.description ?? ''} ${option.value}`
+      .toLowerCase()
+      .includes(search.trim().toLowerCase()),
   );
   const customValue = search.trim();
   const showCustom = props.allowCustom && customValue && !props.options.some((option) => option.value === customValue);
@@ -168,7 +334,7 @@ export function OptionPicker(props: {
         aria-label={props.label}
         onClick={toggleOpen}
       >
-        <span className="truncate" title={displayLabel}>
+        <span className="truncate" title={displayTitle}>
           {displayLabel}
         </span>
         <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -203,7 +369,7 @@ export function OptionPicker(props: {
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => select('')}
             >
-              Clear override
+              {props.emptyOptionLabel ?? 'Clear selection'}
             </button>
           ) : null}
           {props.loading ? <p className="px-2 py-2 text-muted-foreground">Loading...</p> : null}
@@ -224,33 +390,57 @@ export function OptionPicker(props: {
             </button>
           ) : null}
           {!props.loading &&
-            filteredOptions.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={cn(
-                  'block w-full rounded-sm px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-current',
-                  option.value === props.value && 'bg-accent text-accent-foreground',
-                )}
-                disabled={option.available === false}
-                role="option"
-                aria-selected={option.value === props.value}
-                title={option.available === false ? option.unavailableReason : option.label}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => select(option.value)}
-              >
-                <span className="block break-words leading-snug">{option.label}</span>
-                {option.available === false ? (
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    {option.action
-                      ? `${option.unavailableReason ?? 'Unavailable'} ${option.action}`
-                      : (option.unavailableReason ?? 'Unavailable')}
-                  </span>
-                ) : null}
-              </button>
-            ))}
+            filteredOptions.map((option, index) => {
+              const previous = filteredOptions[index - 1];
+              const showSection = option.section && option.section !== previous?.section;
+              return (
+                <Fragment key={option.value}>
+                  {showSection ? (
+                    <div className="px-2 pb-1 pt-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground first:pt-1">
+                      {option.section}
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={cn(
+                      'block w-full rounded-sm px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-current',
+                      option.value === props.value && 'bg-accent text-accent-foreground',
+                    )}
+                    disabled={option.available === false}
+                    role="option"
+                    aria-selected={option.value === props.value}
+                    title={option.available === false ? option.unavailableReason : option.label}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => select(option.value)}
+                  >
+                    <span className="block break-words leading-snug">{option.label}</span>
+                    {option.description ? (
+                      <span className="mt-0.5 block break-words text-xs leading-snug text-muted-foreground">
+                        {option.description}
+                      </span>
+                    ) : null}
+                    {option.available === false ? (
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        {option.action
+                          ? `${option.unavailableReason ?? 'Unavailable'} ${option.action}`
+                          : (option.unavailableReason ?? 'Unavailable')}
+                      </span>
+                    ) : null}
+                  </button>
+                </Fragment>
+              );
+            })}
         </div>
       ) : null}
     </div>
   );
+}
+
+function environmentRepositorySummary(environment: Environment): string {
+  const repositories = environment.repositories
+    .slice()
+    .sort((left, right) => left.position - right.position)
+    .map((repository) => `${repository.owner}/${repository.repo}${repository.primary ? ' primary' : ''}`);
+  if (repositories.length <= 3) return repositories.join(', ');
+  return `${repositories.slice(0, 3).join(', ')} +${repositories.length - 3} more`;
 }

@@ -1,7 +1,9 @@
 import type { RunnerInput } from '../runner/types.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 import {
-  prepareRepositoryShellSetup,
+  prepareRepositoryShellSetups,
+  parseRepositoryContext,
+  sameRepositoryIdentity,
   type GitHubRepository,
   type GitHubRepositoryAccess,
   type RepositoryAccessProvider,
@@ -23,6 +25,8 @@ export type PreparedRepository = {
   repository: GitHubRepository & { provider: 'github' };
   access: GitHubRepositoryAccess;
   workspacePath: string;
+  primary?: boolean;
+  environment?: { id: string; name: string };
   setupScriptResult?: SetupScriptResult | null;
 };
 
@@ -47,12 +51,33 @@ export async function planRepositoryPreparation(input: {
   sandbox: SandboxHandle;
   github?: RepositoryAccessProvider;
 }): Promise<RepositoryPreparationPlan | null> {
-  const setup = await prepareRepositoryShellSetup(input);
+  const setups = await prepareRepositoryShellSetups(input);
+  const active = parseRepositoryContext(input.context);
+  const setup = active ? setups.find((candidate) => sameRepositoryIdentity(candidate.access, active)) : undefined;
   if (!setup) return null;
   return {
     ...setup,
-    repository: { provider: 'github', owner: setup.access.owner, repo: setup.access.repo },
+    repository: { provider: 'github' as const, owner: setup.access.owner, repo: setup.access.repo },
   };
+}
+
+export async function planActiveFirstRepositoryPreparations(input: {
+  context: Record<string, unknown>;
+  sandbox: SandboxHandle;
+  github?: RepositoryAccessProvider;
+}): Promise<RepositoryPreparationPlan[]> {
+  const setups = await prepareRepositoryShellSetups(input);
+  const plans = setups.map((setup) => ({
+    ...setup,
+    repository: { provider: 'github' as const, owner: setup.access.owner, repo: setup.access.repo },
+  }));
+  const active = parseRepositoryContext(input.context);
+  if (!active) return plans;
+  return plans.sort(
+    (left, right) =>
+      Number(sameRepositoryIdentity(right.repository, active)) -
+      Number(sameRepositoryIdentity(left.repository, active)),
+  );
 }
 
 export async function executeRepositoryPreparation(input: {
@@ -71,6 +96,29 @@ export async function executeRepositoryPreparation(input: {
     repositoryWasCloned: checkout.repositoryWasCloned,
     setupShell: input.setupShell ?? input.shell,
   });
+}
+
+export async function executeRepositoryPreparations(input: {
+  plans: RepositoryPreparationPlan[];
+  workspaceRoot: string;
+  shell: RepositoryShell;
+  setupShell?: RepositoryShell;
+  emit: RunnerInput['emit'];
+  eventBase: Pick<RunnerInput, 'sessionId' | 'runId' | 'messageId'>;
+  setupScript?: RepositorySetupScriptPolicy;
+  signal?: AbortSignal;
+}): Promise<RepositoryPreparationResult[]> {
+  const results = [];
+  for (const plan of input.plans) {
+    results.push(
+      await executeRepositoryPreparation({
+        ...input,
+        plan,
+        setupShell: input.setupShell ?? input.shell,
+      }),
+    );
+  }
+  return results;
 }
 
 export async function checkoutRepositoryPreparation(input: {
@@ -131,6 +179,8 @@ export function preparedRepositoryFromPlan(plan: RepositoryPreparationPlan): Pre
     repository: plan.repository,
     access: plan.access,
     workspacePath: plan.workspacePath,
+    primary: plan.primary,
+    ...(plan.environment ? { environment: plan.environment } : {}),
   };
 }
 
@@ -158,6 +208,10 @@ async function emitRepositoryReady(input: {
       repo: input.plan.access.repo,
       ...(input.plan.branch ? { branch: input.plan.branch } : {}),
       workspacePath: input.plan.workspacePath,
+      ...(input.plan.environment
+        ? { environmentId: input.plan.environment.id, environmentName: input.plan.environment.name }
+        : {}),
+      primary: input.plan.primary,
       expiresAt: input.plan.access.expiresAt.toISOString(),
     },
     createdAt: new Date(),

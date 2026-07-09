@@ -112,6 +112,7 @@ export function StaticDemoApp() {
               canCallApi={false}
               canViewGroups={false}
               canViewAutomations={false}
+              canViewEnvironments={false}
               canStartNewThread={false}
               canViewSetup={false}
               canWriteSession={() => false}
@@ -146,6 +147,7 @@ export function StaticDemoApp() {
               onLoadMoreSessions={() => undefined}
               onNewThread={() => undefined}
               onOpenAutomations={() => undefined}
+              onOpenEnvironments={() => undefined}
               onOpenGroups={() => undefined}
               onOpenSessions={() => undefined}
               onOpenSetup={() => undefined}
@@ -200,6 +202,7 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
         <section className="flex min-h-0 min-w-0 flex-col overflow-hidden px-3 pt-4 md:px-8 xl:px-16">
           <div className="min-h-0 flex-1 overflow-auto pb-5" role="log" aria-label="Static demo session messages">
             <MobileContextPanel
+              environment={null}
               repository={repository}
               branch={branch}
               artifacts={props.demoSession.artifacts}
@@ -238,8 +241,14 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
             archived={session.status === 'archived'}
             readOnly
             compactInput
-            hasSelectedRepository={Boolean(repository)}
+            environmentId=""
+            environmentBranchOverrides={{}}
+            environmentOptions={[]}
+            environmentOptionsLoading={false}
+            environmentOptionsError=""
             repository=""
+            inheritedEnvironment={null}
+            inheritedCodebaseLabel={repository ?? ''}
             inheritedRepository={repository ?? ''}
             repositoryOptions={[]}
             repositoryOptionsLoading={false}
@@ -253,14 +262,17 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
             inheritedModel={model}
             modelChoices={modelChoices}
             modelUnavailableReason=""
+            onCodebaseChange={() => undefined}
+            onEnvironmentBranchOverridesChange={() => undefined}
+            onEnvironmentRepositoryBranchesLoad={async () => []}
             onBranchChange={() => undefined}
             onModelChange={() => undefined}
-            onRepositoryChange={() => undefined}
             onFocusChange={() => undefined}
             onSubmit={async () => false}
           />
         </section>
         <DesktopContextPanel
+          environment={null}
           repository={repository}
           branch={branch}
           artifacts={props.demoSession.artifacts}

@@ -10,6 +10,7 @@ import {
   type Automation,
   type AutomationInvocation,
   type BranchOption,
+  type Environment,
   type Group,
   type ModelChoice,
   type RepositoryOption,
@@ -20,7 +21,21 @@ import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Input } from '../ui/input.js';
 import { Textarea } from '../ui/textarea.js';
-import { BranchPicker, OptionPicker, RepositoryPicker, type OptionPickerOption } from './option-picker.js';
+import {
+  EnvironmentBranchOverridesEditor,
+  environmentRepositoryKey,
+  type EnvironmentBranchOverrides,
+  type EnvironmentBranchOverrideRepository,
+} from './environment-branch-overrides.js';
+import {
+  BranchPicker,
+  CodebasePicker,
+  codebaseEnvironmentValue,
+  codebaseRepositoryValue,
+  OptionPicker,
+  parseCodebasePickerValue,
+  type OptionPickerOption,
+} from './option-picker.js';
 import { formatDate, statusTextClass } from './shared.js';
 
 type AutomationForm = {
@@ -28,6 +43,11 @@ type AutomationForm = {
   groupId: string;
   name: string;
   scheduleCron: string;
+  environmentId: string;
+  environmentRevisionPolicy: 'follow_latest' | 'pinned';
+  environmentRevisionId: string;
+  environmentRevisionNumber: number | null;
+  environmentBranchOverrides: EnvironmentBranchOverrides;
   repository: string;
   branch: string;
   model: string;
@@ -88,6 +108,9 @@ export function AutomationsPanel(props: {
   canCreateAutomations: boolean;
   groups: Group[];
   token: string;
+  environmentOptions: Environment[];
+  environmentOptionsLoading: boolean;
+  environmentOptionsError: string;
   repositoryOptions: RepositoryOption[];
   repositoryOptionsLoading: boolean;
   repositoryOptionsError: string;
@@ -110,6 +133,7 @@ export function AutomationsPanel(props: {
   const [olderInvocationsLoading, setOlderInvocationsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<AutomationForm>(() => emptyForm(props.groups));
+  const [branchControlsOpen, setBranchControlsOpen] = useState(false);
   const [branchOptionsState, setBranchOptionsState] = useState<AsyncState<BranchOption[]>>({
     data: [],
     loading: false,
@@ -125,6 +149,17 @@ export function AutomationsPanel(props: {
   });
   const selectedGroup = props.groups.find((group) => group.id === form.groupId);
   const selectedOwnerGroup = selected ? props.groups.find((group) => group.id === selected.ownerGroupId) : null;
+  const environmentOptions = props.environmentOptions.filter((environment) =>
+    environmentAvailableToGroup(environment, form.groupId),
+  );
+  const selectedEnvironment = environmentOptions.find((environment) => environment.id === form.environmentId) ?? null;
+  const codebaseValue = form.environmentId
+    ? codebaseEnvironmentValue(form.environmentId)
+    : form.repository
+      ? codebaseRepositoryValue(form.repository)
+      : '';
+  const hasBranchControls = Boolean(form.repository || selectedEnvironment);
+  const branchControlLabel = selectedEnvironment?.repositories.length === 1 || form.repository ? 'Branch' : 'Branches';
   const selectedOwnerGroupArchived = Boolean(
     selected && form.groupId === selected.ownerGroupId && (selectedGroup?.archivedAt || selected.ownerGroupArchivedAt),
   );
@@ -152,10 +187,24 @@ export function AutomationsPanel(props: {
   const canChangeGroup = canEdit && (selected ? Boolean(selectedOwnerGroup?.canManage) : true);
   const formComplete = Boolean(form.groupId && form.name.trim() && form.scheduleCron.trim() && form.prompt.trim());
   const saveDisabled = !canEdit || saving || !formComplete || (!selected && !selectedGroupSelectable);
+  const revisionPolicyHasUnsavedChanges =
+    !selected ||
+    form.environmentId !== (selected.environmentId ?? '') ||
+    form.environmentRevisionPolicy !== (selected.environmentRevisionPolicy ?? 'follow_latest') ||
+    form.environmentRevisionId !== (selected.environmentRevisionId ?? '');
+  const revisionPolicySaveHint = revisionPolicyHasUnsavedChanges
+    ? selected
+      ? ' Save to apply this change.'
+      : ' Create automation to apply this setting.'
+    : '';
 
   useEffect(() => {
     selectedAutomationIdRef.current = selected?.id ?? '';
   }, [selected?.id]);
+
+  useEffect(() => {
+    setBranchControlsOpen(false);
+  }, [codebaseValue]);
 
   useEffect(() => {
     setForm((current) => (current.groupId ? current : { ...current, groupId: defaultAutomationGroupId(props.groups) }));
@@ -198,7 +247,7 @@ export function AutomationsPanel(props: {
       branchOptionsRepositoryRef.current = repository;
       setBranchOptionsState((current) => ({ ...current, data: [], error: '' }));
     }
-    if (!props.canCallApi || !repository) {
+    if (!props.canCallApi || form.environmentId || !repository) {
       setBranchOptionsState((current) => ({ ...current, loading: false }));
       return;
     }
@@ -222,13 +271,13 @@ export function AutomationsPanel(props: {
     return () => {
       cancelled = true;
     };
-  }, [form.repository, props.canCallApi, props.repositoryOptions, props.token]);
+  }, [form.environmentId, form.repository, props.canCallApi, props.repositoryOptions, props.token]);
 
   async function saveAutomation() {
     if (saveDisabled) return;
     setSaving(true);
     try {
-      const input = automationFormInput(form, props.token);
+      const input = automationFormInput(form, props.token, selectedEnvironment);
       let saved: Automation;
       if (form.id) {
         saved = await updateAutomation({ ...input, automationId: form.id });
@@ -427,7 +476,39 @@ export function AutomationsPanel(props: {
                       value={form.groupId}
                       options={groupOptions}
                       emptyLabel="Select access group..."
-                      onChange={(value) => setForm({ ...form, groupId: value })}
+                      onChange={(value) =>
+                        setForm({
+                          ...form,
+                          groupId: value,
+                          environmentId:
+                            form.environmentId &&
+                            props.environmentOptions.some(
+                              (environment) =>
+                                environment.id === form.environmentId &&
+                                environmentAvailableToGroup(environment, value),
+                            )
+                              ? form.environmentId
+                              : '',
+                          branch:
+                            form.environmentId &&
+                            !props.environmentOptions.some(
+                              (environment) =>
+                                environment.id === form.environmentId &&
+                                environmentAvailableToGroup(environment, value),
+                            )
+                              ? ''
+                              : form.branch,
+                          environmentBranchOverrides:
+                            form.environmentId &&
+                            !props.environmentOptions.some(
+                              (environment) =>
+                                environment.id === form.environmentId &&
+                                environmentAvailableToGroup(environment, value),
+                            )
+                              ? {}
+                              : form.environmentBranchOverrides,
+                        })
+                      }
                       disabled={!canChangeGroup || (selectableGroups.length <= 1 && selectedGroupSelectable)}
                     />
                   </Field>
@@ -456,31 +537,81 @@ export function AutomationsPanel(props: {
                   </label>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-[minmax(10rem,1fr)_minmax(8rem,12rem)_minmax(8rem,14rem)]">
-                  <Field label="Repository" htmlFor="automation-repository">
-                    <RepositoryPicker
-                      id="automation-repository"
-                      value={form.repository}
-                      repositories={props.repositoryOptions}
-                      loading={props.repositoryOptionsLoading}
-                      error={props.repositoryOptionsError}
-                      onChange={(value) => setForm({ ...form, repository: value, branch: '' })}
-                      placeholder="GitHub repository, e.g. owner/repo"
-                      disabled={!canEditDefinition}
-                    />
-                  </Field>
-                  <Field label="Branch" htmlFor="automation-branch">
-                    <BranchPicker
-                      id="automation-branch"
-                      value={form.branch}
-                      branches={branchOptions}
-                      loading={branchOptionsLoading}
-                      error={branchOptionsError}
-                      onChange={(value) => setForm({ ...form, branch: value })}
-                      placeholder="Default"
-                      disabled={!canEditDefinition || !form.repository}
-                    />
-                  </Field>
+                <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(12rem,20rem)]">
+                  <div className="grid gap-3">
+                    <Field label="Codebase" htmlFor="automation-codebase">
+                      <CodebasePicker
+                        id="automation-codebase"
+                        value={codebaseValue}
+                        environments={environmentOptions}
+                        environmentsLoading={props.environmentOptionsLoading}
+                        environmentsError={props.environmentOptionsError}
+                        repositories={props.repositoryOptions}
+                        repositoriesLoading={props.repositoryOptionsLoading}
+                        repositoriesError={props.repositoryOptionsError}
+                        onChange={(value) => setForm({ ...form, ...automationCodebaseFormPatch(value) })}
+                        placeholder="Select environment or repository..."
+                        disabled={!canEditDefinition}
+                      />
+                    </Field>
+                    {selectedEnvironment ? (
+                      <EnvironmentRevisionPolicy
+                        environment={selectedEnvironment}
+                        form={form}
+                        disabled={!canEditDefinition}
+                        saveHint={revisionPolicySaveHint}
+                        onChange={(policy) =>
+                          setForm({
+                            ...form,
+                            environmentRevisionPolicy: policy,
+                            environmentRevisionId: policy === 'pinned' ? selectedEnvironment.currentRevisionId : '',
+                            environmentRevisionNumber:
+                              policy === 'pinned' ? selectedEnvironment.currentRevisionNumber : null,
+                          })
+                        }
+                      />
+                    ) : null}
+                    {hasBranchControls ? (
+                      <div>
+                        <Button
+                          className="h-10 px-3"
+                          type="button"
+                          variant={branchControlsOpen ? 'default' : 'secondary'}
+                          size="sm"
+                          onClick={() => setBranchControlsOpen((open) => !open)}
+                          disabled={!canEditDefinition}
+                          aria-expanded={branchControlsOpen}
+                        >
+                          {branchControlLabel}
+                        </Button>
+                      </div>
+                    ) : null}
+                    {branchControlsOpen && form.repository ? (
+                      <div className="max-w-xs min-w-0">
+                        <BranchPicker
+                          id="automation-branch"
+                          value={form.branch}
+                          branches={branchOptions}
+                          loading={branchOptionsLoading}
+                          error={branchOptionsError}
+                          onChange={(value) => setForm({ ...form, branch: value })}
+                          placeholder="Default"
+                          disabled={!canEditDefinition}
+                        />
+                      </div>
+                    ) : null}
+                    {branchControlsOpen && selectedEnvironment ? (
+                      <EnvironmentBranchOverridesEditor
+                        environment={selectedEnvironment}
+                        value={form.environmentBranchOverrides}
+                        disabled={!canEditDefinition}
+                        onLoadBranches={(repository) =>
+                          loadAutomationEnvironmentRepositoryBranches(repository, props.token)
+                        }
+                        onChange={(value) => setForm({ ...form, environmentBranchOverrides: value })}
+                      />
+                    ) : null}
+                  </div>
                   <Field label="Model" htmlFor="automation-model">
                     <OptionPicker
                       id="automation-model"
@@ -591,6 +722,64 @@ function Field(props: { label: string; htmlFor: string; hint?: string; children:
   );
 }
 
+function EnvironmentRevisionPolicy(props: {
+  environment: Environment;
+  form: AutomationForm;
+  disabled: boolean;
+  saveHint: string;
+  onChange: (policy: AutomationForm['environmentRevisionPolicy']) => void;
+}) {
+  const pinnedRevisionNumber = props.form.environmentRevisionNumber ?? props.environment.currentRevisionNumber;
+  const pinIsCurrent =
+    props.form.environmentRevisionPolicy !== 'pinned' ||
+    props.form.environmentRevisionId === props.environment.currentRevisionId;
+  return (
+    <div className="grid gap-1">
+      <span id="automation-environment-revision-policy" className="text-xs font-medium text-muted-foreground">
+        Environment revision policy
+      </span>
+      <fieldset
+        aria-labelledby="automation-environment-revision-policy"
+        className="grid gap-2 rounded-md border border-border bg-background/70 p-3 text-sm text-muted-foreground"
+      >
+        <label className="flex cursor-pointer items-start gap-2">
+          <input
+            className="mt-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+            type="radio"
+            name="environment-revision-policy"
+            checked={props.form.environmentRevisionPolicy === 'follow_latest'}
+            onChange={() => props.onChange('follow_latest')}
+            disabled={props.disabled}
+          />
+          <span>
+            <span className="block font-medium text-foreground">Follow latest</span>
+            Use the latest environment revision at the time of invocation.
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-2">
+          <input
+            className="mt-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+            type="radio"
+            name="environment-revision-policy"
+            checked={props.form.environmentRevisionPolicy === 'pinned'}
+            onChange={() => props.onChange('pinned')}
+            disabled={props.disabled}
+          />
+          <span>
+            <span className="block font-medium text-foreground">
+              <strong>Pin</strong>
+              {pinIsCurrent ? ' current ' : ' '}
+              <strong>environment revision ({pinnedRevisionNumber})</strong>
+            </span>
+            Use this same environment revision for every invocation.
+          </span>
+        </label>
+        {props.saveHint ? <p className="text-xs text-amber-700">{props.saveHint.trim()}</p> : null}
+      </fieldset>
+    </div>
+  );
+}
+
 function AutomationArchiveAction(props: {
   automation: Automation;
   saving: boolean;
@@ -684,6 +873,11 @@ function emptyForm(groups: Group[]): AutomationForm {
     groupId: defaultAutomationGroupId(groups),
     name: '',
     scheduleCron: '0 9 * * 1-5',
+    environmentId: '',
+    environmentRevisionPolicy: 'follow_latest',
+    environmentRevisionId: '',
+    environmentRevisionNumber: null,
+    environmentBranchOverrides: {},
     repository: '',
     branch: '',
     model: '',
@@ -702,6 +896,11 @@ function formFromAutomation(automation: Automation): AutomationForm {
     groupId: automation.ownerGroupId,
     name: automation.name,
     scheduleCron: automation.scheduleCron,
+    environmentId: automation.environmentId ?? '',
+    environmentRevisionPolicy: automation.environmentRevisionPolicy ?? 'follow_latest',
+    environmentRevisionId: automation.environmentRevisionId ?? '',
+    environmentRevisionNumber: automation.environmentRevisionNumber ?? null,
+    environmentBranchOverrides: environmentBranchOverridesContextValue(automation.context?.environmentBranchOverrides),
     repository: repositoryContextLabel(automation.context?.repository),
     branch: typeof automation.context?.branch === 'string' ? automation.context.branch : '',
     model: typeof automation.context?.model === 'string' ? automation.context.model : '',
@@ -710,7 +909,7 @@ function formFromAutomation(automation: Automation): AutomationForm {
   };
 }
 
-function automationFormInput(form: AutomationForm, token: string) {
+function automationFormInput(form: AutomationForm, token: string, environment: Environment | null) {
   return {
     token,
     name: form.name.trim(),
@@ -718,10 +917,87 @@ function automationFormInput(form: AutomationForm, token: string) {
     scheduleCron: form.scheduleCron.trim(),
     ownerGroupId: form.groupId,
     enabled: form.enabled,
-    repository: form.repository.trim(),
-    branch: form.branch.trim(),
+    environmentId: form.environmentId,
+    ...(form.environmentId
+      ? {
+          environmentRevisionPolicy: form.environmentRevisionPolicy,
+          ...(form.environmentRevisionPolicy === 'pinned'
+            ? { environmentRevisionId: form.environmentRevisionId || environment?.currentRevisionId || '' }
+            : {}),
+        }
+      : {}),
+    ...(form.environmentId
+      ? {
+          environmentBranchOverrides: automationEnvironmentBranchOverrideInput(
+            form.environmentBranchOverrides,
+            environment,
+          ),
+        }
+      : {}),
+    repository: form.environmentId ? '' : form.repository.trim(),
+    branch: form.environmentId ? '' : form.branch.trim(),
     model: form.model,
   };
+}
+
+function automationCodebaseFormPatch(
+  value: string,
+): Pick<
+  AutomationForm,
+  | 'environmentId'
+  | 'environmentRevisionPolicy'
+  | 'environmentRevisionId'
+  | 'environmentRevisionNumber'
+  | 'environmentBranchOverrides'
+  | 'repository'
+  | 'branch'
+> {
+  const selection = parseCodebasePickerValue(value);
+  if (selection?.kind === 'environment') {
+    return {
+      environmentId: selection.environmentId,
+      environmentRevisionPolicy: 'follow_latest',
+      environmentRevisionId: '',
+      environmentRevisionNumber: null,
+      environmentBranchOverrides: {},
+      repository: '',
+      branch: '',
+    };
+  }
+  if (selection?.kind === 'repository') {
+    return {
+      environmentId: '',
+      environmentRevisionPolicy: 'follow_latest',
+      environmentRevisionId: '',
+      environmentRevisionNumber: null,
+      environmentBranchOverrides: {},
+      repository: selection.repository,
+      branch: '',
+    };
+  }
+  return {
+    environmentId: '',
+    environmentRevisionPolicy: 'follow_latest',
+    environmentRevisionId: '',
+    environmentRevisionNumber: null,
+    environmentBranchOverrides: {},
+    repository: '',
+    branch: '',
+  };
+}
+
+function pinnedRevisionDescription(environment: Environment, form: AutomationForm): string {
+  const revisionNumber = form.environmentRevisionNumber ?? environment.currentRevisionNumber;
+  return `environment revision ${revisionNumber}`;
+}
+
+function environmentAvailableToGroup(environment: Environment, groupId: string): boolean {
+  if (!groupId || environment.archivedAt) return false;
+  return (
+    environment.ownerGroupId === groupId ||
+    environment.shareMode === 'all_groups' ||
+    environment.sharedGroupIds.includes(groupId)
+  );
 }
 
 function repositoryContextLabel(value: unknown): string {
@@ -730,4 +1006,55 @@ function repositoryContextLabel(value: unknown): string {
   const owner = typeof repository.owner === 'string' ? repository.owner : '';
   const repo = typeof repository.repo === 'string' ? repository.repo : '';
   return owner && repo ? `${owner}/${repo}` : '';
+}
+
+async function loadAutomationEnvironmentRepositoryBranches(
+  repository: EnvironmentBranchOverrideRepository,
+  token: string,
+): Promise<BranchOption[]> {
+  return listBranches({ repository: `${repository.owner}/${repository.repo}`, token });
+}
+
+function automationEnvironmentBranchOverrideInput(
+  overrides: EnvironmentBranchOverrides,
+  environment: Environment | null,
+) {
+  const repositories = new Map(
+    (environment?.repositories ?? []).map((repository) => [environmentRepositoryKey(repository), repository]),
+  );
+  return Object.entries(overrides)
+    .map(([key, branch]) => {
+      const repository = repositories.get(key) ?? repositoryFromEnvironmentRepositoryKey(key);
+      const trimmedBranch = branch.trim();
+      if (!repository || !trimmedBranch) return null;
+      return {
+        provider: 'github' as const,
+        owner: repository.owner,
+        repo: repository.repo,
+        branch: trimmedBranch,
+      };
+    })
+    .filter((override): override is { provider: 'github'; owner: string; repo: string; branch: string } =>
+      Boolean(override),
+    );
+}
+
+function environmentBranchOverridesContextValue(value: unknown): EnvironmentBranchOverrides {
+  if (!Array.isArray(value)) return {};
+  return value.reduce<EnvironmentBranchOverrides>((overrides, item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return overrides;
+    const record = item as Record<string, unknown>;
+    const provider = record.provider === 'github' || record.provider === undefined ? 'github' : null;
+    const owner = typeof record.owner === 'string' ? record.owner : '';
+    const repo = typeof record.repo === 'string' ? record.repo : '';
+    const branch = typeof record.branch === 'string' ? record.branch : '';
+    if (!provider || !owner || !repo || !branch) return overrides;
+    overrides[environmentRepositoryKey({ provider, owner, repo })] = branch;
+    return overrides;
+  }, {});
+}
+
+function repositoryFromEnvironmentRepositoryKey(key: string): { owner: string; repo: string } | null {
+  const match = /^github:([^/]+)\/(.+)$/.exec(key);
+  return match ? { owner: match[1]!, repo: match[2]! } : null;
 }

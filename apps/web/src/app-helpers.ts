@@ -7,6 +7,7 @@ export const sidebarPanelStorageKey = 'deputies-sidebar-panel';
 export const groupsPanelViewStorageKey = 'deputies-groups-panel-view';
 export const groupsPanelSelectedGroupStorageKey = 'deputies-groups-panel-selected-group-id';
 export const selectedAutomationStorageKey = 'deputies-selected-automation-id';
+export const selectedEnvironmentStorageKey = 'deputies-selected-environment-id';
 export const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
 export const sessionFiltersStorageKey = 'deputies-session-filters';
 export const archivedAutomationsOpenStorageKey = 'deputies-archived-automations-open';
@@ -43,7 +44,7 @@ export function loadStoredToken(): string {
 
 export function loadInitialSelectedSessionId(): string {
   const query = new URLSearchParams(window.location.search);
-  if (query.get('group') || query.get('automation')) return '';
+  if (query.get('group') || query.get('automation') || query.get('environment')) return '';
   return query.get('session') ?? sessionStorage.getItem(selectedSessionStorageKey) ?? '';
 }
 
@@ -52,30 +53,34 @@ export function loadInitialIsCreatingThread(): boolean {
     !new URLSearchParams(window.location.search).get('session') &&
     !new URLSearchParams(window.location.search).get('group') &&
     !new URLSearchParams(window.location.search).get('automation') &&
+    !new URLSearchParams(window.location.search).get('environment') &&
     sessionStorage.getItem(newSessionSelectedStorageKey) === 'true'
   );
 }
 
 export function loadInitialSetupGuideOpen(): boolean {
   const query = new URLSearchParams(window.location.search);
-  if (query.get('session') || query.get('group') || query.get('automation')) return false;
+  if (query.get('session') || query.get('group') || query.get('automation') || query.get('environment')) return false;
   return sessionStorage.getItem(setupGuideOpenStorageKey) === 'true';
 }
 
 export function loadInitialGroupsPanelOpen(): boolean {
   const query = new URLSearchParams(window.location.search);
-  if (query.get('session') || query.get('automation')) return false;
+  if (query.get('session') || query.get('automation') || query.get('environment')) return false;
   if (query.get('group')) return true;
   return sessionStorage.getItem(groupsPanelOpenStorageKey) === 'true';
 }
 
-export function loadInitialSidebarPanel(): 'sessions' | 'groups' | 'automations' {
+export function loadInitialSidebarPanel(): 'sessions' | 'groups' | 'automations' | 'environments' {
   const query = new URLSearchParams(window.location.search);
   if (query.get('session')) return 'sessions';
   if (query.get('automation')) return 'automations';
+  if (query.get('environment')) return 'environments';
   if (query.get('group')) return 'groups';
   const stored = sessionStorage.getItem(sidebarPanelStorageKey);
-  if (stored === 'sessions' || stored === 'groups' || stored === 'automations') return stored;
+  if (stored === 'sessions' || stored === 'groups' || stored === 'automations' || stored === 'environments') {
+    return stored;
+  }
   return loadInitialGroupsPanelOpen() ? 'groups' : 'sessions';
 }
 
@@ -94,6 +99,12 @@ export function loadInitialSelectedAutomationId(): string {
   const automationId = new URLSearchParams(window.location.search).get('automation');
   if (automationId) return automationId;
   return sessionStorage.getItem(selectedAutomationStorageKey) ?? '';
+}
+
+export function loadInitialSelectedEnvironmentId(): string {
+  const environmentId = new URLSearchParams(window.location.search).get('environment');
+  if (environmentId) return environmentId;
+  return sessionStorage.getItem(selectedEnvironmentStorageKey) ?? '';
 }
 
 export function loadThemePreference(): ThemePreference {

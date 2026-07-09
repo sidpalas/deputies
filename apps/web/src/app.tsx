@@ -28,6 +28,7 @@ import {
   login,
   listArtifacts,
   listCallbacks,
+  listEnvironments,
   listGroups,
   listSessionTags,
   listExternalResources,
@@ -50,6 +51,8 @@ import {
   updateSessionAccess,
   updateSessionTags,
   type Automation,
+  type Environment,
+  type EnvironmentBranchOverrideInput,
   type Health,
   type AuthUser,
   type BranchOption,
@@ -116,6 +119,7 @@ import {
   loadInitialIsCreatingThread,
   loadInitialSidebarPanel,
   loadInitialSelectedAutomationId,
+  loadInitialSelectedEnvironmentId,
   loadInitialSetupGuideOpen,
   loadInitialSelectedSessionId,
   loadStoredToken,
@@ -124,6 +128,7 @@ import {
   realtimeReconnectInitialDelayMs,
   realtimeReconnectMaxDelayMs,
   selectedAutomationStorageKey,
+  selectedEnvironmentStorageKey,
   selectedSessionStorageKey,
   sessionFiltersStorageKey,
   setupGuideOpenStorageKey,
@@ -144,6 +149,8 @@ import {
   AutomationsSidebar,
   BearerAuthPanel,
   ConnectionStatusBanner,
+  EnvironmentsPanel,
+  EnvironmentsSidebar,
   LocalSandboxWarning,
   MessageComposer,
   NewThreadPanel,
@@ -156,11 +163,19 @@ import {
   ThreadHeader,
   ThreadSidebar,
 } from './components/app-panels.js';
+import {
+  environmentRepositoryKey,
+  type EnvironmentBranchOverrides,
+  type EnvironmentBranchOverrideRepository,
+  type EnvironmentBranchOverrideTarget,
+} from './components/app-panels/environment-branch-overrides.js';
+import { parseCodebasePickerValue } from './components/app-panels/option-picker.js';
 import { cn } from './lib/utils.js';
 import {
   ChatPanel,
   DesktopContextPanel,
   MobileContextPanel,
+  type ContextEnvironment,
   type SessionLineage,
 } from './components/thread/thread-content.js';
 
@@ -172,7 +187,7 @@ type AsyncState<T> = {
 
 type StateUpdate<T> = T | ((current: T) => T);
 
-type SidebarPanel = 'sessions' | 'groups' | 'automations';
+type SidebarPanel = 'sessions' | 'groups' | 'automations' | 'environments';
 type GroupsPanelView = 'group' | 'super_admins' | 'new_group';
 
 type NavigationState = {
@@ -184,6 +199,7 @@ type NavigationState = {
   groupsPanelView: GroupsPanelView;
   selectedGroupId: string;
   selectedAutomationId: string;
+  selectedEnvironmentId: string;
 };
 
 const activeProgressBatchDelayMs = 100;
@@ -268,6 +284,7 @@ function loadInitialNavigationState(): NavigationState {
     groupsPanelView: loadInitialGroupsPanelView(),
     selectedGroupId: loadInitialGroupsPanelSelectedGroupId(),
     selectedAutomationId: loadInitialSelectedAutomationId(),
+    selectedEnvironmentId: loadInitialSelectedEnvironmentId(),
   };
 }
 
@@ -321,6 +338,11 @@ export function App() {
     loading: false,
     error: '',
   });
+  const [environmentsState, setEnvironmentsState] = useState<AsyncState<Environment[]>>({
+    data: [],
+    loading: false,
+    error: '',
+  });
   const [branchOptionsState, setBranchOptionsState] = useState<AsyncState<BranchOption[]>>({
     data: [],
     loading: false,
@@ -332,10 +354,16 @@ export function App() {
   const [setupStatusError, setSetupStatusError] = useState('');
   const [newThreadGroupId, setNewThreadGroupId] = useState('');
   const [newThreadModel, setNewThreadModel] = useState('');
+  const [newThreadEnvironmentId, setNewThreadEnvironmentId] = useState('');
+  const [newThreadEnvironmentBranchOverrides, setNewThreadEnvironmentBranchOverrides] =
+    useState<EnvironmentBranchOverrides>({});
   const [newThreadBranch, setNewThreadBranch] = useState('');
   const [newThreadPrompt, setNewThreadPrompt] = useState('');
   const [newThreadRepository, setNewThreadRepository] = useState('');
   const [defaultModel, setDefaultModel] = useState('');
+  const [followUpEnvironmentId, setFollowUpEnvironmentId] = useState('');
+  const [followUpEnvironmentBranchOverrides, setFollowUpEnvironmentBranchOverrides] =
+    useState<EnvironmentBranchOverrides>({});
   const [followUpRepository, setFollowUpRepository] = useState('');
   const [followUpBranch, setFollowUpBranch] = useState('');
   const [followUpModel, setFollowUpModel] = useState('');
@@ -381,6 +409,7 @@ export function App() {
     groupsPanelView,
     selectedGroupId,
     selectedAutomationId,
+    selectedEnvironmentId,
   } = navigation;
   const { messages, events, activeProgress, artifacts, services, externalResources, callbacks } = sessionDetail;
   const eventCursor = useRef(0);
@@ -429,6 +458,9 @@ export function App() {
   const repositoryOptions = repositoryOptionsState.data;
   const repositoryOptionsLoading = repositoryOptionsState.loading;
   const repositoryOptionsError = repositoryOptionsState.error;
+  const environments = environmentsState.data;
+  const environmentsLoading = environmentsState.loading;
+  const environmentsError = environmentsState.error;
   const branchOptions = branchOptionsState.data;
   const branchOptionsLoading = branchOptionsState.loading;
   const branchOptionsError = branchOptionsState.error;
@@ -517,6 +549,12 @@ export function App() {
   });
   const canManageGroups = canManageAllGroups || (canCallApi && manageableGroups.length > 0);
   const canViewGroups = canManageGroups || (canCallApi && sessionAuthRequired && groups.length > 0);
+  const canViewEnvironments =
+    canCallApi &&
+    (!sessionAuthRequired ||
+      currentUser?.role === 'super_admin' ||
+      groups.some((group) => !group.archivedAt && Boolean(group.membershipRole)));
+  const canCreateEnvironments = canCallApi && groups.some((group) => !group.archivedAt && group.canManage);
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) ?? null,
     [sessions, selectedSessionId],
@@ -540,6 +578,13 @@ export function App() {
   const showingSetupGuide = setupGuideOpen || defaultSetupGuidePending;
   const startupLoading = waitingForAuth || (canCallApi && !sessionsLoaded);
   const selectedRepository = repositoryLabel(selectedSession?.context?.repository);
+  const selectedSessionEnvironment = sessionContextEnvironment(selectedSession?.context?.environment);
+  const selectedSessionEnvironmentId = selectedSessionEnvironment?.id ?? '';
+  const selectedSessionCodebaseLabel = selectedSessionEnvironment
+    ? `${selectedSessionEnvironment.name} · ${selectedSessionEnvironment.repositories.length} repo${
+        selectedSessionEnvironment.repositories.length === 1 ? '' : 's'
+      }`
+    : (selectedRepository ?? '');
   const selectedSessionModel = typeof selectedSession?.context?.model === 'string' ? selectedSession.context.model : '';
   const availableModelValues = modelChoices.filter((model) => model.available).map((model) => model.value);
   const selectedFollowUpModel = resolveSelectableModel(
@@ -554,6 +599,16 @@ export function App() {
     typeof selectedSession?.context?.branch === 'string' ? selectedSession.context.branch : '';
   const selectedSessionArchived = selectedSession?.status === 'archived';
   const selectedAutomationArchived = Boolean(selectedAutomation?.archivedAt);
+  const activeEnvironmentOptions = environments.filter((environment) => !environment.archivedAt);
+  const newThreadEffectiveGroupId = newThreadGroupId || creatableGroups[0]?.id || '';
+  const newThreadEnvironmentOptions = activeEnvironmentOptions.filter((environment) =>
+    environmentAvailableToGroup(environment, newThreadEffectiveGroupId),
+  );
+  const followUpEnvironmentOptions = selectedSession
+    ? activeEnvironmentOptions.filter((environment) =>
+        environmentAvailableToGroup(environment, selectedSession.ownerGroupId),
+      )
+    : activeEnvironmentOptions;
   const selectedSessionHasMessages = messages.some((message) => message.sessionId === selectedSessionId);
   const selectedSessionDetailLoading = Boolean(
     selectedSessionId && detailLoadedSessionId !== selectedSessionId && !selectedSessionHasMessages,
@@ -748,6 +803,30 @@ export function App() {
   }, [canCallApi, token]);
 
   useEffect(() => {
+    if (!canCallApi) {
+      setEnvironmentsState((current) => ({ ...current, loading: false }));
+      return;
+    }
+    let cancelled = false;
+
+    setEnvironmentsState((current) => ({ ...current, loading: true, error: '' }));
+    listEnvironments(token)
+      .then((nextEnvironments) => {
+        if (cancelled) return;
+        setEnvironmentsState({ data: nextEnvironments, loading: false, error: '' });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setEnvironmentsState((current) => ({ ...current, loading: false, error: errorMessage(err) }));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canCallApi, token]);
+
+  useEffect(() => {
     if (
       !canViewSetup ||
       !health ||
@@ -766,8 +845,30 @@ export function App() {
   }, [canViewSetup, showingSetupGuide, token]);
 
   useEffect(() => {
+    if (!newThreadEnvironmentId) return;
+    if (!newThreadEnvironmentOptions.some((environment) => environment.id === newThreadEnvironmentId)) {
+      setNewThreadEnvironmentId('');
+      setNewThreadEnvironmentBranchOverrides({});
+    }
+  }, [newThreadEnvironmentId, newThreadEnvironmentOptions]);
+
+  useEffect(() => {
+    if (!followUpEnvironmentId) return;
+    if (!followUpEnvironmentOptions.some((environment) => environment.id === followUpEnvironmentId)) {
+      setFollowUpEnvironmentId('');
+      setFollowUpEnvironmentBranchOverrides({});
+    }
+  }, [followUpEnvironmentId, followUpEnvironmentOptions]);
+
+  useEffect(() => {
     const repository =
-      isCreatingThread || !selectedSessionId ? newThreadRepository : followUpRepository || selectedRepository || '';
+      isCreatingThread || !selectedSessionId
+        ? newThreadEnvironmentId
+          ? ''
+          : newThreadRepository
+        : followUpEnvironmentId || (!followUpRepository && selectedSessionEnvironment)
+          ? ''
+          : followUpRepository || selectedRepository || '';
     if (branchOptionsRepositoryRef.current !== repository) {
       branchOptionsRepositoryRef.current = repository;
       setBranchOptionsState((current) => ({ ...current, data: [], error: '' }));
@@ -806,8 +907,11 @@ export function App() {
     isCreatingThread,
     selectedSessionId,
     selectedSessionBranch,
+    newThreadEnvironmentId,
     newThreadRepository,
+    followUpEnvironmentId,
     followUpRepository,
+    selectedSessionEnvironmentId,
     selectedRepository,
     repositoryOptions,
   ]);
@@ -1596,10 +1700,23 @@ export function App() {
     if (createSessionInFlightRef.current || !canCreateThread || !firstPrompt) return;
     createSessionInFlightRef.current = true;
     abortCreatedSessionBackfill();
+    const firstEnvironmentId = newThreadEnvironmentId;
+    const firstEnvironment = firstEnvironmentId
+      ? (environments.find((environment) => environment.id === firstEnvironmentId) ?? null)
+      : null;
+    const firstEnvironmentBranchOverrides = environmentBranchOverrideInputs(
+      firstEnvironment,
+      newThreadEnvironmentBranchOverrides,
+    );
+    const previousEnvironmentBranchOverrides = newThreadEnvironmentBranchOverrides;
     const firstRepository = newThreadRepository.trim();
+    const firstBranch = newThreadBranch;
     blurFocusedTextControl();
     setNewThreadPrompt('');
+    setNewThreadEnvironmentId('');
+    setNewThreadEnvironmentBranchOverrides({});
     setNewThreadRepository('');
+    setNewThreadBranch('');
     setLoading(true);
     setError('');
     const previousSelectedSessionId = selectedSessionIdRef.current;
@@ -1620,13 +1737,28 @@ export function App() {
         sessionId: session.id,
         prompt: firstPrompt,
         token,
-        ...(firstRepository ? { repository: firstRepository } : {}),
+        ...(firstEnvironmentId
+          ? {
+              environmentId: firstEnvironmentId,
+              ...(firstEnvironmentBranchOverrides.length
+                ? { environmentBranchOverrides: firstEnvironmentBranchOverrides }
+                : {}),
+            }
+          : firstRepository
+            ? { repository: firstRepository }
+            : {}),
         ...(newThreadModel ? { model: newThreadModel } : {}),
-        ...(newThreadBranch ? { branch: newThreadBranch } : {}),
+        ...(!firstEnvironmentId && firstBranch ? { branch: firstBranch } : {}),
       });
+      const sessionContext = mergeDisplaySessionContext(
+        session.context,
+        message.context,
+        firstEnvironmentId ? 'environment' : firstRepository ? 'repository' : undefined,
+      );
       setSessions((current) => [
         {
           ...session,
+          ...(sessionContext ? { context: sessionContext } : {}),
           status: session.status === 'active' ? 'active' : 'queued',
           updatedAt: message.createdAt,
           lastActivityAt: message.createdAt,
@@ -1664,7 +1796,10 @@ export function App() {
         selectedSessionIdRef.current = previousSelectedSessionId;
       }
       setNewThreadPrompt(firstPrompt);
+      setNewThreadEnvironmentId(firstEnvironmentId);
+      setNewThreadEnvironmentBranchOverrides(previousEnvironmentBranchOverrides);
       setNewThreadRepository(firstRepository);
+      setNewThreadBranch(firstBranch);
       handleApiError(err);
     } finally {
       setLoading(false);
@@ -1685,21 +1820,45 @@ export function App() {
     sendMessageInFlightRef.current = true;
     setError('');
     try {
+      const followUpEnvironment = followUpEnvironmentId
+        ? (environments.find((environment) => environment.id === followUpEnvironmentId) ?? null)
+        : null;
+      const environmentBranchOverrides = environmentBranchOverrideInputs(
+        followUpEnvironment,
+        followUpEnvironmentBranchOverrides,
+      );
       const message = await enqueueMessage({
         sessionId: selectedSessionId,
         prompt: messagePrompt,
         token,
-        ...(followUpRepository.trim() ? { repository: followUpRepository.trim() } : {}),
+        ...(followUpEnvironmentId
+          ? {
+              environmentId: followUpEnvironmentId,
+              ...(environmentBranchOverrides.length ? { environmentBranchOverrides } : {}),
+            }
+          : followUpRepository.trim()
+            ? { repository: followUpRepository.trim() }
+            : {}),
         ...(selectedFollowUpModel ? { model: selectedFollowUpModel } : {}),
-        ...(followUpBranch ? { branch: followUpBranch } : {}),
+        ...(!followUpEnvironmentId && followUpBranch ? { branch: followUpBranch } : {}),
       });
       setSessionDetail((current) => ({ ...current, messages: [...current.messages, message] }));
       setSessions((current) =>
-        current.map((session) =>
-          session.id === selectedSessionId && session.status !== 'active'
-            ? { ...session, status: 'queued', updatedAt: message.createdAt, lastActivityAt: message.createdAt }
-            : session,
-        ),
+        current.map((session) => {
+          if (session.id !== selectedSessionId) return session;
+          const sessionContext = mergeDisplaySessionContext(
+            session.context,
+            message.context,
+            followUpEnvironmentId ? 'environment' : followUpRepository.trim() ? 'repository' : undefined,
+          );
+          return {
+            ...session,
+            ...(sessionContext ? { context: sessionContext } : {}),
+            status: session.status === 'active' ? session.status : 'queued',
+            updatedAt: message.createdAt,
+            lastActivityAt: message.createdAt,
+          };
+        }),
       );
       setThreadAutoFollowEnabled(true);
       await refreshSessions();
@@ -1713,10 +1872,61 @@ export function App() {
     }
   }
 
-  function handleFollowUpRepositoryChange(value: string) {
-    const nextRepository = value === selectedRepository ? '' : value;
-    setFollowUpRepository(nextRepository);
+  function handleNewThreadGroupChange(value: string) {
+    setNewThreadGroupId(value);
+    setNewThreadEnvironmentId((current) => {
+      if (!current) return current;
+      const environment = environments.find((candidate) => candidate.id === current);
+      if (environment && environmentAvailableToGroup(environment, value)) return current;
+      setNewThreadEnvironmentBranchOverrides({});
+      return '';
+    });
+  }
+
+  function handleNewThreadCodebaseChange(value: string) {
+    const selection = parseCodebasePickerValue(value);
+    setNewThreadEnvironmentBranchOverrides({});
+    setNewThreadBranch('');
+    if (selection?.kind === 'environment') {
+      setNewThreadEnvironmentId(selection.environmentId);
+      setNewThreadRepository('');
+      return;
+    }
+    setNewThreadEnvironmentId('');
+    setNewThreadRepository(selection?.kind === 'repository' ? selection.repository : '');
+  }
+
+  function handleFollowUpCodebaseChange(value: string) {
+    const selection = parseCodebasePickerValue(value);
+    setFollowUpEnvironmentBranchOverrides({});
     setFollowUpBranch('');
+    if (!selection) {
+      setFollowUpEnvironmentId('');
+      setFollowUpRepository('');
+      return;
+    }
+    if (selection.kind === 'environment') {
+      setFollowUpEnvironmentId(selection.environmentId === selectedSessionEnvironmentId ? '' : selection.environmentId);
+      setFollowUpRepository('');
+      return;
+    }
+    setFollowUpEnvironmentId('');
+    setFollowUpRepository(
+      !selectedSessionEnvironmentId && selection.repository === selectedRepository ? '' : selection.repository,
+    );
+  }
+
+  function loadEnvironmentRepositoryBranches(repository: EnvironmentBranchOverrideRepository): Promise<BranchOption[]> {
+    return listBranches({ repository: `${repository.owner}/${repository.repo}`, token });
+  }
+
+  function handleEnvironmentChanged(environment: Environment) {
+    setEnvironmentsState((current) => ({
+      ...current,
+      data: [environment, ...current.data.filter((candidate) => candidate.id !== environment.id)].sort((left, right) =>
+        left.name.localeCompare(right.name),
+      ),
+    }));
   }
 
   async function handleUpdateTitle(title: string): Promise<boolean> {
@@ -1939,6 +2149,7 @@ export function App() {
     sessionStorage.removeItem(groupsPanelViewStorageKey);
     sessionStorage.removeItem(groupsPanelSelectedGroupStorageKey);
     sessionStorage.removeItem(selectedAutomationStorageKey);
+    sessionStorage.removeItem(selectedEnvironmentStorageKey);
     sessionStorage.removeItem(archivedAutomationsOpenStorageKey);
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     setSessions([]);
@@ -1950,17 +2161,23 @@ export function App() {
     setSessionSearchNextCursor(null);
     resetAutomationsAdmin();
     setGroups([]);
+    setEnvironmentsState({ data: [], loading: false, error: '' });
     resetAccessGroupsAdmin();
     setSessionsLoaded(false);
     setDetailLoadedSessionId('');
     updateNavigation({
       selectedSessionId: '',
       selectedAutomationId: '',
+      selectedEnvironmentId: '',
       sidebarPanel: 'sessions',
       isCreatingThread: false,
       setupGuideOpen: false,
       groupsPanelOpen: false,
     });
+    setNewThreadEnvironmentId('');
+    setNewThreadEnvironmentBranchOverrides({});
+    setFollowUpEnvironmentId('');
+    setFollowUpEnvironmentBranchOverrides({});
     clearSessionDetail();
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     setSetupStatus(null);
@@ -1984,7 +2201,11 @@ export function App() {
       setupGuideOpen: false,
       groupsPanelOpen: false,
     });
+    setNewThreadEnvironmentId('');
+    setNewThreadEnvironmentBranchOverrides({});
     setFollowUpRepository('');
+    setFollowUpEnvironmentId('');
+    setFollowUpEnvironmentBranchOverrides({});
     setFollowUpBranch('');
     setFollowUpModel('');
     clearSessionDetail();
@@ -2009,6 +2230,8 @@ export function App() {
       setupGuideOpen: false,
       groupsPanelOpen: false,
     });
+    setFollowUpEnvironmentId('');
+    setFollowUpEnvironmentBranchOverrides({});
     setFollowUpRepository('');
     setFollowUpBranch('');
     setFollowUpModel('');
@@ -2051,6 +2274,41 @@ export function App() {
     });
     setSidebarCollapsed(false);
     setSidebarOpen(!desktop);
+  }
+
+  function openEnvironmentsPanel() {
+    if (!canViewEnvironments) return;
+    const desktop = isDesktopViewport();
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
+    sessionStorage.removeItem(groupsPanelOpenStorageKey);
+    sessionStorage.setItem(sidebarPanelStorageKey, 'environments');
+    if (selectedEnvironmentId) setEnvironmentSearchParam(selectedEnvironmentId);
+    else clearResourceSearchParams();
+    updateNavigation({
+      setupGuideOpen: false,
+      groupsPanelOpen: false,
+      sidebarPanel: 'environments',
+      isCreatingThread: false,
+    });
+    setSidebarCollapsed(false);
+    setSidebarOpen(!desktop);
+  }
+
+  function startNewEnvironment() {
+    if (!canCreateEnvironments) return;
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
+    sessionStorage.removeItem(groupsPanelOpenStorageKey);
+    sessionStorage.removeItem(selectedEnvironmentStorageKey);
+    clearResourceSearchParams();
+    sessionStorage.setItem(sidebarPanelStorageKey, 'environments');
+    updateNavigation({
+      setupGuideOpen: false,
+      groupsPanelOpen: false,
+      sidebarPanel: 'environments',
+      isCreatingThread: false,
+      selectedEnvironmentId: '',
+    });
+    if (!isDesktopViewport()) setSidebarOpen(false);
   }
 
   function startNewAutomation() {
@@ -2097,6 +2355,36 @@ export function App() {
       sidebarPanel: 'automations',
       isCreatingThread: false,
       selectedAutomationId: automation.id,
+    });
+  }
+
+  function selectEnvironmentPanel(environmentId: string) {
+    if (!canViewEnvironments) return;
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
+    sessionStorage.removeItem(groupsPanelOpenStorageKey);
+    sessionStorage.setItem(sidebarPanelStorageKey, 'environments');
+    sessionStorage.setItem(selectedEnvironmentStorageKey, environmentId);
+    setEnvironmentSearchParam(environmentId);
+    updateNavigation({
+      setupGuideOpen: false,
+      groupsPanelOpen: false,
+      sidebarPanel: 'environments',
+      isCreatingThread: false,
+      selectedEnvironmentId: environmentId,
+    });
+    if (!isDesktopViewport()) setSidebarOpen(false);
+  }
+
+  function handleEnvironmentSaved(environment: Environment) {
+    handleEnvironmentChanged(environment);
+    sessionStorage.setItem(selectedEnvironmentStorageKey, environment.id);
+    setEnvironmentSearchParam(environment.id);
+    updateNavigation({
+      setupGuideOpen: false,
+      groupsPanelOpen: false,
+      sidebarPanel: 'environments',
+      isCreatingThread: false,
+      selectedEnvironmentId: environment.id,
     });
   }
 
@@ -2486,14 +2774,18 @@ export function App() {
                       ? 'Expand access'
                       : sidebarPanel === 'automations'
                         ? 'Expand automations'
-                        : 'Expand sessions'
+                        : sidebarPanel === 'environments'
+                          ? 'Expand environments'
+                          : 'Expand sessions'
                   }
                   title={
                     sidebarPanel === 'groups'
                       ? 'Expand access'
                       : sidebarPanel === 'automations'
                         ? 'Expand automations'
-                        : 'Expand sessions'
+                        : sidebarPanel === 'environments'
+                          ? 'Expand environments'
+                          : 'Expand sessions'
                   }
                 >
                   <PanelLeftOpen className="h-4 w-4" />
@@ -2512,6 +2804,7 @@ export function App() {
                     canCreateGroups={canManageAllGroups}
                     canViewGroups={canViewGroups}
                     canViewAutomations={canViewAutomations}
+                    canViewEnvironments={canViewEnvironments}
                     canViewSetup={canViewSetup}
                     connectionStatus={connectionStatus}
                     currentUser={currentUser}
@@ -2528,6 +2821,7 @@ export function App() {
                     onArchiveGroup={fireAndForget(handleArchiveGroup)}
                     onCreateGroup={startNewGroup}
                     onOpenAutomations={openAutomationsPanel}
+                    onOpenEnvironments={openEnvironmentsPanel}
                     onOpenGroups={openGroupsPanel}
                     onOpenSessions={showSessionsSidebar}
                     onOpenSetup={openSetupGuide}
@@ -2545,6 +2839,7 @@ export function App() {
                     canCreateAutomations={canCreateAutomations}
                     canViewGroups={canViewGroups}
                     canViewAutomations={canViewAutomations}
+                    canViewEnvironments={canViewEnvironments}
                     canViewSetup={canViewSetup}
                     connectionStatus={connectionStatus}
                     groups={groups}
@@ -2560,6 +2855,7 @@ export function App() {
                     onCollapse={collapseSidebar}
                     onCreateAutomation={startNewAutomation}
                     onOpenAutomations={openAutomationsPanel}
+                    onOpenEnvironments={openEnvironmentsPanel}
                     onOpenGroups={openGroupsPanel}
                     onOpenSessions={showSessionsSidebar}
                     onOpenSetup={openSetupGuide}
@@ -2568,6 +2864,35 @@ export function App() {
                     onThemeChange={setThemePreference}
                     onUnarchiveAutomation={fireAndForget(handleUnarchiveAutomation)}
                   />
+                ) : sidebarPanel === 'environments' && canViewEnvironments ? (
+                  <EnvironmentsSidebar
+                    authRequired={bearerAuthRequired || sessionAuthRequired}
+                    canCallApi={canViewEnvironments}
+                    canCreateEnvironments={canCreateEnvironments}
+                    canViewGroups={canViewGroups}
+                    canViewAutomations={canViewAutomations}
+                    canViewEnvironments={canViewEnvironments}
+                    canViewSetup={canViewSetup}
+                    connectionStatus={connectionStatus}
+                    environments={environments}
+                    health={health}
+                    loading={environmentsLoading}
+                    navPage={showingSetupGuide ? 'setup' : 'environments'}
+                    selectedEnvironmentId={selectedEnvironmentId}
+                    themePreference={themePreference}
+                    token={token}
+                    onBackToSessions={backToSessionsSidebar}
+                    onCollapse={collapseSidebar}
+                    onCreateEnvironment={startNewEnvironment}
+                    onOpenAutomations={openAutomationsPanel}
+                    onOpenEnvironments={openEnvironmentsPanel}
+                    onOpenGroups={openGroupsPanel}
+                    onOpenSessions={showSessionsSidebar}
+                    onOpenSetup={openSetupGuide}
+                    onSelectEnvironment={selectEnvironmentPanel}
+                    onSignOut={signOut}
+                    onThemeChange={setThemePreference}
+                  />
                 ) : (
                   <ThreadSidebar
                     archivedSessionsOpen={archivedSessionsOpen || Boolean(selectedSessionArchived)}
@@ -2575,6 +2900,7 @@ export function App() {
                     canCallApi={canCallApi}
                     canViewGroups={canViewGroups}
                     canViewAutomations={canViewAutomations}
+                    canViewEnvironments={canViewEnvironments}
                     canStartNewThread={canCreateThread}
                     canViewSetup={canViewSetup}
                     canWriteSession={userCanWriteSession}
@@ -2586,7 +2912,15 @@ export function App() {
                     hasMoreSessions={Boolean(sessionsNextCursor)}
                     loading={loading}
                     loadingMoreSessions={sessionsLoadingMore}
-                    navPage={showingSetupGuide ? 'setup' : sidebarPanel === 'automations' ? 'automations' : 'sessions'}
+                    navPage={
+                      showingSetupGuide
+                        ? 'setup'
+                        : sidebarPanel === 'environments'
+                          ? 'environments'
+                          : sidebarPanel === 'automations'
+                            ? 'automations'
+                            : 'sessions'
+                    }
                     searchQuery={sessionSearchQuery}
                     searchResults={sessionSearchResults}
                     searchLoading={sessionSearchLoading || sessionSearchLoadingMore}
@@ -2605,6 +2939,7 @@ export function App() {
                     onLoadMoreSessions={fireAndForget(loadMoreSessions)}
                     onNewThread={startNewThread}
                     onOpenAutomations={openAutomationsPanel}
+                    onOpenEnvironments={openEnvironmentsPanel}
                     onOpenGroups={openGroupsPanel}
                     onOpenSessions={showSessionsSidebar}
                     onOpenSetup={openSetupGuide}
@@ -2676,7 +3011,9 @@ export function App() {
                         ? 'Open access'
                         : sidebarPanel === 'automations' && canViewAutomations
                           ? 'Open automations'
-                          : 'Open sessions'
+                          : sidebarPanel === 'environments' && canViewEnvironments
+                            ? 'Open environments'
+                            : 'Open sessions'
                     }
                     onOpenSidebar={expandSidebar}
                     onRefresh={fireAndForget(refreshSetupStatus)}
@@ -2692,6 +3029,9 @@ export function App() {
                     canCreateAutomations={canCreateAutomations}
                     groups={groups}
                     token={token}
+                    environmentOptions={activeEnvironmentOptions}
+                    environmentOptionsLoading={environmentsLoading}
+                    environmentOptionsError={environmentsError}
                     repositoryOptions={repositoryOptions}
                     repositoryOptionsLoading={repositoryOptionsLoading}
                     repositoryOptionsError={repositoryOptionsError}
@@ -2708,6 +3048,25 @@ export function App() {
                     onUnarchiveAutomation={fireAndForget(handleUnarchiveAutomation)}
                     onError={handleApiError}
                   />
+                ) : sidebarPanel === 'environments' && canViewEnvironments ? (
+                  <EnvironmentsPanel
+                    environments={environments}
+                    environmentsLoading={environmentsLoading}
+                    environmentsError={environmentsError}
+                    selectedEnvironmentId={selectedEnvironmentId}
+                    canCallApi={canViewEnvironments}
+                    groups={groups}
+                    token={token}
+                    repositoryOptions={repositoryOptions}
+                    repositoryOptionsLoading={repositoryOptionsLoading}
+                    repositoryOptionsError={repositoryOptionsError}
+                    showOpenSidebar={!sidebarOpen}
+                    openSidebarLabel="Open environments"
+                    onCreateEnvironment={startNewEnvironment}
+                    onEnvironmentChanged={handleEnvironmentSaved}
+                    onOpenSidebar={expandSidebar}
+                    onError={handleApiError}
+                  />
                 ) : isCreatingThread || !selectedSession ? (
                   <NewThreadPanel
                     canCallApi={canCreateThread}
@@ -2716,6 +3075,11 @@ export function App() {
                     groups={creatableGroups}
                     loading={loading}
                     prompt={newThreadPrompt}
+                    environmentId={newThreadEnvironmentId}
+                    environmentBranchOverrides={newThreadEnvironmentBranchOverrides}
+                    environmentOptions={newThreadEnvironmentOptions}
+                    environmentOptionsLoading={environmentsLoading}
+                    environmentOptionsError={environmentsError}
                     repository={newThreadRepository}
                     repositoryOptions={repositoryOptions}
                     repositoryOptionsLoading={repositoryOptionsLoading}
@@ -2733,12 +3097,16 @@ export function App() {
                         ? 'Open access'
                         : sidebarPanel === 'automations' && canViewAutomations
                           ? 'Open automations'
-                          : 'Open sessions'
+                          : sidebarPanel === 'environments' && canViewEnvironments
+                            ? 'Open environments'
+                            : 'Open sessions'
                     }
                     onOpenSidebar={expandSidebar}
-                    onGroupChange={setNewThreadGroupId}
+                    onGroupChange={handleNewThreadGroupChange}
                     onPromptChange={setNewThreadPrompt}
-                    onRepositoryChange={setNewThreadRepository}
+                    onCodebaseChange={handleNewThreadCodebaseChange}
+                    onEnvironmentBranchOverridesChange={setNewThreadEnvironmentBranchOverrides}
+                    onEnvironmentRepositoryBranchesLoad={loadEnvironmentRepositoryBranches}
                     onBranchChange={setNewThreadBranch}
                     onModelChange={setNewThreadModel}
                     onSubmit={fireAndForget(handleCreateThread)}
@@ -2754,7 +3122,9 @@ export function App() {
                           ? 'Open access'
                           : sidebarPanel === 'automations' && canViewAutomations
                             ? 'Open automations'
-                            : 'Open sessions'
+                            : sidebarPanel === 'environments' && canViewEnvironments
+                              ? 'Open environments'
+                              : 'Open sessions'
                       }
                       onArchive={fireAndForget(handleArchiveSession)}
                       onSessionStarChange={fireAndForget(handleSetSessionStarred)}
@@ -2788,6 +3158,7 @@ export function App() {
                                     />
                                   }
                                   lineage={selectedSessionLineage}
+                                  environment={selectedSessionEnvironment}
                                   repository={selectedRepository}
                                   branch={selectedSessionBranch || null}
                                   artifacts={artifacts}
@@ -2847,8 +3218,14 @@ export function App() {
                             key={selectedSession.id}
                             archived={selectedSessionArchived}
                             readOnly={!canWriteSelectedSession}
-                            hasSelectedRepository={Boolean(selectedRepository)}
+                            environmentId={followUpEnvironmentId}
+                            environmentBranchOverrides={followUpEnvironmentBranchOverrides}
+                            environmentOptions={followUpEnvironmentOptions}
+                            environmentOptionsLoading={environmentsLoading}
+                            environmentOptionsError={environmentsError}
                             repository={followUpRepository}
+                            inheritedEnvironment={selectedSessionEnvironment}
+                            inheritedCodebaseLabel={selectedSessionCodebaseLabel}
                             inheritedRepository={selectedRepository || ''}
                             repositoryOptions={repositoryOptions}
                             repositoryOptionsLoading={repositoryOptionsLoading}
@@ -2862,9 +3239,11 @@ export function App() {
                             inheritedModel={selectedSessionModel || defaultModel}
                             modelChoices={modelChoices}
                             modelUnavailableReason={followUpModelUnavailableReason}
+                            onCodebaseChange={handleFollowUpCodebaseChange}
+                            onEnvironmentBranchOverridesChange={setFollowUpEnvironmentBranchOverrides}
+                            onEnvironmentRepositoryBranchesLoad={loadEnvironmentRepositoryBranches}
                             onBranchChange={setFollowUpBranch}
                             onModelChange={setFollowUpModel}
-                            onRepositoryChange={handleFollowUpRepositoryChange}
                             onFocusChange={setComposerFocused}
                             onSubmit={handleSendMessage}
                           />
@@ -2881,6 +3260,7 @@ export function App() {
                             />
                           }
                           lineage={selectedSessionLineage}
+                          environment={selectedSessionEnvironment}
                           repository={selectedRepository}
                           branch={selectedSessionBranch || null}
                           artifacts={artifacts}
@@ -2968,11 +3348,16 @@ function setAutomationSearchParam(automationId: string) {
   setResourceSearchParam('automation', automationId);
 }
 
-function setResourceSearchParam(param: 'session' | 'group' | 'automation', value: string) {
+function setEnvironmentSearchParam(environmentId: string) {
+  setResourceSearchParam('environment', environmentId);
+}
+
+function setResourceSearchParam(param: 'session' | 'group' | 'automation' | 'environment', value: string) {
   const url = new URL(window.location.href);
   url.searchParams.delete('session');
   url.searchParams.delete('group');
   url.searchParams.delete('automation');
+  url.searchParams.delete('environment');
   url.searchParams.set(param, value);
   window.history.replaceState({}, '', url);
 }
@@ -2986,12 +3371,97 @@ function clearResourceSearchParams() {
   url.searchParams.delete('session');
   url.searchParams.delete('group');
   url.searchParams.delete('automation');
+  url.searchParams.delete('environment');
   window.history.replaceState({}, '', url);
+}
+
+function environmentAvailableToGroup(environment: Environment, groupId: string): boolean {
+  if (!groupId || environment.archivedAt) return false;
+  return (
+    environment.ownerGroupId === groupId ||
+    environment.shareMode === 'all_groups' ||
+    environment.sharedGroupIds.includes(groupId)
+  );
+}
+
+function environmentBranchOverrideInputs(
+  environment: EnvironmentBranchOverrideTarget | null,
+  overrides: EnvironmentBranchOverrides,
+): EnvironmentBranchOverrideInput[] {
+  if (!environment) return [];
+  return environment.repositories.flatMap((repository) => {
+    const branch = overrides[environmentRepositoryKey(repository)]?.trim();
+    if (!branch) return [];
+    return [
+      {
+        provider: repository.provider,
+        owner: repository.owner,
+        repo: repository.repo,
+        branch,
+      },
+    ];
+  });
+}
+
+function sessionContextEnvironment(value: unknown): (ContextEnvironment & EnvironmentBranchOverrideTarget) | null {
+  if (!isRecord(value)) return null;
+  const id = typeof value.id === 'string' ? value.id : '';
+  const name = typeof value.name === 'string' ? value.name : '';
+  const codebase = isRecord(value.codebase) ? value.codebase : null;
+  const rawRepositories = Array.isArray(codebase?.repositories) ? codebase.repositories : [];
+  const repositories = rawRepositories.flatMap((rawRepository, index): EnvironmentBranchOverrideRepository[] => {
+    if (!isRecord(rawRepository)) return [];
+    if (rawRepository.provider !== 'github') return [];
+    const owner = typeof rawRepository.owner === 'string' ? rawRepository.owner : '';
+    const repo = typeof rawRepository.repo === 'string' ? rawRepository.repo : '';
+    if (!owner || !repo) return [];
+    return [
+      {
+        provider: 'github',
+        owner,
+        repo,
+        primary: rawRepository.primary === true,
+        position: typeof rawRepository.position === 'number' ? rawRepository.position : index,
+        ...(typeof rawRepository.branch === 'string' && rawRepository.branch ? { branch: rawRepository.branch } : {}),
+      },
+    ];
+  });
+
+  if (!id || !name || repositories.length === 0) return null;
+  return { id, name, repositories };
+}
+
+function mergeDisplaySessionContext(
+  sessionContext: Record<string, unknown> | undefined,
+  messageContext: Record<string, unknown> | undefined,
+  codebaseKind?: 'environment' | 'repository',
+): Record<string, unknown> | undefined {
+  if (!messageContext) return sessionContext;
+  const nextContext = { ...(sessionContext ?? {}) };
+  for (const key of ['repository', 'model', 'branch', 'environment']) {
+    if (Object.prototype.hasOwnProperty.call(messageContext, key)) nextContext[key] = messageContext[key];
+  }
+  if (codebaseKind === 'environment') {
+    delete nextContext.repository;
+    delete nextContext.branch;
+  } else if (codebaseKind === 'repository') {
+    delete nextContext.environment;
+  }
+  return nextContext;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function hasResourceSearchParam(): boolean {
   const searchParams = new URLSearchParams(window.location.search);
-  return searchParams.has('session') || searchParams.has('group') || searchParams.has('automation');
+  return (
+    searchParams.has('session') ||
+    searchParams.has('group') ||
+    searchParams.has('automation') ||
+    searchParams.has('environment')
+  );
 }
 
 function isDesktopViewport(): boolean {

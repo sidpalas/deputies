@@ -56,12 +56,13 @@ export function GroupsSidebar(props: {
   canCreateGroups: boolean;
   canViewGroups: boolean;
   canViewAutomations: boolean;
+  canViewEnvironments: boolean;
   canViewSetup: boolean;
   connectionStatus: ConnectionStatus;
   currentUser: AuthUser | null;
   groups: Group[];
   health: Health | null;
-  navPage: 'sessions' | 'setup' | 'groups' | 'automations';
+  navPage: 'sessions' | 'setup' | 'groups' | 'automations' | 'environments';
   selectedGroupId: string;
   selectedView: 'group' | 'super_admins' | 'new_group';
   superAdminUsers: AuthUser[];
@@ -73,6 +74,7 @@ export function GroupsSidebar(props: {
   onCreateGroup: () => void;
   onOpenGroups: () => void;
   onOpenAutomations: () => void;
+  onOpenEnvironments: () => void;
   onOpenSessions: () => void;
   onOpenSetup: () => void;
   onSelectGroup: (groupId: string) => void;
@@ -236,12 +238,14 @@ export function GroupsSidebar(props: {
         authRequired={props.authRequired}
         canViewGroups={props.canViewGroups}
         canViewAutomations={props.canViewAutomations}
+        canViewEnvironments={props.canViewEnvironments}
         canViewSetup={props.canViewSetup}
         health={props.health}
         navPage={props.navPage}
         token={props.token}
         onOpenGroups={props.onOpenGroups}
         onOpenAutomations={props.onOpenAutomations}
+        onOpenEnvironments={props.onOpenEnvironments}
         onOpenSessions={props.onOpenSessions}
         onOpenSetup={props.onOpenSetup}
         onSignOut={props.onSignOut}

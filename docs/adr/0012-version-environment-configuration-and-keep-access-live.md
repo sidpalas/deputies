@@ -1,0 +1,5 @@
+# Version environment configuration and keep access live
+
+Supported environment executable configuration is stored as immutable revisions. Revisions initially contain the codebase and will also contain runtime profiles when that sub-configuration is implemented. Publishing configuration inserts a revision and atomically moves the environment's current-revision pointer; it never rewrites historical revision repositories. Automations explicitly follow the latest revision or pin one revision, and every invocation persists the revision it selected before work begins so failed invocations remain traceable.
+
+Sharing, ownership, archive state, and other authorization inputs remain live properties of the environment rather than revisioned configuration. A pinned revision therefore does not preserve access after an environment is unshared or archived. Revision, sharing, ownership, name, and lifecycle mutations append environment activity in the same transaction as the change; presentation and product-wide audit aggregation may evolve independently from this durable record.

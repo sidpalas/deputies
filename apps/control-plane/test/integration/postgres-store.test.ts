@@ -69,6 +69,50 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     }
   });
 
+  it('persists immutable environment revisions, activity, and invocation references', async () => {
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Postgres environment',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+      actor: { type: 'system' },
+    });
+    const automation = await services.automations.createScheduled({
+      name: 'Pinned Postgres automation',
+      prompt: 'Use the original revision',
+      scheduleCron: '0 9 * * *',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      environmentId: environment.id,
+      environmentRevisionPolicy: 'pinned',
+      environmentRevisionId: environment.currentRevisionId,
+    });
+    const revised = await services.environments.update({
+      id: environment.id,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'web', primary: true }],
+      actor: { type: 'system' },
+    });
+
+    const result = await services.automations.invokeManual({ automationId: automation.id });
+
+    expect(revised.currentRevisionNumber).toBe(2);
+    await expect(store.listEnvironmentRevisions(environment.id)).resolves.toMatchObject([
+      { revisionNumber: 2, repositories: [{ repo: 'web' }] },
+      { revisionNumber: 1, repositories: [{ repo: 'api' }] },
+    ]);
+    await expect(store.listEnvironmentActivity(environment.id)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'environment_created' }),
+        expect.objectContaining({ type: 'revision_published', revisionId: revised.currentRevisionId }),
+      ]),
+    );
+    expect(result.invocation).toMatchObject({
+      environmentId: environment.id,
+      environmentRevisionId: environment.currentRevisionId,
+    });
+  });
+
   it('persists Flue session data opaquely', async () => {
     const flueStore = new PostgresFlueSessionStore(databaseUrl);
     try {

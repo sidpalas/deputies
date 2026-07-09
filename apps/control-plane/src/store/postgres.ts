@@ -15,6 +15,7 @@ import type {
   CreateAutomationRecord,
   CreateArtifactRecord,
   CreateCallbackDeliveryRecord,
+  CreateEnvironmentRecord,
   CreateExternalResourceRecord,
   ClaimedMessage,
   ClaimedMessageBatch,
@@ -25,6 +26,9 @@ import type {
   CreateSessionWithFirstMessageResult,
   CreateWebhookSourceRecord,
   EventDeltaCompactionInput,
+  EnvironmentWithDetailsRecord,
+  EnvironmentActivityRecord,
+  EnvironmentRevisionRecord,
   EventRecord,
   ExternalResourceRecord,
   ExternalThreadRecord,
@@ -53,6 +57,7 @@ import type {
   SessionVisibilityFilter,
   SessionWithSandboxPage,
   UpdateAutomationRecord,
+  UpdateEnvironmentRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -60,6 +65,10 @@ import { SecretCipher } from './encrypted-secrets.js';
 import {
   automationInvocationSelectColumns,
   automationSelectColumns,
+  environmentRepositorySelectColumns,
+  environmentRevisionSelectColumns,
+  environmentActivitySelectColumns,
+  environmentSelectColumns,
   getRunMessageIds,
   groupSelectColumns,
   sessionSelectColumns,
@@ -70,6 +79,10 @@ import {
   toAuthUser,
   toCallbackDelivery,
   toEvent,
+  toEnvironment,
+  toEnvironmentActivity,
+  toEnvironmentRepository,
+  toEnvironmentRevision,
   toExternalResource,
   toExternalThread,
   toGroup,
@@ -89,6 +102,10 @@ import {
   type AuthUserRow,
   type CallbackDeliveryRow,
   type EventRow,
+  type EnvironmentRepositoryRow,
+  type EnvironmentRevisionRow,
+  type EnvironmentActivityRow,
+  type EnvironmentRow,
   type ExternalResourceRow,
   type ExternalThreadRow,
   type GroupMemberRow,
@@ -1252,9 +1269,293 @@ export class PostgresStore implements AppStore {
     return toSession(result.rows[0]);
   }
 
+  async createEnvironment(record: CreateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord> {
+    try {
+      return await this.transaction(async (client) => {
+        const environmentResult = await client.query<EnvironmentRow>(
+          `INSERT INTO environments (
+             id, name, owner_group_id, share_mode, current_revision_id, current_revision_number,
+             archived_at, created_at, updated_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           RETURNING ${environmentSelectColumns}`,
+          [
+            record.environment.id,
+            record.environment.name.trim(),
+            record.environment.ownerGroupId,
+            record.environment.shareMode,
+            record.environment.currentRevisionId,
+            record.environment.currentRevisionNumber,
+            record.environment.archivedAt ?? null,
+            record.environment.createdAt,
+            record.environment.updatedAt,
+          ],
+        );
+        await insertEnvironmentRevision(client, record.revision);
+        const repositories = await insertEnvironmentRepositories(client, record.repositories);
+        await insertEnvironmentShares(
+          client,
+          record.environment.id,
+          record.sharedGroupIds,
+          record.environment.createdAt,
+        );
+        await insertEnvironmentActivities(client, record.activities);
+        return {
+          ...toEnvironment(environmentResult.rows[0]!),
+          repositories,
+          sharedGroupIds: [...record.sharedGroupIds].sort(compareStringAsc),
+        };
+      });
+    } catch (error) {
+      if (isUniqueViolation(error, 'environments_owner_group_name_active_unique_idx')) {
+        throw new StoreConflictError('environment_name_exists', 'Environment name already exists');
+      }
+      throw error;
+    }
+  }
+
+  async getEnvironment(id: string): Promise<EnvironmentWithDetailsRecord | null> {
+    const result = await this.pool.query<EnvironmentRow>(
+      `SELECT ${environmentSelectColumns} FROM environments WHERE id = $1`,
+      [id],
+    );
+    if (!result.rows[0]) return null;
+    return {
+      ...toEnvironment(result.rows[0]),
+      repositories: await this.listEnvironmentRepositories(id),
+      sharedGroupIds: await this.listEnvironmentSharedGroupIds(id),
+    };
+  }
+
+  async listEnvironments(): Promise<EnvironmentWithDetailsRecord[]> {
+    const result = await this.pool.query<EnvironmentRow>(
+      `SELECT ${environmentSelectColumns}
+       FROM environments
+       ORDER BY updated_at DESC, created_at DESC`,
+    );
+    return Promise.all(
+      result.rows.map(async (row) => ({
+        ...toEnvironment(row),
+        repositories: await this.listEnvironmentRepositories(row.id),
+        sharedGroupIds: await this.listEnvironmentSharedGroupIds(row.id),
+      })),
+    );
+  }
+
+  async getEnvironmentRevision(id: string): Promise<EnvironmentRevisionRecord | null> {
+    const result = await this.pool.query<EnvironmentRevisionRow>(
+      `SELECT ${environmentRevisionSelectColumns} FROM environment_revisions WHERE id = $1`,
+      [id],
+    );
+    return result.rows[0]
+      ? toEnvironmentRevision(result.rows[0], await this.listEnvironmentRevisionRepositories(id))
+      : null;
+  }
+
+  async listEnvironmentRevisions(environmentId: string): Promise<EnvironmentRevisionRecord[]> {
+    const result = await this.pool.query<EnvironmentRevisionRow>(
+      `SELECT ${environmentRevisionSelectColumns}
+       FROM environment_revisions
+       WHERE environment_id = $1
+       ORDER BY revision_number DESC`,
+      [environmentId],
+    );
+    return Promise.all(
+      result.rows.map(async (row) =>
+        toEnvironmentRevision(row, await this.listEnvironmentRevisionRepositories(row.id)),
+      ),
+    );
+  }
+
+  async listEnvironmentActivity(environmentId: string): Promise<EnvironmentActivityRecord[]> {
+    const result = await this.pool.query<EnvironmentActivityRow>(
+      `SELECT ${environmentActivitySelectColumns}
+       FROM environment_activity
+       WHERE environment_id = $1
+       ORDER BY created_at DESC, id DESC`,
+      [environmentId],
+    );
+    return result.rows.map(toEnvironmentActivity);
+  }
+
+  async updateEnvironment(record: UpdateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord> {
+    try {
+      return await this.transaction(async (client) => {
+        const locked = await client.query<{ updated_at: Date }>(
+          'SELECT updated_at FROM environments WHERE id = $1 FOR UPDATE',
+          [record.environment.id],
+        );
+        if (!locked.rows[0]) throw new Error(`Environment does not exist: ${record.environment.id}`);
+        if (locked.rows[0].updated_at.getTime() !== record.expectedUpdatedAt.getTime()) {
+          throw new StoreConflictError('environment_update_conflict', 'Environment changed while it was being edited');
+        }
+        if (record.automationAccessAllowedGroupIds) {
+          const conflicts = await client.query<{ id: string; name: string; owner_group_id: string }>(
+            `SELECT id, name, owner_group_id
+             FROM automations
+             WHERE environment_id = $1
+               AND archived_at IS NULL
+               AND NOT (owner_group_id = ANY($2::uuid[]))
+             ORDER BY created_at`,
+            [record.environment.id, record.automationAccessAllowedGroupIds],
+          );
+          if (conflicts.rows.length) {
+            throw new StoreConflictError(
+              'environment_automation_conflict',
+              'Environment access is used by active automations',
+              {
+                automations: conflicts.rows.map((automation) => ({
+                  id: automation.id,
+                  name: automation.name,
+                  ownerGroupId: automation.owner_group_id,
+                })),
+              },
+            );
+          }
+        }
+        const environmentResult = await client.query<EnvironmentRow>(
+          `UPDATE environments
+           SET name = $2,
+               owner_group_id = $3,
+               share_mode = $4,
+               current_revision_id = $5,
+               current_revision_number = $6,
+               archived_at = $7,
+               updated_at = $8
+           WHERE id = $1
+           RETURNING ${environmentSelectColumns}`,
+          [
+            record.environment.id,
+            record.environment.name.trim(),
+            record.environment.ownerGroupId,
+            record.environment.shareMode,
+            record.environment.currentRevisionId,
+            record.environment.currentRevisionNumber,
+            record.environment.archivedAt ?? null,
+            record.environment.updatedAt,
+          ],
+        );
+        if (!environmentResult.rows[0]) throw new Error(`Environment does not exist: ${record.environment.id}`);
+        if (record.revision) await insertEnvironmentRevision(client, record.revision);
+        await client.query('DELETE FROM environment_group_shares WHERE environment_id = $1', [record.environment.id]);
+        const repositories = record.revision
+          ? await insertEnvironmentRepositories(client, record.repositories)
+          : await listEnvironmentRepositoriesWithClient(client, record.environment.id);
+        await insertEnvironmentShares(
+          client,
+          record.environment.id,
+          record.sharedGroupIds,
+          record.environment.updatedAt,
+        );
+        await insertEnvironmentActivities(client, record.activities);
+        return {
+          ...toEnvironment(environmentResult.rows[0]),
+          repositories,
+          sharedGroupIds: [...record.sharedGroupIds].sort(compareStringAsc),
+        };
+      });
+    } catch (error) {
+      if (isUniqueViolation(error, 'environments_owner_group_name_active_unique_idx')) {
+        throw new StoreConflictError('environment_name_exists', 'Environment name already exists');
+      }
+      throw error;
+    }
+  }
+
+  async archiveEnvironment(input: {
+    environmentId: string;
+    archivedAt: Date;
+    activity: EnvironmentActivityRecord;
+  }): Promise<EnvironmentWithDetailsRecord | null> {
+    return this.transaction(async (client) => {
+      const locked = await client.query<EnvironmentRow>(
+        `SELECT ${environmentSelectColumns} FROM environments WHERE id = $1 FOR UPDATE`,
+        [input.environmentId],
+      );
+      if (!locked.rows[0]) return null;
+      if (locked.rows[0].archived_at) {
+        return {
+          ...toEnvironment(locked.rows[0]),
+          repositories: await listEnvironmentRepositoriesWithClient(client, input.environmentId),
+          sharedGroupIds: await listEnvironmentSharedGroupIdsWithClient(client, input.environmentId),
+        };
+      }
+      const conflicts = await client.query<{ id: string; name: string; owner_group_id: string }>(
+        `SELECT id, name, owner_group_id
+         FROM automations
+         WHERE environment_id = $1 AND archived_at IS NULL
+         ORDER BY created_at`,
+        [input.environmentId],
+      );
+      if (conflicts.rows.length) {
+        throw new StoreConflictError('environment_automation_conflict', 'Environment is used by active automations', {
+          automations: conflicts.rows.map((automation) => ({
+            id: automation.id,
+            name: automation.name,
+            ownerGroupId: automation.owner_group_id,
+          })),
+        });
+      }
+      const result = await client.query<EnvironmentRow>(
+        `UPDATE environments SET archived_at = $2, updated_at = $2 WHERE id = $1 RETURNING ${environmentSelectColumns}`,
+        [input.environmentId, input.archivedAt],
+      );
+      await insertEnvironmentActivities(client, [
+        { ...input.activity, revisionId: locked.rows[0].current_revision_id },
+      ]);
+      return {
+        ...toEnvironment(result.rows[0]!),
+        repositories: await listEnvironmentRepositoriesWithClient(client, input.environmentId),
+        sharedGroupIds: await listEnvironmentSharedGroupIdsWithClient(client, input.environmentId),
+      };
+    });
+  }
+
+  async unarchiveEnvironment(input: {
+    environmentId: string;
+    updatedAt: Date;
+    activity: EnvironmentActivityRecord;
+  }): Promise<EnvironmentWithDetailsRecord | null> {
+    try {
+      return await this.transaction(async (client) => {
+        const locked = await client.query<EnvironmentRow>(
+          `SELECT ${environmentSelectColumns} FROM environments WHERE id = $1 FOR UPDATE`,
+          [input.environmentId],
+        );
+        if (!locked.rows[0]) return null;
+        if (!locked.rows[0].archived_at) {
+          return {
+            ...toEnvironment(locked.rows[0]),
+            repositories: await listEnvironmentRepositoriesWithClient(client, input.environmentId),
+            sharedGroupIds: await listEnvironmentSharedGroupIdsWithClient(client, input.environmentId),
+          };
+        }
+        const result = await client.query<EnvironmentRow>(
+          `UPDATE environments SET archived_at = NULL, updated_at = $2 WHERE id = $1 RETURNING ${environmentSelectColumns}`,
+          [input.environmentId, input.updatedAt],
+        );
+        await insertEnvironmentActivities(client, [
+          { ...input.activity, revisionId: locked.rows[0].current_revision_id },
+        ]);
+        return {
+          ...toEnvironment(result.rows[0]!),
+          repositories: await listEnvironmentRepositoriesWithClient(client, input.environmentId),
+          sharedGroupIds: await listEnvironmentSharedGroupIdsWithClient(client, input.environmentId),
+        };
+      });
+    } catch (error) {
+      if (isUniqueViolation(error, 'environments_owner_group_name_active_unique_idx')) {
+        throw new StoreConflictError('environment_name_exists', 'Environment name already exists');
+      }
+      throw error;
+    }
+  }
+
   async createAutomation(record: CreateAutomationRecord): Promise<AutomationRecord> {
-    const result = await this.pool.query<AutomationRow>(
-      `INSERT INTO automations (
+    return this.transaction(async (client) => {
+      await assertAutomationEnvironmentAvailableWithClient(client, record.environmentId, record.ownerGroupId);
+      const result = await client.query<AutomationRow>(
+        `INSERT INTO automations (
          id,
          kind,
          name,
@@ -1266,30 +1567,37 @@ export class PostgresStore implements AppStore {
          write_policy,
          context,
          created_by_user_id,
+         environment_id,
+         environment_revision_policy,
+         environment_revision_id,
          next_invocation_at,
          created_at,
          updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING ${automationSelectColumns}`,
-      [
-        record.id,
-        record.kind,
-        record.name,
-        record.prompt,
-        record.scheduleCron,
-        record.enabled,
-        record.ownerGroupId,
-        record.visibility,
-        record.writePolicy,
-        record.context ?? null,
-        record.createdByUserId ?? null,
-        record.nextInvocationAt ?? null,
-        record.createdAt,
-        record.updatedAt,
-      ],
-    );
-    return toAutomation(result.rows[0]!);
+        [
+          record.id,
+          record.kind,
+          record.name,
+          record.prompt,
+          record.scheduleCron,
+          record.enabled,
+          record.ownerGroupId,
+          record.visibility,
+          record.writePolicy,
+          record.context ?? null,
+          record.createdByUserId ?? null,
+          record.environmentId ?? null,
+          record.environmentRevisionPolicy ?? null,
+          record.environmentRevisionId ?? null,
+          record.nextInvocationAt ?? null,
+          record.createdAt,
+          record.updatedAt,
+        ],
+      );
+      return toAutomation(result.rows[0]!);
+    });
   }
 
   async getAutomation(id: string): Promise<AutomationRecord | null> {
@@ -1308,33 +1616,50 @@ export class PostgresStore implements AppStore {
   }
 
   async updateAutomation(input: UpdateAutomationRecord): Promise<AutomationRecord> {
-    const updates = ['updated_at = $2'];
-    const values: unknown[] = [input.id, input.updatedAt];
+    return this.transaction(async (client) => {
+      const existing = await client.query<AutomationRow>(
+        `SELECT ${automationSelectColumns} FROM automations WHERE id = $1 FOR UPDATE`,
+        [input.id],
+      );
+      if (!existing.rows[0]) throw new Error(`Automation does not exist: ${input.id}`);
+      const current = toAutomation(existing.rows[0]);
+      await assertAutomationEnvironmentAvailableWithClient(
+        client,
+        input.environmentId === undefined ? current.environmentId : (input.environmentId ?? undefined),
+        input.ownerGroupId ?? current.ownerGroupId,
+      );
 
-    function addUpdate(column: string, value: unknown): void {
-      values.push(value);
-      updates.push(`${column} = $${values.length}`);
-    }
+      const updates = ['updated_at = $2'];
+      const values: unknown[] = [input.id, input.updatedAt];
 
-    if (input.name !== undefined) addUpdate('name', input.name);
-    if (input.prompt !== undefined) addUpdate('prompt', input.prompt);
-    if (input.scheduleCron !== undefined) addUpdate('schedule_cron', input.scheduleCron);
-    if (input.enabled !== undefined) addUpdate('enabled', input.enabled);
-    if (input.ownerGroupId !== undefined) addUpdate('owner_group_id', input.ownerGroupId);
-    if (input.visibility !== undefined) addUpdate('visibility', input.visibility);
-    if (input.writePolicy !== undefined) addUpdate('write_policy', input.writePolicy);
-    if (input.context !== undefined) addUpdate('context', input.context);
-    if (input.nextInvocationAt !== undefined) addUpdate('next_invocation_at', input.nextInvocationAt);
+      function addUpdate(column: string, value: unknown): void {
+        values.push(value);
+        updates.push(`${column} = $${values.length}`);
+      }
 
-    const result = await this.pool.query<AutomationRow>(
-      `UPDATE automations
+      if (input.name !== undefined) addUpdate('name', input.name);
+      if (input.prompt !== undefined) addUpdate('prompt', input.prompt);
+      if (input.scheduleCron !== undefined) addUpdate('schedule_cron', input.scheduleCron);
+      if (input.enabled !== undefined) addUpdate('enabled', input.enabled);
+      if (input.ownerGroupId !== undefined) addUpdate('owner_group_id', input.ownerGroupId);
+      if (input.visibility !== undefined) addUpdate('visibility', input.visibility);
+      if (input.writePolicy !== undefined) addUpdate('write_policy', input.writePolicy);
+      if (input.context !== undefined) addUpdate('context', input.context);
+      if (input.environmentId !== undefined) addUpdate('environment_id', input.environmentId);
+      if (input.environmentRevisionPolicy !== undefined)
+        addUpdate('environment_revision_policy', input.environmentRevisionPolicy);
+      if (input.environmentRevisionId !== undefined) addUpdate('environment_revision_id', input.environmentRevisionId);
+      if (input.nextInvocationAt !== undefined) addUpdate('next_invocation_at', input.nextInvocationAt);
+
+      const result = await client.query<AutomationRow>(
+        `UPDATE automations
         SET ${updates.join(', ')}
         WHERE id = $1
         RETURNING ${automationSelectColumns}`,
-      values,
-    );
-    if (!result.rows[0]) throw new Error(`Automation does not exist: ${input.id}`);
-    return toAutomation(result.rows[0]);
+        values,
+      );
+      return toAutomation(result.rows[0]!);
+    });
   }
 
   async archiveAutomation(input: { automationId: string; archivedAt: Date }): Promise<AutomationRecord | null> {
@@ -1353,8 +1678,16 @@ export class PostgresStore implements AppStore {
   }
 
   async unarchiveAutomation(input: { automationId: string; updatedAt: Date }): Promise<AutomationRecord | null> {
-    const result = await this.pool.query<AutomationRow>(
-      `UPDATE automations
+    return this.transaction(async (client) => {
+      const existing = await client.query<AutomationRow>(
+        `SELECT ${automationSelectColumns} FROM automations WHERE id = $1 FOR UPDATE`,
+        [input.automationId],
+      );
+      if (!existing.rows[0]) return null;
+      const automation = toAutomation(existing.rows[0]);
+      await assertAutomationEnvironmentAvailableWithClient(client, automation.environmentId, automation.ownerGroupId);
+      const result = await client.query<AutomationRow>(
+        `UPDATE automations
        SET archived_at = NULL,
            enabled = false,
            scheduler_lock_owner = NULL,
@@ -1362,9 +1695,10 @@ export class PostgresStore implements AppStore {
            updated_at = $2
        WHERE id = $1
        RETURNING ${automationSelectColumns}`,
-      [input.automationId, input.updatedAt],
-    );
-    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+        [input.automationId, input.updatedAt],
+      );
+      return toAutomation(result.rows[0]!);
+    });
   }
 
   async claimAutomation(input: {
@@ -1464,13 +1798,15 @@ export class PostgresStore implements AppStore {
          reserved_session_id,
          reserved_message_id,
          requested_by_user_id,
+         environment_id,
+         environment_revision_id,
          reason,
          error,
          metadata,
          created_at,
          completed_at
        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         RETURNING ${automationInvocationSelectColumns}`,
       [
         record.id,
@@ -1483,6 +1819,8 @@ export class PostgresStore implements AppStore {
         record.reservedSessionId ?? null,
         record.reservedMessageId ?? null,
         record.requestedByUserId ?? null,
+        record.environmentId ?? null,
+        record.environmentRevisionId ?? null,
         record.reason ?? null,
         record.error ?? null,
         record.metadata,
@@ -1503,11 +1841,13 @@ export class PostgresStore implements AppStore {
             reserved_session_id = $6,
             reserved_message_id = $7,
             requested_by_user_id = $8,
-            reason = $9,
-            error = $10,
-            metadata = $11,
-            created_at = $12,
-            completed_at = $13
+            environment_id = $9,
+            environment_revision_id = $10,
+            reason = $11,
+            error = $12,
+            metadata = $13,
+            created_at = $14,
+            completed_at = $15
         WHERE id = $1
         RETURNING ${automationInvocationSelectColumns}`,
       [
@@ -1519,6 +1859,8 @@ export class PostgresStore implements AppStore {
         record.reservedSessionId ?? null,
         record.reservedMessageId ?? null,
         record.requestedByUserId ?? null,
+        record.environmentId ?? null,
+        record.environmentRevisionId ?? null,
         record.reason ?? null,
         record.error ?? null,
         record.metadata,
@@ -2799,6 +3141,175 @@ export class PostgresStore implements AppStore {
       client.release();
     }
   }
+
+  private async listEnvironmentRepositories(
+    environmentId: string,
+  ): Promise<EnvironmentWithDetailsRecord['repositories']> {
+    const result = await this.pool.query<EnvironmentRepositoryRow>(
+      `SELECT ${environmentRepositorySelectColumns}
+       FROM environment_revision_repositories
+       WHERE revision_id = (SELECT current_revision_id FROM environments WHERE id = $1)
+       ORDER BY position ASC`,
+      [environmentId],
+    );
+    return result.rows.map(toEnvironmentRepository);
+  }
+
+  private async listEnvironmentRevisionRepositories(
+    revisionId: string,
+  ): Promise<EnvironmentRevisionRecord['repositories']> {
+    const result = await this.pool.query<EnvironmentRepositoryRow>(
+      `SELECT ${environmentRepositorySelectColumns}
+       FROM environment_revision_repositories
+       WHERE revision_id = $1
+       ORDER BY position ASC`,
+      [revisionId],
+    );
+    return result.rows.map((row) => {
+      const repository = toEnvironmentRepository(row);
+      return {
+        provider: repository.provider,
+        owner: repository.owner,
+        repo: repository.repo,
+        primary: repository.isPrimary,
+        position: repository.position,
+        ...(repository.branch ? { branch: repository.branch } : {}),
+      };
+    });
+  }
+
+  private async listEnvironmentSharedGroupIds(environmentId: string): Promise<string[]> {
+    const result = await this.pool.query<{ group_id: string }>(
+      `SELECT group_id
+       FROM environment_group_shares
+       WHERE environment_id = $1
+       ORDER BY group_id ASC`,
+      [environmentId],
+    );
+    return result.rows.map((row) => row.group_id);
+  }
+}
+
+async function insertEnvironmentRepositories(
+  client: PoolClient,
+  repositories: CreateEnvironmentRecord['repositories'],
+): Promise<EnvironmentWithDetailsRecord['repositories']> {
+  const inserted = [];
+  for (const repository of repositories) {
+    const result = await client.query<EnvironmentRepositoryRow>(
+      `INSERT INTO environment_revision_repositories (
+         id,
+         revision_id,
+         provider,
+         owner,
+         repo,
+         branch,
+         is_primary,
+         position,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING ${environmentRepositorySelectColumns}`,
+      [
+        repository.id,
+        repository.revisionId,
+        repository.provider,
+        repository.owner,
+        repository.repo,
+        repository.branch ?? null,
+        repository.isPrimary,
+        repository.position,
+        repository.createdAt,
+        repository.updatedAt,
+      ],
+    );
+    inserted.push(toEnvironmentRepository(result.rows[0]!));
+  }
+  return inserted.sort((left, right) => left.position - right.position);
+}
+
+async function listEnvironmentRepositoriesWithClient(
+  client: PoolClient,
+  environmentId: string,
+): Promise<EnvironmentWithDetailsRecord['repositories']> {
+  const result = await client.query<EnvironmentRepositoryRow>(
+    `SELECT ${environmentRepositorySelectColumns}
+     FROM environment_revision_repositories
+     WHERE revision_id = (SELECT current_revision_id FROM environments WHERE id = $1)
+     ORDER BY position ASC`,
+    [environmentId],
+  );
+  return result.rows.map(toEnvironmentRepository);
+}
+
+async function listEnvironmentSharedGroupIdsWithClient(client: PoolClient, environmentId: string): Promise<string[]> {
+  const result = await client.query<{ group_id: string }>(
+    `SELECT group_id
+     FROM environment_group_shares
+     WHERE environment_id = $1
+     ORDER BY group_id ASC`,
+    [environmentId],
+  );
+  return result.rows.map((row) => row.group_id);
+}
+
+async function insertEnvironmentRevision(client: PoolClient, revision: EnvironmentRevisionRecord): Promise<void> {
+  await client.query(
+    `INSERT INTO environment_revisions (
+       id, environment_id, revision_number, actor_type, actor_user_id, created_at
+     )
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      revision.id,
+      revision.environmentId,
+      revision.revisionNumber,
+      revision.actorType,
+      revision.actorUserId ?? null,
+      revision.createdAt,
+    ],
+  );
+}
+
+async function insertEnvironmentActivities(client: PoolClient, activities: EnvironmentActivityRecord[]): Promise<void> {
+  for (const activity of activities) {
+    await client.query(
+      `INSERT INTO environment_activity (
+         id, environment_id, type, actor_type, actor_user_id, revision_id, payload, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        activity.id,
+        activity.environmentId,
+        activity.type,
+        activity.actorType,
+        activity.actorUserId ?? null,
+        activity.revisionId ?? null,
+        activity.payload,
+        activity.createdAt,
+      ],
+    );
+  }
+}
+
+async function insertEnvironmentShares(
+  client: PoolClient,
+  environmentId: string,
+  sharedGroupIds: string[],
+  createdAt: Date,
+): Promise<void> {
+  for (const groupId of sharedGroupIds) {
+    await client.query(
+      `INSERT INTO environment_group_shares (environment_id, group_id, created_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (environment_id, group_id) DO NOTHING`,
+      [environmentId, groupId, createdAt],
+    );
+  }
+}
+
+function compareStringAsc(left: string, right: string): number {
+  return left.localeCompare(right);
 }
 
 function sessionVisibilityWhereClauses(visibleTo: SessionVisibilityFilter | undefined, values: unknown[]): string[] {
@@ -2863,6 +3374,50 @@ function uniqueSessionSearchDocs(docs: SessionSearchDocInput[]): SessionSearchDo
 
 function cleanSearchDocContent(value: string): string {
   return value.replaceAll('\u0000', '').slice(0, maxSearchDocContentChars);
+}
+
+async function assertAutomationEnvironmentAvailableWithClient(
+  client: PoolClient,
+  environmentId: string | undefined,
+  ownerGroupId: string,
+): Promise<void> {
+  if (!environmentId) return;
+  const locked = await client.query<{ id: string }>('SELECT id FROM environments WHERE id = $1 FOR SHARE', [
+    environmentId,
+  ]);
+  if (!locked.rows[0]) {
+    throw new StoreConflictError(
+      'automation_environment_unavailable',
+      'Environment is no longer available to the automation owner group',
+    );
+  }
+  const environment = await client.query<{
+    owner_group_id: string;
+    share_mode: string;
+    archived_at: Date | null;
+    shared: boolean;
+  }>(
+    `SELECT e.owner_group_id,
+            e.share_mode,
+            e.archived_at,
+            EXISTS (
+              SELECT 1
+              FROM environment_group_shares s
+              WHERE s.environment_id = e.id AND s.group_id = $2
+            ) AS shared
+     FROM environments e
+     WHERE e.id = $1`,
+    [environmentId, ownerGroupId],
+  );
+  const row = environment.rows[0];
+  const available =
+    row && !row.archived_at && (row.owner_group_id === ownerGroupId || row.share_mode === 'all_groups' || row.shared);
+  if (!available) {
+    throw new StoreConflictError(
+      'automation_environment_unavailable',
+      'Environment is no longer available to the automation owner group',
+    );
+  }
 }
 
 function isUniqueViolation(error: unknown, constraint: string): boolean {

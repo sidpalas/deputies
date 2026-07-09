@@ -12,6 +12,7 @@ import {
   canManageGroup,
   canMoveSession,
   canReadSession,
+  canUseEnvironmentInGroup,
   canWriteSession,
   isSuperAdmin,
   readRequestAuthorization,
@@ -24,6 +25,7 @@ import { readSessionId } from '../auth/session.js';
 import { CallbackService, CallbackServiceError } from '../callbacks/service.js';
 import { requireApiBearerToken, type AppConfig } from '../config/index.js';
 import { EventService } from '../events/service.js';
+import { EnvironmentService } from '../environments/service.js';
 import { ExternalResourceService } from '../external-resources/service.js';
 import { GenericWebhookService } from '../integrations/generic-webhook/service.js';
 import { type GitHubArchivedSessionNotifier } from '../integrations/github/archived-session-notifier.js';
@@ -54,6 +56,7 @@ import {
 } from './access-policy.js';
 import { registerAuthRoutes, serializeBasicAuthUser } from './auth-routes.js';
 import { registerAutomationRoutes } from './automation-routes.js';
+import { registerEnvironmentRoutes } from './environment-routes.js';
 import { registerEventRoutes } from './event-routes.js';
 import { writeSessionEventStream } from './event-stream.js';
 import { registerGroupRoutes } from './group-routes.js';
@@ -107,6 +110,7 @@ export type AppVariables = {
 export type AppServices = {
   store: AppStore;
   events: EventService;
+  environments: EnvironmentService;
   sessions: SessionService;
   messages: MessageService;
   automations: AutomationService;
@@ -139,10 +143,12 @@ export function createServices(
   const events = new EventService(store);
   const sessions = new SessionService(store, events);
   const messages = new MessageService(store, events);
-  const automations = new AutomationService(store, sessions, messages);
+  const environments = new EnvironmentService(store);
+  const automations = new AutomationService(store, sessions, messages, environments);
   const services: AppServices = {
     store,
     events,
+    environments,
     sessions,
     messages,
     automations,
@@ -210,6 +216,8 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('/sessions', apiAuthMiddleware(config, services.store));
   app.use('/automations/*', apiAuthMiddleware(config, services.store));
   app.use('/automations', apiAuthMiddleware(config, services.store));
+  app.use('/environments/*', apiAuthMiddleware(config, services.store));
+  app.use('/environments', apiAuthMiddleware(config, services.store));
   app.use('/repositories/*', apiAuthMiddleware(config, services.store));
   app.use('/repositories', apiAuthMiddleware(config, services.store));
   app.use('/models', apiAuthMiddleware(config, services.store));
@@ -375,6 +383,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   registerAutomationRoutes(app, config, services, {
     serializeSession: (session) => serializeSessionWithSandbox(config, services, session),
   });
+  registerEnvironmentRoutes(app, config, services);
   registerTelemetryRoutes(app, config);
 
   registerRepositoryRoutes(app, config, services);
@@ -576,21 +585,20 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.post('/sessions/:sessionId/messages', async (c) => {
     const sessionId = c.req.param('sessionId');
+    const session = getAuthorizedSession(c, sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const prompt = optionalString(body.prompt);
     if (!prompt) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: prompt');
 
     try {
-      const repository = parseRepositoryBody(body.repository);
       const model = parseModelBody(body.model, config);
       const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModelDefault);
       if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
-      const branch = repository ? parseBranchBody(body.branch) : undefined;
-      const context = {
-        ...(repository ? { repository } : {}),
-        ...(model ? { model } : {}),
-        ...(repository && branch ? { branch } : {}),
-      };
+      const environmentId = optionalString(body.environmentId);
+      const context = environmentId
+        ? await environmentMessageContext(c, config, services, session, environmentId, body, model)
+        : directRepositoryMessageContext(body, model);
       const message = await services.messages.enqueue({
         sessionId,
         prompt,
@@ -1114,6 +1122,79 @@ function parseOptionalBoolean(raw: string | undefined): boolean | undefined {
   if (raw === 'true') return true;
   if (raw === 'false') return false;
   throw new HttpRequestError(400, 'invalid_request', 'Expected boolean query parameter');
+}
+
+async function environmentMessageContext(
+  c: Context,
+  config: AppConfig,
+  services: AppServices,
+  session: SessionRecord,
+  environmentId: string,
+  body: Record<string, unknown>,
+  model: string | undefined,
+): Promise<Record<string, unknown>> {
+  if (body.repository !== undefined || body.branch !== undefined) {
+    throw new HttpRequestError(400, 'invalid_request', 'Use either environmentId or repository, not both');
+  }
+  const auth = await requireRequestAuthorization(config, services.store, c);
+  if (!auth) throw new HttpRequestError(401, 'unauthorized', 'Missing or invalid session');
+  const environment = await services.environments.get(environmentId);
+  if (!environment || environment.archivedAt) throw new HttpRequestError(404, 'not_found', 'Environment not found');
+  if (!canUseEnvironmentInGroup(auth, environment, session.ownerGroupId)) {
+    throw new HttpRequestError(403, 'forbidden', 'Environment use access is required');
+  }
+  const snapshot = await services.environments.resolveForGroup({
+    environmentId,
+    groupId: session.ownerGroupId,
+    branchOverrides: parseEnvironmentBranchOverrides(body.environmentBranchOverrides),
+  });
+  return {
+    environment: snapshot,
+    ...(model ? { model } : {}),
+  };
+}
+
+function directRepositoryMessageContext(
+  body: Record<string, unknown>,
+  model: string | undefined,
+): Record<string, unknown> {
+  if (body.environmentBranchOverrides !== undefined) {
+    throw new HttpRequestError(400, 'invalid_request', 'environmentBranchOverrides require environmentId');
+  }
+  const repository = parseRepositoryBody(body.repository);
+  const branch = repository ? parseBranchBody(body.branch) : undefined;
+  return {
+    ...(repository ? { repository } : {}),
+    ...(model ? { model } : {}),
+    ...(repository && branch ? { branch } : {}),
+  };
+}
+
+function parseEnvironmentBranchOverrides(value: unknown) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new HttpRequestError(400, 'invalid_request', 'Expected environmentBranchOverrides array');
+  }
+  return value.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new HttpRequestError(400, 'invalid_request', 'Expected branch override object');
+    }
+    const record = item as Record<string, unknown>;
+    if (record.provider !== undefined && record.provider !== 'github') {
+      throw new HttpRequestError(400, 'invalid_request', 'Only GitHub repositories are supported');
+    }
+    const owner = optionalString(record.owner);
+    const repo = optionalString(record.repo);
+    if (!owner || !repo) {
+      throw new HttpRequestError(400, 'invalid_request', 'Expected branch override owner and repo');
+    }
+    return {
+      provider: 'github' as const,
+      owner,
+      repo,
+      ...(record.branch !== undefined ? { branch: parseBranchBody(record.branch) ?? '' } : {}),
+    };
+  });
 }
 
 function encodeSessionListCursor(cursor: SessionListCursor | null): string | null {

@@ -1,0 +1,3 @@
+# Snapshot environment config for agent work
+
+Sessions and automation invocations keep references to both the environment and the immutable environment revision used for traceability, and they run from a resolved snapshot of the configuration supported by that revision. Revisions currently snapshot the codebase; runtime profiles will join the revision when that sub-configuration is implemented. Existing work does not change when a new revision is published. Follow-latest automations select the current revision when each invocation is recorded, while pinned automations retain their configured revision. Both policies still require live environment use access at invocation time.

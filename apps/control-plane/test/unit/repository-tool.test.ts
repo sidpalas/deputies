@@ -16,6 +16,20 @@ describe('repository Flue tool', () => {
       branch: 'old-feature',
     };
     await expect(tool.execute({ action: 'status' })).resolves.toContain('Active repository: manaflow-ai/manaflow');
+
+    services.state.context = {
+      environment: {
+        id: 'env-1',
+        name: 'Product surface',
+        codebase: {
+          repositories: [
+            { provider: 'github', owner: 'manaflow-ai', repo: 'web', primary: false },
+            { provider: 'github', owner: 'manaflow-ai', repo: 'api', primary: true },
+          ],
+        },
+      },
+    };
+    await expect(tool.execute({ action: 'status' })).resolves.toContain('Active repository: manaflow-ai/api');
   });
 
   it('sets validated session repository context', async () => {
@@ -41,6 +55,44 @@ describe('repository Flue tool', () => {
     expect(services.state.context).toEqual({
       repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
     });
+  });
+
+  it('preserves environment context when switching the active repository', async () => {
+    const updates: Record<string, unknown>[] = [];
+    const services = repositoryServices({
+      updateSessionContext: async (context) => {
+        updates.push(context);
+        return context;
+      },
+    });
+    services.state.context = {
+      environment: {
+        id: 'env-1',
+        name: 'Product surface',
+        codebase: {
+          repositories: [
+            { provider: 'github', owner: 'manaflow-ai', repo: 'api', primary: true },
+            { provider: 'github', owner: 'manaflow-ai', repo: 'web', primary: false },
+          ],
+        },
+      },
+      environmentBranchOverrides: [{ provider: 'github', owner: 'manaflow-ai', repo: 'api', branch: 'release' }],
+    };
+    const tool = createRepositoryTool(services);
+
+    await tool.execute({ action: 'set', owner: 'manaflow-ai', repo: 'web' });
+
+    expect(updates[0]).toMatchObject({
+      environment: { id: 'env-1' },
+      activeRepository: { provider: 'github', owner: 'manaflow-ai', repo: 'web' },
+    });
+    expect(services.state.context).toMatchObject({
+      environment: { id: 'env-1' },
+      activeRepository: { provider: 'github', owner: 'manaflow-ai', repo: 'web' },
+    });
+    await expect(tool.execute({ action: 'set', owner: 'manaflow-ai', repo: 'outside' })).rejects.toThrow(
+      'must belong to the session environment codebase',
+    );
   });
 
   it('clears prepared state when changing repositories', async () => {
@@ -104,7 +156,7 @@ describe('repository Flue tool', () => {
     expect(shells[0]?.command).toContain('export GIT_CONFIG_GLOBAL=/dev/null');
     expect(shells[0]?.command).toContain('export GIT_CONFIG_SYSTEM=/dev/null');
     expect(shells[0]?.command).toContain('default_branch="$(git -C');
-    expect(shells[0]?.command).toContain('diff --quiet --ignore-submodules');
+    expect(shells[0]?.command).toContain('status --porcelain --untracked-files=normal --ignore-submodules');
     expect(shells[0]?.command).toContain('preserving checkout instead of switching branches');
     expect(shells[0]?.command).toContain('git -c core.hooksPath=/dev/null');
     expect(shells[0]?.command).toContain('checkout -B "$default_branch" "origin/$default_branch"');

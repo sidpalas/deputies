@@ -5,11 +5,14 @@ import {
   canManageAutomation,
   canManageGroup,
   canReadAutomation,
+  canUseEnvironmentInGroup,
   canReadSession,
   readRequestAuthorization,
   type RequestAuthorization,
 } from '../auth/authorization.js';
 import type { AppConfig } from '../config/index.js';
+import { EnvironmentServiceError, type EnvironmentBranchOverride } from '../environments/service.js';
+import { StoreConflictError } from '../store/types.js';
 import type { AutomationInvocationRecord, AutomationRecord, SessionRecord } from '../store/types.js';
 import type { AppServices, AppVariables } from './server.js';
 import {
@@ -76,7 +79,22 @@ export function registerAutomationRoutes(
     }
 
     try {
-      const context = parseAutomationCreateContextBody(body, config, services);
+      const environmentId = await parseAutomationEnvironmentId(body, group.id, auth, services);
+      const revisionSelection = await parseEnvironmentRevisionSelection(body, environmentId, services);
+      const environmentBranchOverrides = await parseAutomationEnvironmentBranchOverrides(
+        body,
+        environmentId,
+        revisionSelection.environmentRevisionId,
+        group.id,
+        services,
+      );
+      const context = parseAutomationCreateContextBody(
+        body,
+        config,
+        services,
+        Boolean(environmentId),
+        environmentBranchOverrides ?? [],
+      );
       const automation = await services.automations.createScheduled({
         name,
         prompt,
@@ -86,11 +104,14 @@ export function registerAutomationRoutes(
         writePolicy: requestedWritePolicy ?? defaults.writePolicy,
         enabled: body.enabled === undefined ? true : parseBooleanBody(body.enabled, 'enabled'),
         ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
+        ...(environmentId ? { environmentId } : {}),
+        ...revisionSelection,
         ...(Object.keys(context).length ? { context } : {}),
       });
       return c.json({ automation: await serializeAutomation(services, automation, auth) }, 201);
     } catch (error) {
       if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
+      if (error instanceof StoreConflictError) return automationStoreConflictResponse(c, error);
       throw error;
     }
   });
@@ -152,7 +173,45 @@ export function registerAutomationRoutes(
     }
 
     try {
-      const context = parseAutomationUpdateContextBody(body, config, services, automation.context);
+      const environmentId = await parseAutomationUpdateEnvironmentId(
+        body,
+        nextOwnerGroupId,
+        automation,
+        auth,
+        services,
+      );
+      const effectiveEnvironmentId = environmentId === undefined ? automation.environmentId : environmentId;
+      const revisionSelection = await parseEnvironmentRevisionSelection(
+        body,
+        effectiveEnvironmentId,
+        services,
+        automation,
+      );
+      const effectiveRevisionId =
+        revisionSelection.environmentRevisionPolicy === 'pinned'
+          ? revisionSelection.environmentRevisionId
+          : revisionSelection.environmentRevisionPolicy === 'follow_latest'
+            ? undefined
+            : automation.environmentRevisionId;
+      const environmentBranchOverrides = await parseAutomationEnvironmentBranchOverrides(
+        body,
+        effectiveEnvironmentId,
+        effectiveRevisionId,
+        nextOwnerGroupId,
+        services,
+      );
+      const context = parseAutomationUpdateContextBody(
+        body,
+        config,
+        services,
+        automation.context,
+        effectiveEnvironmentId,
+        {
+          environmentChanged: environmentId !== undefined && environmentId !== automation.environmentId,
+          environmentBranchOverridesProvided: Object.prototype.hasOwnProperty.call(body, 'environmentBranchOverrides'),
+          ...(environmentBranchOverrides !== undefined ? { environmentBranchOverrides } : {}),
+        },
+      );
       const updated = await services.automations.updateScheduled({
         id: automation.id,
         ...(body.name !== undefined ? { name: optionalString(body.name) ?? '' } : {}),
@@ -162,11 +221,14 @@ export function registerAutomationRoutes(
         ...(accessChangeRequested ? { ownerGroupId: nextOwnerGroupId } : {}),
         ...(visibility ? { visibility } : {}),
         ...(writePolicy ? { writePolicy } : {}),
+        ...(environmentId !== undefined ? { environmentId } : {}),
+        ...revisionSelection,
         ...(context.changed ? { context: context.value } : {}),
       });
       return c.json({ automation: await serializeAutomation(services, updated, auth) });
     } catch (error) {
       if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
+      if (error instanceof StoreConflictError) return automationStoreConflictResponse(c, error);
       throw error;
     }
   });
@@ -184,6 +246,7 @@ export function registerAutomationRoutes(
       return c.json({ automation: await serializeAutomation(services, archived, auth) });
     } catch (error) {
       if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
+      if (error instanceof StoreConflictError) return automationStoreConflictResponse(c, error);
       throw error;
     }
   });
@@ -201,6 +264,7 @@ export function registerAutomationRoutes(
       return c.json({ automation: await serializeAutomation(services, unarchived, auth) });
     } catch (error) {
       if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
+      if (error instanceof StoreConflictError) return automationStoreConflictResponse(c, error);
       throw error;
     }
   });
@@ -267,9 +331,12 @@ async function requireRequestAuthorization(
 }
 
 async function serializeAutomation(services: AppServices, automation: AutomationRecord, auth: RequestAuthorization) {
-  const [ownerGroup, invocationPage] = await Promise.all([
+  const [ownerGroup, invocationPage, environmentRevision] = await Promise.all([
     services.store.getGroup(automation.ownerGroupId),
     services.automations.listInvocationPage({ automationId: automation.id, limit: 1 }),
+    automation.environmentRevisionId
+      ? services.store.getEnvironmentRevision(automation.environmentRevisionId)
+      : Promise.resolve(null),
   ]);
   const lastInvocation = invocationPage.invocations[0];
   return {
@@ -286,6 +353,12 @@ async function serializeAutomation(services: AppServices, automation: Automation
     visibility: automation.visibility,
     writePolicy: automation.writePolicy,
     ...(automation.createdByUserId ? { createdByUserId: automation.createdByUserId } : {}),
+    ...(automation.environmentId ? { environmentId: automation.environmentId } : {}),
+    ...(automation.environmentRevisionPolicy
+      ? { environmentRevisionPolicy: automation.environmentRevisionPolicy }
+      : {}),
+    ...(automation.environmentRevisionId ? { environmentRevisionId: automation.environmentRevisionId } : {}),
+    ...(environmentRevision ? { environmentRevisionNumber: environmentRevision.revisionNumber } : {}),
     ...(automation.context ? { context: automation.context } : {}),
     ...(automation.archivedAt ? { archivedAt: automation.archivedAt } : {}),
     ...(automation.nextInvocationAt ? { nextInvocationAt: automation.nextInvocationAt } : {}),
@@ -322,6 +395,8 @@ async function serializeAutomationInvocation(
     ...(message ? { messageId: message.id } : {}),
     ...(message ? { messageStatus: message.status } : {}),
     ...(invocation.requestedByUserId ? { requestedByUserId: invocation.requestedByUserId } : {}),
+    ...(invocation.environmentId ? { environmentId: invocation.environmentId } : {}),
+    ...(invocation.environmentRevisionId ? { environmentRevisionId: invocation.environmentRevisionId } : {}),
     ...(invocation.reason ? { reason: invocation.reason } : {}),
     ...(invocation.error ? { error: invocation.error } : {}),
   };
@@ -340,6 +415,13 @@ function automationServiceErrorResponse(c: Context, error: AutomationServiceErro
   if (error.code === 'overlap') return writeError(c, 409, 'automation_overlap', error.message, error.details);
   if (error.code === 'invalid_schedule') return writeError(c, 400, 'invalid_schedule', error.message);
   return writeError(c, 400, 'invalid_request', error.message);
+}
+
+function automationStoreConflictResponse(c: Context, error: StoreConflictError): Response {
+  if (error.code === 'automation_environment_unavailable') {
+    return writeError(c, 409, error.code, error.message, error.details);
+  }
+  throw error;
 }
 
 function parseAutomationInvocationLimit(value: string | undefined): number {
@@ -375,16 +457,22 @@ function parseAutomationCreateContextBody(
   body: Record<string, unknown>,
   config: AppConfig,
   services: AppServices,
+  hasEnvironment: boolean,
+  environmentBranchOverrides: EnvironmentBranchOverride[],
 ): Record<string, unknown> {
+  if (hasEnvironment && (body.repository !== undefined || body.branch !== undefined)) {
+    throw new HttpRequestError(400, 'invalid_request', 'Use either environmentId or repository, not both');
+  }
   const repository = parseRepositoryBody(body.repository);
   const model = parseModelBody(body.model, config);
   const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModelDefault);
   if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
-  const branch = repository ? parseBranchBody(body.branch) : undefined;
+  const branch = repository && !hasEnvironment ? parseBranchBody(body.branch) : undefined;
   return {
-    ...(repository ? { repository } : {}),
+    ...(!hasEnvironment && repository ? { repository } : {}),
     ...(model ? { model } : {}),
-    ...(repository && branch ? { branch } : {}),
+    ...(!hasEnvironment && repository && branch ? { branch } : {}),
+    ...(hasEnvironment && environmentBranchOverrides.length ? { environmentBranchOverrides } : {}),
   };
 }
 
@@ -393,13 +481,43 @@ function parseAutomationUpdateContextBody(
   config: AppConfig,
   services: AppServices,
   currentContext: Record<string, unknown> | undefined,
+  environmentId: string | null | undefined,
+  options: {
+    environmentChanged: boolean;
+    environmentBranchOverrides?: EnvironmentBranchOverride[];
+    environmentBranchOverridesProvided: boolean;
+  },
 ): { changed: boolean; value: Record<string, unknown> | null } {
   const hasRepository = Object.prototype.hasOwnProperty.call(body, 'repository');
   const hasModel = Object.prototype.hasOwnProperty.call(body, 'model');
   const hasBranch = Object.prototype.hasOwnProperty.call(body, 'branch');
-  if (!hasRepository && !hasModel && !hasBranch) return { changed: false, value: null };
+  const hasEnvironment = Boolean(environmentId);
+  if (hasEnvironment && (hasRepository || hasBranch)) {
+    throw new HttpRequestError(400, 'invalid_request', 'Use either environmentId or repository, not both');
+  }
+  if (!hasEnvironment && options.environmentBranchOverridesProvided) {
+    throw new HttpRequestError(400, 'invalid_request', 'environmentBranchOverrides require environmentId');
+  }
+  if (
+    !hasRepository &&
+    !hasModel &&
+    !hasBranch &&
+    !options.environmentBranchOverridesProvided &&
+    !options.environmentChanged
+  ) {
+    return { changed: false, value: null };
+  }
 
   const next = { ...(currentContext ?? {}) };
+  if (hasEnvironment) {
+    delete next.repository;
+    delete next.branch;
+    if (options.environmentChanged && !options.environmentBranchOverridesProvided) {
+      delete next.environmentBranchOverrides;
+    }
+  } else {
+    delete next.environmentBranchOverrides;
+  }
   if (hasRepository) {
     const repository = parseRepositoryBody(body.repository);
     if (repository) next.repository = repository;
@@ -420,6 +538,144 @@ function parseAutomationUpdateContextBody(
     if (branch) next.branch = branch;
     else delete next.branch;
   }
+  if (options.environmentBranchOverridesProvided) {
+    if (options.environmentBranchOverrides?.length) {
+      next.environmentBranchOverrides = options.environmentBranchOverrides;
+    } else {
+      delete next.environmentBranchOverrides;
+    }
+  }
 
   return { changed: true, value: Object.keys(next).length ? next : null };
+}
+
+async function parseAutomationEnvironmentBranchOverrides(
+  body: Record<string, unknown>,
+  environmentId: string | null | undefined,
+  environmentRevisionId: string | undefined,
+  ownerGroupId: string,
+  services: AppServices,
+): Promise<EnvironmentBranchOverride[] | undefined> {
+  if (!Object.prototype.hasOwnProperty.call(body, 'environmentBranchOverrides')) return undefined;
+  const branchOverrides = parseEnvironmentBranchOverrides(body.environmentBranchOverrides);
+  if (!environmentId) {
+    throw new HttpRequestError(400, 'invalid_request', 'environmentBranchOverrides require environmentId');
+  }
+  try {
+    await services.environments.resolveForGroup({
+      environmentId,
+      groupId: ownerGroupId,
+      ...(environmentRevisionId ? { revisionId: environmentRevisionId } : {}),
+      branchOverrides,
+    });
+  } catch (error) {
+    if (error instanceof EnvironmentServiceError) {
+      throw new HttpRequestError(error.code === 'invalid_request' ? 400 : 404, error.code, error.message);
+    }
+    throw error;
+  }
+  return branchOverrides;
+}
+
+function parseEnvironmentBranchOverrides(value: unknown): EnvironmentBranchOverride[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new HttpRequestError(400, 'invalid_request', 'Expected environmentBranchOverrides array');
+  }
+  return value.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new HttpRequestError(400, 'invalid_request', 'Expected branch override object');
+    }
+    const record = item as Record<string, unknown>;
+    if (record.provider !== undefined && record.provider !== 'github') {
+      throw new HttpRequestError(400, 'invalid_request', 'Only GitHub repositories are supported');
+    }
+    const owner = optionalString(record.owner);
+    const repo = optionalString(record.repo);
+    if (!owner || !repo) {
+      throw new HttpRequestError(400, 'invalid_request', 'Expected branch override owner and repo');
+    }
+    return {
+      provider: 'github' as const,
+      owner,
+      repo,
+      ...(record.branch !== undefined ? { branch: parseBranchBody(record.branch) ?? '' } : {}),
+    };
+  });
+}
+
+async function parseAutomationEnvironmentId(
+  body: Record<string, unknown>,
+  ownerGroupId: string,
+  auth: RequestAuthorization,
+  services: AppServices,
+): Promise<string | undefined> {
+  const environmentId = optionalString(body.environmentId);
+  if (!environmentId) return undefined;
+  await assertEnvironmentUsable(environmentId, ownerGroupId, auth, services);
+  return environmentId;
+}
+
+async function parseEnvironmentRevisionSelection(
+  body: Record<string, unknown>,
+  environmentId: string | null | undefined,
+  services: AppServices,
+  existing?: AutomationRecord,
+) {
+  const policyProvided = Object.prototype.hasOwnProperty.call(body, 'environmentRevisionPolicy');
+  const revisionProvided = Object.prototype.hasOwnProperty.call(body, 'environmentRevisionId');
+  if (!policyProvided && !revisionProvided) return {};
+  if (!environmentId) {
+    throw new HttpRequestError(400, 'invalid_request', 'Environment revision selection requires environmentId');
+  }
+  const rawPolicy = optionalString(body.environmentRevisionPolicy);
+  const policy = rawPolicy ?? existing?.environmentRevisionPolicy ?? 'follow_latest';
+  if (policy !== 'follow_latest' && policy !== 'pinned') {
+    throw new HttpRequestError(400, 'invalid_request', 'Expected valid environmentRevisionPolicy');
+  }
+  if (policy === 'follow_latest') {
+    if (optionalString(body.environmentRevisionId)) {
+      throw new HttpRequestError(400, 'invalid_request', 'Follow-latest automations cannot pin a revision');
+    }
+    return { environmentRevisionPolicy: 'follow_latest' as const };
+  }
+  let revisionId = optionalString(body.environmentRevisionId);
+  if (!revisionId) {
+    const environment = await services.environments.get(environmentId);
+    if (!environment) throw new HttpRequestError(404, 'not_found', 'Environment not found');
+    revisionId = environment.currentRevisionId;
+  }
+  return { environmentRevisionPolicy: 'pinned' as const, environmentRevisionId: revisionId };
+}
+
+async function parseAutomationUpdateEnvironmentId(
+  body: Record<string, unknown>,
+  ownerGroupId: string,
+  automation: AutomationRecord,
+  auth: RequestAuthorization,
+  services: AppServices,
+): Promise<string | null | undefined> {
+  if (!Object.prototype.hasOwnProperty.call(body, 'environmentId')) {
+    if (automation.environmentId) await assertEnvironmentUsable(automation.environmentId, ownerGroupId, auth, services);
+    return undefined;
+  }
+  const environmentId = optionalString(body.environmentId);
+  if (!environmentId) return null;
+  await assertEnvironmentUsable(environmentId, ownerGroupId, auth, services);
+  return environmentId;
+}
+
+async function assertEnvironmentUsable(
+  environmentId: string,
+  ownerGroupId: string,
+  auth: RequestAuthorization,
+  services: AppServices,
+): Promise<void> {
+  const environment = await services.environments.get(environmentId);
+  if (!environment || environment.archivedAt) {
+    throw new HttpRequestError(404, 'not_found', 'Environment not found');
+  }
+  if (!canUseEnvironmentInGroup(auth, environment, ownerGroupId)) {
+    throw new HttpRequestError(403, 'forbidden', 'Environment use access is required');
+  }
 }

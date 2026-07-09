@@ -7,12 +7,14 @@ import {
 } from '@flue/runtime';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ArtifactService } from '../artifacts/service.js';
+import type { EnvironmentService } from '../environments/service.js';
+import { validateEnvironmentContext } from '../environments/tool.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
 import { type RepositoryAccessProvider } from '../repositories/setup.js';
 import {
-  executeRepositoryPreparation,
-  planRepositoryPreparation,
+  executeRepositoryPreparations,
+  planActiveFirstRepositoryPreparations,
   preparedRepositoryFromPlan,
   type RepositoryPreparationPlan,
   type RepositoryPreparationResult,
@@ -24,7 +26,13 @@ import { createGitTool, type AgentRef } from './git-tool.js';
 import { createGitHubCliTool } from './github-cli-tool.js';
 import { createDeputyTool } from './deputy-tool.js';
 import { createServiceTool } from './service-tool.js';
-import { createRepositoryTool, type RepositoryToolServices, type RepositoryToolState } from './repository-tool.js';
+import {
+  createRepositoryTool,
+  toSharedRepositoryToolServices,
+  type RepositoryToolServices,
+  type RepositoryToolState,
+} from './repository-tool.js';
+import { createEnvironmentTool } from './environment-tool.js';
 import type { FlueAgentFactory, FluePromptResponse, FlueSessionPort } from './types.js';
 import { createWebSearchTool, type WebSearchToolServices } from './web-search-tool.js';
 import type { DeputyToolBaseServices } from '../sessions/deputy-tool.js';
@@ -36,6 +44,7 @@ export type FlueRunnerOptions = {
   repositoryAccess?: {
     github?: RepositoryAccessProvider;
   };
+  environments?: EnvironmentService;
   artifacts?: ArtifactService;
   externalResources?: ExternalResourceService;
   artifactToolMaxBytes?: number;
@@ -63,35 +72,38 @@ export class FlueRunner implements Runner {
   async run(input: RunnerInput): Promise<RunnerResult> {
     const unavailableReason = this.options.modelUnavailableReason?.(input.model);
     if (unavailableReason) throw new Error(unavailableReason);
+    await validateEnvironmentContext(this.options.environments, input.ownerGroupId, input.context);
 
     const pendingEvents: Array<Promise<void>> = [];
     let sawTextDelta = false;
-    const repositorySetupInput: Parameters<typeof planRepositoryPreparation>[0] = {
+    const repositorySetupInput: Parameters<typeof planActiveFirstRepositoryPreparations>[0] = {
       context: input.context,
       sandbox: input.sandbox,
     };
     if (this.options.repositoryAccess?.github) repositorySetupInput.github = this.options.repositoryAccess.github;
     const mcpSetupPromise = connectFlueMcpServers(this.options.mcp, input.signal);
     let setup: {
-      repositorySetup: Awaited<ReturnType<typeof planRepositoryPreparation>>;
+      repositorySetups: Awaited<ReturnType<typeof planActiveFirstRepositoryPreparations>>;
       mcpSetup: FlueMcpSetup;
     };
     try {
-      const [repositorySetup, mcpSetup] = await Promise.all([
-        planRepositoryPreparation(repositorySetupInput),
+      const [repositorySetups, mcpSetup] = await Promise.all([
+        planActiveFirstRepositoryPreparations(repositorySetupInput),
         mcpSetupPromise,
       ]);
-      setup = { repositorySetup, mcpSetup };
+      setup = { repositorySetups, mcpSetup };
     } catch (error) {
       const connected = await mcpSetupPromise.catch(() => null);
       if (connected) await closeMcpConnections(connected.connections);
       throw error;
     }
-    const { repositorySetup, mcpSetup } = setup;
+    const { repositorySetups, mcpSetup } = setup;
+    const activeRepositorySetup = repositorySetups[0] ?? null;
     const agentRef: AgentRef = {};
     const repositoryState: RepositoryToolState = { context: structuredClone(input.context) };
-    if (repositorySetup) {
-      repositoryState.prepared = preparedRepositoryFromPlan(repositorySetup);
+    if (repositorySetups.length) {
+      repositoryState.preparedRepositories = repositorySetups.map(preparedRepositoryFromPlan);
+      repositoryState.prepared = repositoryState.preparedRepositories[0]!;
     }
     const repositoryServices = this.options.repositoryAccess?.github
       ? ({
@@ -121,6 +133,15 @@ export class FlueRunner implements Runner {
     }
     if (repositoryServices) {
       tools.push(
+        ...(this.options.environments && input.ownerGroupId
+          ? [
+              createEnvironmentTool({
+                environments: this.options.environments,
+                ownerGroupId: input.ownerGroupId,
+                repository: toSharedRepositoryToolServices(repositoryServices),
+              }),
+            ]
+          : []),
         createRepositoryTool(repositoryServices),
         createGitHubCliTool(repositoryServices, {
           ...(this.options.externalResources ? { externalResources: this.options.externalResources } : {}),
@@ -170,7 +191,7 @@ export class FlueRunner implements Runner {
         agentId: input.sessionId,
         sessionId: input.sessionId,
         sandbox: input.sandbox,
-        cwd: repositorySetup?.workspacePath ?? input.sandbox.workspacePath,
+        cwd: activeRepositorySetup?.workspacePath ?? input.sandbox.workspacePath,
         ...(input.model ? { model: input.model } : {}),
         tools,
         onEvent: (event) => {
@@ -195,9 +216,12 @@ export class FlueRunner implements Runner {
         createdAt: new Date(),
       });
 
-      const setupResult = repositorySetup ? await this.runRepositorySetup(input, repositorySetup, session) : null;
-      if (setupResult) repositoryState.prepared = setupResult;
-      const setupNote = combineSetupNotes(mcpSetup.note, setupResult?.setupFailureNote ?? null);
+      const setupResults = repositorySetups.length
+        ? await this.runRepositorySetup(input, repositorySetups, session)
+        : [];
+      repositoryState.preparedRepositories = setupResults;
+      if (setupResults[0]) repositoryState.prepared = setupResults[0];
+      const setupNote = combineSetupNotes(mcpSetup.note, ...setupResults.map((result) => result.setupFailureNote));
 
       // Cancellation must not leave partial Flue turn state in durable history.
       // A prompt-only warning is cheaper but advisory, and models can still continue
@@ -212,6 +236,7 @@ export class FlueRunner implements Runner {
             input.prompt,
             Boolean(this.options.artifacts),
             Boolean(repositoryServices),
+            Boolean(this.options.environments && input.ownerGroupId && repositoryServices),
             Boolean(this.options.webSearch),
             Boolean(this.options.deputy),
             setupNote,
@@ -255,11 +280,11 @@ export class FlueRunner implements Runner {
 
   private async runRepositorySetup(
     input: RunnerInput,
-    setup: RepositoryPreparationPlan,
+    setups: RepositoryPreparationPlan[],
     session: FlueSessionPort,
-  ): Promise<RepositoryPreparationResult> {
-    return executeRepositoryPreparation({
-      plan: setup,
+  ): Promise<RepositoryPreparationResult[]> {
+    return executeRepositoryPreparations({
+      plans: setups,
       workspaceRoot: input.sandbox.workspacePath,
       shell: flueSessionShell(session),
       setupShell: sandboxRepositoryShell(input.sandbox),
@@ -379,6 +404,7 @@ function withToolGuidance(
   prompt: string,
   includeArtifacts: boolean,
   includeRepository: boolean,
+  includeEnvironment: boolean,
   includeWebSearch: boolean,
   includeDeputy: boolean,
   setupNote: string | null = null,
@@ -403,6 +429,7 @@ function withToolGuidance(
   if (includeRepository) {
     lines.push(
       'Repository tool guidance:',
+      '- When the environment tool is available, a direct repository is already active, and no environment is selected, prefer environment({ action: "auto" }) before repository-specific work.',
       '- Before doing repository-specific work, use repository({ action: "status" }) to inspect the active repo.',
       '- If a repository is already active and the user did not ask to switch, use it.',
       '- If the user clearly names or chooses a repo for ongoing work, use repository({ action: "set", owner, repo, reason }) and then repository({ action: "prepare" }) in the same turn.',
@@ -410,6 +437,15 @@ function withToolGuidance(
       '- If the repo is unclear, use repository({ action: "list" }) and ask the user to choose instead of guessing.',
       '- Use repository({ action: "prepare" }) before reading or editing files in the repo.',
       '- Use normal file and shell tools for local code changes and commits, git for authenticated remote git operations, and gh for GitHub issues, comments, and pull requests.',
+      '',
+    );
+  }
+  if (includeEnvironment) {
+    lines.push(
+      'Environment tool guidance:',
+      '- Before repository-specific work without an environment, use environment({ action: "auto" }) when direct repository context is available.',
+      '- Auto selects only one unambiguous accessible environment. If multiple environments match, use environment({ action: "list" }) and ask the user to choose.',
+      '- Selecting an environment prepares its primary repository. Use repository({ action: "set" }) only to move the active repository within that environment.',
       '',
     );
   }

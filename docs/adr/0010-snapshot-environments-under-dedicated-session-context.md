@@ -1,0 +1,3 @@
+# Snapshot environments under dedicated session context
+
+Environment-backed sessions and automation invocations store the resolved environment snapshot under `context.environment`, including environment identity, revision identity, and resolved codebase repositories. Deputies keeps the existing top-level `context.repository` and `context.branch` shape for direct single-repository work. Environment-backed work stores a separate `context.activeRepository` pointer when repository-aware actions move away from the primary repository, preserving the environment snapshot and keeping legacy direct-repository work unambiguous.

@@ -190,8 +190,10 @@ function mergeMessageContext(
   sessionContext: Record<string, unknown> | undefined,
   messageContext: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
-  if (sessionContext && messageContext) return { ...sessionContext, ...messageContext };
-  return messageContext ?? sessionContext;
+  const context =
+    sessionContext && messageContext ? { ...sessionContext, ...messageContext } : (messageContext ?? sessionContext);
+  if (!context || !messageContext) return context;
+  return clearOppositeCodebaseContext(context, messageContext);
 }
 
 function mergeSessionContext(
@@ -201,12 +203,28 @@ function mergeSessionContext(
   if (!messageContext) return undefined;
   const nextContext = { ...(sessionContext ?? {}) };
   let changed = false;
-  for (const key of ['repository', 'model', 'branch']) {
+  for (const key of ['repository', 'model', 'branch', 'environment']) {
     if (!Object.prototype.hasOwnProperty.call(messageContext, key)) continue;
     nextContext[key] = messageContext[key];
     changed = true;
   }
+  clearOppositeCodebaseContext(nextContext, messageContext);
   return changed ? nextContext : undefined;
+}
+
+function clearOppositeCodebaseContext(
+  context: Record<string, unknown>,
+  messageContext: Record<string, unknown>,
+): Record<string, unknown> {
+  if (Object.prototype.hasOwnProperty.call(messageContext, 'environment')) {
+    delete context.repository;
+    delete context.branch;
+    delete context.activeRepository;
+  } else if (Object.prototype.hasOwnProperty.call(messageContext, 'repository')) {
+    delete context.environment;
+    delete context.activeRepository;
+  }
+  return context;
 }
 
 export class MessageServiceError extends Error {

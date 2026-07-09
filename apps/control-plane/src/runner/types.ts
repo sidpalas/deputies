@@ -5,6 +5,7 @@ export type RunnerInput = {
   sessionId: string;
   runId: string;
   messageId: string;
+  ownerGroupId?: string;
   prompt: string;
   model?: string;
   context: Record<string, unknown>;

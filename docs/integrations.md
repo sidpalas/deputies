@@ -136,7 +136,7 @@ Generic webhook payloads currently require non-empty `thread.externalId`, `dedup
 
 GitHub App runtime access exists for webhook-created and manually selected repository work. The service mints short-lived installation credentials for clone/fetch and guarded runtime GitHub operations. Provider-owned branch push and PR helper operations remain future work.
 
-Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, signed inbound GitHub webhooks, webhook sender/repo-owner allowlists, trigger-phrase gating, GitHub completion comments, runner repository refresh from message repository context, a dynamic `repository` tool for status/list/set/prepare actions, a dynamic `gh` tool for authenticated GitHub CLI/API operations against the active repository, and a dynamic `git` tool for authenticated git network operations inside the prepared sandbox repository. The worker only ensures a sandbox exists. When a run starts with repository context, Pi performs pre-prompt clone/fetch and starts in the repository `cwd`. When no repository context exists, agents can choose an allowlisted repo with `repository set`, prepare it with `repository prepare`, and then use absolute paths in the returned workspace. PR helper operations are still future work.
+Current runtime access support includes GitHub App JWT signing, repository installation lookup, installation token minting, token caching, repository allowlist checks, configurable clone URL generation through `GITHUB_CLONE_BASE_URL`, signed inbound GitHub webhooks, webhook sender/repo-owner allowlists, trigger-phrase gating, GitHub completion comments, runner repository refresh from message repository context, a dynamic `environment` tool for status/list/auto/set actions, a dynamic `repository` tool for status/list/set/prepare actions, a dynamic `gh` tool for authenticated GitHub CLI/API operations against the active repository, and a dynamic `git` tool for authenticated git network operations inside the prepared sandbox repository. The worker only ensures a sandbox exists. When a run starts with repository context, Pi performs pre-prompt clone/fetch and starts in the repository `cwd`. Before direct repository selection, agents can use `environment auto` to select exactly one accessible environment containing that repository; ambiguous matches require a user choice. When no environment is selected, agents can choose an allowlisted repo with `repository set`, prepare it with `repository prepare`, and then use absolute paths in the returned workspace. PR helper operations are still future work.
 
 `GITHUB_API_BASE_URL`, `GITHUB_OAUTH_BASE_URL`, and `GITHUB_CLONE_BASE_URL` are intentionally separate. The API base points at GitHub's REST API or an emulator, the OAuth base points at the GitHub web host used for app user authorization, and the clone base points at the git remote host used for clone/fetch/push. Defaults are `https://api.github.com`, `https://github.com`, and `https://github.com`.
 
@@ -148,6 +148,7 @@ Credential handling:
 - Git clone/fetch auth is passed to runner sandbox execution as command-scoped env: `GITHUB_AUTH_HEADER=Authorization: Basic base64(x-access-token:<installation-token>)`.
 - Shell commands reference only `$GITHUB_AUTH_HEADER`; token values are not embedded in command strings. Runner event history records env variable names, not values.
 - The agent `repository` tool is always available when GitHub access is configured. `status` reports active/prepared repo state, `list` reports configured allowlist entries, `set` validates and persists session repo context, and `prepare` clones/fetches inside the sandbox.
+- The agent `environment` tool is available when GitHub access and an owning access group are available. `auto` selects and snapshots only one accessible environment containing the current direct repository; `list` reports accessible choices, and `set` snapshots the selected revision, clears direct-repository context, prepares the primary repository, and lets `repository` switch the active repository within that environment.
 - Repository setup configures repo-local git identity as `DevDeputies <devdeputies@users.noreply.github.com>` so agents do not need to mutate global sandbox git config.
 - The agent `gh` tool runs in trusted worker code with `GH_TOKEN` for `github.com` or `GH_ENTERPRISE_TOKEN` plus `GH_HOST` for GitHub Enterprise hosts, `GH_REPO`, a temporary `GH_CONFIG_DIR`, disabled prompts, token redaction, and blocked auth/config/extension/clone escape hatches. It resolves the active repo at call time, blocks direct issue/PR comment posting so callbacks own final replies, and blocks GitHub Git Database API routes so sandbox-local commits are published through git, not remote object surgery.
 - The agent `git` tool runs the git process inside the prepared remote sandbox repository with command-scoped `GITHUB_AUTH_HEADER`. Agents should use it for authenticated push/fetch/pull operations, not for GitHub issue/comment/PR API work. Risky push forms such as force, mirror, delete, and force refspecs are blocked.
@@ -171,24 +172,25 @@ Repository-scoped messages can carry context in either shape:
 
 When a message provides repository context through the product API, the repository is also persisted as durable session context. Later messages inherit that repository automatically. Supplying a different repository on a later message updates the session default and overrides the effective context for that message and future follow-ups. Only durable repository context should be promoted to the session; transient integration metadata, callbacks, delivery IDs, and webhook payloads remain message-scoped.
 
-Future multi-repository context should distinguish repository roles instead of treating every cloned repo as equally writable:
+Multi-repository context should distinguish the stable primary repository from the session/run-scoped active repository without using either designation as a writability boundary:
 
 ```json
 {
   "repositories": [
-    { "provider": "github", "owner": "org", "repo": "app", "role": "primary", "writable": true },
-    { "provider": "github", "owner": "org", "repo": "shared-lib", "role": "auxiliary", "writable": false }
+    { "provider": "github", "owner": "org", "repo": "app", "primary": true },
+    { "provider": "github", "owner": "org", "repo": "shared-lib", "primary": false }
   ]
 }
 ```
 
 Planned semantics:
 
-- Exactly one `primary` repository is the default `cwd`, branch target, and expected edit location for normal tasks.
-- `auxiliary` repositories are cloned as sibling worktrees for context/reference and are read-only by default.
-- A task that intentionally spans multiple repositories should mark each modified repo as `writable: true`; each writable repo should get its own branch/PR artifact plus a summary artifact linking the PR set.
-- Snapshot/image baking can pre-populate common primary and auxiliary repositories, but startup refresh still verifies each requested worktree exists and is current enough for the run.
-- Prompt context should list each repository role and sandbox path so the agent knows which repo is safe to modify.
+- Exactly one `primary` repository is the initial default `cwd` and branch target.
+- Non-primary repositories are cloned as sibling worktrees and may be modified when work spans repositories.
+- Repository-aware actions target the active repository, which starts as primary and may move within the environment codebase.
+- Agent work that intentionally spans multiple repositories should produce a branch/PR artifact for each modified repository plus a summary artifact linking the PR set.
+- Snapshot/image baking can pre-populate common primary and non-primary repositories, but startup refresh still verifies each requested worktree exists and is current enough for the run.
+- Prompt context should identify the primary and active repositories and list every repository's sandbox path.
 
 Current webhook triggers:
 

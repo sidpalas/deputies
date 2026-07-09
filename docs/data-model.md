@@ -18,6 +18,11 @@ Postgres is the required durable store for the MVP.
 
 ```txt
 sessions
+environments
+environment_revisions
+environment_revision_repositories
+environment_group_shares
+environment_activity
 automations
 automation_invocations
 auth_users
@@ -48,6 +53,11 @@ The data model below is both the product target and the current implementation r
 Current implemented tables:
 
 - `sessions`
+- `environments`
+- `environment_revisions`
+- `environment_revision_repositories`
+- `environment_group_shares`
+- `environment_activity`
 - `automations`
 - `automation_invocations`
 - `auth_users`
@@ -135,6 +145,62 @@ Rules:
 - `member` lets group members and admins create new scheduled automations in the group.
 - `admin` limits new scheduled automation creation to group admins and super admins.
 - The setting controls creation only; existing automation management still follows automation ownership and creator-management rules.
+
+## Environments And Revisions
+
+Environments are stable, group-owned identities with live sharing and lifecycle policy. Executable configuration is append-only: publishing creates an immutable revision and atomically advances `current_revision_id`. Repository rows belong to revisions rather than directly to the mutable environment. Activity rows durably record actors and access/configuration changes; they are not session events or telemetry.
+
+```txt
+environments
+  id uuid primary key
+  name text not null
+  owner_group_id uuid not null references groups(id) on delete restrict
+  share_mode text not null
+  current_revision_id uuid not null references environment_revisions(id) on delete restrict
+  current_revision_number integer not null
+  archived_at timestamptz
+  created_at timestamptz not null
+  updated_at timestamptz not null
+
+environment_revisions
+  id uuid primary key
+  environment_id uuid not null references environments(id) on delete restrict
+  revision_number integer not null
+  actor_type text not null
+  actor_user_id uuid references auth_users(id) on delete set null
+  created_at timestamptz not null
+  unique(environment_id, revision_number)
+
+environment_revision_repositories
+  id uuid primary key
+  revision_id uuid not null references environment_revisions(id) on delete restrict
+  provider text not null
+  owner text not null
+  repo text not null
+  branch text
+  is_primary boolean not null
+  position integer not null
+  created_at timestamptz not null
+  updated_at timestamptz not null
+
+environment_group_shares
+  environment_id uuid not null references environments(id) on delete cascade
+  group_id uuid not null references groups(id) on delete cascade
+  created_at timestamptz not null
+  primary key(environment_id, group_id)
+
+environment_activity
+  id uuid primary key
+  environment_id uuid not null references environments(id) on delete restrict
+  type text not null
+  actor_type text not null
+  actor_user_id uuid references auth_users(id) on delete set null
+  revision_id uuid references environment_revisions(id) on delete restrict
+  payload jsonb not null
+  created_at timestamptz not null
+```
+
+Automations referencing environments store either `follow_latest` with no pinned revision or `pinned` with an `environment_revision_id`. Every automation invocation stores the environment and selected revision before work begins, including skipped and failed invocations. Sharing remains live for both policies.
 
 ## Sessions
 
@@ -275,6 +341,9 @@ write_policy text not null
 context jsonb
 created_by_user_id uuid references auth_users(id)
 archived_at timestamptz
+environment_id uuid references environments(id)
+environment_revision_policy text
+environment_revision_id uuid references environment_revisions(id)
 next_invocation_at timestamptz
 scheduler_lock_owner text
 scheduler_locked_until timestamptz
@@ -292,6 +361,9 @@ Rules:
 - Restored automations remain disabled until explicitly enabled.
 - Archiving an automation's owner access group suspends automatic and manual invocations without mutating the automation's `enabled` state.
 - A scheduled fire while the owner group is archived records a skipped invocation with reason `owner_group_archived`.
+- Environment-backed automations explicitly use `follow_latest` or `pinned` revision policy.
+- Follow-latest automations leave `environment_revision_id` null and resolve the environment's current revision when each invocation is recorded.
+- Pinned automations require an `environment_revision_id` belonging to their environment.
 - Automation context may contain durable prompt context such as repository, model, or branch.
 
 ## Automation Invocations
@@ -311,6 +383,8 @@ message_id uuid references messages(id)
 reserved_session_id uuid
 reserved_message_id uuid
 requested_by_user_id uuid references auth_users(id)
+environment_id uuid references environments(id)
+environment_revision_id uuid references environment_revisions(id)
 reason text
 error text
 metadata jsonb not null default '{}'
@@ -324,6 +398,7 @@ Rules:
 - Scheduled invocations are unique per automation and scheduled timestamp.
 - Skipped invocations are recorded when domain rules prevent session creation, such as missed schedule time or an active previous automation session.
 - Failed invocations are terminal records; the next scheduled time or a manual invocation creates a separate invocation.
+- Every environment-backed invocation records both its environment identity and resolved immutable revision, including skipped and failed invocations.
 - Reserved session/message ids are private idempotency fields and are not exposed as public invocation metadata.
 
 ## Runs

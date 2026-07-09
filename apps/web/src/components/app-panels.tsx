@@ -14,6 +14,8 @@ export {
 export { BearerAuthPanel, SessionAuthPanel } from './app-panels/auth-panels.js';
 export { AutomationsPanel } from './app-panels/automations-panel.js';
 export { AutomationsSidebar } from './app-panels/automations-sidebar.js';
+export { EnvironmentsPanel } from './app-panels/environments-panel.js';
+export { EnvironmentsSidebar } from './app-panels/environments-sidebar.js';
 export { MessageComposer } from './app-panels/message-composer.js';
 export { NewThreadPanel } from './app-panels/new-thread-panel.js';
 export { SetupGuidePanel } from './app-panels/setup-guide-panel.js';

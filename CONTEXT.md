@@ -40,6 +40,50 @@ _Avoid_: Job, task, scheduled run
 An isolated execution environment associated with a session where agent work can read files, run commands, and produce artifacts.
 _Avoid_: Container, workspace, runner
 
+**Environment**:
+A reusable work context selected for a session or automation. An environment can contain sub-configurations for the code the agent should work with and the runtime assumptions it should run under.
+_Avoid_: Project, workspace
+
+**Codebase**:
+The code sub-configuration of an environment. A codebase identifies one or more repositories that belong together for agent work.
+_Avoid_: Repository set, code environment
+
+**Primary Repository**:
+The repository in an environment's codebase that acts as the default entry point for agent work. A session starts in the primary repository's working directory when its environment has a multi-repository codebase. Primary status does not make other repositories read-only.
+_Avoid_: Main repo, selected repo
+
+**Active Repository**:
+The repository that repository-aware tools currently target during a session or run. It starts as the primary repository, may change among the environment's repositories as work moves across a codebase, and does not change the environment's primary repository or revision. Any repository in the codebase may be writable.
+_Avoid_: Primary repository, current project
+
+**Environment Revision**:
+An immutable version of an environment's supported executable configuration. Revisions currently contain the codebase and can include the runtime profile when runtime profiles are implemented. An environment points to one current revision while historical revisions remain available for traceability and pinned automation work.
+_Avoid_: Environment version, configuration copy
+
+**Follow-Latest Automation**:
+An automation that resolves the environment's current revision when each invocation is recorded. The invocation retains the selected revision even if the environment later changes.
+_Avoid_: Unpinned automation, dynamic environment
+
+**Pinned Automation**:
+An automation that always resolves one specified environment revision. Pinning executable configuration does not preserve environment access when live sharing policy changes.
+_Avoid_: Frozen automation, copied environment
+
+**Environment Activity**:
+An append-only audit record of an environment revision, sharing, ownership, name, or lifecycle change, including the actor and time of the change.
+_Avoid_: Environment event, telemetry
+
+**Runtime Profile**:
+The runtime sub-configuration of an environment. A runtime profile describes sandbox, tooling, and execution assumptions separately from the codebase.
+_Avoid_: Runtime environment
+
+**Shared Environment**:
+An environment that a non-owner access group can view and use for sessions or automations without receiving management authority over the environment.
+_Avoid_: Shared project, copied environment
+
+**All-Groups Environment Share**:
+A non-default sharing mode that lets every current and future non-archived access group view and use an environment without receiving management authority over it.
+_Avoid_: Public environment, global environment
+
 **Artifact**:
 A durable output produced for a session, such as a file, link, preview, or result bundle.
 _Avoid_: Attachment, asset

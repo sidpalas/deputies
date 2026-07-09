@@ -1,4 +1,5 @@
 import { HttpRequestError } from './request.js';
+import { parseRepositoryContext, RepositorySetupError } from '../repositories/setup.js';
 import type { SandboxHandle } from '../sandbox/types.js';
 import { readServices, type PublishedService } from '../sessions/services.js';
 import type { AppStore, SessionRecord } from '../store/types.js';
@@ -127,11 +128,14 @@ export function workspaceToolWorkingDirectory(
   workspacePath: string,
 ): string {
   if (tool.id !== 'diff') return workspacePath;
-  const repository = context.repository;
-  if (!repository || typeof repository !== 'object' || Array.isArray(repository)) return workspacePath;
-  const repo = (repository as Record<string, unknown>).repo;
-  if (typeof repo !== 'string' || !repo.trim() || repo.includes('/')) return workspacePath;
-  return `${workspacePath.replace(/\/$/, '')}/${repo}`;
+  try {
+    const repository = parseRepositoryContext(context);
+    if (!repository) return workspacePath;
+    return `${workspacePath.replace(/\/$/, '')}/${repository.owner}/${repository.repo}`;
+  } catch (error) {
+    if (error instanceof RepositorySetupError) return workspacePath;
+    throw error;
+  }
 }
 
 function waitForLocalServiceCommand(port: number, onFailure?: string): string {

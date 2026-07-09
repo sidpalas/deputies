@@ -42,6 +42,186 @@ describe('scheduled automations', () => {
     expect(result.message).toMatchObject({ prompt: 'Check the repository', source: 'automation' });
   });
 
+  it('applies environment branch overrides when invoking automations', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Product surface',
+      ownerGroupId: defaultGroupId,
+      repositories: [
+        { provider: 'github', owner: 'acme', repo: 'api', branch: 'main', primary: true },
+        { provider: 'github', owner: 'acme', repo: 'web', primary: false },
+      ],
+    });
+    const automation = await services.automations.createScheduled({
+      name: 'Environment automation',
+      prompt: 'Run against the environment',
+      scheduleCron: '0 9 * * *',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      environmentId: environment.id,
+      context: {
+        model: 'anthropic/claude-sonnet',
+        environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'web', branch: 'release' }],
+      },
+    });
+
+    const result = await services.automations.invokeManual({ automationId: automation.id });
+
+    expect(result.message?.context).toEqual({
+      model: 'anthropic/claude-sonnet',
+      environment: {
+        id: environment.id,
+        revisionId: environment.currentRevisionId,
+        revisionNumber: 1,
+        name: 'Product surface',
+        ownerGroupId: defaultGroupId,
+        codebase: {
+          repositories: [
+            { provider: 'github', owner: 'acme', repo: 'api', branch: 'main', primary: true },
+            { provider: 'github', owner: 'acme', repo: 'web', branch: 'release', primary: false },
+          ],
+        },
+      },
+    });
+  });
+
+  it('applies environment branch overrides that clear default branches when invoking automations', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Product surface',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', branch: 'main', primary: true }],
+    });
+    const automation = await services.automations.createScheduled({
+      name: 'Environment automation',
+      prompt: 'Run against the environment',
+      scheduleCron: '0 9 * * *',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      environmentId: environment.id,
+      context: {
+        environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'api' }],
+      },
+    });
+
+    const result = await services.automations.invokeManual({ automationId: automation.id });
+
+    expect(result.message?.context).toEqual({
+      environment: {
+        id: environment.id,
+        revisionId: environment.currentRevisionId,
+        revisionNumber: 1,
+        name: 'Product surface',
+        ownerGroupId: defaultGroupId,
+        codebase: {
+          repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+        },
+      },
+    });
+  });
+
+  it('pins automation invocations to an immutable environment revision', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Pinned codebase',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const automation = await services.automations.createScheduled({
+      name: 'Pinned automation',
+      prompt: 'Use the pinned revision',
+      scheduleCron: '0 9 * * *',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      environmentId: environment.id,
+      environmentRevisionPolicy: 'pinned',
+      environmentRevisionId: environment.currentRevisionId,
+    });
+    await services.environments.update({
+      id: environment.id,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'web', primary: true }],
+    });
+
+    const result = await services.automations.invokeManual({ automationId: automation.id });
+
+    expect(result.invocation).toMatchObject({
+      environmentId: environment.id,
+      environmentRevisionId: environment.currentRevisionId,
+    });
+    expect(
+      (result.message?.context?.environment as { codebase: { repositories: Array<{ repo: string }> } }).codebase
+        .repositories,
+    ).toMatchObject([{ repo: 'api' }]);
+  });
+
+  it('can switch a pinned automation back to following the latest revision', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Policy transition codebase',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const pinned = await services.automations.createScheduled({
+      name: 'Policy transition automation',
+      prompt: 'Use the selected revision policy',
+      scheduleCron: '0 9 * * *',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      environmentId: environment.id,
+      environmentRevisionPolicy: 'pinned',
+      environmentRevisionId: environment.currentRevisionId,
+    });
+
+    const following = await services.automations.updateScheduled({
+      id: pinned.id,
+      environmentRevisionPolicy: 'follow_latest',
+    });
+
+    expect(following.environmentRevisionPolicy).toBe('follow_latest');
+    expect(following.environmentRevisionId).toBeUndefined();
+  });
+
+  it('resolves follow-latest automation revisions when each invocation is recorded', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Latest codebase',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const automation = await services.automations.createScheduled({
+      name: 'Latest automation',
+      prompt: 'Use the latest revision',
+      scheduleCron: '0 9 * * *',
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      environmentId: environment.id,
+    });
+    const revised = await services.environments.update({
+      id: environment.id,
+      repositories: [
+        { provider: 'github', owner: 'acme', repo: 'api', primary: false },
+        { provider: 'github', owner: 'acme', repo: 'web', primary: true },
+      ],
+    });
+
+    const result = await services.automations.invokeManual({ automationId: automation.id });
+
+    expect(result.invocation).toMatchObject({
+      environmentId: environment.id,
+      environmentRevisionId: revised.currentRevisionId,
+    });
+  });
+
   it('creates a new session for a due scheduled invocation', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -286,6 +466,85 @@ describe('scheduled automations', () => {
     };
     expect(invocationsBody.invocations.map((invocation) => invocation.id)).toContain(invokeBody.invocation.id);
     expect(invocationsBody.invocations[0]).toMatchObject({ sessionStatus: 'queued', messageStatus: 'pending' });
+  });
+
+  it('validates environment branch overrides on automation API routes', async () => {
+    const services = createServices(new MemoryStore());
+    const app = createApp(loadConfig({ API_AUTH_MODE: 'none' }), services);
+    const environment = await services.environments.create({
+      name: 'API environment',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+
+    const createResponse = await app.request(
+      '/automations',
+      jsonRequest({
+        name: 'Environment API automation',
+        prompt: 'Run from API',
+        scheduleCron: '0 9 * * 1-5',
+        ownerGroupId: defaultGroupId,
+        environmentId: environment.id,
+        environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'api', branch: 'release' }],
+      }),
+    );
+    expect(createResponse.status).toBe(201);
+    await expect(createResponse.json()).resolves.toMatchObject({
+      automation: {
+        environmentId: environment.id,
+        context: {
+          environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'api', branch: 'release' }],
+        },
+      },
+    });
+
+    const pinnedResponse = await app.request(
+      '/automations',
+      jsonRequest({
+        name: 'Pinned environment API automation',
+        prompt: 'Keep using this revision',
+        scheduleCron: '0 9 * * 1-5',
+        ownerGroupId: defaultGroupId,
+        environmentId: environment.id,
+        environmentRevisionPolicy: 'pinned',
+        environmentRevisionId: environment.currentRevisionId,
+      }),
+    );
+    expect(pinnedResponse.status).toBe(201);
+    const pinnedBody = (await pinnedResponse.json()) as { automation: { id: string } };
+    const revised = await services.environments.update({
+      id: environment.id,
+      repositories: [
+        { provider: 'github', owner: 'acme', repo: 'api', primary: false },
+        { provider: 'github', owner: 'acme', repo: 'web', primary: true },
+      ],
+    });
+    expect(revised.currentRevisionNumber).toBe(2);
+    const pinnedGetResponse = await app.request(`/automations/${pinnedBody.automation.id}`);
+    expect(pinnedGetResponse.status).toBe(200);
+    await expect(pinnedGetResponse.json()).resolves.toMatchObject({
+      automation: {
+        environmentRevisionId: environment.currentRevisionId,
+        environmentRevisionNumber: environment.currentRevisionNumber,
+      },
+    });
+
+    const invalidResponse = await app.request(
+      '/automations',
+      jsonRequest({
+        name: 'Invalid environment API automation',
+        prompt: 'Run from API',
+        scheduleCron: '0 9 * * 1-5',
+        ownerGroupId: defaultGroupId,
+        environmentId: environment.id,
+        environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'worker', branch: 'release' }],
+      }),
+    );
+    expect(invalidResponse.status).toBe(400);
+    await expect(invalidResponse.json()).resolves.toMatchObject({
+      error: 'invalid_request',
+      message: 'Branch override references a repository outside the environment',
+    });
   });
 
   it('enforces per-group automation creation policy', async () => {
