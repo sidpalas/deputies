@@ -529,9 +529,7 @@ SANDBOX_WORKSPACE_PATH=/workspace
 `SUPERSERVE_TEMPLATE` is the name or ID of a ready team template created from the published Daytona image. Create or rebuild it through the official Superserve SDK and wait for readiness with:
 
 ```sh
-SUPERSERVE_IMAGE=ghcr.io/sidpalas/deputies-daytona-sandbox:<tag-or-digest> \
-SUPERSERVE_TEMPLATE=deputies \
-mise run //deploy/sandboxes/superserve:template:sync
+op run --env-file=.env.local -- mise run //deploy/sandboxes/superserve:template:sync
 ```
 
 The image reference is stored when a template is first created. Subsequent syncs rebuild that stored reference. Use a stable mutable tag for in-place rebuilds, or create a new template name when moving to a different pinned image reference.

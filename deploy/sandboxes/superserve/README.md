@@ -9,12 +9,10 @@ Superserve publishes `@superserve/cli`, but its current CLI release does not inc
 The template task creates a template when it is absent, or rebuilds the template's stored image reference when it exists:
 
 ```sh
-SUPERSERVE_IMAGE=ghcr.io/sidpalas/deputies-daytona-sandbox:<tag-or-digest> \
-SUPERSERVE_TEMPLATE=deputies \
-mise run //deploy/sandboxes/superserve:template:sync
+op run --env-file=.env.local -- mise run //deploy/sandboxes/superserve:template:sync
 ```
 
-When not explicitly set, `SUPERSERVE_IMAGE` inherits `DAYTONA_IMAGE` and otherwise defaults to `ghcr.io/sidpalas/deputies-daytona-sandbox:latest`. The task loads `.env.local` when available. The default template shape is 2 vCPU, 2048 MiB memory, and 8192 MiB disk; override it only when first creating a template with `SUPERSERVE_TEMPLATE_VCPU`, `SUPERSERVE_TEMPLATE_MEMORY_MIB`, and `SUPERSERVE_TEMPLATE_DISK_MIB`.
+The task consumes environment variables supplied by its caller; it does not source `.env.local`. Use `op run --env-file=.env.local --` to resolve 1Password references before invoking `mise`, including `SUPERSERVE_API_KEY`, `SUPERSERVE_TEMPLATE`, and an optional `SUPERSERVE_IMAGE`. When not explicitly set, `SUPERSERVE_IMAGE` inherits `DAYTONA_IMAGE` and otherwise defaults to `ghcr.io/sidpalas/deputies-daytona-sandbox:latest`. The default template shape is 2 vCPU, 2048 MiB memory, and 8192 MiB disk; override it only when first creating a template with `SUPERSERVE_TEMPLATE_VCPU`, `SUPERSERVE_TEMPLATE_MEMORY_MIB`, and `SUPERSERVE_TEMPLATE_DISK_MIB`.
 
 The image reference is stored when a template is first created. Subsequent syncs rebuild that stored reference. Use a stable mutable tag for in-place rebuilds, or a new template name when moving to a different pinned image reference.
 
@@ -22,7 +20,7 @@ When the shared Daytona image changes, publish it first and then sync the Supers
 
 ```sh
 mise run //deploy/sandboxes/daytona:image:publish
-mise run //deploy/sandboxes/superserve:template:sync
+op run --env-file=.env.local -- mise run //deploy/sandboxes/superserve:template:sync
 ```
 
 Configure Deputies with that template name or ID:
@@ -39,7 +37,7 @@ SANDBOX_WORKSPACE_PATH=/workspace
 ## Live UAT
 
 ```sh
-mise run //deploy/sandboxes/superserve:uat
+op run --env-file=.env.local -- mise run //deploy/sandboxes/superserve:uat
 ```
 
 The UAT creates one sandbox, validates exec, files, pause/resume, and the authenticated bridge preview, then verifies sandbox deletion.

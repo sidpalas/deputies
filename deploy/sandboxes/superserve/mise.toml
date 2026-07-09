@@ -4,7 +4,8 @@ run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 
-source ./load-env.sh
+export SUPERSERVE_TEMPLATE="${SUPERSERVE_TEMPLATE:-deputies}"
+export SUPERSERVE_IMAGE="${SUPERSERVE_IMAGE:-${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:latest}}"
 
 pnpm --dir ../../../apps/control-plane exec tsx src/scripts/sync-superserve-template.ts
 '''
@@ -15,7 +16,7 @@ run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 
-source ./load-env.sh
+export SUPERSERVE_TEMPLATE="${SUPERSERVE_TEMPLATE:-deputies}"
 export RUN_REAL_SUPERSERVE_SANDBOX_UAT=true
 
 mise run //apps/control-plane:test:uat -- test/uat/real-superserve-sandbox.test.ts
