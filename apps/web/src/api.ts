@@ -95,6 +95,7 @@ export type Automation = {
   visibility: SessionVisibility;
   writePolicy: SessionWritePolicy;
   createdByUserId?: string;
+  environmentId?: string;
   context?: Record<string, unknown>;
   nextInvocationAt?: string;
   archivedAt?: string;
@@ -176,11 +177,49 @@ export type RepositoryInput = {
   repo: string;
 };
 
+export type EnvironmentBranchOverrideInput = RepositoryInput & {
+  branch?: string;
+};
+
 export type RepositoryOption = {
   fullName: string;
   owner: string;
   name: string;
   defaultBranch?: string;
+};
+
+export type EnvironmentShareMode = 'private' | 'selected_groups' | 'all_groups';
+
+export type EnvironmentRepository = {
+  id: string;
+  provider: 'github';
+  owner: string;
+  repo: string;
+  primary: boolean;
+  position: number;
+  branch?: string;
+};
+
+export type Environment = {
+  id: string;
+  name: string;
+  ownerGroupId: string;
+  ownerGroupName?: string;
+  shareMode: EnvironmentShareMode;
+  sharedGroupIds: string[];
+  repositories: EnvironmentRepository[];
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  canManage?: boolean;
+};
+
+export type EnvironmentRepositoryInput = {
+  provider: 'github';
+  owner: string;
+  repo: string;
+  primary?: boolean;
+  branch?: string;
 };
 
 export type BranchOption = { name: string };
@@ -401,6 +440,8 @@ export async function createAutomation(input: {
   token: string;
   ownerGroupId?: string;
   enabled?: boolean;
+  environmentId?: string;
+  environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
   branch?: string;
@@ -421,6 +462,8 @@ export async function updateAutomation(input: {
   scheduleCron?: string;
   enabled?: boolean;
   ownerGroupId?: string;
+  environmentId?: string;
+  environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
   branch?: string;
@@ -490,12 +533,70 @@ export async function listRepositoryOptions(token: string): Promise<RepositoryOp
   return body.repositories;
 }
 
+export async function listEnvironments(token: string): Promise<Environment[]> {
+  const body = await request<{ environments: Environment[] }>('/environments', { token });
+  return body.environments;
+}
+
+export async function createEnvironment(input: {
+  name: string;
+  ownerGroupId: string;
+  shareMode: EnvironmentShareMode;
+  sharedGroupIds: string[];
+  repositories: EnvironmentRepositoryInput[];
+  token: string;
+}): Promise<Environment> {
+  const body = await request<{ environment: Environment }>('/environments', {
+    method: 'POST',
+    token: input.token,
+    body: environmentRequestBody(input),
+  });
+  return body.environment;
+}
+
+export async function updateEnvironment(input: {
+  environmentId: string;
+  name: string;
+  ownerGroupId: string;
+  shareMode: EnvironmentShareMode;
+  sharedGroupIds: string[];
+  repositories: EnvironmentRepositoryInput[];
+  token: string;
+}): Promise<Environment> {
+  const body = await request<{ environment: Environment }>(`/environments/${input.environmentId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: environmentRequestBody(input),
+  });
+  return body.environment;
+}
+
+export async function archiveEnvironment(input: { environmentId: string; token: string }): Promise<Environment> {
+  const body = await request<{ environment: Environment }>(`/environments/${input.environmentId}/archive`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.environment;
+}
+
+export async function unarchiveEnvironment(input: { environmentId: string; token: string }): Promise<Environment> {
+  const body = await request<{ environment: Environment }>(`/environments/${input.environmentId}/unarchive`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.environment;
+}
+
 function automationRequestBody(input: {
   name?: string;
   prompt?: string;
   scheduleCron?: string;
   ownerGroupId?: string;
   enabled?: boolean;
+  environmentId?: string;
+  environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
   branch?: string;
@@ -506,9 +607,29 @@ function automationRequestBody(input: {
     ...(input.scheduleCron !== undefined ? { scheduleCron: input.scheduleCron } : {}),
     ...(input.ownerGroupId ? { ownerGroupId: input.ownerGroupId } : {}),
     ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+    ...(input.environmentId !== undefined ? { environmentId: input.environmentId } : {}),
+    ...(input.environmentBranchOverrides !== undefined
+      ? { environmentBranchOverrides: input.environmentBranchOverrides }
+      : {}),
     ...(input.repository !== undefined ? { repository: input.repository } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(input.branch !== undefined ? { branch: input.branch } : {}),
+  };
+}
+
+function environmentRequestBody(input: {
+  name: string;
+  ownerGroupId: string;
+  shareMode: EnvironmentShareMode;
+  sharedGroupIds: string[];
+  repositories: EnvironmentRepositoryInput[];
+}): Record<string, unknown> {
+  return {
+    name: input.name,
+    ownerGroupId: input.ownerGroupId,
+    shareMode: input.shareMode,
+    sharedGroupIds: input.sharedGroupIds,
+    repositories: input.repositories,
   };
 }
 
@@ -738,13 +859,24 @@ export async function enqueueMessage(input: {
   sessionId: string;
   prompt: string;
   token: string;
+  environmentId?: string;
+  environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
   branch?: string;
 }): Promise<Message> {
-  const requestBody: { prompt: string; repository?: string | RepositoryInput; model?: string; branch?: string } = {
+  const requestBody: {
+    prompt: string;
+    environmentId?: string;
+    environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
+    repository?: string | RepositoryInput;
+    model?: string;
+    branch?: string;
+  } = {
     prompt: input.prompt,
   };
+  if (input.environmentId) requestBody.environmentId = input.environmentId;
+  if (input.environmentBranchOverrides) requestBody.environmentBranchOverrides = input.environmentBranchOverrides;
   if (input.repository) requestBody.repository = input.repository;
   if (input.model) requestBody.model = input.model;
   if (input.branch) requestBody.branch = input.branch;

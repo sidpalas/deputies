@@ -38,6 +38,7 @@ export function ThreadSidebar(props: {
   canCallApi: boolean;
   canViewGroups: boolean;
   canViewAutomations: boolean;
+  canViewEnvironments: boolean;
   canStartNewThread: boolean;
   canViewSetup: boolean;
   canWriteSession: (session: Session) => boolean;
@@ -47,7 +48,7 @@ export function ThreadSidebar(props: {
   archivedSessionsLoading: boolean;
   hasMoreArchivedSessions: boolean;
   hasMoreSessions: boolean;
-  navPage: 'sessions' | 'setup' | 'automations';
+  navPage: 'sessions' | 'setup' | 'automations' | 'environments';
   loading: boolean;
   loadingMoreSessions: boolean;
   searchQuery: string;
@@ -70,6 +71,7 @@ export function ThreadSidebar(props: {
   onNewThread: () => void;
   onOpenGroups: () => void;
   onOpenAutomations: () => void;
+  onOpenEnvironments: () => void;
   onOpenSessions: () => void;
   onOpenSetup: () => void;
   onRefresh: () => void;
@@ -258,12 +260,14 @@ export function ThreadSidebar(props: {
         authRequired={props.authRequired}
         canViewGroups={props.canViewGroups}
         canViewAutomations={props.canViewAutomations}
+        canViewEnvironments={props.canViewEnvironments}
         canViewSetup={props.canViewSetup}
         health={props.health}
         navPage={props.navPage}
         token={props.token}
         onOpenGroups={props.onOpenGroups}
         onOpenAutomations={props.onOpenAutomations}
+        onOpenEnvironments={props.onOpenEnvironments}
         onOpenSessions={props.onOpenSessions}
         onOpenSetup={props.onOpenSetup}
         onSignOut={props.onSignOut}
@@ -485,12 +489,14 @@ export function ApiStatusFooter(props: {
   authRequired: boolean;
   canViewGroups: boolean;
   canViewAutomations: boolean;
+  canViewEnvironments: boolean;
   canViewSetup: boolean;
   health: Health | null;
-  navPage: 'sessions' | 'setup' | 'groups' | 'automations';
+  navPage: 'sessions' | 'setup' | 'groups' | 'automations' | 'environments';
   token: string;
   onOpenGroups: () => void;
   onOpenAutomations: () => void;
+  onOpenEnvironments: () => void;
   onOpenSessions: () => void;
   onOpenSetup: () => void;
   onSignOut: () => void;
@@ -527,6 +533,17 @@ export function ApiStatusFooter(props: {
             onClick={props.onOpenGroups}
           >
             Access
+          </Button>
+        ) : null}
+        {props.canViewEnvironments ? (
+          <Button
+            className="h-7 px-2 text-xs"
+            variant={props.navPage === 'environments' ? 'default' : 'secondary'}
+            size="sm"
+            aria-current={props.navPage === 'environments' ? 'page' : undefined}
+            onClick={props.onOpenEnvironments}
+          >
+            Environments
           </Button>
         ) : null}
         {props.canViewSetup ? (

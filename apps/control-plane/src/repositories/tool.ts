@@ -1,4 +1,9 @@
-import { type GitHubRepository, type GitHubRepositoryAccess, type RepositoryAccessProvider } from './setup.js';
+import {
+  parseRepositoryContext,
+  type GitHubRepository,
+  type GitHubRepositoryAccess,
+  type RepositoryAccessProvider,
+} from './setup.js';
 import {
   executeRepositoryPreparation,
   planRepositoryPreparation,
@@ -65,7 +70,8 @@ export async function executeRepositoryTool(
 }
 
 export function getActiveRepository(state: RepositoryToolState): (GitHubRepository & { provider: 'github' }) | null {
-  return parseRepositoryValue(state.context.repository);
+  const repository = parseRepositoryContext(state.context);
+  return repository ? { provider: 'github', owner: repository.owner, repo: repository.repo } : null;
 }
 
 export async function resolveActiveRepositoryAccess(services: RepositoryToolServices): Promise<GitHubRepositoryAccess> {
@@ -168,6 +174,8 @@ async function setRepositoryContext(
   const previousRepository = getActiveRepository(services.state);
   await services.github.getRepositoryAccess(repository);
   const nextContext: Record<string, unknown> = { ...services.state.context, repository };
+  delete nextContext.environment;
+  delete nextContext.environmentBranchOverrides;
   if (previousRepository?.owner !== owner || previousRepository?.repo !== repo) {
     delete nextContext.branch;
   }
@@ -182,13 +190,4 @@ async function setRepositoryContext(
   }
   const reason = typeof params.reason === 'string' && params.reason.trim() ? `\nReason: ${params.reason.trim()}` : '';
   return `Active repository set to ${owner}/${repo}.${reason}\nNext step: use repository({ action: "prepare" }) now if the user intends any work in this repository.`;
-}
-
-function parseRepositoryValue(value: unknown): (GitHubRepository & { provider: 'github' }) | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  const provider = typeof record.provider === 'string' ? record.provider : 'github';
-  const owner = typeof record.owner === 'string' ? record.owner.trim() : '';
-  const repo = typeof record.repo === 'string' ? record.repo.trim() : '';
-  return provider === 'github' && owner && repo ? { provider, owner, repo } : null;
 }

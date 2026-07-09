@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../messages/service.js';
 import type { SessionService } from '../sessions/service.js';
+import type { EnvironmentBranchOverride, EnvironmentService } from '../environments/service.js';
 import type {
   AppStore,
   AutomationInvocationCursor,
@@ -24,6 +25,7 @@ export type CreateScheduledAutomationInput = {
   enabled?: boolean;
   createdByUserId?: string;
   context?: Record<string, unknown>;
+  environmentId?: string;
 };
 
 export type UpdateScheduledAutomationInput = {
@@ -36,6 +38,7 @@ export type UpdateScheduledAutomationInput = {
   visibility?: SessionVisibility;
   writePolicy?: SessionWritePolicy;
   context?: Record<string, unknown> | null;
+  environmentId?: string | null;
 };
 
 export type ManualAutomationInvocationInput = {
@@ -83,6 +86,7 @@ export class AutomationService {
     private readonly store: AppStore,
     private readonly sessions: SessionService,
     private readonly messages: MessageService,
+    private readonly environments: EnvironmentService,
   ) {}
 
   async createScheduled(input: CreateScheduledAutomationInput): Promise<AutomationRecord> {
@@ -106,6 +110,7 @@ export class AutomationService {
       nextInvocationAt,
       ...(input.createdByUserId ? { createdByUserId: input.createdByUserId } : {}),
       ...(input.context ? { context: input.context } : {}),
+      ...(input.environmentId ? { environmentId: input.environmentId } : {}),
     });
   }
 
@@ -141,6 +146,7 @@ export class AutomationService {
       ...(input.ownerGroupId !== undefined ? { ownerGroupId: input.ownerGroupId } : {}),
       ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
       ...(input.writePolicy !== undefined ? { writePolicy: input.writePolicy } : {}),
+      ...(input.environmentId !== undefined ? { environmentId: input.environmentId } : {}),
       ...(shouldRecalculateNextInvocation ? { nextInvocationAt: nextScheduledInvocation(scheduleCron, now) } : {}),
     };
     return this.store.updateAutomation({
@@ -371,6 +377,7 @@ export class AutomationService {
       const existingMessage = (await this.store.getMessages(createdSession.id)).find(
         (message) => message.id === messageId,
       );
+      const messageContext = await this.resolveAutomationMessageContext(input.automation);
       const message =
         existingMessage ??
         (await this.messages.enqueue({
@@ -379,7 +386,7 @@ export class AutomationService {
           prompt: input.automation.prompt,
           source: 'automation',
           authorName: `Automation: ${input.automation.name}`,
-          ...(input.automation.context ? { context: input.automation.context } : {}),
+          ...(messageContext ? { context: messageContext } : {}),
         }));
       const session = (await this.store.getSession(createdSession.id)) ?? createdSession;
       const completed = await this.store.updateAutomationInvocation({
@@ -510,6 +517,22 @@ export class AutomationService {
       });
     }
   }
+
+  private async resolveAutomationMessageContext(
+    automation: AutomationRecord,
+  ): Promise<Record<string, unknown> | undefined> {
+    if (!automation.environmentId) return automation.context;
+    const context = automation.context ?? {};
+    const environment = await this.environments.resolveForGroup({
+      environmentId: automation.environmentId,
+      groupId: automation.ownerGroupId,
+      branchOverrides: storedEnvironmentBranchOverrides(context.environmentBranchOverrides),
+    });
+    return {
+      environment,
+      ...(typeof context.model === 'string' && context.model ? { model: context.model } : {}),
+    };
+  }
 }
 
 function parseScheduleCron(value: string): string {
@@ -540,6 +563,25 @@ function requiredTrimmed(value: string, field: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new AutomationServiceError('invalid_request', `Expected non-empty string field: ${field}`);
   return trimmed;
+}
+
+function storedEnvironmentBranchOverrides(value: unknown): EnvironmentBranchOverride[] {
+  if (!Array.isArray(value)) return [];
+  return value.reduce<EnvironmentBranchOverride[]>((overrides, item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return overrides;
+    const record = item as Record<string, unknown>;
+    const owner = typeof record.owner === 'string' ? record.owner : '';
+    const repo = typeof record.repo === 'string' ? record.repo : '';
+    const branch = typeof record.branch === 'string' ? record.branch : '';
+    if (!owner || !repo) return overrides;
+    overrides.push({
+      provider: 'github' as const,
+      owner,
+      repo,
+      ...(branch ? { branch } : {}),
+    });
+    return overrides;
+  }, []);
 }
 
 function isMissedScheduledTime(scheduledAt: Date, now: Date): boolean {

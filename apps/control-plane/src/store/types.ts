@@ -25,6 +25,8 @@ export type CallbackDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed';
 export type AutomationKind = 'scheduled';
 export type AutomationInvocationTrigger = 'scheduled' | 'manual';
 export type AutomationInvocationStatus = 'creating' | 'created' | 'skipped' | 'failed';
+export type EnvironmentShareMode = 'private' | 'selected_groups' | 'all_groups';
+export type RepositoryProvider = 'github';
 
 export const defaultGroupId = '00000000-0000-4000-8000-000000000001';
 
@@ -75,7 +77,7 @@ export type GroupRecord = {
 
 export class StoreConflictError extends Error {
   constructor(
-    readonly code: 'group_name_exists',
+    readonly code: 'group_name_exists' | 'environment_name_exists',
     message: string,
   ) {
     super(message);
@@ -287,11 +289,40 @@ export type AutomationRecord = {
   createdAt: Date;
   updatedAt: Date;
   archivedAt?: Date;
+  environmentId?: string;
   nextInvocationAt?: Date;
   createdByUserId?: string;
   context?: Record<string, unknown>;
   schedulerLockOwner?: string;
   schedulerLockedUntil?: Date;
+};
+
+export type EnvironmentRecord = {
+  id: string;
+  name: string;
+  ownerGroupId: string;
+  shareMode: EnvironmentShareMode;
+  createdAt: Date;
+  updatedAt: Date;
+  archivedAt?: Date;
+};
+
+export type EnvironmentRepositoryRecord = {
+  id: string;
+  environmentId: string;
+  provider: RepositoryProvider;
+  owner: string;
+  repo: string;
+  isPrimary: boolean;
+  position: number;
+  createdAt: Date;
+  updatedAt: Date;
+  branch?: string;
+};
+
+export type EnvironmentWithDetailsRecord = EnvironmentRecord & {
+  repositories: EnvironmentRepositoryRecord[];
+  sharedGroupIds: string[];
 };
 
 export type AutomationInvocationRecord = {
@@ -448,8 +479,15 @@ export type CreateAutomationRecord = {
   createdAt: Date;
   updatedAt: Date;
   nextInvocationAt?: Date;
+  environmentId?: string;
   createdByUserId?: string;
   context?: Record<string, unknown>;
+};
+
+export type CreateEnvironmentRecord = {
+  environment: EnvironmentRecord;
+  repositories: EnvironmentRepositoryRecord[];
+  sharedGroupIds: string[];
 };
 
 export type CreateAutomationInvocationRecord = {
@@ -481,7 +519,14 @@ export type UpdateAutomationRecord = {
   visibility?: SessionVisibility;
   writePolicy?: SessionWritePolicy;
   context?: Record<string, unknown> | null;
+  environmentId?: string | null;
   nextInvocationAt?: Date | null;
+};
+
+export type UpdateEnvironmentRecord = {
+  environment: EnvironmentRecord;
+  repositories: EnvironmentRepositoryRecord[];
+  sharedGroupIds: string[];
 };
 
 export type SessionWithSandboxRecord = {
@@ -800,6 +845,15 @@ export interface AutomationStore {
   ): Promise<AutomationInvocationRecord[]>;
 }
 
+export interface EnvironmentStore {
+  createEnvironment(record: CreateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord>;
+  getEnvironment(id: string): Promise<EnvironmentWithDetailsRecord | null>;
+  listEnvironments(): Promise<EnvironmentWithDetailsRecord[]>;
+  updateEnvironment(record: UpdateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord>;
+  archiveEnvironment(input: { environmentId: string; archivedAt: Date }): Promise<EnvironmentWithDetailsRecord | null>;
+  unarchiveEnvironment(input: { environmentId: string; updatedAt: Date }): Promise<EnvironmentWithDetailsRecord | null>;
+}
+
 export interface EventStore {
   nextEventSequence(sessionId: string): Promise<number>;
   appendEvent(event: NormalizedEvent & { sequence: number }): Promise<EventRecord>;
@@ -888,6 +942,7 @@ export interface AppStore
     SandboxStore,
     CallbackStore,
     AutomationStore,
+    EnvironmentStore,
     EventStore,
     AuthStore,
     GroupStore,

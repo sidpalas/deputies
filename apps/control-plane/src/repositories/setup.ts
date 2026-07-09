@@ -21,6 +21,8 @@ export type RepositoryAccessProvider = {
 export type RepositoryShellSetup = {
   access: GitHubRepositoryAccess;
   branch?: string;
+  primary: boolean;
+  environment?: { id: string; name: string };
   workspacePath: string;
   command: string;
   env: Record<string, string>;
@@ -31,21 +33,36 @@ export async function prepareRepositoryShellSetup(input: {
   sandbox: SandboxHandle;
   github?: RepositoryAccessProvider;
 }): Promise<RepositoryShellSetup | null> {
-  const repository = parseRepositoryContext(input.context);
-  if (!repository) return null;
+  return (await prepareRepositoryShellSetups(input))[0] ?? null;
+}
+
+export async function prepareRepositoryShellSetups(input: {
+  context: Record<string, unknown>;
+  sandbox: SandboxHandle;
+  github?: RepositoryAccessProvider;
+}): Promise<RepositoryShellSetup[]> {
+  const repositories = parseRepositoryContexts(input.context);
+  if (!repositories.length) return [];
   if (!input.github)
     throw new RepositorySetupError('repository_access_unavailable', 'GitHub repository access is not configured');
 
-  const access = await input.github.getRepositoryAccess({ owner: repository.owner, repo: repository.repo });
-  const branch = parseBranchContext(input.context);
-  const workspacePath = joinPath(joinPath(input.sandbox.workspacePath, access.owner), access.repo);
-  return {
-    access,
-    ...(branch ? { branch } : {}),
-    workspacePath,
-    command: repositorySetupCommand(access, workspacePath, branch),
-    env: { GITHUB_AUTH_HEADER: gitAuthHeader(access.auth.token) },
-  };
+  const setups = [];
+  for (const repository of repositories) {
+    const access = await input.github.getRepositoryAccess({ owner: repository.owner, repo: repository.repo });
+    const workspacePath = joinPath(joinPath(input.sandbox.workspacePath, access.owner), access.repo);
+    setups.push({
+      access,
+      primary: repository.primary,
+      ...(repository.branch ? { branch: repository.branch } : {}),
+      ...(repository.environment ? { environment: repository.environment } : {}),
+      workspacePath,
+      command: repositorySetupCommand(access, workspacePath, repository.branch, {
+        failOnDirtyBranchMismatch: Boolean(repository.environment),
+      }),
+      env: { GITHUB_AUTH_HEADER: gitAuthHeader(access.auth.token) },
+    });
+  }
+  return setups.sort((left, right) => Number(right.primary) - Number(left.primary));
 }
 
 export class RepositorySetupError extends Error {
@@ -57,18 +74,36 @@ export class RepositorySetupError extends Error {
   }
 }
 
-type RepositoryContext = GitHubRepository & { provider: 'github' };
+type RepositoryContext = GitHubRepository & {
+  provider: 'github';
+  primary: boolean;
+  branch?: string;
+  environment?: { id: string; name: string };
+};
 
 export function parseRepositoryContext(context: Record<string, unknown>): RepositoryContext | null {
-  const direct = parseRepositoryValue(context.repository);
-  if (direct) return direct;
-
-  const github = context.github;
-  if (!isRecord(github)) return null;
-  return parseRepositoryValue(github.repository);
+  return parseRepositoryContexts(context)[0] ?? null;
 }
 
-export function repositorySetupCommand(access: GitHubRepositoryAccess, workspacePath: string, branch?: string): string {
+export function parseRepositoryContexts(context: Record<string, unknown>): RepositoryContext[] {
+  const environment = parseEnvironmentRepositoryContexts(context);
+  if (environment.length) return environment;
+
+  const direct = parseRepositoryValue(context.repository);
+  if (direct) return [{ ...direct, primary: true, ...optionalBranch(parseBranchContext(context)) }];
+
+  const github = context.github;
+  if (!isRecord(github)) return [];
+  const repository = parseRepositoryValue(github.repository);
+  return repository ? [{ ...repository, primary: true, ...optionalBranch(parseBranchContext(context)) }] : [];
+}
+
+export function repositorySetupCommand(
+  access: GitHubRepositoryAccess,
+  workspacePath: string,
+  branch?: string,
+  options: { failOnDirtyBranchMismatch?: boolean } = {},
+): string {
   const checkoutBranch = branch ? quoteShell(branch) : '"$default_branch"';
   const checkoutRemote = branch ? quoteShell(`origin/${branch}`) : '"origin/$default_branch"';
   const gitAuthConfig = authenticatedGitConfig(access.cloneUrl);
@@ -99,11 +134,15 @@ export function repositorySetupCommand(access: GitHubRepositoryAccess, workspace
     ${branchOverride}
 
     if [ -n "$default_branch" ]; then
-      if [ "$repository_was_cloned" = "1" ] || git -C ${quoteShell(workspacePath)} diff --quiet --ignore-submodules -- && git -C ${quoteShell(workspacePath)} diff --cached --quiet --ignore-submodules --; then
+      if [ "$repository_was_cloned" = "1" ] || [ -z "$(git -C ${quoteShell(workspacePath)} status --porcelain --untracked-files=normal --ignore-submodules)" ]; then
         git -c core.hooksPath=/dev/null -C ${quoteShell(workspacePath)} checkout -B ${checkoutBranch} ${checkoutRemote}
       else
         current_branch="$(git -C ${quoteShell(workspacePath)} branch --show-current || true)"
         if [ "$current_branch" != "$default_branch" ]; then
+          if [ ${options.failOnDirtyBranchMismatch ? '1' : '0'} = "1" ]; then
+            echo "Repository has uncommitted changes; refusing to switch from $current_branch to $default_branch." >&2
+            exit 65
+          fi
           echo "Repository has uncommitted changes; preserving checkout instead of switching branches." >&2
         fi
       fi
@@ -125,6 +164,35 @@ function parseBranchContext(context: Record<string, unknown>): string | undefine
   return typeof branch === 'string' && branch.trim() ? branch.trim() : undefined;
 }
 
+function parseEnvironmentRepositoryContexts(context: Record<string, unknown>): RepositoryContext[] {
+  const environment = context.environment;
+  if (!isRecord(environment)) return [];
+  const id = typeof environment.id === 'string' ? environment.id : '';
+  const name = typeof environment.name === 'string' ? environment.name : '';
+  const codebase = environment.codebase;
+  if (!isRecord(codebase) || !Array.isArray(codebase.repositories)) return [];
+  const repositories = codebase.repositories.map((value) => {
+    const repository = parseRepositoryValue(value);
+    if (!repository) {
+      throw new RepositorySetupError(
+        'invalid_repository_context',
+        'Expected environment codebase repositories with provider, owner, and repo',
+      );
+    }
+    const record = value as Record<string, unknown>;
+    return {
+      ...repository,
+      primary: record.primary === true,
+      ...optionalBranch(typeof record.branch === 'string' ? record.branch.trim() : undefined),
+      environment: { id, name },
+    };
+  });
+  if (repositories.length && repositories.filter((repository) => repository.primary).length !== 1) {
+    throw new RepositorySetupError('invalid_repository_context', 'Expected exactly one primary environment repository');
+  }
+  return repositories.sort((left, right) => Number(right.primary) - Number(left.primary));
+}
+
 function parseRepositoryValue(value: unknown): RepositoryContext | null {
   if (!isRecord(value)) return null;
   const provider = typeof value.provider === 'string' ? value.provider : 'github';
@@ -137,7 +205,11 @@ function parseRepositoryValue(value: unknown): RepositoryContext | null {
       'Expected repository context with provider, owner, and repo',
     );
   }
-  return { provider, owner, repo };
+  return { provider, owner, repo, primary: false };
+}
+
+function optionalBranch(branch: string | undefined): { branch?: string } {
+  return branch ? { branch } : {};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

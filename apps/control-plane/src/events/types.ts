@@ -71,6 +71,9 @@ export type NormalizedEventPayloadMap = {
     repo: string;
     branch?: string;
     workspacePath: string;
+    environmentId?: string;
+    environmentName?: string;
+    primary?: boolean;
     expiresAt: string;
   };
   setup_script_started: {

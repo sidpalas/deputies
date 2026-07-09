@@ -40,6 +40,34 @@ _Avoid_: Job, task, scheduled run
 An isolated execution environment associated with a session where agent work can read files, run commands, and produce artifacts.
 _Avoid_: Container, workspace, runner
 
+**Environment**:
+A reusable work context selected for a session or automation. An environment can contain sub-configurations for the code the agent should work with and the runtime assumptions it should run under.
+_Avoid_: Project, workspace
+
+**Codebase**:
+The code sub-configuration of an environment. A codebase identifies one or more repositories that belong together for agent work.
+_Avoid_: Repository set, code environment
+
+**Primary Repository**:
+The repository in an environment's codebase that acts as the default entry point for agent work. A session starts in the primary repository's working directory when its environment has a multi-repository codebase.
+_Avoid_: Main repo, selected repo
+
+**Active Repository**:
+The repository that repository-aware tools currently target during a session or run. The active repository can change as agent work moves across a codebase and does not change the environment's primary repository.
+_Avoid_: Primary repository, current project
+
+**Runtime Profile**:
+The runtime sub-configuration of an environment. A runtime profile describes sandbox, tooling, and execution assumptions separately from the codebase.
+_Avoid_: Runtime environment
+
+**Shared Environment**:
+An environment that a non-owner access group can view and use for sessions or automations without receiving management authority over the environment.
+_Avoid_: Shared project, copied environment
+
+**All-Groups Environment Share**:
+A non-default sharing mode that lets every current and future non-archived access group view and use an environment without receiving management authority over it.
+_Avoid_: Public environment, global environment
+
 **Artifact**:
 A durable output produced for a session, such as a file, link, preview, or result bundle.
 _Avoid_: Attachment, asset

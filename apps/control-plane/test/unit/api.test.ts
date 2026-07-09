@@ -221,6 +221,22 @@ describe('core API', () => {
     expect(body.message).not.toHaveProperty('context');
   });
 
+  it('rejects environment branch overrides without an environment message context', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Orphan overrides' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const response = await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
+      prompt: 'use overrides',
+      environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'api', branch: 'release' }],
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'invalid_request',
+      message: 'environmentBranchOverrides require environmentId',
+    });
+  });
+
   it('exposes only worker health routes for worker mode', async () => {
     await closeServer(server);
     server = createWorkerHealthServer(loadConfig({ API_AUTH_MODE: 'none', RUN_MODE: 'worker' }));

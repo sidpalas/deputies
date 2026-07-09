@@ -423,11 +423,11 @@ it('keeps only one context picker open at a time', async () => {
 
   fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
 
-  fireEvent.click(screen.getByRole('button', { name: 'Repository' }));
-  expect(screen.getByRole('option', { name: 'owner/repo' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Codebase' }));
+  expect(screen.getByRole('option', { name: /owner\/repo/i })).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Model' }));
-  expect(screen.queryByRole('option', { name: 'owner/repo' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: /owner\/repo/i })).not.toBeInTheDocument();
   expect(screen.getByRole('option', { name: /gpt 4\.1 \(OpenAI\)/i })).toBeInTheDocument();
 });
 

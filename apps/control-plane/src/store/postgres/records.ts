@@ -12,6 +12,9 @@ import type {
   AuthUserRecord,
   CallbackDeliveryRecord,
   CallbackDeliveryStatus,
+  EnvironmentRecord,
+  EnvironmentRepositoryRecord,
+  EnvironmentShareMode,
   EventRecord,
   ExternalResourceRecord,
   ExternalThreadRecord,
@@ -233,6 +236,7 @@ export type AutomationRow = QueryResultRow & {
   context: Record<string, unknown> | null;
   created_by_user_id: string | null;
   archived_at: Date | null;
+  environment_id: string | null;
   next_invocation_at: Date | null;
   scheduler_lock_owner: string | null;
   scheduler_locked_until: Date | null;
@@ -241,7 +245,35 @@ export type AutomationRow = QueryResultRow & {
 };
 
 export const automationSelectColumns =
-  'id, kind, name, prompt, schedule_cron, enabled, owner_group_id, visibility, write_policy, context, created_by_user_id, archived_at, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
+  'id, kind, name, prompt, schedule_cron, enabled, owner_group_id, visibility, write_policy, context, created_by_user_id, archived_at, environment_id, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
+
+export type EnvironmentRow = QueryResultRow & {
+  id: string;
+  name: string;
+  owner_group_id: string;
+  share_mode: EnvironmentShareMode;
+  archived_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export const environmentSelectColumns = 'id, name, owner_group_id, share_mode, archived_at, created_at, updated_at';
+
+export type EnvironmentRepositoryRow = QueryResultRow & {
+  id: string;
+  environment_id: string;
+  provider: EnvironmentRepositoryRecord['provider'];
+  owner: string;
+  repo: string;
+  branch: string | null;
+  is_primary: boolean;
+  position: PgInteger;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export const environmentRepositorySelectColumns =
+  'id, environment_id, provider, owner, repo, branch, is_primary, position, created_at, updated_at';
 
 export type AutomationInvocationRow = QueryResultRow & {
   id: string;
@@ -541,11 +573,39 @@ export function toAutomation(row: AutomationRow): AutomationRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+    ...(row.environment_id ? { environmentId: row.environment_id } : {}),
     ...(row.next_invocation_at ? { nextInvocationAt: row.next_invocation_at } : {}),
     ...(row.created_by_user_id ? { createdByUserId: row.created_by_user_id } : {}),
     ...(row.context ? { context: row.context } : {}),
     ...(row.scheduler_lock_owner ? { schedulerLockOwner: row.scheduler_lock_owner } : {}),
     ...(row.scheduler_locked_until ? { schedulerLockedUntil: row.scheduler_locked_until } : {}),
+  };
+}
+
+export function toEnvironment(row: EnvironmentRow): EnvironmentRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    ownerGroupId: row.owner_group_id,
+    shareMode: row.share_mode,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+  };
+}
+
+export function toEnvironmentRepository(row: EnvironmentRepositoryRow): EnvironmentRepositoryRecord {
+  return {
+    id: row.id,
+    environmentId: row.environment_id,
+    provider: row.provider,
+    owner: row.owner,
+    repo: row.repo,
+    isPrimary: row.is_primary,
+    position: Number(row.position),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.branch ? { branch: row.branch } : {}),
   };
 }
 

@@ -4,6 +4,7 @@ import type {
   AuthStore,
   AuthUserRecord,
   AutomationRecord,
+  EnvironmentWithDetailsRecord,
   GroupStore,
   GroupMemberRecord,
   GroupRecord,
@@ -50,7 +51,7 @@ export function readRequestAuthorization(
     authorization = (async (): Promise<RequestAuthorization | null> => {
       const user = await readRequestAuthUser(config, store, c);
       if (!user) return null;
-      return { bypass: false, user, memberships: await store.listUserGroupMemberships(user.id) };
+      return { bypass: false, user, memberships: await activeGroupMemberships(store, user.id) };
     })();
     requestAuthorizationCache.set(request, authorization);
   }
@@ -98,6 +99,29 @@ export function canManageAutomation(auth: RequestAuthorization, automation: Auto
   );
 }
 
+export function canReadEnvironment(auth: RequestAuthorization, environment: EnvironmentWithDetailsRecord): boolean {
+  if (auth.bypass || isSuperAdmin(auth)) return true;
+  if (groupRole(auth, environment.ownerGroupId)) return true;
+  if (environment.shareMode === 'all_groups') return auth.memberships.length > 0;
+  if (environment.shareMode === 'selected_groups') {
+    return environment.sharedGroupIds.some((groupId) => Boolean(groupRole(auth, groupId)));
+  }
+  return false;
+}
+
+export function canUseEnvironmentInGroup(
+  auth: RequestAuthorization,
+  environment: EnvironmentWithDetailsRecord,
+  groupId: string,
+): boolean {
+  if (!canCreateSessionInGroup(auth, groupId)) return false;
+  return environmentAvailableToGroup(environment, groupId);
+}
+
+export function canManageEnvironment(auth: RequestAuthorization, environment: EnvironmentWithDetailsRecord): boolean {
+  return canManageGroup(auth, environment.ownerGroupId);
+}
+
 export function canManageGroup(auth: RequestAuthorization, groupId: string): boolean {
   if (auth.bypass || isSuperAdmin(auth)) return true;
   return groupRole(auth, groupId) === 'admin';
@@ -120,6 +144,20 @@ export function groupRole(auth: RequestAuthorization, groupId: string): GroupRol
   if (auth.bypass) return 'admin';
   const roles = auth.memberships.filter((member) => member.groupId === groupId).map((member) => member.role);
   return strongestGroupRole(roles);
+}
+
+function environmentAvailableToGroup(environment: EnvironmentWithDetailsRecord, groupId: string): boolean {
+  return (
+    environment.ownerGroupId === groupId ||
+    environment.shareMode === 'all_groups' ||
+    (environment.shareMode === 'selected_groups' && environment.sharedGroupIds.includes(groupId))
+  );
+}
+
+async function activeGroupMemberships(store: GroupStore, userId: string): Promise<GroupMemberRecord[]> {
+  const memberships = await store.listUserGroupMemberships(userId);
+  const groups = await Promise.all(memberships.map((membership) => store.getGroup(membership.groupId)));
+  return memberships.filter((_, index) => !groups[index]?.archivedAt);
 }
 
 export function strongestGroupRole(roles: GroupRole[]): GroupRole | null {

@@ -17,12 +17,13 @@ export function AutomationsSidebar(props: {
   canCreateAutomations: boolean;
   canViewGroups: boolean;
   canViewAutomations: boolean;
+  canViewEnvironments: boolean;
   canViewSetup: boolean;
   connectionStatus: ConnectionStatus;
   groups: Group[];
   health: Health | null;
   loading: boolean;
-  navPage: 'sessions' | 'setup' | 'groups' | 'automations';
+  navPage: 'sessions' | 'setup' | 'groups' | 'automations' | 'environments';
   selectedAutomationId: string;
   themePreference: ThemePreference;
   token: string;
@@ -32,6 +33,7 @@ export function AutomationsSidebar(props: {
   onCollapse: () => void;
   onCreateAutomation: () => void;
   onOpenAutomations: () => void;
+  onOpenEnvironments: () => void;
   onOpenGroups: () => void;
   onOpenSessions: () => void;
   onOpenSetup: () => void;
@@ -171,12 +173,14 @@ export function AutomationsSidebar(props: {
         authRequired={props.authRequired}
         canViewGroups={props.canViewGroups}
         canViewAutomations={props.canViewAutomations}
+        canViewEnvironments={props.canViewEnvironments}
         canViewSetup={props.canViewSetup}
         health={props.health}
         navPage={props.navPage}
         token={props.token}
         onOpenGroups={props.onOpenGroups}
         onOpenAutomations={props.onOpenAutomations}
+        onOpenEnvironments={props.onOpenEnvironments}
         onOpenSessions={props.onOpenSessions}
         onOpenSetup={props.onOpenSetup}
         onSignOut={props.onSignOut}

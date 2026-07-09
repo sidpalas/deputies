@@ -24,7 +24,7 @@ import type { RepositoryAccessProvider } from '../repositories/setup.js';
 import {
   checkoutRepositoryPreparation,
   completeRepositoryPreparation,
-  planRepositoryPreparation,
+  planRepositoryPreparations,
   preparedRepositoryFromPlan,
   type RepositoryCheckoutResult,
   type RepositoryPreparationPlan,
@@ -155,7 +155,8 @@ export class PiRunner implements Runner {
       if (mcpSetup) await closeMcpConnections(mcpSetup.connections);
       throw error;
     }
-    const cwd = repositorySetup?.plan.workspacePath ?? input.sandbox.workspacePath;
+    const primaryRepositorySetup = repositorySetup?.[0] ?? null;
+    const cwd = primaryRepositorySetup?.plan.workspacePath ?? input.sandbox.workspacePath;
     const { lease, modelRegistry, modelSelection, model, resourceLoader } = await (async () => {
       try {
         const lease = await this.getSessionLease(input.sessionId, cwd);
@@ -250,11 +251,13 @@ export class PiRunner implements Runner {
         createdAt: new Date(),
       });
 
-      const setupResult = repositorySetup
-        ? await completePiRepositorySetup(input, this.options, repositorySetup)
-        : null;
-      if (setupResult) repositoryState.prepared = setupResult;
-      const setupNote = combineSetupNotes(mcpSetup?.note ?? null, setupResult?.setupFailureNote ?? null);
+      const setupResults = repositorySetup ? await completePiRepositorySetup(input, this.options, repositorySetup) : [];
+      const primarySetupResult = setupResults.find((result) => result.primary) ?? setupResults[0] ?? null;
+      if (primarySetupResult) repositoryState.prepared = primarySetupResult;
+      const setupNote = combineSetupNotes(
+        mcpSetup?.note ?? null,
+        ...setupResults.map((result) => result.setupFailureNote),
+      );
 
       if (input.signal?.aborted) throw new Error('Operation aborted');
       await session.prompt(withSetupNote(input.prompt, setupNote), { expandPromptTemplates: false });
@@ -337,10 +340,12 @@ export class PiRunner implements Runner {
   }
 }
 
-type PiRepositorySetup = {
-  plan: RepositoryPreparationPlan;
-  checkout: RepositoryCheckoutResult;
-} | null;
+type PiRepositorySetup =
+  | {
+      plan: RepositoryPreparationPlan;
+      checkout: RepositoryCheckoutResult;
+    }[]
+  | null;
 
 function createPiToolSet(
   input: RunnerInput,
@@ -587,8 +592,9 @@ function resolveSubagentCwd(parentCwd: string, cwd: string | undefined): string 
 
 function createRepositoryState(context: Record<string, unknown>, setup: PiRepositorySetup): RepositoryToolState {
   const state: RepositoryToolState = { context: structuredClone(context) };
-  if (setup) {
-    state.prepared = preparedRepositoryFromPlan(setup.plan);
+  const primarySetup = setup?.[0];
+  if (primarySetup) {
+    state.prepared = preparedRepositoryFromPlan(primarySetup.plan);
   }
   return state;
 }
@@ -612,36 +618,46 @@ function createPiRepositoryServices(
 }
 
 async function preparePiRepositorySetup(input: RunnerInput, options: PiRunnerOptions) {
-  const repositorySetupInput: Parameters<typeof planRepositoryPreparation>[0] = {
+  const repositorySetupInput: Parameters<typeof planRepositoryPreparations>[0] = {
     context: input.context,
     sandbox: input.sandbox,
   };
   if (options.repositoryAccess?.github) repositorySetupInput.github = options.repositoryAccess.github;
-  const plan = await planRepositoryPreparation(repositorySetupInput);
-  if (!plan) return null;
-  const checkout = await checkoutRepositoryPreparation({
-    plan,
-    workspaceRoot: input.sandbox.workspacePath,
-    shell: sandboxRepositoryShell(input.sandbox),
-    ...(input.signal ? { signal: input.signal } : {}),
-  });
-  return { plan, checkout };
+  const plans = await planRepositoryPreparations(repositorySetupInput);
+  if (!plans.length) return null;
+  const setups = [];
+  for (const plan of plans) {
+    const checkout = await checkoutRepositoryPreparation({
+      plan,
+      workspaceRoot: input.sandbox.workspacePath,
+      shell: sandboxRepositoryShell(input.sandbox),
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+    setups.push({ plan, checkout });
+  }
+  return setups;
 }
 
 async function completePiRepositorySetup(
   input: RunnerInput,
   options: PiRunnerOptions,
   setup: NonNullable<PiRepositorySetup>,
-): Promise<RepositoryPreparationResult> {
-  return completeRepositoryPreparation({
-    plan: setup.plan,
-    repositoryWasCloned: setup.checkout.repositoryWasCloned,
-    emit: input.emit,
-    eventBase: { sessionId: input.sessionId, runId: input.runId, messageId: input.messageId },
-    setupShell: sandboxRepositoryShell(input.sandbox),
-    ...(options.setupScript ? { setupScript: options.setupScript } : {}),
-    ...(input.signal ? { signal: input.signal } : {}),
-  });
+): Promise<RepositoryPreparationResult[]> {
+  const results = [];
+  for (const item of setup) {
+    results.push(
+      await completeRepositoryPreparation({
+        plan: item.plan,
+        repositoryWasCloned: item.checkout.repositoryWasCloned,
+        emit: input.emit,
+        eventBase: { sessionId: input.sessionId, runId: input.runId, messageId: input.messageId },
+        setupShell: sandboxRepositoryShell(input.sandbox),
+        ...(options.setupScript ? { setupScript: options.setupScript } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
+    );
+  }
+  return results;
 }
 
 async function connectPiMcpServers(mcp: PiRunnerOptions['mcp'], signal: AbortSignal | undefined): Promise<PiMcpSetup> {

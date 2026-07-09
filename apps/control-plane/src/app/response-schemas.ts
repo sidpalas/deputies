@@ -77,6 +77,14 @@ export const publicApiResponseSchemas = {
     description: 'Manual automation invocation result envelope.',
     fields: { automation: 'object', invocation: 'object', session: 'optional:object', message: 'optional:object' },
   },
+  environment: {
+    description: 'Single environment envelope.',
+    fields: { environment: 'object' },
+  },
+  environments: {
+    description: 'Environment list envelope.',
+    fields: { environments: 'array' },
+  },
   group: {
     description: 'Single group envelope.',
     fields: { group: 'object' },

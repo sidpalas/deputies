@@ -15,6 +15,7 @@ import type {
   CreateAutomationRecord,
   CreateArtifactRecord,
   CreateCallbackDeliveryRecord,
+  CreateEnvironmentRecord,
   CreateExternalResourceRecord,
   CreateSandboxRecord,
   CreateWebhookSourceRecord,
@@ -26,6 +27,7 @@ import type {
   IntegrationDeliveryRecord,
   EventRecord,
   EventDeltaCompactionInput,
+  EnvironmentWithDetailsRecord,
   CreateMessageRecord,
   CreateSessionRecord,
   CreateSessionWithFirstMessageInput,
@@ -53,6 +55,7 @@ import type {
   SessionTranscriptOptions,
   SessionTranscriptPage,
   UpdateAutomationRecord,
+  UpdateEnvironmentRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -91,6 +94,7 @@ export class MemoryStore implements AppStore {
   private readonly callbacks = new Map<string, CallbackDeliveryRecord>();
   private readonly automations = new Map<string, AutomationRecord>();
   private readonly automationInvocations = new Map<string, AutomationInvocationRecord>();
+  private readonly environments = new Map<string, EnvironmentWithDetailsRecord>();
   private readonly webhookSources = new Map<string, WebhookSourceRecord>();
   private readonly externalThreads = new Map<string, ExternalThreadRecord>();
   private readonly integrationDeliveries = new Map<string, IntegrationDeliveryRecord>();
@@ -566,11 +570,84 @@ export class MemoryStore implements AppStore {
       if (input.context) updated.context = input.context;
       else delete updated.context;
     }
+    if (input.environmentId !== undefined) {
+      if (input.environmentId) updated.environmentId = input.environmentId;
+      else delete updated.environmentId;
+    }
     if (input.nextInvocationAt !== undefined && input.nextInvocationAt !== null)
       updated.nextInvocationAt = input.nextInvocationAt;
     else if (input.nextInvocationAt === null) delete updated.nextInvocationAt;
     this.automations.set(input.id, updated);
     return updated;
+  }
+
+  async createEnvironment(record: CreateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord> {
+    if (this.environments.has(record.environment.id))
+      throw new Error(`Environment already exists: ${record.environment.id}`);
+    this.assertEnvironmentNameAvailable(record.environment.name, record.environment.ownerGroupId);
+    const created = this.environmentWithDetails(record);
+    this.environments.set(created.id, created);
+    return created;
+  }
+
+  async getEnvironment(id: string): Promise<EnvironmentWithDetailsRecord | null> {
+    return cloneEnvironment(this.environments.get(id)) ?? null;
+  }
+
+  async listEnvironments(): Promise<EnvironmentWithDetailsRecord[]> {
+    return [...this.environments.values()]
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+      .map((environment) => cloneEnvironment(environment)!);
+  }
+
+  async updateEnvironment(record: UpdateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord> {
+    const existing = this.environments.get(record.environment.id);
+    if (!existing) throw new Error(`Environment does not exist: ${record.environment.id}`);
+    if (
+      !existing.archivedAt &&
+      !record.environment.archivedAt &&
+      (existing.name !== record.environment.name || existing.ownerGroupId !== record.environment.ownerGroupId)
+    ) {
+      this.assertEnvironmentNameAvailable(
+        record.environment.name,
+        record.environment.ownerGroupId,
+        record.environment.id,
+      );
+    }
+    const updated = this.environmentWithDetails(record);
+    this.environments.set(updated.id, updated);
+    return cloneEnvironment(updated)!;
+  }
+
+  async archiveEnvironment(input: {
+    environmentId: string;
+    archivedAt: Date;
+  }): Promise<EnvironmentWithDetailsRecord | null> {
+    const existing = this.environments.get(input.environmentId);
+    if (!existing) return null;
+    const archived: EnvironmentWithDetailsRecord = {
+      ...existing,
+      archivedAt: existing.archivedAt ?? input.archivedAt,
+      updatedAt: input.archivedAt,
+    };
+    this.environments.set(input.environmentId, archived);
+    return cloneEnvironment(archived)!;
+  }
+
+  async unarchiveEnvironment(input: {
+    environmentId: string;
+    updatedAt: Date;
+  }): Promise<EnvironmentWithDetailsRecord | null> {
+    const existing = this.environments.get(input.environmentId);
+    if (!existing) return null;
+    this.assertEnvironmentNameAvailable(existing.name, existing.ownerGroupId, existing.id);
+    const { archivedAt: _archivedAt, ...withoutArchive } = existing;
+    const unarchived: EnvironmentWithDetailsRecord = {
+      ...withoutArchive,
+      updatedAt: input.updatedAt,
+    };
+    this.environments.set(input.environmentId, unarchived);
+    return cloneEnvironment(unarchived)!;
   }
 
   async archiveAutomation(input: { automationId: string; archivedAt: Date }): Promise<AutomationRecord | null> {
@@ -1555,6 +1632,30 @@ export class MemoryStore implements AppStore {
     if (!existing) throw new Error(`Callback delivery does not exist: ${id}`);
     return existing;
   }
+
+  private assertEnvironmentNameAvailable(name: string, ownerGroupId: string, exceptEnvironmentId?: string): void {
+    const normalized = normalizedGroupName(name);
+    const conflict = [...this.environments.values()].find(
+      (environment) =>
+        environment.id !== exceptEnvironmentId &&
+        !environment.archivedAt &&
+        environment.ownerGroupId === ownerGroupId &&
+        normalizedGroupName(environment.name) === normalized,
+    );
+    if (conflict) throw new StoreConflictError('environment_name_exists', 'Environment name already exists');
+  }
+
+  private environmentWithDetails(
+    record: CreateEnvironmentRecord | UpdateEnvironmentRecord,
+  ): EnvironmentWithDetailsRecord {
+    return {
+      ...record.environment,
+      repositories: record.repositories
+        .map((repository) => ({ ...repository }))
+        .sort((left, right) => left.position - right.position),
+      sharedGroupIds: [...record.sharedGroupIds].sort(compareStringAsc),
+    };
+  }
 }
 
 function authAccountKey(provider: string, providerAccountId: string): string {
@@ -1563,6 +1664,17 @@ function authAccountKey(provider: string, providerAccountId: string): string {
 
 function groupMemberKey(groupId: string, userId: string): string {
   return `${groupId}:${userId}`;
+}
+
+function cloneEnvironment(
+  environment: EnvironmentWithDetailsRecord | undefined,
+): EnvironmentWithDetailsRecord | undefined {
+  if (!environment) return undefined;
+  return {
+    ...environment,
+    repositories: environment.repositories.map((repository) => ({ ...repository })),
+    sharedGroupIds: [...environment.sharedGroupIds],
+  };
 }
 
 function normalizedGroupName(name: string): string {

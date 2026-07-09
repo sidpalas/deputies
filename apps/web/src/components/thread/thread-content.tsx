@@ -56,6 +56,21 @@ export type SessionLineage = {
   onSelectSession?: (sessionId: string) => void;
 };
 
+export type ContextEnvironment = {
+  id: string;
+  name: string;
+  repositories: ContextEnvironmentRepository[];
+};
+
+export type ContextEnvironmentRepository = {
+  provider: string;
+  owner: string;
+  repo: string;
+  primary?: boolean;
+  position?: number;
+  branch?: string;
+};
+
 export function ChatPanel(props: {
   activeProgress: Record<string, string>;
   artifacts: Artifact[];
@@ -470,6 +485,7 @@ export function MobileContextPanel(props: {
   accessPanel?: ReactNode;
   lineage?: SessionLineage | undefined;
   canWriteSession: boolean;
+  environment: ContextEnvironment | null;
   repository: string | null;
   branch: string | null;
   artifacts: Artifact[];
@@ -504,6 +520,7 @@ export function DesktopContextPanel(props: {
   accessPanel?: ReactNode;
   lineage?: SessionLineage | undefined;
   canWriteSession: boolean;
+  environment: ContextEnvironment | null;
   repository: string | null;
   branch: string | null;
   artifacts: Artifact[];
@@ -529,6 +546,7 @@ function ContextPanelContent(props: {
   accessPanel?: ReactNode;
   lineage?: SessionLineage | undefined;
   canWriteSession: boolean;
+  environment: ContextEnvironment | null;
   repository: string | null;
   branch: string | null;
   artifacts: Artifact[];
@@ -544,8 +562,10 @@ function ContextPanelContent(props: {
       {props.accessPanel ? <div className="mt-3 border-b border-border pb-3">{props.accessPanel}</div> : null}
       {props.lineage ? <SessionLineageSection lineage={props.lineage} /> : null}
       <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
-        <strong className="block font-medium text-foreground">Repository</strong>
-        {props.repository ? (
+        <strong className="block font-medium text-foreground">Codebase</strong>
+        {props.environment ? (
+          <EnvironmentCodebaseSummary environment={props.environment} canWriteSession={props.canWriteSession} />
+        ) : props.repository ? (
           <>
             <a
               className="mt-1 block break-all text-primary"
@@ -565,7 +585,7 @@ function ContextPanelContent(props: {
             </span>
           </>
         ) : (
-          <span className="mt-1 block">No repository selected.</span>
+          <span className="mt-1 block">No codebase selected.</span>
         )}
       </div>
       <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
@@ -662,6 +682,54 @@ function ContextPanelContent(props: {
         ))}
         {!props.callbacks.length ? <p className="text-sm text-muted-foreground">No callbacks yet.</p> : null}
       </div>
+    </div>
+  );
+}
+
+function EnvironmentCodebaseSummary(props: { environment: ContextEnvironment; canWriteSession: boolean }) {
+  const repositories = props.environment.repositories.slice().sort((left, right) => {
+    if (left.primary !== right.primary) return left.primary ? -1 : 1;
+    return (left.position ?? 0) - (right.position ?? 0);
+  });
+
+  return (
+    <div className="mt-1 grid gap-2">
+      <div>
+        <span className="block text-foreground">{props.environment.name}</span>
+        <span className="block text-xs">
+          Environment · {repositories.length} repo{repositories.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div className="grid gap-1.5">
+        {repositories.map((repository) => {
+          const fullName = `${repository.owner}/${repository.repo}`;
+          return (
+            <div
+              className="min-w-0 rounded-md border border-border bg-background/70 px-2 py-1.5 text-xs"
+              key={`${repository.provider}:${fullName}`}
+            >
+              <a
+                className="block truncate text-primary"
+                href={repository.provider === 'github' ? `https://github.com/${fullName}` : undefined}
+                target="_blank"
+                rel="noreferrer"
+                title={fullName}
+              >
+                {fullName}
+              </a>
+              <span className="mt-0.5 block truncate text-muted-foreground">
+                {repository.primary ? 'Primary' : 'Secondary'}
+                {repository.branch ? ` · ${repository.branch}` : ''}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <span className="block text-xs">
+        {props.canWriteSession
+          ? 'Follow-ups inherit this environment. Select another codebase in the composer to switch.'
+          : 'Write-access follow-ups inherit this environment.'}
+      </span>
     </div>
   );
 }

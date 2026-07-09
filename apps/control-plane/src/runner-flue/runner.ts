@@ -11,8 +11,8 @@ import type { ExternalResourceService } from '../external-resources/service.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
 import { type RepositoryAccessProvider } from '../repositories/setup.js';
 import {
-  executeRepositoryPreparation,
-  planRepositoryPreparation,
+  executeRepositoryPreparations,
+  planRepositoryPreparations,
   preparedRepositoryFromPlan,
   type RepositoryPreparationPlan,
   type RepositoryPreparationResult,
@@ -66,32 +66,33 @@ export class FlueRunner implements Runner {
 
     const pendingEvents: Array<Promise<void>> = [];
     let sawTextDelta = false;
-    const repositorySetupInput: Parameters<typeof planRepositoryPreparation>[0] = {
+    const repositorySetupInput: Parameters<typeof planRepositoryPreparations>[0] = {
       context: input.context,
       sandbox: input.sandbox,
     };
     if (this.options.repositoryAccess?.github) repositorySetupInput.github = this.options.repositoryAccess.github;
     const mcpSetupPromise = connectFlueMcpServers(this.options.mcp, input.signal);
     let setup: {
-      repositorySetup: Awaited<ReturnType<typeof planRepositoryPreparation>>;
+      repositorySetups: Awaited<ReturnType<typeof planRepositoryPreparations>>;
       mcpSetup: FlueMcpSetup;
     };
     try {
-      const [repositorySetup, mcpSetup] = await Promise.all([
-        planRepositoryPreparation(repositorySetupInput),
+      const [repositorySetups, mcpSetup] = await Promise.all([
+        planRepositoryPreparations(repositorySetupInput),
         mcpSetupPromise,
       ]);
-      setup = { repositorySetup, mcpSetup };
+      setup = { repositorySetups, mcpSetup };
     } catch (error) {
       const connected = await mcpSetupPromise.catch(() => null);
       if (connected) await closeMcpConnections(connected.connections);
       throw error;
     }
-    const { repositorySetup, mcpSetup } = setup;
+    const { repositorySetups, mcpSetup } = setup;
+    const primaryRepositorySetup = repositorySetups[0] ?? null;
     const agentRef: AgentRef = {};
     const repositoryState: RepositoryToolState = { context: structuredClone(input.context) };
-    if (repositorySetup) {
-      repositoryState.prepared = preparedRepositoryFromPlan(repositorySetup);
+    if (primaryRepositorySetup) {
+      repositoryState.prepared = preparedRepositoryFromPlan(primaryRepositorySetup);
     }
     const repositoryServices = this.options.repositoryAccess?.github
       ? ({
@@ -170,7 +171,7 @@ export class FlueRunner implements Runner {
         agentId: input.sessionId,
         sessionId: input.sessionId,
         sandbox: input.sandbox,
-        cwd: repositorySetup?.workspacePath ?? input.sandbox.workspacePath,
+        cwd: primaryRepositorySetup?.workspacePath ?? input.sandbox.workspacePath,
         ...(input.model ? { model: input.model } : {}),
         tools,
         onEvent: (event) => {
@@ -195,9 +196,12 @@ export class FlueRunner implements Runner {
         createdAt: new Date(),
       });
 
-      const setupResult = repositorySetup ? await this.runRepositorySetup(input, repositorySetup, session) : null;
-      if (setupResult) repositoryState.prepared = setupResult;
-      const setupNote = combineSetupNotes(mcpSetup.note, setupResult?.setupFailureNote ?? null);
+      const setupResults = repositorySetups.length
+        ? await this.runRepositorySetup(input, repositorySetups, session)
+        : [];
+      const primarySetupResult = setupResults.find((result) => result.primary) ?? setupResults[0] ?? null;
+      if (primarySetupResult) repositoryState.prepared = primarySetupResult;
+      const setupNote = combineSetupNotes(mcpSetup.note, ...setupResults.map((result) => result.setupFailureNote));
 
       // Cancellation must not leave partial Flue turn state in durable history.
       // A prompt-only warning is cheaper but advisory, and models can still continue
@@ -255,11 +259,11 @@ export class FlueRunner implements Runner {
 
   private async runRepositorySetup(
     input: RunnerInput,
-    setup: RepositoryPreparationPlan,
+    setups: RepositoryPreparationPlan[],
     session: FlueSessionPort,
-  ): Promise<RepositoryPreparationResult> {
-    return executeRepositoryPreparation({
-      plan: setup,
+  ): Promise<RepositoryPreparationResult[]> {
+    return executeRepositoryPreparations({
+      plans: setups,
       workspaceRoot: input.sandbox.workspacePath,
       shell: flueSessionShell(session),
       setupShell: sandboxRepositoryShell(input.sandbox),
