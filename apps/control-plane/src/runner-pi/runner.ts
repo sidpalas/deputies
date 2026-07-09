@@ -17,6 +17,8 @@ import {
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import type { ArtifactService } from '../artifacts/service.js';
+import type { EnvironmentService } from '../environments/service.js';
+import { validateEnvironmentContext } from '../environments/tool.js';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
 import { getModels, type Api, type Model } from '@earendil-works/pi-ai/compat';
@@ -47,6 +49,7 @@ import { createPiGitToolDefinition } from './git-tool.js';
 import { createPiGitHubCliToolDefinition } from './github-cli-tool.js';
 import { createPiMcpToolDefinitions } from './mcp-tools.js';
 import { createPiRepositoryToolDefinition } from './repository-tool.js';
+import { createPiEnvironmentToolDefinition } from './environment-tool.js';
 import { createSandboxPiToolDefinitions } from './sandbox-tools.js';
 import { createPiServiceToolDefinition } from './service-tool.js';
 import { createPiWebSearchToolDefinition } from './web-search-tool.js';
@@ -84,6 +87,7 @@ export type PiRunnerOptions = {
   repositoryAccess?: {
     github?: RepositoryAccessProvider;
   };
+  environments?: EnvironmentService;
   artifacts?: ArtifactService;
   externalResources?: ExternalResourceService;
   artifactToolMaxBytes?: number;
@@ -144,6 +148,7 @@ export class PiRunner implements Runner {
     const modelName = input.model ?? this.options.model;
     const unavailableReason = this.options.modelUnavailableReason?.(modelName);
     if (unavailableReason) throw new Error(unavailableReason);
+    await validateEnvironmentContext(this.options.environments, input.ownerGroupId, input.context);
 
     const mcpSetupPromise = connectPiMcpServers(this.options.mcp, input.signal);
     let mcpSetup: PiMcpSetup | null = null;
@@ -375,6 +380,15 @@ function createPiToolSet(
 
   if (repositoryServices) {
     customTools.push(
+      ...(options.environments && input.ownerGroupId
+        ? [
+            createPiEnvironmentToolDefinition({
+              environments: options.environments,
+              ownerGroupId: input.ownerGroupId,
+              repository: repositoryServices,
+            }),
+          ]
+        : []),
       createPiRepositoryToolDefinition(repositoryServices),
       createPiGitHubCliToolDefinition(repositoryServices, {
         ...(options.externalResources ? { externalResources: options.externalResources } : {}),

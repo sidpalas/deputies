@@ -261,6 +261,7 @@ export class WorkerService {
             sessionId: primary.sessionId,
             runId: claimed.run.id,
             messageId: primary.id,
+            ownerGroupId: session.ownerGroupId,
             prompt: buildBatchPrompt(claimed.messages),
             ...(typeof runContext.model === 'string' ? { model: runContext.model } : {}),
             context: runContext,

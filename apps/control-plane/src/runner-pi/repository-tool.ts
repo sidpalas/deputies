@@ -15,6 +15,7 @@ export function createPiRepositoryToolDefinition(services: RepositoryToolService
     description: repositoryToolDescription,
     promptSnippet: 'Select, inspect, and prepare the active GitHub repository for this session',
     promptGuidelines: [
+      'When the environment tool is available, a direct repository is already active, and no environment is selected, prefer environment({ action: "auto" }) before repository-specific work.',
       'Before doing repository-specific work, use repository({ action: "status" }) to inspect the active repo.',
       'If a repository is already active and the user did not ask to switch, use it.',
       'If the user clearly names or chooses a repo for ongoing work, use repository({ action: "set", owner, repo, reason }) and then repository({ action: "prepare" }) in the same turn.',

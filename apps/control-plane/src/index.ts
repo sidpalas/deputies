@@ -399,6 +399,7 @@ async function createRunner(): Promise<Runner> {
     }
     if (deputy) piOptions.deputy = deputy;
     piOptions.repositoryAccess = createRepositoryAccess();
+    piOptions.environments = services.environments;
     piOptions.externalResources = services.externalResources;
     if (services.sandboxKeepalive) piOptions.sandboxKeepalive = services.sandboxKeepalive;
     piOptions.sandboxKeepaliveMaxExtensionMs = config.sandboxKeepaliveMaxExtensionMs;
@@ -440,6 +441,7 @@ async function createRunner(): Promise<Runner> {
 
   return new FlueRunner(new RealFlueAgentFactory(options), {
     repositoryAccess: createRepositoryAccess(),
+    environments: services.environments,
     ...(artifactObjectStorage ? { artifacts: services.artifacts } : {}),
     ...(webSearch ? { webSearch } : {}),
     ...(config.mcpServers.length

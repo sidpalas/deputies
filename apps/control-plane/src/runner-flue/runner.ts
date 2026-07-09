@@ -7,6 +7,8 @@ import {
 } from '@flue/runtime';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ArtifactService } from '../artifacts/service.js';
+import type { EnvironmentService } from '../environments/service.js';
+import { validateEnvironmentContext } from '../environments/tool.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
 import { type RepositoryAccessProvider } from '../repositories/setup.js';
@@ -24,7 +26,13 @@ import { createGitTool, type AgentRef } from './git-tool.js';
 import { createGitHubCliTool } from './github-cli-tool.js';
 import { createDeputyTool } from './deputy-tool.js';
 import { createServiceTool } from './service-tool.js';
-import { createRepositoryTool, type RepositoryToolServices, type RepositoryToolState } from './repository-tool.js';
+import {
+  createRepositoryTool,
+  toSharedRepositoryToolServices,
+  type RepositoryToolServices,
+  type RepositoryToolState,
+} from './repository-tool.js';
+import { createEnvironmentTool } from './environment-tool.js';
 import type { FlueAgentFactory, FluePromptResponse, FlueSessionPort } from './types.js';
 import { createWebSearchTool, type WebSearchToolServices } from './web-search-tool.js';
 import type { DeputyToolBaseServices } from '../sessions/deputy-tool.js';
@@ -36,6 +44,7 @@ export type FlueRunnerOptions = {
   repositoryAccess?: {
     github?: RepositoryAccessProvider;
   };
+  environments?: EnvironmentService;
   artifacts?: ArtifactService;
   externalResources?: ExternalResourceService;
   artifactToolMaxBytes?: number;
@@ -63,6 +72,7 @@ export class FlueRunner implements Runner {
   async run(input: RunnerInput): Promise<RunnerResult> {
     const unavailableReason = this.options.modelUnavailableReason?.(input.model);
     if (unavailableReason) throw new Error(unavailableReason);
+    await validateEnvironmentContext(this.options.environments, input.ownerGroupId, input.context);
 
     const pendingEvents: Array<Promise<void>> = [];
     let sawTextDelta = false;
@@ -123,6 +133,15 @@ export class FlueRunner implements Runner {
     }
     if (repositoryServices) {
       tools.push(
+        ...(this.options.environments && input.ownerGroupId
+          ? [
+              createEnvironmentTool({
+                environments: this.options.environments,
+                ownerGroupId: input.ownerGroupId,
+                repository: toSharedRepositoryToolServices(repositoryServices),
+              }),
+            ]
+          : []),
         createRepositoryTool(repositoryServices),
         createGitHubCliTool(repositoryServices, {
           ...(this.options.externalResources ? { externalResources: this.options.externalResources } : {}),
@@ -217,6 +236,7 @@ export class FlueRunner implements Runner {
             input.prompt,
             Boolean(this.options.artifacts),
             Boolean(repositoryServices),
+            Boolean(this.options.environments && input.ownerGroupId && repositoryServices),
             Boolean(this.options.webSearch),
             Boolean(this.options.deputy),
             setupNote,
@@ -384,6 +404,7 @@ function withToolGuidance(
   prompt: string,
   includeArtifacts: boolean,
   includeRepository: boolean,
+  includeEnvironment: boolean,
   includeWebSearch: boolean,
   includeDeputy: boolean,
   setupNote: string | null = null,
@@ -408,6 +429,7 @@ function withToolGuidance(
   if (includeRepository) {
     lines.push(
       'Repository tool guidance:',
+      '- When the environment tool is available, a direct repository is already active, and no environment is selected, prefer environment({ action: "auto" }) before repository-specific work.',
       '- Before doing repository-specific work, use repository({ action: "status" }) to inspect the active repo.',
       '- If a repository is already active and the user did not ask to switch, use it.',
       '- If the user clearly names or chooses a repo for ongoing work, use repository({ action: "set", owner, repo, reason }) and then repository({ action: "prepare" }) in the same turn.',
@@ -415,6 +437,15 @@ function withToolGuidance(
       '- If the repo is unclear, use repository({ action: "list" }) and ask the user to choose instead of guessing.',
       '- Use repository({ action: "prepare" }) before reading or editing files in the repo.',
       '- Use normal file and shell tools for local code changes and commits, git for authenticated remote git operations, and gh for GitHub issues, comments, and pull requests.',
+      '',
+    );
+  }
+  if (includeEnvironment) {
+    lines.push(
+      'Environment tool guidance:',
+      '- Before repository-specific work without an environment, use environment({ action: "auto" }) when direct repository context is available.',
+      '- Auto selects only one unambiguous accessible environment. If multiple environments match, use environment({ action: "list" }) and ask the user to choose.',
+      '- Selecting an environment prepares its primary repository. Use repository({ action: "set" }) only to move the active repository within that environment.',
       '',
     );
   }

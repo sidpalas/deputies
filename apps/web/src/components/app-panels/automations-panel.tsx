@@ -537,42 +537,81 @@ export function AutomationsPanel(props: {
                   </label>
                 </div>
 
-                <div className="grid gap-3 xl:grid-cols-[minmax(16rem,1fr)_auto_minmax(8rem,14rem)]">
-                  <Field label="Codebase" htmlFor="automation-codebase">
-                    <CodebasePicker
-                      id="automation-codebase"
-                      value={codebaseValue}
-                      environments={environmentOptions}
-                      environmentsLoading={props.environmentOptionsLoading}
-                      environmentsError={props.environmentOptionsError}
-                      repositories={props.repositoryOptions}
-                      repositoriesLoading={props.repositoryOptionsLoading}
-                      repositoriesError={props.repositoryOptionsError}
-                      onChange={(value) => setForm({ ...form, ...automationCodebaseFormPatch(value) })}
-                      placeholder="Select environment or repository..."
-                      disabled={!canEditDefinition}
-                    />
-                  </Field>
-                  {hasBranchControls ? (
-                    <div className="shrink-0">
-                      <span className="mb-1 block text-xs font-medium opacity-0" aria-hidden="true">
-                        {branchControlLabel}
-                      </span>
-                      <Button
-                        className="h-10 shrink-0 px-3"
-                        type="button"
-                        variant={branchControlsOpen ? 'default' : 'secondary'}
-                        size="sm"
-                        onClick={() => setBranchControlsOpen((open) => !open)}
+                <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(12rem,20rem)]">
+                  <div className="grid gap-3">
+                    <Field label="Codebase" htmlFor="automation-codebase">
+                      <CodebasePicker
+                        id="automation-codebase"
+                        value={codebaseValue}
+                        environments={environmentOptions}
+                        environmentsLoading={props.environmentOptionsLoading}
+                        environmentsError={props.environmentOptionsError}
+                        repositories={props.repositoryOptions}
+                        repositoriesLoading={props.repositoryOptionsLoading}
+                        repositoriesError={props.repositoryOptionsError}
+                        onChange={(value) => setForm({ ...form, ...automationCodebaseFormPatch(value) })}
+                        placeholder="Select environment or repository..."
                         disabled={!canEditDefinition}
-                        aria-expanded={branchControlsOpen}
-                      >
-                        {branchControlLabel}
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="hidden xl:block" />
-                  )}
+                      />
+                    </Field>
+                    {selectedEnvironment ? (
+                      <EnvironmentRevisionPolicy
+                        environment={selectedEnvironment}
+                        form={form}
+                        disabled={!canEditDefinition}
+                        saveHint={revisionPolicySaveHint}
+                        onChange={(policy) =>
+                          setForm({
+                            ...form,
+                            environmentRevisionPolicy: policy,
+                            environmentRevisionId: policy === 'pinned' ? selectedEnvironment.currentRevisionId : '',
+                            environmentRevisionNumber:
+                              policy === 'pinned' ? selectedEnvironment.currentRevisionNumber : null,
+                          })
+                        }
+                      />
+                    ) : null}
+                    {hasBranchControls ? (
+                      <div>
+                        <Button
+                          className="h-10 px-3"
+                          type="button"
+                          variant={branchControlsOpen ? 'default' : 'secondary'}
+                          size="sm"
+                          onClick={() => setBranchControlsOpen((open) => !open)}
+                          disabled={!canEditDefinition}
+                          aria-expanded={branchControlsOpen}
+                        >
+                          {branchControlLabel}
+                        </Button>
+                      </div>
+                    ) : null}
+                    {branchControlsOpen && form.repository ? (
+                      <div className="max-w-xs min-w-0">
+                        <BranchPicker
+                          id="automation-branch"
+                          value={form.branch}
+                          branches={branchOptions}
+                          loading={branchOptionsLoading}
+                          error={branchOptionsError}
+                          onChange={(value) => setForm({ ...form, branch: value })}
+                          placeholder="Default"
+                          disabled={!canEditDefinition}
+                        />
+                      </div>
+                    ) : null}
+                    {branchControlsOpen && selectedEnvironment ? (
+                      <EnvironmentBranchOverridesEditor
+                        environment={selectedEnvironment}
+                        value={form.environmentBranchOverrides}
+                        disabled={!canEditDefinition}
+                        onLoadBranches={(repository) =>
+                          loadAutomationEnvironmentRepositoryBranches(repository, props.token)
+                        }
+                        onChange={(value) => setForm({ ...form, environmentBranchOverrides: value })}
+                      />
+                    ) : null}
+                  </div>
                   <Field label="Model" htmlFor="automation-model">
                     <OptionPicker
                       id="automation-model"
@@ -586,58 +625,6 @@ export function AutomationsPanel(props: {
                     />
                   </Field>
                 </div>
-
-                {branchControlsOpen && form.repository ? (
-                  <div className="max-w-xs min-w-0">
-                    <BranchPicker
-                      id="automation-branch"
-                      value={form.branch}
-                      branches={branchOptions}
-                      loading={branchOptionsLoading}
-                      error={branchOptionsError}
-                      onChange={(value) => setForm({ ...form, branch: value })}
-                      placeholder="Default"
-                      disabled={!canEditDefinition}
-                    />
-                  </div>
-                ) : null}
-                {branchControlsOpen && selectedEnvironment ? (
-                  <EnvironmentBranchOverridesEditor
-                    environment={selectedEnvironment}
-                    value={form.environmentBranchOverrides}
-                    disabled={!canEditDefinition}
-                    onLoadBranches={(repository) =>
-                      loadAutomationEnvironmentRepositoryBranches(repository, props.token)
-                    }
-                    onChange={(value) => setForm({ ...form, environmentBranchOverrides: value })}
-                  />
-                ) : null}
-
-                {selectedEnvironment ? (
-                  <label className="flex items-start gap-2 rounded-md border border-border bg-background/70 p-3 text-sm text-muted-foreground">
-                    <input
-                      className="mt-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-                      type="checkbox"
-                      checked={form.environmentRevisionPolicy === 'pinned'}
-                      onChange={(event) =>
-                        setForm({
-                          ...form,
-                          environmentRevisionPolicy: event.target.checked ? 'pinned' : 'follow_latest',
-                          environmentRevisionId: event.target.checked ? selectedEnvironment.currentRevisionId : '',
-                          environmentRevisionNumber: event.target.checked
-                            ? selectedEnvironment.currentRevisionNumber
-                            : null,
-                        })
-                      }
-                      disabled={!canEditDefinition}
-                    />
-                    <span>
-                      {form.environmentRevisionPolicy === 'pinned'
-                        ? `Use ${pinnedRevisionDescription(selectedEnvironment, form)} for each invocation.${revisionPolicySaveHint}`
-                        : `Use the latest environment revision at the time of invocation.${revisionPolicySaveHint}`}
-                    </span>
-                  </label>
-                ) : null}
 
                 <Field label="Prompt" htmlFor="automation-prompt">
                   <Textarea
@@ -731,6 +718,64 @@ function Field(props: { label: string; htmlFor: string; hint?: string; children:
       </label>
       {props.children}
       {props.hint ? <p className="mt-1 text-xs text-muted-foreground">{props.hint}</p> : null}
+    </div>
+  );
+}
+
+function EnvironmentRevisionPolicy(props: {
+  environment: Environment;
+  form: AutomationForm;
+  disabled: boolean;
+  saveHint: string;
+  onChange: (policy: AutomationForm['environmentRevisionPolicy']) => void;
+}) {
+  const pinnedRevisionNumber = props.form.environmentRevisionNumber ?? props.environment.currentRevisionNumber;
+  const pinIsCurrent =
+    props.form.environmentRevisionPolicy !== 'pinned' ||
+    props.form.environmentRevisionId === props.environment.currentRevisionId;
+  return (
+    <div className="grid gap-1">
+      <span id="automation-environment-revision-policy" className="text-xs font-medium text-muted-foreground">
+        Environment revision policy
+      </span>
+      <fieldset
+        aria-labelledby="automation-environment-revision-policy"
+        className="grid gap-2 rounded-md border border-border bg-background/70 p-3 text-sm text-muted-foreground"
+      >
+        <label className="flex cursor-pointer items-start gap-2">
+          <input
+            className="mt-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+            type="radio"
+            name="environment-revision-policy"
+            checked={props.form.environmentRevisionPolicy === 'follow_latest'}
+            onChange={() => props.onChange('follow_latest')}
+            disabled={props.disabled}
+          />
+          <span>
+            <span className="block font-medium text-foreground">Follow latest</span>
+            Use the latest environment revision at the time of invocation.
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-2">
+          <input
+            className="mt-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+            type="radio"
+            name="environment-revision-policy"
+            checked={props.form.environmentRevisionPolicy === 'pinned'}
+            onChange={() => props.onChange('pinned')}
+            disabled={props.disabled}
+          />
+          <span>
+            <span className="block font-medium text-foreground">
+              <strong>Pin</strong>
+              {pinIsCurrent ? ' current ' : ' '}
+              <strong>environment revision ({pinnedRevisionNumber})</strong>
+            </span>
+            Use this same environment revision for every invocation.
+          </span>
+        </label>
+        {props.saveHint ? <p className="text-xs text-amber-700">{props.saveHint.trim()}</p> : null}
+      </fieldset>
     </div>
   );
 }

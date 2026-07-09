@@ -37,7 +37,7 @@ export type RepositoryToolServices = {
 };
 
 export const repositoryToolDescription =
-  'Manage the active GitHub repository for this session. Use status to inspect current repo, list when uncertain, set when you have a confident repo choice, and prepare before reading/editing files. After setting a repo for ongoing work, prepare it in the same turn unless the user only asked to inspect or select. If the repo is unclear, ask the user instead of guessing.';
+  'Manage the active GitHub repository for this session. When the environment tool is available, a direct repository is already active, and no environment is selected, prefer environment({ action: "auto" }) before repository-specific work. Use status to inspect current repo, list when uncertain, set when you have a confident repo choice, and prepare before reading/editing files. After setting a repo for ongoing work, prepare it in the same turn unless the user only asked to inspect or select. If the repo is unclear, ask the user instead of guessing.';
 
 export const repositoryToolParameters = {
   type: 'object',
