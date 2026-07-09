@@ -24,7 +24,6 @@ describe.skipIf(!enabled)('real Superserve sandbox UAT', () => {
       ...(process.env.SUPERSERVE_BASE_URL ? { baseUrl: process.env.SUPERSERVE_BASE_URL } : {}),
       template: template!,
       workspacePath: '/workspace',
-      idleTimeoutMs: 600_000,
     });
   });
 

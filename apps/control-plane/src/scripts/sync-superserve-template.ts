@@ -1,7 +1,7 @@
 import { Template, type ConnectionOptions, type TemplateInfo } from '@superserve/sdk';
 
 const templateName = process.env.SUPERSERVE_TEMPLATE ?? 'deputies';
-const image = process.env.SUPERSERVE_IMAGE ?? 'ghcr.io/sidpalas/deputies-superserve-sandbox:latest';
+const image = process.env.SUPERSERVE_IMAGE ?? 'ghcr.io/sidpalas/deputies-daytona-sandbox:latest';
 
 async function main(): Promise<void> {
   if (templateName.startsWith('superserve/')) {

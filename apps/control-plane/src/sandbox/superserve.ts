@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, normalize, relative } from 'node:path/posix';
-import { NotFoundError, Sandbox } from '@superserve/sdk';
+import { ConflictError, NotFoundError, Sandbox } from '@superserve/sdk';
 import { sandboxBridgeSkipCookieNamesEnv } from './bridge-env.js';
 import type {
   ConnectSandboxInput,
@@ -20,6 +20,8 @@ import type {
 } from './types.js';
 
 const superserveBridgePort = 3584;
+const superserveActivationRetryAttempts = 4;
+const superserveActivationRetryDelayMs = 100;
 
 type SuperserveStatus = 'active' | 'paused' | 'resuming' | 'failed';
 
@@ -36,6 +38,10 @@ export type SuperserveCreateOptions = {
   timeoutSeconds?: number;
   metadata?: Record<string, string>;
   envVars?: Record<string, string>;
+};
+
+export type SuperserveListOptions = {
+  metadata?: Record<string, string>;
 };
 
 type SuperserveCommandOptions = {
@@ -71,7 +77,7 @@ export type SuperserveSandboxLike = SuperserveSandboxInfoLike & {
 export type SuperserveClientLike = {
   create(options: SuperserveCreateOptions): Promise<SuperserveSandboxLike>;
   connect(sandboxId: string): Promise<SuperserveSandboxLike>;
-  list(): Promise<SuperserveSandboxInfoLike[]>;
+  list(options?: SuperserveListOptions): Promise<SuperserveSandboxInfoLike[]>;
   killById(sandboxId: string): Promise<void>;
 };
 
@@ -81,7 +87,6 @@ export type SuperserveSandboxProviderOptions = {
   baseUrl?: string;
   template?: string;
   workspacePath?: string;
-  idleTimeoutMs?: number;
   envVars?: Record<string, string>;
   bridgeSkippedCookieNames?: string;
 };
@@ -133,7 +138,7 @@ export class SuperserveSandboxProvider implements SandboxProvider {
   }
 
   async connect(input: ConnectSandboxInput): Promise<SandboxHandle> {
-    const sandbox = await this.client.connect(input.providerSandboxId);
+    const sandbox = await this.connectSandbox(input.providerSandboxId);
     await ensureSuperserveWorkspace(sandbox, this.workspacePath);
     return this.toHandle(sandbox, input.sessionId, input.metadata ?? {}, input.secrets);
   }
@@ -148,23 +153,25 @@ export class SuperserveSandboxProvider implements SandboxProvider {
   }
 
   async start(input: SandboxRef): Promise<void> {
-    await this.client.connect(input.providerSandboxId);
+    await this.connectSandbox(input.providerSandboxId);
   }
 
   async stop(input: SandboxRef): Promise<void> {
-    const sandbox = await this.client.connect(input.providerSandboxId);
+    const sandbox = await this.connectSandbox(input.providerSandboxId);
     await sandbox.pause();
   }
 
   async health(input: SandboxRef): Promise<SandboxHealth> {
-    const info = (await this.client.list()).find((sandbox) => sandbox.id === input.providerSandboxId);
+    const info = (await this.client.list({ metadata: { 'deputies-session-id': input.sessionId } })).find(
+      (sandbox) => sandbox.id === input.providerSandboxId,
+    );
     if (!info) return { status: 'missing', checkedAt: new Date() };
     return superserveHealth(info);
   }
 
   async getServiceEndpoint(input: SandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {
     if (input.port === superserveBridgePort) return null;
-    const sandbox = await this.client.connect(input.providerSandboxId);
+    const sandbox = await this.connectSandbox(input.providerSandboxId);
     const bridgeToken = input.secrets?.bridgeToken ?? randomUUID();
     await ensureSuperserveBridge(sandbox, this.workspacePath, bridgeToken, this.options.bridgeSkippedCookieNames);
     return {
@@ -196,8 +203,19 @@ export class SuperserveSandboxProvider implements SandboxProvider {
       },
     };
     if (this.options.template) options.fromTemplate = this.options.template;
-    if (this.options.idleTimeoutMs) options.timeoutSeconds = Math.max(1, Math.ceil(this.options.idleTimeoutMs / 1000));
     return options;
+  }
+
+  private async connectSandbox(providerSandboxId: string): Promise<SuperserveSandboxLike> {
+    for (let attempt = 0; attempt < superserveActivationRetryAttempts; attempt += 1) {
+      try {
+        return await this.client.connect(providerSandboxId);
+      } catch (error) {
+        if (!isSuperserveActivationConflict(error) || attempt === superserveActivationRetryAttempts - 1) throw error;
+        await delay(superserveActivationRetryDelayMs * 2 ** attempt);
+      }
+    }
+    throw new Error('Superserve activation retries exhausted');
   }
 
   private toHandle(
@@ -232,8 +250,11 @@ function createSuperserveClient(options: SuperserveSandboxProviderOptions): Supe
     async connect(sandboxId) {
       return Sandbox.connect(sandboxId, connection);
     },
-    async list() {
-      return Sandbox.list(connection);
+    async list(options = {}) {
+      return Sandbox.list({
+        ...connection,
+        ...(options.metadata ? { metadata: options.metadata } : {}),
+      });
     },
     async killById(sandboxId) {
       await Sandbox.killById(sandboxId, connection);
@@ -428,6 +449,17 @@ function safeId(value: string): string {
 
 function abortError(): DOMException {
   return new DOMException('Operation aborted', 'AbortError');
+}
+
+function isSuperserveActivationConflict(error: unknown): boolean {
+  if (error instanceof ConflictError) return true;
+  if (!(error instanceof Error)) return false;
+  const named = error as Error & { statusCode?: number; status?: number; code?: string };
+  return named.statusCode === 409 || named.status === 409 || named.code === 'conflict';
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function isSuperserveNotFoundError(error: unknown): boolean {

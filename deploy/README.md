@@ -24,7 +24,7 @@ Sandbox provider deployment assets live under `sandboxes/`. These build and veri
 
 - `sandboxes/docker/`: Docker sandbox image and runtime notes.
 - `sandboxes/daytona/`: Daytona image and sandbox verification notes.
-- `sandboxes/superserve/`: Superserve custom-template image and linux/amd64 build tasks.
+- `sandboxes/superserve/`: Superserve template synchronization and live-UAT tasks using the published Daytona image.
 - `sandboxes/lambda-microvm/`: AWS Lambda MicroVM sandbox image package and image-management tasks.
 
 Add one subdirectory per deployment target or infrastructure provider, for example:

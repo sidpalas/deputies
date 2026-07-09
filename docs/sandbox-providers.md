@@ -22,7 +22,7 @@ Lambda MicroVM images are managed separately from app Terraform with `deploy/san
 
 Tensorlake sandboxes require `TENSORLAKE_REGISTERED_IMAGE` to name a registered Tensorlake sandbox image, such as `deputies`. Raw registry references like `ghcr.io/org/image:tag` cannot be passed directly to `Sandbox.create`; put the registry reference in `deploy/sandboxes/tensorlake/Dockerfile`, set `TENSORLAKE_REGISTERED_IMAGE` to the stable registered name/id, then run `mise run //deploy/sandboxes/tensorlake:image:create` before using the provider.
 
-Superserve sandboxes require `SUPERSERVE_TEMPLATE` to name a ready Superserve template. Build and publish `deploy/sandboxes/superserve/Dockerfile`, then create the template from that custom image. Superserve custom images must be Linux/amd64 and glibc-based; the repository build task and Dockerfile both enforce those constraints. Deputies exposes only the authenticated bridge port through Superserve's public preview URL and forwards requested application ports through `/preview/<port>`.
+Superserve sandboxes require `SUPERSERVE_TEMPLATE` to name a ready Superserve template. Templates use the published Daytona image, which satisfies Superserve's Linux/amd64 glibc requirement and contains the Deputies bridge. Deputies exposes only the authenticated bridge port through Superserve's public preview URL and forwards requested application ports through `/preview/<port>`. The bridge token protects the public endpoint from external callers but is a sandbox-visible capability, so sandbox code must be trusted with preview access.
 
 > **Warning:** `SANDBOX_PROVIDER=unsafe-local` is for trusted local development only. It is not a security boundary; agent commands run on the API/worker host runtime in a temporary workspace.
 

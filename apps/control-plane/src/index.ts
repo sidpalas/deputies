@@ -306,7 +306,6 @@ function createSandboxProvider(): SandboxProvider {
     const options = {
       apiKey: requireSuperserveApiKey(config),
       template: requireSuperserveTemplate(config),
-      idleTimeoutMs: Math.max(config.sandboxIdleTimeoutMs, config.sandboxKeepaliveMaxExtensionMs),
       workspacePath: config.sandboxWorkspacePath,
       bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
     };

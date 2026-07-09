@@ -7,7 +7,7 @@ This directory contains sandbox runtime image assets. These images are not full 
 - `base/`: provider-neutral base toolchain for Deputies-compatible sandboxes.
 - `docker/`: Docker-provider image. It uses the base toolchain and starts the Deputies sandbox bridge as its command.
 - `daytona/`: Daytona-provider image. It uses the base toolchain, adds helper scripts for Daytona/no-nested-virtualization verification, and uses a long-running command.
-- `superserve/`: Superserve custom-template image. It enforces the provider's Linux/amd64 and glibc requirements and includes the authenticated Deputies bridge.
+- `superserve/`: Superserve template synchronization and live-UAT tasks. Templates use the published Daytona image.
 
 ## Custom Repository Images
 

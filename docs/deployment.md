@@ -37,14 +37,13 @@ Use scale mode when API, worker, web/proxy, storage, and sandbox orchestration n
 
 Use the published GHCR images for standard deployments, or use the in-repo Dockerfiles as starting points for provider-specific builds:
 
-| Component          | Published image                                                | Dockerfile                               |
-| ------------------ | -------------------------------------------------------------- | ---------------------------------------- |
-| Control plane      | `ghcr.io/sidpalas/deputies-control-plane:<tag-or-digest>`      | `apps/control-plane/Dockerfile`          |
-| Web                | `ghcr.io/sidpalas/deputies-web:<tag-or-digest>`                | `apps/web/Dockerfile`                    |
-| Sandbox base       | `ghcr.io/sidpalas/deputies-sandbox-base:<tag-or-digest>`       | `deploy/sandboxes/base/Dockerfile`       |
-| Docker sandbox     | `ghcr.io/sidpalas/deputies-docker-sandbox:<tag-or-digest>`     | `deploy/sandboxes/docker/Dockerfile`     |
-| Daytona sandbox    | `ghcr.io/sidpalas/deputies-daytona-sandbox:<tag-or-digest>`    | `deploy/sandboxes/daytona/Dockerfile`    |
-| Superserve sandbox | `ghcr.io/sidpalas/deputies-superserve-sandbox:<tag-or-digest>` | `deploy/sandboxes/superserve/Dockerfile` |
+| Component       | Published image                                             | Dockerfile                            |
+| --------------- | ----------------------------------------------------------- | ------------------------------------- |
+| Control plane   | `ghcr.io/sidpalas/deputies-control-plane:<tag-or-digest>`   | `apps/control-plane/Dockerfile`       |
+| Web             | `ghcr.io/sidpalas/deputies-web:<tag-or-digest>`             | `apps/web/Dockerfile`                 |
+| Sandbox base    | `ghcr.io/sidpalas/deputies-sandbox-base:<tag-or-digest>`    | `deploy/sandboxes/base/Dockerfile`    |
+| Docker sandbox  | `ghcr.io/sidpalas/deputies-docker-sandbox:<tag-or-digest>`  | `deploy/sandboxes/docker/Dockerfile`  |
+| Daytona sandbox | `ghcr.io/sidpalas/deputies-daytona-sandbox:<tag-or-digest>` | `deploy/sandboxes/daytona/Dockerfile` |
 
 The web image serves the built `apps/web/dist` assets behind Caddy and proxies browser-facing API routes. The control-plane image runs `apps/control-plane/dist/index.js` and uses `RUN_MODE` to choose API, worker, or combined process responsibilities.
 
@@ -527,28 +526,19 @@ SUPERSERVE_TEMPLATE=deputies
 SANDBOX_WORKSPACE_PATH=/workspace
 ```
 
-`SUPERSERVE_TEMPLATE` is the name or ID of a ready team template created from the provider image. Build and publish the image with:
+`SUPERSERVE_TEMPLATE` is the name or ID of a ready team template created from the published Daytona image. Create or rebuild it through the official Superserve SDK and wait for readiness with:
 
 ```sh
-SUPERSERVE_IMAGE=ghcr.io/<owner>/deputies-superserve-sandbox:<tag> \
-mise run //deploy/sandboxes/superserve:image:publish
-```
-
-Create or rebuild that template through the official Superserve SDK and wait for readiness with:
-
-```sh
-SUPERSERVE_IMAGE=ghcr.io/<owner>/deputies-superserve-sandbox:<tag> \
+SUPERSERVE_IMAGE=ghcr.io/sidpalas/deputies-daytona-sandbox:<tag-or-digest> \
 SUPERSERVE_TEMPLATE=deputies \
 mise run //deploy/sandboxes/superserve:template:sync
 ```
 
-Use `mise run //deploy/sandboxes/superserve:publish` to push the image and sync the template sequentially. GHCR creates the container package on the first push; it does not require a separate Git repository. Link the resulting package to this repository and make it public, or give Superserve registry pull credentials.
-
 The image reference is stored when a template is first created. Subsequent syncs rebuild that stored reference. Use a stable mutable tag for in-place rebuilds, or create a new template name when moving to a different pinned image reference.
 
-Superserve custom images must be Linux/amd64 and glibc-based. The image task pins `linux/amd64`, and the Dockerfile checks the target architecture and glibc during the build. Use an 8192 MiB template disk for the included browser and Postgres toolchain.
+The Daytona image is built for Linux/amd64 and uses glibc, satisfying Superserve's image constraint. Use an 8192 MiB template disk for the included browser and Postgres toolchain.
 
-Superserve public preview URLs expose only the authenticated Deputies bridge on port `3584`. Deputies app service links target `/preview/<application-port>` on that bridge, so application ports are not published directly.
+Superserve public preview URLs expose only the authenticated Deputies bridge on port `3584`. Deputies app service links target `/preview/<application-port>` on that bridge, so application ports are not published directly. The bridge token protects that public endpoint from arbitrary external callers, but it is a sandbox-visible capability and not a secrecy boundary from sandbox code.
 
 ### AWS Lambda MicroVM
 

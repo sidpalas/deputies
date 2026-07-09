@@ -17,7 +17,6 @@ describe('SuperserveSandboxProvider', () => {
     const provider = new SuperserveSandboxProvider({
       client,
       template: 'deputies',
-      idleTimeoutMs: 900_000,
       workspacePath: '/workspace/custom',
     });
 
@@ -26,7 +25,6 @@ describe('SuperserveSandboxProvider', () => {
     expect(createCalls).toHaveLength(1);
     expect(createCalls[0]).toMatchObject({
       fromTemplate: 'deputies',
-      timeoutSeconds: 900,
       metadata: { 'deputies-session-id': 'Session 1', owner: 'test', attempt: '2' },
       envVars: {
         DEPUTIES_WORKSPACE: '/workspace/custom',
@@ -34,6 +32,7 @@ describe('SuperserveSandboxProvider', () => {
         DEPUTIES_SANDBOX_BRIDGE_PORT: '3584',
       },
     });
+    expect(createCalls[0]).not.toHaveProperty('timeoutSeconds');
     expect((createCalls[0] as { name: string }).name).toMatch(/^deputies-session-1-[a-f0-9]{8}$/);
     expect(handle).toMatchObject({
       provider: 'superserve',
@@ -78,8 +77,10 @@ describe('SuperserveSandboxProvider', () => {
     const sandbox = createMockSuperserveSandbox();
     let status: 'active' | 'paused' | 'resuming' | 'failed' = 'active';
     const killed: string[] = [];
+    const listCalls: unknown[] = [];
     const client = createClient(sandbox, {
-      async list() {
+      async list(options) {
+        listCalls.push(options);
         return [{ id: 'sandbox-1', name: sandbox.name, status, metadata: {} }];
       },
       async killById(id) {
@@ -108,6 +109,7 @@ describe('SuperserveSandboxProvider', () => {
     await expect(provider.health({ providerSandboxId: 'missing', sessionId: 'session-1' })).resolves.toMatchObject({
       status: 'missing',
     });
+    expect(listCalls).toContainEqual({ metadata: { 'deputies-session-id': 'session-1' } });
 
     await provider.stop({ providerSandboxId: 'sandbox-1', sessionId: 'session-1' });
     expect(sandbox.pauseCalls).toBe(1);
@@ -116,6 +118,24 @@ describe('SuperserveSandboxProvider', () => {
     await provider.destroy({ providerSandboxId: 'sandbox-1', sessionId: 'session-1' });
     await expect(provider.destroy({ providerSandboxId: 'missing', sessionId: 'session-1' })).resolves.toBeUndefined();
     expect(killed).toEqual(['sandbox-1']);
+  });
+
+  it('retries transient Superserve activation conflicts before reconnecting', async () => {
+    const sandbox = createMockSuperserveSandbox();
+    let attempts = 0;
+    const client = createClient(sandbox, {
+      async connect() {
+        attempts += 1;
+        if (attempts === 1) throw Object.assign(new Error('sandbox is resuming'), { statusCode: 409 });
+        return sandbox;
+      },
+    });
+    const provider = new SuperserveSandboxProvider({ client });
+
+    await expect(provider.connect({ providerSandboxId: 'sandbox-1', sessionId: 'session-1' })).resolves.toMatchObject({
+      providerSandboxId: 'sandbox-1',
+    });
+    expect(attempts).toBe(2);
   });
 
   it('routes Superserve public ports through the authenticated Deputies bridge', async () => {
