@@ -613,6 +613,7 @@ function automationRequestBody(input: {
   model?: string;
   branch?: string;
 }): Record<string, unknown> {
+  const usesEnvironment = Boolean(input.environmentId);
   return {
     ...(input.name !== undefined ? { name: input.name } : {}),
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
@@ -627,9 +628,9 @@ function automationRequestBody(input: {
     ...(input.environmentBranchOverrides !== undefined
       ? { environmentBranchOverrides: input.environmentBranchOverrides }
       : {}),
-    ...(input.repository !== undefined ? { repository: input.repository } : {}),
+    ...(!usesEnvironment && input.repository !== undefined ? { repository: input.repository } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
-    ...(input.branch !== undefined ? { branch: input.branch } : {}),
+    ...(!usesEnvironment && input.branch !== undefined ? { branch: input.branch } : {}),
   };
 }
 
