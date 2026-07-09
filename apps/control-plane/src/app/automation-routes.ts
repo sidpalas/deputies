@@ -331,9 +331,12 @@ async function requireRequestAuthorization(
 }
 
 async function serializeAutomation(services: AppServices, automation: AutomationRecord, auth: RequestAuthorization) {
-  const [ownerGroup, invocationPage] = await Promise.all([
+  const [ownerGroup, invocationPage, environmentRevision] = await Promise.all([
     services.store.getGroup(automation.ownerGroupId),
     services.automations.listInvocationPage({ automationId: automation.id, limit: 1 }),
+    automation.environmentRevisionId
+      ? services.store.getEnvironmentRevision(automation.environmentRevisionId)
+      : Promise.resolve(null),
   ]);
   const lastInvocation = invocationPage.invocations[0];
   return {
@@ -355,6 +358,7 @@ async function serializeAutomation(services: AppServices, automation: Automation
       ? { environmentRevisionPolicy: automation.environmentRevisionPolicy }
       : {}),
     ...(automation.environmentRevisionId ? { environmentRevisionId: automation.environmentRevisionId } : {}),
+    ...(environmentRevision ? { environmentRevisionNumber: environmentRevision.revisionNumber } : {}),
     ...(automation.context ? { context: automation.context } : {}),
     ...(automation.archivedAt ? { archivedAt: automation.archivedAt } : {}),
     ...(automation.nextInvocationAt ? { nextInvocationAt: automation.nextInvocationAt } : {}),

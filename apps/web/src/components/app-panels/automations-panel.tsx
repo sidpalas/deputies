@@ -46,6 +46,7 @@ type AutomationForm = {
   environmentId: string;
   environmentRevisionPolicy: 'follow_latest' | 'pinned';
   environmentRevisionId: string;
+  environmentRevisionNumber: number | null;
   environmentBranchOverrides: EnvironmentBranchOverrides;
   repository: string;
   branch: string;
@@ -186,6 +187,16 @@ export function AutomationsPanel(props: {
   const canChangeGroup = canEdit && (selected ? Boolean(selectedOwnerGroup?.canManage) : true);
   const formComplete = Boolean(form.groupId && form.name.trim() && form.scheduleCron.trim() && form.prompt.trim());
   const saveDisabled = !canEdit || saving || !formComplete || (!selected && !selectedGroupSelectable);
+  const revisionPolicyHasUnsavedChanges =
+    !selected ||
+    form.environmentId !== (selected.environmentId ?? '') ||
+    form.environmentRevisionPolicy !== (selected.environmentRevisionPolicy ?? 'follow_latest') ||
+    form.environmentRevisionId !== (selected.environmentRevisionId ?? '');
+  const revisionPolicySaveHint = revisionPolicyHasUnsavedChanges
+    ? selected
+      ? ' Save to apply this change.'
+      : ' Create automation to apply this setting.'
+    : '';
 
   useEffect(() => {
     selectedAutomationIdRef.current = selected?.id ?? '';
@@ -613,14 +624,17 @@ export function AutomationsPanel(props: {
                           ...form,
                           environmentRevisionPolicy: event.target.checked ? 'pinned' : 'follow_latest',
                           environmentRevisionId: event.target.checked ? selectedEnvironment.currentRevisionId : '',
+                          environmentRevisionNumber: event.target.checked
+                            ? selectedEnvironment.currentRevisionNumber
+                            : null,
                         })
                       }
                       disabled={!canEditDefinition}
                     />
                     <span>
                       {form.environmentRevisionPolicy === 'pinned'
-                        ? `Pin to environment revision ${revisionNumberForId(selectedEnvironment, form.environmentRevisionId)} when you save.`
-                        : 'Follow the latest environment revision after you save.'}
+                        ? `Use ${pinnedRevisionDescription(selectedEnvironment, form)} for each invocation.${revisionPolicySaveHint}`
+                        : `Use the latest environment revision at the time of invocation.${revisionPolicySaveHint}`}
                     </span>
                   </label>
                 ) : null}
@@ -817,6 +831,7 @@ function emptyForm(groups: Group[]): AutomationForm {
     environmentId: '',
     environmentRevisionPolicy: 'follow_latest',
     environmentRevisionId: '',
+    environmentRevisionNumber: null,
     environmentBranchOverrides: {},
     repository: '',
     branch: '',
@@ -839,6 +854,7 @@ function formFromAutomation(automation: Automation): AutomationForm {
     environmentId: automation.environmentId ?? '',
     environmentRevisionPolicy: automation.environmentRevisionPolicy ?? 'follow_latest',
     environmentRevisionId: automation.environmentRevisionId ?? '',
+    environmentRevisionNumber: automation.environmentRevisionNumber ?? null,
     environmentBranchOverrides: environmentBranchOverridesContextValue(automation.context?.environmentBranchOverrides),
     repository: repositoryContextLabel(automation.context?.repository),
     branch: typeof automation.context?.branch === 'string' ? automation.context.branch : '',
@@ -886,6 +902,7 @@ function automationCodebaseFormPatch(
   | 'environmentId'
   | 'environmentRevisionPolicy'
   | 'environmentRevisionId'
+  | 'environmentRevisionNumber'
   | 'environmentBranchOverrides'
   | 'repository'
   | 'branch'
@@ -896,6 +913,7 @@ function automationCodebaseFormPatch(
       environmentId: selection.environmentId,
       environmentRevisionPolicy: 'follow_latest',
       environmentRevisionId: '',
+      environmentRevisionNumber: null,
       environmentBranchOverrides: {},
       repository: '',
       branch: '',
@@ -906,6 +924,7 @@ function automationCodebaseFormPatch(
       environmentId: '',
       environmentRevisionPolicy: 'follow_latest',
       environmentRevisionId: '',
+      environmentRevisionNumber: null,
       environmentBranchOverrides: {},
       repository: selection.repository,
       branch: '',
@@ -915,14 +934,16 @@ function automationCodebaseFormPatch(
     environmentId: '',
     environmentRevisionPolicy: 'follow_latest',
     environmentRevisionId: '',
+    environmentRevisionNumber: null,
     environmentBranchOverrides: {},
     repository: '',
     branch: '',
   };
 }
 
-function revisionNumberForId(environment: Environment, revisionId: string): number | string {
-  return revisionId === environment.currentRevisionId ? environment.currentRevisionNumber : revisionId.slice(0, 8);
+function pinnedRevisionDescription(environment: Environment, form: AutomationForm): string {
+  const revisionNumber = form.environmentRevisionNumber ?? environment.currentRevisionNumber;
+  return `environment revision ${revisionNumber}`;
 }
 
 function environmentAvailableToGroup(environment: Environment, groupId: string): boolean {

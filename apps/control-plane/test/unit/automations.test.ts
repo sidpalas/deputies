@@ -208,7 +208,10 @@ describe('scheduled automations', () => {
     });
     const revised = await services.environments.update({
       id: environment.id,
-      repositories: [{ provider: 'github', owner: 'acme', repo: 'web', primary: true }],
+      repositories: [
+        { provider: 'github', owner: 'acme', repo: 'api', primary: false },
+        { provider: 'github', owner: 'acme', repo: 'web', primary: true },
+      ],
     });
 
     const result = await services.automations.invokeManual({ automationId: automation.id });
@@ -495,6 +498,37 @@ describe('scheduled automations', () => {
       },
     });
 
+    const pinnedResponse = await app.request(
+      '/automations',
+      jsonRequest({
+        name: 'Pinned environment API automation',
+        prompt: 'Keep using this revision',
+        scheduleCron: '0 9 * * 1-5',
+        ownerGroupId: defaultGroupId,
+        environmentId: environment.id,
+        environmentRevisionPolicy: 'pinned',
+        environmentRevisionId: environment.currentRevisionId,
+      }),
+    );
+    expect(pinnedResponse.status).toBe(201);
+    const pinnedBody = (await pinnedResponse.json()) as { automation: { id: string } };
+    const revised = await services.environments.update({
+      id: environment.id,
+      repositories: [
+        { provider: 'github', owner: 'acme', repo: 'api', primary: false },
+        { provider: 'github', owner: 'acme', repo: 'web', primary: true },
+      ],
+    });
+    expect(revised.currentRevisionNumber).toBe(2);
+    const pinnedGetResponse = await app.request(`/automations/${pinnedBody.automation.id}`);
+    expect(pinnedGetResponse.status).toBe(200);
+    await expect(pinnedGetResponse.json()).resolves.toMatchObject({
+      automation: {
+        environmentRevisionId: environment.currentRevisionId,
+        environmentRevisionNumber: environment.currentRevisionNumber,
+      },
+    });
+
     const invalidResponse = await app.request(
       '/automations',
       jsonRequest({
@@ -503,7 +537,7 @@ describe('scheduled automations', () => {
         scheduleCron: '0 9 * * 1-5',
         ownerGroupId: defaultGroupId,
         environmentId: environment.id,
-        environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'web', branch: 'release' }],
+        environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'worker', branch: 'release' }],
       }),
     );
     expect(invalidResponse.status).toBe(400);

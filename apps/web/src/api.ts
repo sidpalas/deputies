@@ -98,6 +98,7 @@ export type Automation = {
   environmentId?: string;
   environmentRevisionPolicy?: 'follow_latest' | 'pinned';
   environmentRevisionId?: string;
+  environmentRevisionNumber?: number;
   context?: Record<string, unknown>;
   nextInvocationAt?: string;
   archivedAt?: string;
