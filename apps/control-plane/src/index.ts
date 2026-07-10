@@ -15,6 +15,8 @@ import {
   requireGitHubAppCredentials,
   requireLambdaMicrovmImageIdentifier,
   requireRunnerModelDefault,
+  requireSuperserveApiKey,
+  requireSuperserveTemplate,
   requireTensorlakeApiKey,
   requireTensorlakeRegisteredImage,
 } from './config/index.js';
@@ -49,6 +51,7 @@ import { LambdaMicrovmSandboxProvider } from './sandbox/lambda-microvm.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
 import { startSandboxReaper } from './sandbox/reaper.js';
 import { TensorlakeSandboxProvider } from './sandbox/tensorlake.js';
+import { SuperserveSandboxProvider } from './sandbox/superserve.js';
 import type { SandboxProvider } from './sandbox/types.js';
 import { startSessionSearchIndexer } from './search/indexer.js';
 import { MemoryStore } from './store/memory.js';
@@ -298,6 +301,16 @@ function createSandboxProvider(): SandboxProvider {
     if (config.tensorlakeAllowInternetAccess !== undefined)
       Object.assign(options, { allowInternetAccess: config.tensorlakeAllowInternetAccess });
     return new TensorlakeSandboxProvider(options);
+  }
+  if (config.sandboxProvider === 'superserve') {
+    const options = {
+      apiKey: requireSuperserveApiKey(config),
+      template: requireSuperserveTemplate(config),
+      workspacePath: config.sandboxWorkspacePath,
+      bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
+    };
+    if (config.superserveBaseUrl) Object.assign(options, { baseUrl: config.superserveBaseUrl });
+    return new SuperserveSandboxProvider(options);
   }
   if (config.sandboxProvider === 'lambda-microvm') {
     return new LambdaMicrovmSandboxProvider(

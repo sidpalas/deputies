@@ -31,6 +31,7 @@ Place each `mise.toml` next to the config or scripts it operates on. Examples:
 - `deploy/local/mise.toml`: local Docker Compose and Portless tasks.
 - `deploy/kubernetes/mise.toml`: Helm, kind, and Kubernetes smoke workflows.
 - `deploy/sandboxes/daytona/mise.toml`: Daytona sandbox image tasks.
+- `deploy/sandboxes/superserve/mise.toml`: Superserve template synchronization and live-UAT tasks.
 - `deploy/railway/mise.toml`: Railway service deploy tasks.
 
 ## Both

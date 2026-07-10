@@ -11,6 +11,7 @@ Initial providers may include:
 - `docker`: planned Docker Engine backed sandboxes. This can use a local or remote Docker daemon depending on deployment configuration.
 - `daytona`: hosted persistent development sandboxes.
 - `tensorlake`: hosted MicroVM sandboxes with direct exec, file operations, suspend/resume, snapshots, and exposed service ports.
+- `superserve`: hosted Firecracker MicroVM sandboxes with direct exec/files, pause/resume, snapshots, and public port URLs routed through the authenticated Deputies bridge.
 - `lambda-microvm`: AWS Lambda MicroVM sandboxes launched from a prebuilt MicroVM image through the AWS Lambda MicroVM APIs.
 - `kubernetes`: pods/jobs inside a cluster.
 - `modal` or others later, if desired.
@@ -20,6 +21,31 @@ Some sandbox providers create sandboxes from OCI/container images without suppor
 Lambda MicroVM images are managed separately from app Terraform with `deploy/sandboxes/lambda-microvm` tasks. Terraform should manage supporting IAM, S3, logs, and app configuration, while the control plane manages individual MicroVM lifecycle at runtime.
 
 Tensorlake sandboxes require `TENSORLAKE_REGISTERED_IMAGE` to name a registered Tensorlake sandbox image, such as `deputies`. Raw registry references like `ghcr.io/org/image:tag` cannot be passed directly to `Sandbox.create`; put the registry reference in `deploy/sandboxes/tensorlake/Dockerfile`, set `TENSORLAKE_REGISTERED_IMAGE` to the stable registered name/id, then run `mise run //deploy/sandboxes/tensorlake:image:create` before using the provider.
+
+### Deferred: Tensorlake service previews through the Deputies bridge
+
+Tensorlake currently exposes each requested application port directly through its authenticated ingress: `getServiceEndpoint()` adds the port to `exposedPorts`, sets `allowUnauthenticatedAccess: false`, and supplies the Tensorlake API key as the ingress bearer credential. This supports ordinary services, but is not yet equivalent to the bridge-based previews used by Daytona, Superserve, Docker, Kubernetes, and Lambda MicroVMs. In particular, a direct ingress target does not give the application the same Deputies-facing host rewrite and cookie/header isolation as the bridge.
+
+In a separate PR, migrate Tensorlake browser-facing service previews to this path:
+
+```text
+Deputies service proxy
+  -> Tensorlake authenticated ingress on bridge port 3584
+  -> Deputies bridge /preview/<application-port>
+  -> application
+```
+
+Keep Tensorlake's native SDK APIs for lifecycle, exec, and filesystem work. The migration applies only to browser-facing service endpoints. It must:
+
+1. Start the bridge with the per-sandbox bridge token and workspace path, then expose only bridge port `3584` through Tensorlake ingress with `allowUnauthenticatedAccess: false`.
+2. Address the two authentication layers without putting the Tensorlake API key in the sandbox: use `Authorization: Bearer <Tensorlake API key>` for ingress and add a dedicated bridge credential header such as `X-Deputies-Bridge-Token` for the bridge.
+3. Extend the bridge to accept that dedicated header and strip both it and the ingress credential before proxying to the application. Do not reuse `Authorization` for the bridge token because Tensorlake ingress needs that header.
+4. Verify that Tensorlake forwards the dedicated header to the sandbox bridge before depending on it. If it does not, stop and redesign the provider/bridge authentication boundary rather than putting credentials in a URL.
+5. Add live Tensorlake UAT coverage for HTTP, WebSockets, host rewriting, cookie isolation, and an inner-Deputies login/session flow. Confirm application processes cannot receive either proxy credential.
+
+Do not change Tensorlake behavior as part of the Superserve or shared-bridge work; this plan is intentionally deferred until its dedicated PR.
+
+Superserve sandboxes require `SUPERSERVE_TEMPLATE` to name a ready Superserve template. Templates use the published Daytona image, which satisfies Superserve's Linux/amd64 glibc requirement and contains the Deputies bridge. Superserve preview URLs are public internet endpoints; Deputies protects the bridge with service authorization plus a per-sandbox bridge token, then forwards requested application ports through `/preview/<port>`. The bridge token protects the public endpoint from external callers but is a sandbox-visible capability, so sandbox code must be trusted with preview access.
 
 > **Warning:** `SANDBOX_PROVIDER=unsafe-local` is for trusted local development only. It is not a security boundary; agent commands run on the API/worker host runtime in a temporary workspace.
 

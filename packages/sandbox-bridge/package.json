@@ -3,6 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./filesystem": {
+      "types": "./src/filesystem.ts",
+      "default": "./dist/filesystem.js"
+    }
+  },
   "bin": {
     "deputies-sandbox-bridge": "dist/server.js"
   },

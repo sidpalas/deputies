@@ -58,6 +58,9 @@ importers:
       '@deputies/browser-milestones':
         specifier: workspace:*
         version: link:../../packages/browser-milestones
+      '@deputies/sandbox-bridge':
+        specifier: workspace:*
+        version: link:../../packages/sandbox-bridge
       '@earendil-works/pi-ai':
         specifier: 0.80.3
         version: 0.80.3(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
@@ -91,6 +94,9 @@ importers:
       '@opentelemetry/sdk-node':
         specifier: ^0.217.0
         version: 0.217.0(@opentelemetry/api@1.9.1)
+      '@superserve/sdk':
+        specifier: 0.7.7
+        version: 0.7.7
       hono:
         specifier: '>=4.12.25'
         version: 4.12.27
@@ -2157,6 +2163,9 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  '@superserve/sdk@0.7.7':
+    resolution: {integrity: sha512-NkUXH9JItjwYi3B0uSVi3mXDe0qDIICdU7Z82vdvK2lbH+VD9xcnUI/a7fGDUzuCEgdDZXJKxl94Jt2lnbAs0g==}
 
   '@tailwindcss/node@4.2.4':
     resolution: {integrity: sha512-Ai7+yQPxz3ddrDQzFfBKdHEVBg0w3Zl83jnjuwxnZOsnH9pGn93QHQtpU0p/8rYWxvbFZHneni6p1BSLK4DkGA==}
@@ -7693,6 +7702,8 @@ snapshots:
       zod: 4.4.3
 
   '@standard-schema/spec@1.1.0': {}
+
+  '@superserve/sdk@0.7.7': {}
 
   '@tailwindcss/node@4.2.4':
     dependencies:

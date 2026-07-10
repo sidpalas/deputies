@@ -516,6 +516,28 @@ Leave these empty to use Daytona defaults. These are deployment-level controls b
 
 Use pinned image tags or digests instead of `latest`. For private registries, configure registry credentials in Daytona.
 
+### Superserve
+
+```sh
+SANDBOX_PROVIDER=superserve
+SUPERSERVE_API_KEY=<secret>
+SUPERSERVE_BASE_URL=<optional>
+SUPERSERVE_TEMPLATE=deputies
+SANDBOX_WORKSPACE_PATH=/workspace
+```
+
+`SUPERSERVE_TEMPLATE` is the name or ID of a ready team template created from the published Daytona image. Create or rebuild it through the official Superserve SDK and wait for readiness with:
+
+```sh
+op run --env-file=.env.local -- mise run //deploy/sandboxes/superserve:template:sync
+```
+
+The image reference is stored when a template is first created. Subsequent syncs rebuild that stored reference. Use a stable mutable tag for in-place rebuilds, or create a new template name when moving to a different pinned image reference.
+
+The Daytona image is built for Linux/amd64 and uses glibc, satisfying Superserve's image constraint. Use an 8192 MiB template disk for the included browser and Postgres toolchain.
+
+Superserve public preview URLs expose only the authenticated Deputies bridge on port `3584`. Deputies app service links target `/preview/<application-port>` on that bridge, so application ports are not published directly. The bridge token protects that public endpoint from arbitrary external callers, but it is a sandbox-visible capability and not a secrecy boundary from sandbox code.
+
 ### AWS Lambda MicroVM
 
 ```sh

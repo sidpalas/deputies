@@ -1,0 +1,12 @@
+[env]
+SUPERSERVE_TEMPLATE = { default = "deputies" }
+SUPERSERVE_IMAGE = { default = "{{ get_env(name='DAYTONA_IMAGE', default='ghcr.io/sidpalas/deputies-daytona-sandbox:latest') }}" }
+
+[tasks."template:sync"]
+description = "Create or rebuild a Superserve template from the published Daytona image"
+run = "pnpm --dir ../../../apps/control-plane exec tsx src/scripts/sync-superserve-template.ts"
+
+[tasks.uat]
+description = "Run the live Superserve provider UAT and clean up its sandbox"
+env = { RUN_REAL_SUPERSERVE_SANDBOX_UAT = "true" }
+run = "mise run //apps/control-plane:test:uat -- test/uat/real-superserve-sandbox.test.ts"

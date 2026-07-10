@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { sandboxBridgePreviewUrl } from './bridge.js';
 import { sandboxBridgeSkipCookieNamesEnv } from './bridge-env.js';
 import type {
   ConnectSandboxInput,
@@ -325,7 +326,7 @@ export class InProcessDockerOrchestrator implements DockerOrchestrator {
     const descriptor = await this.connectedDescriptor(input);
     return {
       port: input.port,
-      targetUrl: `${descriptor.bridgeUrl}/preview/${input.port}`,
+      targetUrl: sandboxBridgePreviewUrl(descriptor.bridgeUrl, input.port),
       targetHeaders: { authorization: `Bearer ${descriptor.bridgeToken}` },
       forwardPreviewHost: true,
     };

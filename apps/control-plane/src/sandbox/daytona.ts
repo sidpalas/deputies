@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { Daytona } from '@daytona/sdk';
 import type { Resources, Sandbox as DaytonaSandbox } from '@daytona/sdk';
-import { sandboxBridgeSkipCookieNamesEnv } from './bridge-env.js';
+import {
+  sandboxBridgeEnvironment,
+  sandboxBridgePort,
+  sandboxBridgePreviewUrl,
+  sandboxBridgeStartupCommand,
+} from './bridge.js';
 import type {
   ConnectSandboxInput,
   CreateSandboxInput,
@@ -18,8 +23,6 @@ import type {
   SandboxProviderCheck,
   SandboxRef,
 } from './types.js';
-
-const daytonaBridgePort = 3584;
 
 export type DaytonaClientLike = {
   create(params?: Record<string, unknown>, options?: { timeout?: number }): Promise<DaytonaSandboxLike>;
@@ -171,11 +174,11 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     const bridgeToken = input.secrets?.bridgeToken ?? randomUUID();
     const workspacePath = this.options.workspacePath ?? (await sandbox.getWorkDir()) ?? '/workspace';
     await ensureDaytonaBridge(sandbox, workspacePath, bridgeToken, this.options.bridgeSkippedCookieNames);
-    const preview = await resolveDaytonaPreviewUrl(sandbox, daytonaBridgePort);
+    const preview = await resolveDaytonaPreviewUrl(sandbox, sandboxBridgePort);
     if (!preview) return null;
     return {
       port: input.port,
-      targetUrl: daytonaBridgePreviewUrl(preview.targetUrl, input.port),
+      targetUrl: sandboxBridgePreviewUrl(preview.targetUrl, input.port),
       targetHeaders: {
         ...preview.targetHeaders,
         authorization: `Bearer ${bridgeToken}`,
@@ -210,7 +213,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       ...(this.options.envVars ?? {}),
       DEPUTIES_WORKSPACE: workspacePath,
       DEPUTIES_SANDBOX_BRIDGE_HOST: '0.0.0.0',
-      DEPUTIES_SANDBOX_BRIDGE_PORT: String(daytonaBridgePort),
+      DEPUTIES_SANDBOX_BRIDGE_PORT: String(sandboxBridgePort),
     };
     if (this.options.image) params.image = this.options.image;
     if (!this.options.image && this.options.snapshot) params.snapshot = this.options.snapshot;
@@ -281,55 +284,16 @@ async function getDaytonaPreviewUrl(
   return null;
 }
 
-function daytonaBridgePreviewUrl(targetUrl: string, port: number): string {
-  const target = new URL(targetUrl);
-  const base = target.pathname.endsWith('/') ? target.pathname.slice(0, -1) : target.pathname;
-  target.pathname = `${base}/preview/${port}`;
-  return target.toString();
-}
-
 async function ensureDaytonaBridge(
   sandbox: DaytonaSandboxLike,
   workspacePath: string,
   bridgeToken: string,
   skippedCookieNames?: string,
 ): Promise<void> {
-  const pidFile = '/tmp/deputies-sandbox-bridge.pid';
-  const logFile = '/tmp/deputies-sandbox-bridge.log';
   const response = await sandbox.process.executeCommand(
-    [
-      `TOKEN=${quoteShell(bridgeToken)};`,
-      `WORKSPACE=${quoteShell(workspacePath)};`,
-      `SKIP_COOKIE_NAMES=${quoteShell(skippedCookieNames ?? '')};`,
-      `PID_FILE=${quoteShell(pidFile)};`,
-      `LOG_FILE=${quoteShell(logFile)};`,
-      `HEALTH_URL=${quoteShell(`http://127.0.0.1:${daytonaBridgePort}/health`)};`,
-      'export TOKEN HEALTH_URL;',
-      `HEALTH_CHECK=${quoteShell(
-        'const http=require("node:http");const req=http.get(process.env.HEALTH_URL,{headers:{Authorization:"Bearer "+process.env.TOKEN}},res=>{res.resume();process.exit(res.statusCode===200?0:1);});req.on("error",()=>process.exit(1));req.setTimeout(1000,()=>{req.destroy();process.exit(1);});',
-      )};`,
-      'health() { node -e "$HEALTH_CHECK" >/dev/null 2>&1; };',
-      'start_bridge() {',
-      'DEPUTIES_SANDBOX_TOKEN="$TOKEN"',
-      'DEPUTIES_WORKSPACE="$WORKSPACE"',
-      `${sandboxBridgeSkipCookieNamesEnv}="$SKIP_COOKIE_NAMES"`,
-      'DEPUTIES_SANDBOX_BRIDGE_HOST=0.0.0.0',
-      `DEPUTIES_SANDBOX_BRIDGE_PORT=${daytonaBridgePort}`,
-      'nohup node /opt/deputies/sandbox-bridge/dist/server.js >> "$LOG_FILE" 2>&1 & echo $! > "$PID_FILE";',
-      '};',
-      'if ! health; then',
-      '[ -f "$PID_FILE" ] && kill "$(cat "$PID_FILE")" 2>/dev/null || true;',
-      'start_bridge;',
-      'fi;',
-      'for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do',
-      'health && exit 0;',
-      'sleep 0.25;',
-      'done;',
-      'echo "deputies sandbox bridge did not become ready" >&2;',
-      'exit 1;',
-    ].join(' '),
+    sandboxBridgeStartupCommand(),
     undefined,
-    undefined,
+    sandboxBridgeEnvironment({ bridgeToken, workspacePath, skippedCookieNames }),
     10,
   );
   if ((response.exitCode ?? 0) !== 0) {

@@ -62,3 +62,4 @@ RUN mkdir -p /opt/deputies/sandbox-bridge
 
 COPY --from=bridge-build /app/packages/sandbox-bridge/dist /opt/deputies/sandbox-bridge/dist
 COPY --from=bridge-build /app/packages/sandbox-bridge/package.json /opt/deputies/sandbox-bridge/package.json
+COPY --chmod=0755 deploy/sandboxes/base/ensure-sandbox-bridge.sh /opt/deputies/ensure-sandbox-bridge.sh
