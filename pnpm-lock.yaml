@@ -58,9 +58,6 @@ importers:
       '@deputies/browser-milestones':
         specifier: workspace:*
         version: link:../../packages/browser-milestones
-      '@deputies/sandbox-bridge':
-        specifier: workspace:*
-        version: link:../../packages/sandbox-bridge
       '@earendil-works/pi-ai':
         specifier: 0.80.3
         version: 0.80.3(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
@@ -107,6 +104,9 @@ importers:
         specifier: ^0.5.40
         version: 0.5.40
     devDependencies:
+      '@deputies/sandbox-bridge':
+        specifier: workspace:*
+        version: link:../../packages/sandbox-bridge
       '@types/node':
         specifier: ^22.10.10
         version: 22.19.17

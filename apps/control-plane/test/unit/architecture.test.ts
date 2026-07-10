@@ -135,6 +135,12 @@ describe('architecture boundaries', () => {
     expect(text).toMatch(/(?:apk add --no-cache[^\n]*\bgithub-cli\b|apt-get install[^\n]*\bgh\b)/);
   });
 
+  it('includes compile-time workspace packages in the image build context', async () => {
+    const text = await readFile(join(root, 'Dockerfile'), 'utf8');
+
+    expect(text).toContain('COPY packages/sandbox-bridge packages/sandbox-bridge');
+  });
+
   it('declares source-owned schemas for public API response envelopes', async () => {
     const text = await readFile(join(srcRoot, 'app/server.ts'), 'utf8');
     const missingFields = [...jsonResponseEnvelopeFields(text)]
