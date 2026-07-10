@@ -34,7 +34,7 @@ export function buildAssistantText(events: AgentEvent[]): Record<string, string>
   return outputByMessageId;
 }
 
-export function buildAssistantTimestamps(events: AgentEvent[]): Record<string, string> {
+export function buildAssistantFinalTimestamps(events: AgentEvent[]): Record<string, string> {
   const messageIdsBySequence: Record<number, string> = {};
   const timestampsByMessageId: Record<string, string> = {};
   let currentSequence = 0;
@@ -48,10 +48,8 @@ export function buildAssistantTimestamps(events: AgentEvent[]): Record<string, s
     }
     if (event.messageId) currentMessageId = event.messageId;
     const messageId = event.messageId || currentMessageId || messageIdsBySequence[currentSequence];
-    if (!messageId) continue;
-    if (event.type === 'agent_response_final' || event.type === 'agent_text_delta') {
-      timestampsByMessageId[messageId] = event.createdAt;
-    }
+    if (!messageId || event.type !== 'agent_response_final') continue;
+    timestampsByMessageId[messageId] = event.createdAt;
   }
 
   return timestampsByMessageId;
