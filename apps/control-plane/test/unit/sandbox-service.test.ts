@@ -281,6 +281,10 @@ class FailingCreateSandboxStore implements SandboxStore {
     return null;
   }
 
+  async getLatestSandboxForSession(): Promise<SandboxRecord | null> {
+    return null;
+  }
+
   async listActiveSandboxes(): Promise<SandboxRecord[]> {
     return [];
   }

@@ -1377,7 +1377,7 @@ async function serializeSessionWithSandbox(
   starred?: boolean,
 ) {
   const [sandbox, ownerGroup] = await Promise.all([
-    services.store.getLatestSandbox(session.id, config.sandboxProvider),
+    services.store.getLatestSandboxForSession(session.id, config.sandboxProvider),
     services.store.getGroup(session.ownerGroupId),
   ]);
   return serializeSessionView(session, sandbox, ownerGroup?.name, starred);

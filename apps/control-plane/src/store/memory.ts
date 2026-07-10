@@ -329,7 +329,7 @@ export class MemoryStore implements AppStore {
       items: await Promise.all(
         page.map(async (session) => ({
           session,
-          sandbox: await this.getLatestSandbox(session.id, provider),
+          sandbox: await this.getLatestSandboxForSession(session.id, provider),
         })),
       ),
       nextCursor:
@@ -358,7 +358,7 @@ export class MemoryStore implements AppStore {
     return {
       items: await Promise.all(
         page.map(async ({ session, match }) => ({
-          item: { session, sandbox: await this.getLatestSandbox(session.id, provider) },
+          item: { session, sandbox: await this.getLatestSandboxForSession(session.id, provider) },
           snippet: match.snippet,
           matchKind: match.kind,
           score: match.score,
@@ -1234,10 +1234,28 @@ export class MemoryStore implements AppStore {
   }
 
   async getLatestSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null> {
+    return this.latestSandbox((sandbox) => sandbox.sessionId === sessionId && sandbox.provider === provider);
+  }
+
+  async getLatestSandboxForSession(sessionId: string, preferredProvider?: string): Promise<SandboxRecord | null> {
+    return this.latestSandbox(
+      (sandbox) => sandbox.sessionId === sessionId,
+      preferredProvider ? (sandbox) => sandbox.provider === preferredProvider : undefined,
+    );
+  }
+
+  private latestSandbox(
+    predicate: (sandbox: SandboxRecord) => boolean,
+    prefer?: (sandbox: SandboxRecord) => boolean,
+  ): SandboxRecord | null {
     return (
       Array.from(this.sandboxes.values())
-        .filter((sandbox) => sandbox.sessionId === sessionId && sandbox.provider === provider)
-        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null
+        .filter(predicate)
+        .sort(
+          (a, b) =>
+            Number(Boolean(prefer?.(b))) - Number(Boolean(prefer?.(a))) ||
+            b.updatedAt.getTime() - a.updatedAt.getTime(),
+        )[0] ?? null
     );
   }
 

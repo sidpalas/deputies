@@ -782,8 +782,7 @@ export class PostgresStore implements AppStore {
                 created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at
          FROM sandboxes
          WHERE sandboxes.session_id = sessions.id
-           AND sandboxes.provider = $1
-          ORDER BY updated_at DESC
+          ORDER BY (provider = $1) DESC, updated_at DESC
           LIMIT 1
         ) latest_sandbox ON TRUE
          ORDER BY sessions.last_activity_at DESC, sessions.created_at DESC, sessions.id DESC`,
@@ -869,8 +868,7 @@ export class PostgresStore implements AppStore {
                 created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at
          FROM sandboxes
          WHERE sandboxes.session_id = sessions.id
-           AND sandboxes.provider = $1
-         ORDER BY updated_at DESC
+         ORDER BY (provider = $1) DESC, updated_at DESC
          LIMIT 1
        ) latest_sandbox ON TRUE
         ORDER BY sessions.score DESC, sessions.last_activity_at DESC, sessions.created_at DESC, sessions.id DESC`,
@@ -2377,6 +2375,19 @@ export class PostgresStore implements AppStore {
        ORDER BY updated_at DESC
        LIMIT 1`,
       [sessionId, provider],
+    );
+    return result.rows[0] ? toSandbox(result.rows[0]) : null;
+  }
+
+  async getLatestSandboxForSession(sessionId: string, preferredProvider?: string): Promise<SandboxRecord | null> {
+    const result = await this.pool.query<SandboxRow>(
+      `SELECT id, session_id, provider, provider_sandbox_id, status, workspace_path, metadata,
+              created_at, updated_at, last_health_check_at, keepalive_until, destroyed_at
+       FROM sandboxes
+       WHERE session_id = $1
+       ORDER BY ($2::text IS NOT NULL AND provider = $2::text) DESC, updated_at DESC
+       LIMIT 1`,
+      [sessionId, preferredProvider ?? null],
     );
     return result.rows[0] ? toSandbox(result.rows[0]) : null;
   }

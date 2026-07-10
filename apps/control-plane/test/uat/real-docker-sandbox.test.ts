@@ -101,6 +101,11 @@ class MemorySandboxStore implements SandboxStore {
     return this.record;
   }
 
+  async getLatestSandboxForSession(sessionId: string): Promise<SandboxRecord | null> {
+    if (!this.record || this.record.sessionId !== sessionId) return null;
+    return this.record;
+  }
+
   async listActiveSandboxes(sessionId: string, provider: string): Promise<SandboxRecord[]> {
     if (
       !this.record ||

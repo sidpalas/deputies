@@ -65,6 +65,7 @@ const storeMethods = [
   'getLatestEventByType',
   'getLatestRunForSession',
   'getLatestSandbox',
+  'getLatestSandboxForSession',
   'getMessage',
   'getMessages',
   'getSessionMessageSummary',

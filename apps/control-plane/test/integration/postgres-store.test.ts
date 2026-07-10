@@ -270,7 +270,11 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       providerSandboxId: 'fake-sandbox-new',
       status: 'ready',
     });
-    expect(bySessionId.get(otherProvider.id)?.sandbox).toBeNull();
+    expect(bySessionId.get(otherProvider.id)?.sandbox).toMatchObject({
+      provider: 'docker',
+      providerSandboxId: 'docker-sandbox-1',
+      status: 'ready',
+    });
     expect(bySessionId.get(withoutSandbox.id)?.sandbox).toBeNull();
   });
 
