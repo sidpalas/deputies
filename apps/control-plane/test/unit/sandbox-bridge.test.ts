@@ -18,11 +18,9 @@ describe('sandbox bridge helpers', () => {
       DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES: 'deputies_preview,deputies_session',
     });
 
-    expect(sandboxBridgeStartupCommand()).toContain('/opt/deputies/sandbox-bridge/dist/server.js');
-    expect(sandboxBridgeStartupCommand()).toContain('/opt/deputies/sandbox-bridge/dist/healthcheck.js');
-    expect(sandboxBridgeStartupCommand()).toContain('http://127.0.0.1:3584/health');
+    expect(sandboxBridgeStartupCommand()).toContain('/opt/deputies/ensure-sandbox-bridge.sh');
     expect(sandboxBridgeStartupCommand()).toContain('DEPUTIES_SANDBOX_BRIDGE_PORT=3584');
-    expect(sandboxBridgeStartupCommand()).not.toContain('node -e');
+    expect(sandboxBridgeStartupCommand()).not.toContain('node');
   });
 
   it('routes a provider preview URL through the requested bridge preview path', () => {

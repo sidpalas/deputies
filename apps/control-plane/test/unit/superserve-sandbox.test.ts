@@ -167,7 +167,7 @@ describe('SuperserveSandboxProvider', () => {
     });
     expect(sandbox.previewPorts).toEqual([3584]);
     expect(sandbox.commandsRun.at(-1)).toMatchObject({
-      command: expect.stringContaining('/opt/deputies/sandbox-bridge/dist/server.js'),
+      command: expect.stringContaining('/opt/deputies/ensure-sandbox-bridge.sh'),
       options: {
         env: {
           DEPUTIES_SANDBOX_TOKEN: 'bridge-token',

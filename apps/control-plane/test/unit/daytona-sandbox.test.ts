@@ -222,7 +222,7 @@ describe('DaytonaSandboxProvider', () => {
     });
     expect(previewPorts).toEqual([3584]);
     expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
-      expect.stringContaining('/opt/deputies/sandbox-bridge/dist/server.js'),
+      expect.stringContaining('/opt/deputies/ensure-sandbox-bridge.sh'),
       undefined,
       {
         DEPUTIES_SANDBOX_TOKEN: 'bridge-token',
@@ -257,7 +257,7 @@ describe('DaytonaSandboxProvider', () => {
     });
 
     expect(sandbox.process.executeCommand).toHaveBeenCalledWith(
-      expect.stringContaining('/opt/deputies/sandbox-bridge/dist/server.js'),
+      expect.stringContaining('/opt/deputies/ensure-sandbox-bridge.sh'),
       undefined,
       expect.objectContaining({
         DEPUTIES_SANDBOX_SKIP_COOKIE_NAMES: 'inner_deputies_preview,inner_deputies_session',
