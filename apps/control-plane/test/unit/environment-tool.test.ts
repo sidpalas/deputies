@@ -1,7 +1,7 @@
 import { createServices } from '../../src/app/server.js';
 import { executeEnvironmentTool, validateEnvironmentContext } from '../../src/environments/tool.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId } from '../../src/store/types.js';
+import { defaultGroupId, type GroupRecord } from '../../src/store/types.js';
 import type { RepositoryToolServices } from '../../src/repositories/tool.js';
 
 describe('environment tool', () => {
@@ -58,7 +58,7 @@ describe('environment tool', () => {
     expect(repository.state.context).toEqual({ repository: { provider: 'github', owner: 'acme', repo: 'api' } });
   });
 
-  it('rejects a persisted environment after it is archived', async () => {
+  it('continues from a saved snapshot after the environment is archived', async () => {
     const services = createServices(new MemoryStore());
     const environment = await services.environments.create({
       name: 'Product surface',
@@ -73,9 +73,133 @@ describe('environment tool', () => {
 
     await expect(
       validateEnvironmentContext(services.environments, defaultGroupId, { environment: snapshot }),
+    ).resolves.toBe(
+      `Note: environment "Product surface" (revision 1) is no longer available (it has been archived). Continuing with this session's saved environment snapshot.`,
+    );
+  });
+
+  it('warns when an environment is no longer shared with the session group', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const sharedGroup = await store.createGroup(groupRecord('00000000-0000-4000-8000-000000001101', 'Shared'));
+    const environment = await services.environments.create({
+      name: 'Product surface',
+      ownerGroupId: defaultGroupId,
+      shareMode: 'all_groups',
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const snapshot = await services.environments.resolveForGroup({
+      environmentId: environment.id,
+      groupId: sharedGroup.id,
+    });
+    await services.environments.update({ id: environment.id, shareMode: 'private' });
+
+    await expect(
+      validateEnvironmentContext(services.environments, sharedGroup.id, { environment: snapshot }),
+    ).resolves.toContain('this group no longer has access');
+  });
+
+  it('warns when the session owner group is archived', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Product surface',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const snapshot = await services.environments.resolveForGroup({
+      environmentId: environment.id,
+      groupId: defaultGroupId,
+    });
+    const ownerGroup = await store.getGroup(defaultGroupId);
+    await store.updateGroup({ ...ownerGroup!, archivedAt: new Date(), updatedAt: new Date() });
+
+    await expect(
+      validateEnvironmentContext(services.environments, defaultGroupId, { environment: snapshot }),
+    ).resolves.toContain('session owner group is archived');
+  });
+
+  it('returns null for a still-available environment and rejects malformed snapshots', async () => {
+    const services = createServices(new MemoryStore());
+    const environment = await services.environments.create({
+      name: 'Product surface',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const snapshot = await services.environments.resolveForGroup({
+      environmentId: environment.id,
+      groupId: defaultGroupId,
+    });
+
+    await expect(
+      validateEnvironmentContext(services.environments, defaultGroupId, { environment: snapshot }),
+    ).resolves.toBeNull();
+    await expect(
+      validateEnvironmentContext(services.environments, defaultGroupId, { environment: { id: environment.id } }),
+    ).rejects.toThrow('Invalid environment session context');
+  });
+
+  it('rethrows unexpected live-environment lookup failures', async () => {
+    const services = createServices(new MemoryStore());
+    const environment = await services.environments.create({
+      name: 'Product surface',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const snapshot = await services.environments.resolveForGroup({
+      environmentId: environment.id,
+      groupId: defaultGroupId,
+    });
+    services.environments.resolveForGroup = async () => {
+      throw new Error('environment store unavailable');
+    };
+
+    await expect(
+      validateEnvironmentContext(services.environments, defaultGroupId, { environment: snapshot }),
+    ).rejects.toThrow('environment store unavailable');
+  });
+
+  it('reports saved-snapshot status but keeps new environment selection strict', async () => {
+    const services = createServices(new MemoryStore());
+    const environment = await services.environments.create({
+      name: 'Product surface',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
+    });
+    const snapshot = await services.environments.resolveForGroup({
+      environmentId: environment.id,
+      groupId: defaultGroupId,
+    });
+    await services.environments.archive(environment.id);
+    const repository = repositoryServices({ context: { environment: snapshot } });
+
+    await expect(
+      executeEnvironmentTool(
+        { environments: services.environments, ownerGroupId: defaultGroupId, repository },
+        { action: 'status' },
+      ),
+    ).resolves.toContain("Continuing with this session's saved environment snapshot.");
+    await expect(
+      executeEnvironmentTool(
+        { environments: services.environments, ownerGroupId: defaultGroupId, repository },
+        { action: 'set', environmentId: environment.id },
+      ),
     ).rejects.toMatchObject({ code: 'archived' });
   });
 });
+
+function groupRecord(id: string, name: string): GroupRecord {
+  const now = new Date();
+  return {
+    id,
+    name,
+    defaultVisibility: 'group',
+    defaultWritePolicy: 'group_members',
+    automationCreateRequiredRole: 'member',
+    createdAt: now,
+    updatedAt: now,
+  };
+}
 
 function repositoryServices(input: {
   context: Record<string, unknown>;

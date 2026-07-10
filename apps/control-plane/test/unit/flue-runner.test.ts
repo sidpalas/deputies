@@ -1,4 +1,5 @@
 import { FlueRunner } from '../../src/runner-flue/runner.js';
+import { createServices } from '../../src/app/server.js';
 import { RealFlueAgentFactory } from '../../src/runner-flue/agent-factory.js';
 import { createArtifactTool } from '../../src/runner-flue/artifact-tool.js';
 import type { FlueAgentFactory } from '../../src/runner-flue/types.js';
@@ -257,6 +258,58 @@ describe('FlueRunner', () => {
     expect(prompts[0]).toContain('User request:\nhello');
     expect(prompts[0]).not.toContain('secret-token-from-transport');
     expect(warn).toHaveBeenCalledWith('MCP server "executor" is unavailable this run (unknown).');
+  });
+
+  it('continues archived environment sessions and prepends the saved-snapshot warning once', async () => {
+    const services = createServices(new MemoryStore());
+    const environment = await services.environments.create({
+      name: 'Product surface',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'manaflow-ai', repo: 'manaflow', primary: true }],
+    });
+    const snapshot = await services.environments.resolveForGroup({
+      environmentId: environment.id,
+      groupId: defaultGroupId,
+    });
+    await services.environments.archive(environment.id);
+    const prompts: string[] = [];
+    const factory: FlueAgentFactory = {
+      async create() {
+        return {
+          async session() {
+            return {
+              async shell() {
+                return { stdout: 'cloned', stderr: '', exitCode: 0 };
+              },
+              async prompt(text) {
+                prompts.push(text);
+                return { text: 'continued from snapshot' };
+              },
+              abort() {},
+            };
+          },
+        };
+      },
+    };
+    const sandbox = await new FakeSandboxProvider().create({ sessionId: 'session-1' });
+
+    const result = await new FlueRunner(factory, {
+      environments: services.environments,
+      repositoryAccess: { github: new StaticGitHubAccessProvider('ghs_secret_token') },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'continue',
+      context: { environment: snapshot },
+      ownerGroupId: defaultGroupId,
+      sandbox,
+      emit: async () => {},
+    });
+
+    expect(result.text).toBe('continued from snapshot');
+    expect(prompts[0]?.match(/saved environment snapshot/g)).toHaveLength(1);
+    expect(prompts[0]).toContain('User request:\ncontinue');
   });
 
   it('closes MCP connections when a Flue run fails', async () => {

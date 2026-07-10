@@ -148,7 +148,11 @@ export class PiRunner implements Runner {
     const modelName = input.model ?? this.options.model;
     const unavailableReason = this.options.modelUnavailableReason?.(modelName);
     if (unavailableReason) throw new Error(unavailableReason);
-    await validateEnvironmentContext(this.options.environments, input.ownerGroupId, input.context);
+    const environmentWarning = await validateEnvironmentContext(
+      this.options.environments,
+      input.ownerGroupId,
+      input.context,
+    );
 
     const mcpSetupPromise = connectPiMcpServers(this.options.mcp, input.signal);
     let mcpSetup: PiMcpSetup | null = null;
@@ -260,6 +264,7 @@ export class PiRunner implements Runner {
       repositoryState.preparedRepositories = setupResults;
       if (setupResults[0]) repositoryState.prepared = setupResults[0];
       const setupNote = combineSetupNotes(
+        environmentWarning,
         mcpSetup?.note ?? null,
         ...setupResults.map((result) => result.setupFailureNote),
       );

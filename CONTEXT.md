@@ -45,7 +45,7 @@ A reusable work context selected for a session or automation. An environment can
 _Avoid_: Project, workspace
 
 **Codebase**:
-The code sub-configuration of an environment. A codebase identifies one or more repositories that belong together for agent work.
+The code sub-configuration of an environment. A codebase identifies one to 10 repositories that belong together for agent work.
 _Avoid_: Repository set, code environment
 
 **Primary Repository**:

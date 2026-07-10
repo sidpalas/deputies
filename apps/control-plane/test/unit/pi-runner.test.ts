@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import { ArtifactService } from '../../src/artifacts/service.js';
+import { createServices } from '../../src/app/server.js';
 import { FilesystemArtifactObjectStorage } from '../../src/artifacts/storage.js';
 import { createArtifactFromSandbox } from '../../src/artifacts/tool.js';
 import { EventService } from '../../src/events/service.js';
@@ -494,6 +495,66 @@ describe('PiRunner', () => {
     expect(prompt.mock.calls[0]?.[0]).toContain('\n\nhello');
     expect(prompt.mock.calls[0]?.[0]).not.toContain('secret-token-from-transport');
     expect(warn).toHaveBeenCalledWith('MCP server "executor" is unavailable this run (unknown).');
+  });
+
+  it('continues archived environment sessions and prepends the saved-snapshot warning once', async () => {
+    const services = createServices(new MemoryStore());
+    const environment = await services.environments.create({
+      name: 'Product surface',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'manaflow-ai', repo: 'manaflow', primary: true }],
+    });
+    const snapshot = await services.environments.resolveForGroup({
+      environmentId: environment.id,
+      groupId: defaultGroupId,
+    });
+    await services.environments.archive(environment.id);
+    const prompt = vi.fn();
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'continued from snapshot' }],
+            model: 'gpt-5.5',
+            stopReason: 'stop',
+          },
+        ],
+        prompt,
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe: vi.fn(() => () => {}),
+      },
+      extensionsResult: {},
+    });
+
+    const result = await new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      environments: services.environments,
+      repositoryAccess: {
+        github: {
+          async getRepositoryAccess() {
+            return githubAccess;
+          },
+        },
+      },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'continue',
+      context: { environment: snapshot },
+      ownerGroupId: defaultGroupId,
+      sandbox: createMemorySandbox(),
+      emit: async () => {},
+    });
+
+    expect(result.text).toBe('continued from snapshot');
+    const prompted = prompt.mock.calls[0]?.[0] as string;
+    expect(prompted.match(/saved environment snapshot/g)).toHaveLength(1);
+    expect(prompted).toContain('\n\ncontinue');
   });
 
   it('closes MCP connections when Pi setup fails after connecting', async () => {

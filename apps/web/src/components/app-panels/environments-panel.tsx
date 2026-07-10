@@ -16,6 +16,8 @@ import { Card } from '../ui/card.js';
 import { Input } from '../ui/input.js';
 import { OptionPicker, RepositoryPicker, type OptionPickerOption } from './option-picker.js';
 
+const MAX_ENVIRONMENT_REPOSITORIES = 10;
+
 type EnvironmentRepositoryForm = {
   key: string;
   repository: string;
@@ -132,13 +134,16 @@ export function EnvironmentsPanel(props: {
   }
 
   function addRepository() {
-    setForm((current) => ({
-      ...current,
-      repositories: [
-        ...current.repositories,
-        { key: nextRepositoryKey(), repository: '', branch: '', primary: current.repositories.length === 0 },
-      ],
-    }));
+    setForm((current) => {
+      if (current.repositories.length >= MAX_ENVIRONMENT_REPOSITORIES) return current;
+      return {
+        ...current,
+        repositories: [
+          ...current.repositories,
+          { key: nextRepositoryKey(), repository: '', branch: '', primary: current.repositories.length === 0 },
+        ],
+      };
+    });
   }
 
   function removeRepository(key: string) {
@@ -399,10 +404,19 @@ export function EnvironmentsPanel(props: {
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-foreground">Repositories</h3>
-                  <Button type="button" variant="secondary" size="sm" onClick={addRepository} disabled={!canEdit}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={addRepository}
+                    disabled={!canEdit || form.repositories.length >= MAX_ENVIRONMENT_REPOSITORIES}
+                  >
                     <Plus className="h-4 w-4" /> Add repo
                   </Button>
                 </div>
+                <p className="mb-2 text-sm text-muted-foreground">
+                  Environments support up to {MAX_ENVIRONMENT_REPOSITORIES} repositories.
+                </p>
                 <div className="grid gap-2">
                   {form.repositories.map((repository, index) => (
                     <div

@@ -1,5 +1,5 @@
 import { createServices } from '../../src/app/server.js';
-import { EnvironmentServiceError } from '../../src/environments/service.js';
+import { EnvironmentServiceError, MAX_ENVIRONMENT_REPOSITORIES } from '../../src/environments/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import { defaultGroupId, type GroupRecord } from '../../src/store/types.js';
 
@@ -193,6 +193,59 @@ describe('environment service', () => {
     } satisfies Partial<EnvironmentServiceError>);
   });
 
+  it('caps environment codebases at ten repositories on create and repository updates', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const repositories = repositoryInputs(MAX_ENVIRONMENT_REPOSITORIES);
+
+    const maximum = await services.environments.create({
+      name: 'Maximum codebase',
+      ownerGroupId: defaultGroupId,
+      repositories,
+    });
+    expect(maximum.repositories).toHaveLength(MAX_ENVIRONMENT_REPOSITORIES);
+    await expect(
+      services.environments.create({
+        name: 'Oversized codebase',
+        ownerGroupId: defaultGroupId,
+        repositories: repositoryInputs(MAX_ENVIRONMENT_REPOSITORIES + 1),
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      message: 'Environment codebase cannot contain more than 10 repositories',
+    } satisfies Partial<EnvironmentServiceError>);
+
+    const environment = await services.environments.create({
+      name: 'Editable codebase',
+      ownerGroupId: defaultGroupId,
+      repositories: repositoryInputs(1),
+    });
+    await expect(
+      services.environments.update({
+        id: environment.id,
+        repositories: repositoryInputs(MAX_ENVIRONMENT_REPOSITORIES + 1),
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_request',
+      message: 'Environment codebase cannot contain more than 10 repositories',
+    } satisfies Partial<EnvironmentServiceError>);
+
+    const storedEnvironment = await store.getEnvironment(maximum.id);
+    const environments = (store as unknown as { environments: Map<string, NonNullable<typeof storedEnvironment>> })
+      .environments;
+    const firstRepository = storedEnvironment!.repositories[0]!;
+    environments.set(maximum.id, {
+      ...storedEnvironment!,
+      repositories: [
+        ...storedEnvironment!.repositories,
+        { ...firstRepository, id: 'pre-cap-repository', repo: 'repo-11', position: MAX_ENVIRONMENT_REPOSITORIES },
+      ],
+    });
+    await expect(
+      services.environments.update({ id: maximum.id, name: 'Renamed pre-cap codebase' }),
+    ).resolves.toMatchObject({ name: 'Renamed pre-cap codebase', repositories: expect.any(Array) });
+  });
+
   it('restores archived environments', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -250,4 +303,13 @@ function groupRecord(id: string, name: string): GroupRecord {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function repositoryInputs(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    provider: 'github' as const,
+    owner: 'acme',
+    repo: `repo-${index + 1}`,
+    primary: index === 0,
+  }));
 }

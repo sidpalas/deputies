@@ -72,7 +72,11 @@ export class FlueRunner implements Runner {
   async run(input: RunnerInput): Promise<RunnerResult> {
     const unavailableReason = this.options.modelUnavailableReason?.(input.model);
     if (unavailableReason) throw new Error(unavailableReason);
-    await validateEnvironmentContext(this.options.environments, input.ownerGroupId, input.context);
+    const environmentWarning = await validateEnvironmentContext(
+      this.options.environments,
+      input.ownerGroupId,
+      input.context,
+    );
 
     const pendingEvents: Array<Promise<void>> = [];
     let sawTextDelta = false;
@@ -221,7 +225,11 @@ export class FlueRunner implements Runner {
         : [];
       repositoryState.preparedRepositories = setupResults;
       if (setupResults[0]) repositoryState.prepared = setupResults[0];
-      const setupNote = combineSetupNotes(mcpSetup.note, ...setupResults.map((result) => result.setupFailureNote));
+      const setupNote = combineSetupNotes(
+        environmentWarning,
+        mcpSetup.note,
+        ...setupResults.map((result) => result.setupFailureNote),
+      );
 
       // Cancellation must not leave partial Flue turn state in durable history.
       // A prompt-only warning is cheaper but advisory, and models can still continue

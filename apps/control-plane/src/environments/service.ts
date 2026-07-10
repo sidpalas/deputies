@@ -20,6 +20,8 @@ export type EnvironmentRepositoryInput = {
   primary?: boolean;
 };
 
+export const MAX_ENVIRONMENT_REPOSITORIES = 10;
+
 export type EnvironmentBranchOverride = {
   provider?: RepositoryProvider;
   owner: string;
@@ -426,6 +428,12 @@ function normalizeRepositories(
 ): EnvironmentRepositoryRecord[] {
   if (!Array.isArray(repositories) || repositories.length < 1) {
     throw new EnvironmentServiceError('invalid_request', 'Environment codebase must include at least one repository');
+  }
+  if (repositories.length > MAX_ENVIRONMENT_REPOSITORIES) {
+    throw new EnvironmentServiceError(
+      'invalid_request',
+      `Environment codebase cannot contain more than ${MAX_ENVIRONMENT_REPOSITORIES} repositories`,
+    );
   }
   const normalized = repositories.map((repository, index) => {
     const provider = repository.provider ?? 'github';

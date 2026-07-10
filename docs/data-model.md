@@ -148,7 +148,7 @@ Rules:
 
 ## Environments And Revisions
 
-Environments are stable, group-owned identities with live sharing and lifecycle policy. Executable configuration is append-only: publishing creates an immutable revision and atomically advances `current_revision_id`. Repository rows belong to revisions rather than directly to the mutable environment. Activity rows durably record actors and access/configuration changes; they are not session events or telemetry.
+Environments are stable, group-owned identities with live sharing and lifecycle policy. Executable configuration is append-only: publishing creates an immutable revision and atomically advances `current_revision_id`. Repository rows belong to revisions rather than directly to the mutable environment; each codebase supports from one to 10 repositories. Activity rows durably record actors and access/configuration changes; they are not session events or telemetry.
 
 ```txt
 environments
