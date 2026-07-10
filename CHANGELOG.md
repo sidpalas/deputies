@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/sidpalas/deputies/compare/v0.16.0...v0.17.0) (2026-07-10)
+
+
+### Features
+
+* add Superserve sandbox provider ([#92](https://github.com/sidpalas/deputies/issues/92)) ([6e5880f](https://github.com/sidpalas/deputies/commit/6e5880fe49d536a37e7495d261b0af5f66cb842e))
+
 ## [0.16.0](https://github.com/sidpalas/deputies/compare/v0.15.1...v0.16.0) (2026-07-09)
 
 
