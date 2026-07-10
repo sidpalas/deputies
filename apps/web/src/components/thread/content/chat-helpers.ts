@@ -34,6 +34,29 @@ export function buildAssistantText(events: AgentEvent[]): Record<string, string>
   return outputByMessageId;
 }
 
+export function buildAssistantTimestamps(events: AgentEvent[]): Record<string, string> {
+  const messageIdsBySequence: Record<number, string> = {};
+  const timestampsByMessageId: Record<string, string> = {};
+  let currentSequence = 0;
+  let currentMessageId = '';
+
+  for (const event of events) {
+    const maybeSequence = event.payload.sequence;
+    if (typeof maybeSequence === 'number') {
+      currentSequence = maybeSequence;
+      if (event.messageId) messageIdsBySequence[maybeSequence] = event.messageId;
+    }
+    if (event.messageId) currentMessageId = event.messageId;
+    const messageId = event.messageId || currentMessageId || messageIdsBySequence[currentSequence];
+    if (!messageId) continue;
+    if (event.type === 'agent_response_final' || event.type === 'agent_text_delta') {
+      timestampsByMessageId[messageId] = event.createdAt;
+    }
+  }
+
+  return timestampsByMessageId;
+}
+
 export function formatAssistantDisplayText(text: string): string {
   return text.replace(/([.!?])(?=[A-Z])/g, '$1 ').replace(/:(?=[A-Z][a-z])/g, ': ');
 }

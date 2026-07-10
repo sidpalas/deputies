@@ -29,6 +29,7 @@ import { Textarea } from '../ui/textarea.js';
 import { cn } from '../../lib/utils.js';
 import {
   buildAssistantText,
+  buildAssistantTimestamps,
   formatAssistantDisplayText,
   groupDiagnosticsByRun,
   groupMessagesByRun,
@@ -93,6 +94,7 @@ export function ChatPanel(props: {
   onLoadArtifactPreview: (artifact: Artifact) => Promise<ArtifactPreview>;
 }) {
   const assistantText = { ...buildAssistantText(props.events), ...props.activeProgress };
+  const assistantTimestamps = buildAssistantTimestamps(props.events);
   const diagnostics = groupDiagnosticsByRun(props.events);
   const groups = groupMessagesByRun(props.messages, props.events);
 
@@ -149,8 +151,9 @@ export function ChatPanel(props: {
             ))}
             {response ? (
               <Card className="min-w-0 overflow-hidden p-3">
-                <h3 className="mb-1 text-xs font-medium text-muted-foreground">
-                  {activeRun ? 'Deputy progress' : 'Deputy response'}
+                <h3 className="mb-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs font-medium text-muted-foreground">
+                  <span className="min-w-0 truncate">{activeRun ? 'Deputy progress' : 'Deputy response'}</span>
+                  <InlineTimestamp value={assistantTimestamps[group.responseMessageId]} />
                 </h3>
                 {activeRun ? (
                   <StreamingProgressText text={formatAssistantDisplayText(response)} />
@@ -240,10 +243,13 @@ function UserMessageCard(props: {
   return (
     <Card className="border-primary/50 bg-primary/10 p-3" role="article" aria-label={`Message ${message.sequence}`}>
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="min-w-0 text-xs font-medium text-muted-foreground">
-          {messageLabel(message)}
-          {message.authorName ? ` from ${message.authorName}` : ''}{' '}
-          <Badge className={statusTextClass(message.status)}>{messageStatusLabel(message)}</Badge>
+        <h3 className="flex min-w-0 items-center gap-2 overflow-hidden text-xs font-medium text-muted-foreground">
+          <span className="min-w-0 truncate">
+            {messageLabel(message)}
+            {message.authorName ? ` from ${message.authorName}` : ''}
+          </span>
+          <InlineTimestamp value={message.createdAt} />
+          <Badge className={cn('shrink-0', statusTextClass(message.status))}>{messageStatusLabel(message)}</Badge>
         </h3>
         {props.canWriteSession && message.status === 'pending' && props.editingMessageId !== message.id ? (
           <div className="flex gap-1">
@@ -306,6 +312,15 @@ function messageLabel(message: Message): string {
 function messageStatusLabel(message: Message): string {
   if (message.context?.transcriptOnly && message.status === 'cancelled') return 'not queued';
   return message.status === 'pending' ? 'queued' : message.status;
+}
+
+function InlineTimestamp(props: { value: string | undefined }) {
+  if (!props.value) return null;
+  return (
+    <time className="shrink-0 text-[11px] font-normal text-muted-foreground/80" dateTime={props.value}>
+      {formatDate(props.value)}
+    </time>
+  );
 }
 
 function PlainText(props: { text: string }) {
