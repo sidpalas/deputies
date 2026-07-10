@@ -986,11 +986,6 @@ function automationCodebaseFormPatch(
   };
 }
 
-function pinnedRevisionDescription(environment: Environment, form: AutomationForm): string {
-  const revisionNumber = form.environmentRevisionNumber ?? environment.currentRevisionNumber;
-  return `environment revision ${revisionNumber}`;
-}
-
 function environmentAvailableToGroup(environment: Environment, groupId: string): boolean {
   if (!groupId || environment.archivedAt) return false;
   return (
