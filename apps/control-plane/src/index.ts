@@ -292,6 +292,7 @@ function createSandboxProvider(): SandboxProvider {
       image: requireTensorlakeRegisteredImage(config),
       idleTimeoutMs: Math.max(config.sandboxIdleTimeoutMs, config.sandboxKeepaliveMaxExtensionMs),
       workspacePath: config.sandboxWorkspacePath,
+      bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
     };
     if (config.tensorlakeSandboxCpu !== undefined) Object.assign(options, { cpus: config.tensorlakeSandboxCpu });
     if (config.tensorlakeSandboxMemoryMb !== undefined)

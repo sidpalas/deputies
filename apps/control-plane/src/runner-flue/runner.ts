@@ -11,6 +11,7 @@ import type { EnvironmentService } from '../environments/service.js';
 import { validateEnvironmentContext } from '../environments/tool.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
+import { startSandboxService } from '../sandbox/service-process.js';
 import { type RepositoryAccessProvider } from '../repositories/setup.js';
 import {
   executeRepositoryPreparations,
@@ -162,6 +163,7 @@ export class FlueRunner implements Runner {
           sessionId: input.sessionId,
           providerSandboxId: input.sandbox.providerSandboxId,
           sandboxMetadata: input.sandbox.metadata,
+          launchService: (service) => startSandboxService(input.sandbox, service),
           updateSessionContext: input.updateSessionContext,
           getContext: () => repositoryState.context,
           setContext: (context) => {
@@ -419,7 +421,7 @@ function withToolGuidance(
 ): string {
   const lines = [
     'Service tool guidance:',
-    '- If you start or identify a web server, app preview, code-server instance, API docs, notebook, dashboard, or other HTTP service the user should open, call service({ action: "publish", port, label, path, ttlSeconds }) after confirming the service is running. Use ttlSeconds of at least 300 for interactive services so the sandbox stays alive long enough for the user to open it. Multiple services may be visible at the same time.',
+    '- To start a persistent web server, app preview, code-server instance, API docs, notebook, dashboard, or other HTTP service, prefer service({ action: "launch", command, port, label, path, ttlSeconds }). Deputies will launch and publish it with provider-managed process semantics. Use action=publish only for services that are already managed and confirmed running. Use ttlSeconds of at least 300 for interactive services.',
     '- Use service({ action: "extend", port, ttlSeconds }) to keep an existing service sandbox alive longer, service({ action: "list" }) to inspect published services, and service({ action: "unpublish", port }) to remove stale links.',
     '- Do not publish ports that are not serving an app, browser-accessible tool, or useful HTTP endpoint.',
     '- For Vite dev servers published as services/previews, do not hard-code server.hmr.host, server.hmr.clientPort, or server.hmr.protocol to localhost; let Vite infer the browser URL unless the user specifically asks otherwise.',

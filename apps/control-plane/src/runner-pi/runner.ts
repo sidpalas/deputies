@@ -42,6 +42,7 @@ import { type RepositoryToolServices, type RepositoryToolState } from '../reposi
 import { sandboxRepositoryShell } from '../repositories/shell.js';
 import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
+import { startSandboxService } from '../sandbox/service-process.js';
 import { PI_SESSION_DATA_VERSION, type PiSessionData, type PiSessionStore } from './session-store.js';
 import { createPiArtifactToolDefinition } from './artifact-tool.js';
 import { createPiDeputyToolDefinition } from './deputy-tool.js';
@@ -411,6 +412,7 @@ function createPiToolSet(
         sessionId: input.sessionId,
         providerSandboxId: input.sandbox.providerSandboxId,
         sandboxMetadata: input.sandbox.metadata,
+        launchService: (service) => startSandboxService(input.sandbox, service),
         updateSessionContext: input.updateSessionContext,
         getContext: () => repositoryState.context,
         setContext: (context) => {

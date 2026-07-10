@@ -1,6 +1,7 @@
 import { sandboxBridgeSkipCookieNamesEnv } from './bridge-env.js';
 
 export const sandboxBridgePort = 3584;
+export const sandboxBridgeTokenHeader = 'x-deputies-bridge-token';
 
 export type SandboxBridgeEnvironmentInput = {
   bridgeToken: string;

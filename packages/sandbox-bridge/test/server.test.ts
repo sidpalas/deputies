@@ -62,6 +62,14 @@ describe('sandbox bridge server', () => {
     await expect(response.json()).resolves.toMatchObject({ status: 'ready', workspacePath });
   });
 
+  it('accepts the dedicated bridge credential header', async () => {
+    const response = await fetch(`${baseUrl}/health`, {
+      headers: { 'x-deputies-bridge-token': token },
+    });
+
+    await expect(response.json()).resolves.toMatchObject({ status: 'ready' });
+  });
+
   it('round trips filesystem operations and rejects path escapes', async () => {
     await expect(
       bridgeFetch('/fs/mkdir', { method: 'POST', body: JSON.stringify({ path: 'nested', recursive: true }) }),
@@ -251,6 +259,37 @@ describe('sandbox bridge server', () => {
         daytonaToken: null,
         cookie: 'app_session=ok',
       });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it('strips ingress and bridge credentials before forwarding preview traffic', async () => {
+    const upstream = createServer((request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          authorization: request.headers.authorization ?? null,
+          bridgeToken: request.headers['x-deputies-bridge-token'] ?? null,
+        }),
+      );
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const address = upstream.address();
+    if (typeof address !== 'object' || !address) throw new Error('Expected upstream address');
+
+    try {
+      const response = await fetch(`${baseUrl}/preview/${address.port}/`, {
+        headers: {
+          authorization: 'Bearer tensorlake-ingress-key',
+          'x-deputies-bridge-token': token,
+        },
+      });
+
+      await expect(response.json()).resolves.toEqual({ authorization: null, bridgeToken: null });
     } finally {
       await new Promise<void>((resolve, reject) => {
         upstream.close((error) => (error ? reject(error) : resolve()));

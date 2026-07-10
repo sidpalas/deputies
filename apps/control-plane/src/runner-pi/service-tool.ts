@@ -15,7 +15,8 @@ export function createPiServiceToolDefinition(services: ServiceToolServices): To
     description: serviceToolDescription,
     promptSnippet: 'Publish, list, extend, and unpublish live HTTP services for the user',
     promptGuidelines: [
-      'If you start or identify a web server, app preview, code-server instance, API docs, notebook, dashboard, or other HTTP service the user should open, call service({ action: "publish", port, label, path, ttlSeconds }) after confirming the service is running.',
+      'To start a web server, app preview, code-server instance, API docs, notebook, dashboard, or other persistent HTTP service, prefer service({ action: "launch", command, port, label, path, ttlSeconds }). Deputies will launch it with provider-managed process semantics and publish it.',
+      'Use service({ action: "publish", port, label, path, ttlSeconds }) only when the service is already managed and confirmed running.',
       'Use ttlSeconds of at least 300 for interactive services so the sandbox stays alive long enough for the user to open it. Multiple services may be visible at the same time.',
       'Use service({ action: "extend", port, ttlSeconds }) to keep an existing service sandbox alive longer, service({ action: "list" }) to inspect published services, and service({ action: "unpublish", port }) to remove stale links.',
       'Do not publish ports that are not serving an app, browser-accessible tool, or useful HTTP endpoint.',

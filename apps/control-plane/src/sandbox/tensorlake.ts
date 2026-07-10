@@ -8,7 +8,16 @@ import {
   type CreateAndConnectOptions,
   type SandboxClientOptions,
   type SandboxInfo,
+  type ProcessInfo,
+  type StartProcessOptions,
 } from 'tensorlake';
+import {
+  sandboxBridgeEnvironment,
+  sandboxBridgePort,
+  sandboxBridgePreviewUrl,
+  sandboxBridgeStartupCommand,
+  sandboxBridgeTokenHeader,
+} from './bridge.js';
 import type {
   ConnectSandboxInput,
   CreateSandboxInput,
@@ -24,6 +33,8 @@ import type {
   SandboxRef,
   SandboxServiceEndpoint,
   SandboxServiceEndpointInput,
+  SandboxServiceProcess,
+  SandboxServiceProcessInput,
 } from './types.js';
 
 export type TensorlakeSandboxProviderOptions = {
@@ -36,6 +47,7 @@ export type TensorlakeSandboxProviderOptions = {
   memoryMb?: number;
   diskMb?: number;
   allowInternetAccess?: boolean;
+  bridgeSkippedCookieNames?: string;
 };
 
 export type TensorlakeClientLike = {
@@ -61,6 +73,7 @@ export type TensorlakeSandboxLike = {
     command: string,
     options?: { args?: string[]; env?: Record<string, string>; workingDir?: string; timeout?: number },
   ): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  startProcess?(command: string, options?: StartProcessOptions): Promise<ProcessInfo>;
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, content: Uint8Array): Promise<void>;
   deleteFile(path: string): Promise<void>;
@@ -104,11 +117,12 @@ export class TensorlakeSandboxProvider implements SandboxProvider {
   }
 
   async create(input: CreateSandboxInput): Promise<SandboxHandle> {
+    const bridgeToken = randomUUID();
     const sandbox = await this.client.createAndConnect(this.createOptions(input));
     try {
       await ensureWorkspace(sandbox, this.workspacePath);
       const info = await this.client.get(sandbox.sandboxId);
-      return await this.toHandle(sandbox, info, input.sessionId, input.metadata ?? {});
+      return await this.toHandle(sandbox, info, input.sessionId, input.metadata ?? {}, { bridgeToken });
     } catch (error) {
       await this.destroy({ providerSandboxId: sandbox.sandboxId, sessionId: input.sessionId }).catch(() => undefined);
       throw error;
@@ -119,7 +133,7 @@ export class TensorlakeSandboxProvider implements SandboxProvider {
     const info = await this.client.get(input.providerSandboxId);
     const sandbox = await this.client.connect(input.providerSandboxId);
     await ensureWorkspace(sandbox, this.workspacePath);
-    return this.toHandle(sandbox, info, input.sessionId, input.metadata ?? {});
+    return this.toHandle(sandbox, info, input.sessionId, input.metadata ?? {}, input.secrets);
   }
 
   async destroy(input: SandboxRef): Promise<void> {
@@ -150,19 +164,30 @@ export class TensorlakeSandboxProvider implements SandboxProvider {
   }
 
   async getServiceEndpoint(input: SandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {
+    if (input.port === sandboxBridgePort || !this.options.apiKey) return null;
     const info = await this.client.get(input.providerSandboxId);
-    const ports = Array.from(new Set([...(info.exposedPorts ?? []), input.port]));
+    const sandbox = await this.client.connect(input.providerSandboxId);
+    const bridgeToken = input.secrets?.bridgeToken ?? randomUUID();
+    await ensureTensorlakeBridge(sandbox, this.workspacePath, bridgeToken, this.options.bridgeSkippedCookieNames);
     const updated = await this.client.update(input.providerSandboxId, {
-      exposedPorts: ports,
+      exposedPorts: [sandboxBridgePort],
       allowUnauthenticatedAccess: false,
     });
     const ingressEndpoint = updated.ingressEndpoint ?? info.ingressEndpoint;
-    if (!ingressEndpoint || !this.options.apiKey) return null;
+    if (!ingressEndpoint) return null;
     return {
       port: input.port,
-      targetUrl: sandboxUrlFromIngressEndpoint(ingressEndpoint, input.providerSandboxId, input.port),
-      targetHeaders: { authorization: `Bearer ${this.options.apiKey}` },
+      targetUrl: sandboxBridgePreviewUrl(
+        sandboxUrlFromIngressEndpoint(ingressEndpoint, input.providerSandboxId, sandboxBridgePort),
+        input.port,
+      ),
+      targetHeaders: {
+        authorization: `Bearer ${this.options.apiKey}`,
+        [sandboxBridgeTokenHeader]: bridgeToken,
+      },
       preserveTargetHost: true,
+      forwardPreviewHost: true,
+      secrets: { bridgeToken },
     };
   }
 
@@ -188,6 +213,7 @@ export class TensorlakeSandboxProvider implements SandboxProvider {
     info: SandboxInfo,
     sessionId: string,
     metadata: Record<string, unknown>,
+    secrets: Record<string, string> | undefined,
   ): Promise<SandboxHandle> {
     return {
       provider: this.name,
@@ -202,10 +228,29 @@ export class TensorlakeSandboxProvider implements SandboxProvider {
         ingressEndpoint: info.ingressEndpoint,
       },
       capabilities: this.capabilities,
+      ...(secrets?.bridgeToken ? { secrets: { bridgeToken: secrets.bridgeToken } } : {}),
       fs: createTensorlakeFileSystem(sandbox, this.workspacePath),
       exec: (command) => execTensorlakeCommand(sandbox, command, this.workspacePath),
+      startService: (input) => startTensorlakeService(sandbox, input, this.workspacePath),
     };
   }
+}
+
+async function startTensorlakeService(
+  sandbox: TensorlakeSandboxLike,
+  input: SandboxServiceProcessInput,
+  workspacePath: string,
+): Promise<SandboxServiceProcess> {
+  if (!sandbox.startProcess) throw new Error('Tensorlake SDK does not support managed processes');
+  const process = await sandbox.startProcess('bash', {
+    args: ['-lc', `exec ${input.command}`],
+    workingDir: resolveTensorlakePath(input.cwd ?? '.', workspacePath),
+    ...(input.env ? { env: input.env } : {}),
+    name: `deputies-service-${input.port}`,
+    restart: { policy: 'on_failure', maxRestarts: 3, initialBackoffMs: 250, maxBackoffMs: 2000 },
+    healthCheck: { type: 'tcp', port: input.port, initialDelayMs: 250, intervalMs: 500, timeoutMs: 500 },
+  });
+  return { pid: process.pid, status: process.managed?.status === 'running' ? 'running' : 'starting' };
 }
 
 function createTensorlakeClient(options: TensorlakeSandboxProviderOptions): TensorlakeClientLike {
@@ -250,6 +295,22 @@ function createTensorlakeClient(options: TensorlakeSandboxProviderOptions): Tens
 async function ensureWorkspace(sandbox: TensorlakeSandboxLike, workspacePath: string): Promise<void> {
   const result = await execTensorlakeCommand(sandbox, { command: `mkdir -p ${quoteShell(workspacePath)}` });
   if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout || 'Tensorlake workspace setup failed');
+}
+
+async function ensureTensorlakeBridge(
+  sandbox: TensorlakeSandboxLike,
+  workspacePath: string,
+  bridgeToken: string,
+  skippedCookieNames?: string,
+): Promise<void> {
+  const result = await execTensorlakeCommand(sandbox, {
+    command: sandboxBridgeStartupCommand(),
+    cwd: workspacePath,
+    env: sandboxBridgeEnvironment({ bridgeToken, workspacePath, skippedCookieNames }),
+    timeoutMs: 10_000,
+  });
+  if (result.exitCode !== 0)
+    throw new Error(result.stderr || result.stdout || 'Tensorlake sandbox bridge did not become ready');
 }
 
 function createTensorlakeFileSystem(sandbox: TensorlakeSandboxLike, workspacePath: string): SandboxFileSystem {

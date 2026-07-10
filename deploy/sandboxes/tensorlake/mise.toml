@@ -26,3 +26,41 @@ tl sbx image create \
   --cpus "$TENSORLAKE_IMAGE_BUILD_CPUS" \
   --memory "$TENSORLAKE_IMAGE_BUILD_MEMORY_MB"
 '''
+
+[tasks.uat]
+description = "Publish a minimal current-branch base, register it, and run the live Tensorlake provider UAT"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+base_repository=${TENSORLAKE_BASE_REPOSITORY:-ghcr.io/sidpalas/deputies-sandbox-base}
+base_tag=${TENSORLAKE_UAT_BASE_TAG:-tensorlake-uat-$(date -u +%Y%m%d%H%M%S)}
+registered_image=${TENSORLAKE_UAT_REGISTERED_IMAGE:-deputies-uat}
+uat_dockerfile=$(mktemp .Dockerfile.tensorlake-uat.XXXXXX)
+trap 'rm -f "$uat_dockerfile"' EXIT
+
+docker buildx build \
+  --platform linux/amd64 \
+  --provenance=false \
+  --sbom=false \
+  --target sandbox-provider-minimal-uat \
+  -f ../base/Dockerfile \
+  -t "${base_repository}:${base_tag}" \
+  --push \
+  ../../..
+
+printf 'FROM %s:%s\nEXPOSE 3584\nCMD ["sleep", "infinity"]\n' \
+  "$base_repository" "$base_tag" > "$uat_dockerfile"
+
+tl sbx image create \
+  "$uat_dockerfile" \
+  --registered-name "$registered_image" \
+  --cpus "${TENSORLAKE_IMAGE_BUILD_CPUS:-1}" \
+  --memory "${TENSORLAKE_IMAGE_BUILD_MEMORY_MB:-1024}"
+
+RUN_REAL_TENSORLAKE_SANDBOX_UAT=true \
+TENSORLAKE_REGISTERED_IMAGE="$registered_image" \
+  pnpm --dir ../../../apps/control-plane exec vitest run \
+    --config vitest.uat.config.ts \
+    test/uat/real-tensorlake-sandbox.test.ts
+'''

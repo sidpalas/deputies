@@ -1,6 +1,7 @@
 import type { RunnerInput } from '../runner/types.js';
 import { sandboxRuntimeId } from '../sandbox/runtime.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
+import type { SandboxServiceProcess, SandboxServiceProcessInput } from '../sandbox/types.js';
 import {
   isValidServicePath,
   maxServiceLabelLength,
@@ -18,6 +19,7 @@ export type ServiceToolServices = {
   setContext: (context: Record<string, unknown>) => void;
   keepalive?: SandboxKeepaliveService;
   keepaliveMaxExtensionMs?: number;
+  launchService?: (input: SandboxServiceProcessInput) => Promise<SandboxServiceProcess>;
 };
 
 export type ServiceToolResult = {
@@ -26,12 +28,13 @@ export type ServiceToolResult = {
     keepaliveUntil: string;
     providerSync: 'not_supported' | 'ok' | 'failed';
   };
+  process?: SandboxServiceProcess;
 };
 
 const defaultServiceTtlSeconds = 600;
 
 export const serviceToolDescription =
-  'Manage live HTTP services visible in the product UI, including app previews, API docs, dashboards, notebooks, code-server, and other browser-accessible sandbox tools. Use action=publish after starting a web server or service in the sandbox so the user can open it. Multiple services may be visible at the same time. Use action=extend to keep the sandbox alive longer when a service needs more interaction time. Use action=list to inspect published services and action=unpublish to remove stale links. Publish one service per port, with a user-facing label such as "Web app", "Vite dev server", "API docs", "code-server", or "Jupyter".';
+  "Launch and manage live HTTP services visible in the product UI, including app previews, API docs, dashboards, notebooks, code-server, and other browser-accessible sandbox tools. Prefer action=launch with the service command and port so Deputies can use the provider's persistent process API. Use action=publish only for an already-managed service. Multiple services may be visible at the same time. Use action=extend to keep the sandbox alive longer, action=list to inspect published services, and action=unpublish to remove stale links.";
 
 export const serviceToolParameters = {
   type: 'object',
@@ -40,10 +43,12 @@ export const serviceToolParameters = {
   properties: {
     action: {
       type: 'string',
-      enum: ['publish', 'unpublish', 'list', 'extend'],
+      enum: ['launch', 'publish', 'unpublish', 'list', 'extend'],
       description: 'Service action to perform.',
     },
     port: { type: 'number', minimum: 1, maximum: 65535, description: 'TCP port the service listens on.' },
+    command: { type: 'string', description: 'Command to launch as a persistent managed service.' },
+    cwd: { type: 'string', description: 'Optional service working directory.' },
     ttlSeconds: { type: 'number', minimum: 1, description: 'Seconds to keep the sandbox alive.' },
     label: { type: 'string', maxLength: maxServiceLabelLength, description: 'Human-readable service label.' },
     path: {
@@ -69,18 +74,19 @@ export async function executeServiceTool(
   const port = readPort(params.port);
   if (action === 'extend') return { keepalive: await extendKeepalive(services, params, port) };
 
-  const ttlSeconds = action === 'publish' ? publishTtlSeconds(params.ttlSeconds) : undefined;
+  const ttlSeconds = action === 'publish' || action === 'launch' ? publishTtlSeconds(params.ttlSeconds) : undefined;
   const keepalive =
     ttlSeconds !== undefined ? await extendKeepalive(services, { ...params, ttlSeconds }, port) : undefined;
+  const process = action === 'launch' ? await launchService(services, params, port) : undefined;
   const latestContext = await refreshSessionContextWithoutStaleServices(services);
   const current = readServices(latestContext);
   const next =
-    action === 'publish'
+    action === 'publish' || action === 'launch'
       ? publishService(current, params, port, services.providerSandboxId, runtimeId)
       : unpublishService(current, port, services.providerSandboxId, runtimeId);
   services.setContext(await services.updateSessionContext({ ...latestContext, services: next }));
 
-  return { services: next, ...(keepalive ? { keepalive } : {}) };
+  return { services: next, ...(process ? { process } : {}), ...(keepalive ? { keepalive } : {}) };
 }
 
 async function refreshSessionContextWithoutStaleServices(
@@ -155,9 +161,22 @@ async function extendKeepalive(
   };
 }
 
-function readAction(value: unknown): 'publish' | 'unpublish' | 'list' | 'extend' {
-  if (value === 'publish' || value === 'unpublish' || value === 'list' || value === 'extend') return value;
-  throw new Error('service action must be one of: publish, unpublish, list, extend');
+async function launchService(
+  services: ServiceToolServices,
+  params: Record<string, unknown>,
+  port: number,
+): Promise<SandboxServiceProcess> {
+  if (!services.launchService) throw new Error('managed service launch is not available');
+  const command = readOptionalString(params.command, 'command', 16_384);
+  if (!command) throw new Error('service command is required for action=launch');
+  const cwd = readOptionalString(params.cwd, 'cwd', 4096);
+  return services.launchService({ command, port, ...(cwd ? { cwd } : {}) });
+}
+
+function readAction(value: unknown): 'launch' | 'publish' | 'unpublish' | 'list' | 'extend' {
+  if (value === 'launch' || value === 'publish' || value === 'unpublish' || value === 'list' || value === 'extend')
+    return value;
+  throw new Error('service action must be one of: launch, publish, unpublish, list, extend');
 }
 
 function readPort(value: unknown): number {

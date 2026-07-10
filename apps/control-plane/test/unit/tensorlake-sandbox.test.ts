@@ -1,4 +1,4 @@
-import { SandboxStatus } from 'tensorlake';
+import { ProcessStatus, SandboxStatus, type StartProcessOptions } from 'tensorlake';
 import {
   TensorlakeSandboxProvider,
   type TensorlakeClientLike,
@@ -67,6 +67,7 @@ describe('TensorlakeSandboxProvider', () => {
       },
       capabilities: { persistentFilesystem: true, exec: true, filesystem: true, stopStart: true },
     });
+    expect(handle.secrets?.bridgeToken).toMatch(/^[a-f0-9-]{36}$/);
 
     await expect(handle.exec({ command: 'echo ok', cwd: '/workspace/custom', timeoutMs: 2500 })).resolves.toMatchObject(
       {
@@ -95,6 +96,23 @@ describe('TensorlakeSandboxProvider', () => {
       args: ['-lc', 'echo relative cwd'],
       workingDir: '/workspace/custom/subdir',
     });
+
+    await expect(handle.startService?.({ command: 'node server.js', cwd: 'app', port: 3000 })).resolves.toEqual({
+      pid: 321,
+      status: 'starting',
+    });
+    expect(sandbox.startedProcesses).toEqual([
+      {
+        command: 'bash',
+        options: expect.objectContaining({
+          args: ['-lc', 'exec node server.js'],
+          workingDir: '/workspace/custom/app',
+          name: 'deputies-service-3000',
+          restart: expect.objectContaining({ policy: 'on_failure' }),
+          healthCheck: expect.objectContaining({ type: 'tcp', port: 3000 }),
+        }),
+      },
+    ]);
 
     await expect(handle.exec({ command: 'cat', stdin: 'input' })).rejects.toThrow(
       'Tensorlake exec does not support stdin',
@@ -167,7 +185,7 @@ describe('TensorlakeSandboxProvider', () => {
     expect(deleted).toEqual(['sandbox-1']);
   });
 
-  it('exposes authenticated Tensorlake service endpoints through the Deputies proxy', async () => {
+  it('routes Tensorlake browser previews through the authenticated Deputies bridge', async () => {
     const sandbox = createMockTensorlakeSandbox({ ingressEndpoint: 'https://sandbox.tensorlake.ai' });
     const provider = new TensorlakeSandboxProvider({
       apiKey: 'tensorlake-key',
@@ -197,11 +215,29 @@ describe('TensorlakeSandboxProvider', () => {
       provider.getServiceEndpoint({ providerSandboxId: 'sandbox-1', sessionId: 'session-1', port: 3000 }),
     ).resolves.toEqual({
       port: 3000,
-      targetUrl: 'https://3000-sandbox-1.sandbox.tensorlake.ai',
-      targetHeaders: { authorization: 'Bearer tensorlake-key' },
+      targetUrl: 'https://3584-sandbox-1.sandbox.tensorlake.ai/preview/3000',
+      targetHeaders: {
+        authorization: 'Bearer tensorlake-key',
+        'x-deputies-bridge-token': expect.stringMatching(/^[a-f0-9-]{36}$/),
+      },
       preserveTargetHost: true,
+      forwardPreviewHost: true,
+      secrets: { bridgeToken: expect.stringMatching(/^[a-f0-9-]{36}$/) },
     });
-    expect(sandbox.updates).toEqual([{ exposedPorts: [3000], allowUnauthenticatedAccess: false }]);
+    expect(sandbox.updates).toEqual([{ exposedPorts: [3584], allowUnauthenticatedAccess: false }]);
+    expect(sandbox.commands.at(-1)).toMatchObject({
+      command: 'bash',
+      args: ['-lc', expect.stringContaining('/opt/deputies/ensure-sandbox-bridge.sh')],
+      workingDir: '/workspace',
+      timeout: 10,
+      env: expect.objectContaining({
+        DEPUTIES_SANDBOX_TOKEN: expect.stringMatching(/^[a-f0-9-]{36}$/),
+        DEPUTIES_WORKSPACE: '/workspace',
+      }),
+    });
+    await expect(
+      provider.getServiceEndpoint({ providerSandboxId: 'sandbox-1', sessionId: 'session-1', port: 3584 }),
+    ).resolves.toBeNull();
   });
 
   it('rejects Tensorlake exec when the caller aborts before the SDK command starts', async () => {
@@ -240,20 +276,29 @@ describe('TensorlakeSandboxProvider', () => {
 });
 
 type MockTensorlakeSandbox = TensorlakeSandboxLike & {
-  commands: Array<{ command: string; args?: string[]; workingDir?: string; timeout?: number }>;
+  commands: Array<{
+    command: string;
+    args?: string[];
+    env?: Record<string, string>;
+    workingDir?: string;
+    timeout?: number;
+  }>;
   updates: Array<{ exposedPorts?: number[]; allowUnauthenticatedAccess?: boolean }>;
+  startedProcesses: Array<{ command: string; options?: StartProcessOptions }>;
 };
 
 function createMockTensorlakeSandbox(input: { ingressEndpoint?: string } = {}): MockTensorlakeSandbox {
   const files = new Map<string, Uint8Array>();
   const commands: MockTensorlakeSandbox['commands'] = [];
   const updates: MockTensorlakeSandbox['updates'] = [];
+  const startedProcesses: MockTensorlakeSandbox['startedProcesses'] = [];
   let exposedPorts: number[] = [];
   const sandbox: MockTensorlakeSandbox = {
     sandboxId: 'sandbox-1',
     name: 'deputies-session-1',
     commands,
     updates,
+    startedProcesses,
     async info() {
       const info = {
         sandboxId: 'sandbox-1',
@@ -275,6 +320,25 @@ function createMockTensorlakeSandbox(input: { ingressEndpoint?: string } = {}): 
     async run(command, options) {
       commands.push({ command, ...options });
       return { exitCode: 0, stdout: `ran: ${options?.args?.[1] ?? command}`, stderr: '' };
+    },
+    async startProcess(command, options) {
+      startedProcesses.push({ command, ...(options ? { options } : {}) });
+      return {
+        pid: 321,
+        status: ProcessStatus.RUNNING,
+        stdinWritable: false,
+        command,
+        args: options?.args ?? [],
+        startedAt: new Date(),
+        managed: {
+          id: 'managed-1',
+          status: 'starting' as const,
+          restartCount: 0,
+          restart: options?.restart ?? {},
+          healthStatus: 'starting' as const,
+          consecutiveHealthFailures: 0,
+        },
+      };
     },
     async readFile(path) {
       const file = files.get(path);

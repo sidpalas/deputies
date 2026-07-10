@@ -74,6 +74,18 @@ export type SandboxServiceEndpoint = {
   secrets?: Record<string, string>;
 };
 
+export type SandboxServiceProcessInput = {
+  command: string;
+  port: number;
+  cwd?: string;
+  env?: Record<string, string>;
+};
+
+export type SandboxServiceProcess = {
+  pid: number;
+  status: 'starting' | 'running';
+};
+
 export type SandboxFileSystem = {
   readFile(path: string): Promise<string>;
   readFileBuffer(path: string): Promise<Uint8Array>;
@@ -101,6 +113,7 @@ export type SandboxHandle = SandboxRef & {
   capabilities: SandboxCapabilities;
   fs?: SandboxFileSystem;
   exec(input: SandboxExecInput): Promise<SandboxExecResult>;
+  startService?(input: SandboxServiceProcessInput): Promise<SandboxServiceProcess>;
 };
 
 export interface SandboxProvider {

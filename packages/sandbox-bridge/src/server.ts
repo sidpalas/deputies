@@ -22,9 +22,11 @@ const commandEnvPrefix = 'DEPUTIES_SANDBOX_COMMAND_ENV_';
 const envKeyPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const previewBufferedBodyMaxBytes = 16 * 1024 * 1024;
 const previewHostHeader = 'x-deputies-preview-host';
+const bridgeTokenHeader = 'x-deputies-bridge-token';
 const skippedPreviewRequestHeaders = new Set([
   'accept-encoding',
   'authorization',
+  bridgeTokenHeader,
   'connection',
   'content-length',
   'cookie',
@@ -36,6 +38,7 @@ const skippedPreviewRequestHeaders = new Set([
 const skippedPreviewResponseHeaders = new Set(['connection', 'content-length', 'transfer-encoding']);
 const skippedPreviewUpgradeHeaders = new Set([
   'authorization',
+  bridgeTokenHeader,
   'content-length',
   'cookie',
   'host',
@@ -646,8 +649,12 @@ function writeJson(response: ServerResponse, status: number, body: unknown): voi
 }
 
 function isAuthorized(request: IncomingMessage, token: string): boolean {
-  const authorization = request.headers.authorization;
-  return authorization !== undefined && safeEqual(authorization, `Bearer ${token}`);
+  const authorization = headerValue(request.headers.authorization);
+  const bridgeToken = headerValue(request.headers[bridgeTokenHeader]);
+  return (
+    (authorization !== undefined && safeEqual(authorization, `Bearer ${token}`)) ||
+    (bridgeToken !== undefined && safeEqual(bridgeToken, token))
+  );
 }
 
 function safeEqual(a: string, b: string): boolean {

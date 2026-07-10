@@ -34,6 +34,45 @@ describe('service tool', () => {
     await expect(tool.execute({ action: 'unpublish', port: 5173 })).resolves.toBe(JSON.stringify({ services: [] }));
   });
 
+  it('launches persistent services before publishing them', async () => {
+    let context: Record<string, unknown> = {};
+    const launches: Array<{ command: string; port: number; cwd?: string }> = [];
+    const tool = createServiceTool({
+      sessionId: 'session-1',
+      providerSandboxId: 'sandbox-1',
+      sandboxMetadata: { runtimeId: 'runtime-1' },
+      keepalive: createKeepalive(),
+      async launchService(input) {
+        launches.push(input);
+        return { pid: 42, status: 'starting' };
+      },
+      getContext: () => context,
+      setContext: (next) => {
+        context = next;
+      },
+      async updateSessionContext(next) {
+        context = { ...context, ...next };
+        return context;
+      },
+    });
+
+    await expect(
+      tool
+        .execute({
+          action: 'launch',
+          command: 'pnpm dev --host 0.0.0.0',
+          cwd: '/workspace/app',
+          port: 5173,
+          label: 'Web app',
+        })
+        .then(JSON.parse),
+    ).resolves.toMatchObject({
+      process: { pid: 42, status: 'starting' },
+      services: [{ port: 5173, label: 'Web app', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' }],
+    });
+    expect(launches).toEqual([{ command: 'pnpm dev --host 0.0.0.0', cwd: '/workspace/app', port: 5173 }]);
+  });
+
   it('keeps existing services by default when publishing', async () => {
     let context: Record<string, unknown> = {
       services: [{ port: 2343, label: 'Old server', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' }],

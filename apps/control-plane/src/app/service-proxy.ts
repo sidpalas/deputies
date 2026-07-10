@@ -34,10 +34,12 @@ type PreviewAuthorization = {
 
 const previewBufferedBodyMaxBytes = 16 * 1024 * 1024;
 const previewHostHeader = 'x-deputies-preview-host';
+const bridgeTokenHeader = 'x-deputies-bridge-token';
 const noBodyResponseStatuses = new Set([101, 204, 205, 304]);
 const skippedPreviewProxyRequestHeaders = new Set([
   'accept-encoding',
   'authorization',
+  bridgeTokenHeader,
   'connection',
   'content-length',
   'cookie',
@@ -47,6 +49,7 @@ const skippedPreviewProxyRequestHeaders = new Set([
 ]);
 const skippedPreviewUpgradeRequestHeaders = new Set([
   'authorization',
+  bridgeTokenHeader,
   'content-length',
   'cookie',
   'host',

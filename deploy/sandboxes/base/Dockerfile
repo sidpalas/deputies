@@ -14,7 +14,27 @@ COPY packages/sandbox-bridge packages/sandbox-bridge
 
 RUN pnpm --dir packages/sandbox-bridge build
 
-FROM ubuntu:24.04
+FROM node:24-trixie-slim AS sandbox-provider-minimal-uat
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && useradd -m -s /bin/bash sandbox \
+  && mkdir -p /workspace /opt/deputies/sandbox-bridge \
+  && chown -R sandbox:sandbox /workspace /home/sandbox /opt/deputies
+
+COPY --from=bridge-build /app/packages/sandbox-bridge/dist /opt/deputies/sandbox-bridge/dist
+COPY --from=bridge-build /app/packages/sandbox-bridge/package.json /opt/deputies/sandbox-bridge/package.json
+COPY --chmod=0755 deploy/sandboxes/base/ensure-sandbox-bridge.sh /opt/deputies/ensure-sandbox-bridge.sh
+
+USER sandbox
+WORKDIR /workspace
+
+EXPOSE 3584
+
+CMD ["sleep", "infinity"]
+
+FROM ubuntu:24.04 AS full
 
 # Provider-neutral Deputies sandbox base. Provider-specific images should add
 # their startup contract on top of this toolchain, such as the Docker bridge or

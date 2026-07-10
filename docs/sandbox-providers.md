@@ -22,11 +22,15 @@ Lambda MicroVM images are managed separately from app Terraform with `deploy/san
 
 Tensorlake sandboxes require `TENSORLAKE_REGISTERED_IMAGE` to name a registered Tensorlake sandbox image, such as `deputies`. Raw registry references like `ghcr.io/org/image:tag` cannot be passed directly to `Sandbox.create`; put the registry reference in `deploy/sandboxes/tensorlake/Dockerfile`, set `TENSORLAKE_REGISTERED_IMAGE` to the stable registered name/id, then run `mise run //deploy/sandboxes/tensorlake:image:create` before using the provider.
 
-### Deferred: Tensorlake service previews through the Deputies bridge
+> **Warning:** Tensorlake's remote rootfs builder can struggle to export large container images, especially on free-tier builders limited to 1 vCPU and 1 GiB RAM. The build may complete every Dockerfile step and then fail while exporting layers with `rpc error: code = Unavailable` or `error reading from server: EOF`. Prefer a small provider-specific base and avoid adding browser binaries or unrelated developer tooling when they are not required. The `//deploy/sandboxes/tensorlake:uat` task uses the minimal `sandbox-provider-minimal-uat` base target for this reason.
 
-Tensorlake currently exposes each requested application port directly through its authenticated ingress: `getServiceEndpoint()` adds the port to `exposedPorts`, sets `allowUnauthenticatedAccess: false`, and supplies the Tensorlake API key as the ingress bearer credential. This supports ordinary services, but is not yet equivalent to the bridge-based previews used by Daytona, Superserve, Docker, Kubernetes, and Lambda MicroVMs. In particular, a direct ingress target does not give the application the same Deputies-facing host rewrite and cookie/header isolation as the bridge.
+The live provider UAT publishes the current checkout's bridge in a minimal, immutable base image, registers it separately as `deputies-uat`, and runs the gated test with `mise run //deploy/sandboxes/tensorlake:uat`. It intentionally omits developer tooling and must not be used as the local or production `TENSORLAKE_REGISTERED_IMAGE`.
 
-In a separate PR, migrate Tensorlake browser-facing service previews to this path:
+### Tensorlake Service Previews Through The Deputies Bridge
+
+Tensorlake exposes only the sandbox bridge port through its authenticated ingress. Browser-facing application traffic uses the same bridge-based preview path as Daytona, Superserve, Docker, Kubernetes, and Lambda MicroVMs, which gives the application Deputies-facing host rewriting and cookie/header isolation.
+
+Browser-facing service previews use this path:
 
 ```text
 Deputies service proxy
@@ -35,15 +39,13 @@ Deputies service proxy
   -> application
 ```
 
-Keep Tensorlake's native SDK APIs for lifecycle, exec, and filesystem work. The migration applies only to browser-facing service endpoints. It must:
+Tensorlake's native SDK APIs remain responsible for lifecycle, exec, and filesystem work. The bridge applies only to browser-facing service endpoints:
 
 1. Start the bridge with the per-sandbox bridge token and workspace path, then expose only bridge port `3584` through Tensorlake ingress with `allowUnauthenticatedAccess: false`.
 2. Address the two authentication layers without putting the Tensorlake API key in the sandbox: use `Authorization: Bearer <Tensorlake API key>` for ingress and add a dedicated bridge credential header such as `X-Deputies-Bridge-Token` for the bridge.
 3. Extend the bridge to accept that dedicated header and strip both it and the ingress credential before proxying to the application. Do not reuse `Authorization` for the bridge token because Tensorlake ingress needs that header.
-4. Verify that Tensorlake forwards the dedicated header to the sandbox bridge before depending on it. If it does not, stop and redesign the provider/bridge authentication boundary rather than putting credentials in a URL.
-5. Add live Tensorlake UAT coverage for HTTP, WebSockets, host rewriting, cookie isolation, and an inner-Deputies login/session flow. Confirm application processes cannot receive either proxy credential.
-
-Do not change Tensorlake behavior as part of the Superserve or shared-bridge work; this plan is intentionally deferred until its dedicated PR.
+4. The Tensorlake UAT verifies the dedicated header reaches the sandbox bridge and neither it nor the ingress credential reaches the application.
+5. Live Tensorlake UAT covers HTTP, WebSockets, host rewriting, cookie isolation, and an application login/session flow.
 
 Superserve sandboxes require `SUPERSERVE_TEMPLATE` to name a ready Superserve template. Templates use the published Daytona image, which satisfies Superserve's Linux/amd64 glibc requirement and contains the Deputies bridge. Superserve preview URLs are public internet endpoints; Deputies protects the bridge with service authorization plus a per-sandbox bridge token, then forwards requested application ports through `/preview/<port>`. The bridge token protects the public endpoint from external callers but is a sandbox-visible capability, so sandbox code must be trusted with preview access.
 
@@ -55,7 +57,7 @@ The worker coordinates product sandbox lifecycle through the provider interface.
 
 No module outside `sandbox` and provider-specific adapters should know whether a session is running on Docker, Daytona, Kubernetes, Lambda MicroVMs, or a fake test provider.
 
-Our provider interface should not become a second agent filesystem/tool runtime. It should own lifecycle concerns that runner SDKs intentionally do not own for our product: create, reconnect, health, destroy, stop/start when supported, persisted provider IDs, and provider capabilities. Deprecated Flue support adapts this handle into Flue's `SandboxFactory` and `SessionEnv` shape.
+Our provider interface should not become a second agent filesystem/tool runtime. It should own lifecycle concerns that runner SDKs intentionally do not own for our product: create, reconnect, health, destroy, stop/start when supported, managed service processes when available, persisted provider IDs, and provider capabilities. Deprecated Flue support adapts this handle into Flue's `SandboxFactory` and `SessionEnv` shape.
 
 ## Provider Interface
 
@@ -113,6 +115,7 @@ export type SandboxHandle = SandboxRef & {
   capabilities: SandboxCapabilities;
   fs?: SandboxFileSystem;
   exec(input: SandboxExecInput): Promise<SandboxExecResult>;
+  startService?(input: SandboxServiceProcessInput): Promise<SandboxServiceProcess>;
 };
 ```
 

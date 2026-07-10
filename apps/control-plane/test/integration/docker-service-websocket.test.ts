@@ -35,6 +35,7 @@ describe('Docker service WebSocket proxy integration', () => {
           `X-Upstream-Origin: ${request.headers.origin}\r\n` +
           `X-Upstream-Path: ${request.url}\r\n` +
           `X-Upstream-Host: ${request.headers.host}\r\n` +
+          `X-Upstream-Bridge-Token: ${String(request.headers['x-deputies-bridge-token'] ?? '')}\r\n` +
           '\r\n',
       );
       socket.end();
@@ -110,6 +111,7 @@ describe('Docker service WebSocket proxy integration', () => {
       cookie,
       origin: `https://${serviceHost}`,
       path: '/stable-code-server?reconnection=false',
+      bridgeToken: 'untrusted-browser-value',
     });
     const forwardedResponse = await rawUpgrade(controlPlaneUrl, {
       forwardedHost: serviceHost,
@@ -123,6 +125,7 @@ describe('Docker service WebSocket proxy integration', () => {
       expect(response).toContain(`X-Upstream-Origin: https://${serviceHost}`);
       expect(response).toContain('X-Upstream-Path: /stable-code-server?reconnection=false');
       expect(response).toContain(`X-Upstream-Host: ${serviceHost}`);
+      expect(response).toContain('X-Upstream-Bridge-Token: \r\n');
     }
   });
 });
@@ -213,7 +216,7 @@ async function listen(server: Server): Promise<string> {
 
 function rawUpgrade(
   baseUrl: string,
-  input: { host?: string; forwardedHost?: string; cookie?: string; origin: string; path: string },
+  input: { host?: string; forwardedHost?: string; cookie?: string; origin: string; path: string; bridgeToken?: string },
 ): Promise<string> {
   const url = new URL(baseUrl);
   return new Promise((resolve, reject) => {
@@ -227,6 +230,7 @@ function rawUpgrade(
           (input.forwardedHost ? `X-Forwarded-Host: ${input.forwardedHost}\r\n` : '') +
           (input.forwardedHost ? 'X-Forwarded-Proto: https\r\n' : '') +
           (input.cookie ? `Cookie: ${input.cookie}\r\n` : '') +
+          (input.bridgeToken ? `X-Deputies-Bridge-Token: ${input.bridgeToken}\r\n` : '') +
           'Connection: Upgrade\r\n' +
           'Upgrade: websocket\r\n' +
           `Origin: ${input.origin}\r\n` +
