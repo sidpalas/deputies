@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/sidpalas/deputies/compare/v0.17.0...v0.17.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* include sandbox bridge in control-plane build ([2a3b413](https://github.com/sidpalas/deputies/commit/2a3b4133d7b04beda99062361df54584d729995c))
+
 ## [0.17.0](https://github.com/sidpalas/deputies/compare/v0.16.0...v0.17.0) (2026-07-10)
 
 
