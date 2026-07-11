@@ -1,5 +1,7 @@
 import {
   loadConfig,
+  requireOpenComputerApiKey,
+  requireOpenComputerSnapshot,
   requireSuperserveApiKey,
   requireSuperserveTemplate,
   requireTensorlakeRegisteredImage,
@@ -455,6 +457,43 @@ describe('loadConfig', () => {
     );
     expect(() => loadConfig({ API_AUTH_MODE: 'none', TENSORLAKE_ALLOW_INTERNET_ACCESS: 'sometimes' })).toThrow(
       'TENSORLAKE_ALLOW_INTERNET_ACCESS must be true or false',
+    );
+  });
+
+  it('parses and requires OpenComputer provider settings', () => {
+    const config = loadConfig({
+      API_AUTH_MODE: 'none',
+      SANDBOX_PROVIDER: 'opencomputer',
+      OPENCOMPUTER_API_KEY: 'key',
+      OPENCOMPUTER_API_URL: 'https://app.opencomputer.dev',
+      OPENCOMPUTER_SNAPSHOT: 'deputies-snapshot',
+      OPENCOMPUTER_SECRET_STORE: 'deputies-egress',
+      OPENCOMPUTER_CPU_COUNT: '2',
+      OPENCOMPUTER_MEMORY_MB: '4096',
+      OPENCOMPUTER_DISK_MB: '20480',
+    });
+
+    expect(config).toMatchObject({
+      opencomputerApiKey: 'key',
+      opencomputerApiUrl: 'https://app.opencomputer.dev',
+      opencomputerSnapshot: 'deputies-snapshot',
+      opencomputerSecretStore: 'deputies-egress',
+      opencomputerCpuCount: 2,
+      opencomputerMemoryMb: 4096,
+      opencomputerDiskMb: 20480,
+    });
+    expect(requireOpenComputerApiKey(config)).toBe('key');
+    expect(requireOpenComputerSnapshot(config)).toBe('deputies-snapshot');
+    expect(() =>
+      requireOpenComputerApiKey(loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'opencomputer' })),
+    ).toThrow('OPENCOMPUTER_API_KEY is required');
+    expect(() =>
+      requireOpenComputerSnapshot(
+        loadConfig({ API_AUTH_MODE: 'none', SANDBOX_PROVIDER: 'opencomputer', OPENCOMPUTER_API_KEY: 'key' }),
+      ),
+    ).toThrow('OPENCOMPUTER_SNAPSHOT is required');
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', OPENCOMPUTER_MEMORY_MB: '0' })).toThrow(
+      'OPENCOMPUTER_MEMORY_MB must be a positive integer',
     );
   });
 

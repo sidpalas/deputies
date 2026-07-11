@@ -645,10 +645,14 @@ export function requireOpenComputerApiKey(config: AppConfig): string {
   if (!config.opencomputerApiKey) {
     throw new Error('OPENCOMPUTER_API_KEY is required when SANDBOX_PROVIDER=opencomputer');
   }
+  return config.opencomputerApiKey;
+}
+
+export function requireOpenComputerSnapshot(config: AppConfig): string {
   if (!config.opencomputerSnapshot) {
     throw new Error('OPENCOMPUTER_SNAPSHOT is required when SANDBOX_PROVIDER=opencomputer');
   }
-  return config.opencomputerApiKey;
+  return config.opencomputerSnapshot;
 }
 
 export function requireTensorlakeApiKey(config: AppConfig): string {

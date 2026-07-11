@@ -2,7 +2,6 @@ import { basename, dirname } from 'node:path/posix';
 import {
   OpenComputerSandboxProvider,
   type OpenComputerClientLike,
-  type OpenComputerCreateSandboxOptions,
   type OpenComputerSandboxLike,
 } from '../../src/sandbox/opencomputer.js';
 
@@ -359,7 +358,7 @@ describe('OpenComputerSandboxProvider', () => {
     await provider.refreshKeepalive({ providerSandboxId: 'sandbox-1', sessionId: 'session-1', durationMs: 60_000 });
     await provider.refreshKeepalive({ providerSandboxId: 'sandbox-1', sessionId: 'session-1', durationMs: 300_000 });
 
-    expect(sandbox.timeoutCalls).toEqual([300]);
+    expect(sandbox.timeoutCalls).toEqual([120, 300]);
   });
 
   it('kills a created sandbox if handle setup fails and preserves the setup error', async () => {

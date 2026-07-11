@@ -208,9 +208,8 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   async refreshKeepalive(input: SandboxRef & { durationMs: number }): Promise<void> {
     const requestedSeconds = Math.max(1, Math.ceil(input.durationMs / 1000));
     const fallbackSeconds = openComputerTimeoutSeconds(this.options.idleTimeoutMs) ?? 0;
-    if (requestedSeconds <= fallbackSeconds) return;
     const sandbox = await this.client.connect(input.providerSandboxId);
-    await sandbox.setTimeout(requestedSeconds);
+    await sandbox.setTimeout(Math.max(requestedSeconds, fallbackSeconds));
   }
 
   private get workspacePath(): string {
@@ -468,6 +467,7 @@ async function waitForOpenComputerExec(sandbox: OpenComputerSandboxLike): Promis
     if (isOpenComputerSandboxRoutingRace(error)) {
       throw new Error(
         `OpenComputer sandbox exec did not become available within ${openComputerExecReadinessRetryMs / 1000}s`,
+        { cause: error },
       );
     }
     throw error;
@@ -674,7 +674,7 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Pro
       },
       (error: unknown) => {
         signal.removeEventListener('abort', abort);
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       },
     );
   });

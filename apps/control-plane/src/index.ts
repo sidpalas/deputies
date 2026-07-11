@@ -15,6 +15,7 @@ import {
   requireGitHubAppCredentials,
   requireLambdaMicrovmImageIdentifier,
   requireOpenComputerApiKey,
+  requireOpenComputerSnapshot,
   requireRunnerModelDefault,
   requireSuperserveApiKey,
   requireSuperserveTemplate,
@@ -308,12 +309,12 @@ function createSandboxProvider(): SandboxProvider {
   if (config.sandboxProvider === 'opencomputer') {
     const options = {
       apiKey: requireOpenComputerApiKey(config),
+      snapshot: requireOpenComputerSnapshot(config),
       workspacePath: config.sandboxWorkspacePath,
       idleTimeoutMs: config.sandboxIdleTimeoutMs,
       bridgeSkippedCookieNames: sandboxBridgeSkippedCookieNames(config),
     };
     if (config.opencomputerApiUrl) Object.assign(options, { apiUrl: config.opencomputerApiUrl });
-    if (config.opencomputerSnapshot) Object.assign(options, { snapshot: config.opencomputerSnapshot });
     if (config.opencomputerSecretStore) Object.assign(options, { secretStore: config.opencomputerSecretStore });
     if (config.opencomputerCpuCount !== undefined) Object.assign(options, { cpuCount: config.opencomputerCpuCount });
     if (config.opencomputerMemoryMb !== undefined) Object.assign(options, { memoryMB: config.opencomputerMemoryMb });

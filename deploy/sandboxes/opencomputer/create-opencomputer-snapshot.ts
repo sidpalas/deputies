@@ -141,7 +141,7 @@ async function createSnapshotWithTimeoutFallback(
     if (!isCloudflareTimeoutError(error)) throw error;
 
     if (timeoutPollSeconds <= 0) {
-      throw new Error(createTimeoutMessage(name, timeoutPollSeconds));
+      throw new Error(createTimeoutMessage(name, timeoutPollSeconds), { cause: error });
     }
 
     console.warn('OpenComputer returned HTTP 524 before snapshot creation completed.');
@@ -153,7 +153,7 @@ async function createSnapshotWithTimeoutFallback(
       return snapshot;
     }
 
-    throw new Error(createTimeoutMessage(name, timeoutPollSeconds));
+    throw new Error(createTimeoutMessage(name, timeoutPollSeconds), { cause: error });
   }
 }
 
@@ -519,7 +519,7 @@ function redactedContent(value: unknown): unknown {
 
 function parseArgs(values: string[], env: NodeJS.ProcessEnv): Args {
   let nameProvided = Boolean(env.OPENCOMPUTER_SNAPSHOT_NAME);
-  const variant = snapshotVariant(env.OPENCOMPUTER_SNAPSHOT_VARIANT ?? 'full', 'OPENCOMPUTER_SNAPSHOT_VARIANT');
+  const variant = snapshotVariant(env.OPENCOMPUTER_SNAPSHOT_VARIANT ?? 'bridge', 'OPENCOMPUTER_SNAPSHOT_VARIANT');
   const timestamp = snapshotTimestamp(new Date());
   const args: Args = {
     codeServerVersion: env.CODE_SERVER_VERSION ?? defaultCodeServerVersion,
@@ -655,7 +655,7 @@ Options:
   --variant <variant>           full includes Playwright and code-server.
                                 slim skips both. bridge only adds the Deputies bridge.
                                 minimal has zero image steps.
-                                Defaults to OPENCOMPUTER_SNAPSHOT_VARIANT or full.
+                                Defaults to OPENCOMPUTER_SNAPSHOT_VARIANT or bridge.
   --playwright-version <ver>    Playwright version. Default: ${defaultPlaywrightVersion}
   --postgres-version <major>    PostgreSQL major version. Default: ${defaultPostgresVersion}
   --code-server-version <ver>   code-server version. Default: ${defaultCodeServerVersion}
