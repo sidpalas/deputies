@@ -13,6 +13,12 @@ describe('architecture boundaries', () => {
     const rules = [
       { sdk: '@flue/runtime', allowed: (path: string) => path.startsWith('runner-flue/') },
       { sdk: '@daytona/sdk', allowed: (path: string) => path === 'sandbox/daytona.ts' },
+      { sdk: '@opencomputer/sdk', allowed: (path: string) => path === 'sandbox/opencomputer.ts' },
+      {
+        sdk: '@superserve/sdk',
+        allowed: (path: string) => path === 'sandbox/superserve.ts' || path === 'scripts/sync-superserve-template.ts',
+      },
+      { sdk: 'tensorlake', allowed: (path: string) => path === 'sandbox/tensorlake.ts' },
     ];
 
     for (const file of files) {

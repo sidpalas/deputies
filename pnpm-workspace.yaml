@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - deploy/sandboxes/opencomputer
 minimumReleaseAge: 4320
 allowBuilds:
   '@google/genai': false

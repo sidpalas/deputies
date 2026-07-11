@@ -185,7 +185,10 @@ export class SandboxKeepaliveService {
       keepaliveUntil,
       updatedAt: now,
     });
-    const providerSync = await this.syncProviderKeepalive(updated, durationMs);
+    const providerSync = await this.syncProviderKeepalive(
+      updated,
+      Math.max(1, keepaliveUntil.getTime() - now.getTime()),
+    );
     await this.events.append({
       sessionId: sandbox.sessionId,
       type: 'sandbox_keepalive_extended',
