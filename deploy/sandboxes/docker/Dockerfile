@@ -46,8 +46,14 @@ RUN set -eux; \
 
 RUN set -eux; \
   case "${TARGETARCH}" in \
-    amd64) ffmpeg_archive="ffmpeg-linux.zip" ;; \
-    arm64) ffmpeg_archive="ffmpeg-linux-arm64.zip" ;; \
+    amd64) \
+      ffmpeg_archive="ffmpeg-linux.zip"; \
+      ffmpeg_sha256="ebc74fc5b94830176a3c2914ae96bd8bc7f6a91f4f33890230f84a172ee61ccc"; \
+      ;; \
+    arm64) \
+      ffmpeg_archive="ffmpeg-linux-arm64.zip"; \
+      ffmpeg_sha256="2628c03f05318ff812c8c9baaf207dea2ddf53e818c0dc936714b0fbe3afb009"; \
+      ;; \
     *) echo "Unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
   esac; \
   ffmpeg_dir="/ms-playwright/ffmpeg-${PLAYWRIGHT_FFMPEG_REVISION}"; \
@@ -55,6 +61,7 @@ RUN set -eux; \
   curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 --max-time 300 \
     -o /tmp/playwright-ffmpeg.zip \
     "https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/${PLAYWRIGHT_FFMPEG_REVISION}/${ffmpeg_archive}"; \
+  echo "${ffmpeg_sha256}  /tmp/playwright-ffmpeg.zip" | sha256sum --check; \
   timeout 2m unzip -q /tmp/playwright-ffmpeg.zip -d "${ffmpeg_dir}"; \
   touch "${ffmpeg_dir}/INSTALLATION_COMPLETE"; \
   chmod -R a+rX /ms-playwright; \
@@ -76,7 +83,15 @@ ENV DEPUTIES_SANDBOX_BRIDGE_PORT=3584
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
   apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg postgresql postgresql-contrib
+  && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    fontconfig \
+    fonts-dejavu-core \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    fonts-noto-core \
+    postgresql \
+    postgresql-contrib
 
 RUN --mount=type=cache,target=/root/.npm \
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g \

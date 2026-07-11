@@ -14,10 +14,27 @@ If your Daytona target supports privileged Docker, `deploy/local/docker-compose.
 - Node.js 24 and Corepack/pnpm
 - Playwright Chromium, its video helper, Linux browser dependencies, and the `deputies-record` demo CLI
 - System ffmpeg for MP4 transcoding and media inspection
+- Baseline DejaVu, Liberation, Noto, and Noto Color Emoji fonts with fontconfig
 - Postgres and PostgreSQL client tools installed explicitly
 - Git, Git LFS, SSH, jq, rsync, and zsh
 
 The Daytona and Docker provider images build on the same base and differ primarily by entrypoint/runtime contract. Daytona keeps the container alive with `sleep infinity` because Daytona supplies exec/filesystem APIs outside the container.
+
+### Project-Specific Fonts
+
+The baseline font set covers common browser defaults but cannot include every proprietary or project-specific typeface. For deterministic captures, applications should serve fonts from repository-owned `@font-face` assets. If an application intentionally depends on an additional system font, derive a custom sandbox image and install it explicitly:
+
+```dockerfile
+FROM ghcr.io/sidpalas/deputies-daytona-sandbox:latest
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends fonts-noto-cjk \
+  && fc-cache -f \
+  && rm -rf /var/lib/apt/lists/*
+USER daytona
+```
+
+For licensed fonts, copy them from an authorized build context into `/usr/local/share/fonts/<project>/`, run `fc-cache -f`, and ensure the resulting image distribution complies with the font license. Agents should wait for `document.fonts.ready` and report failed font requests rather than treating fallback-font captures as accurate.
 
 ## Published Image
 
@@ -35,7 +52,7 @@ Build from the repository root only when changing this image or publishing a for
 
 ```sh
 docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/sandboxes/base/Dockerfile -t deputies-sandbox-base:local --load .
-docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/sandboxes/daytona/Dockerfile -t ghcr.io/<owner>/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1-ffmpeg7 --push .
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/sandboxes/daytona/Dockerfile -t ghcr.io/<owner>/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1-ffmpeg6 --push .
 ```
 
 Or use mise:

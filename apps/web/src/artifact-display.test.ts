@@ -29,4 +29,9 @@ describe('isBrowserPlayableVideoArtifact', () => {
   it('rejects unsupported video formats', () => {
     expect(isBrowserPlayableVideoArtifact(artifact('demo.mkv', 'video/x-matroska'))).toBe(false);
   });
+
+  it('prefers an explicit content type over a misleading extension', () => {
+    expect(isBrowserPlayableVideoArtifact(artifact('demo.webm', 'text/plain'))).toBe(false);
+    expect(isBrowserPlayableVideoArtifact(artifact('demo.webm', 'video/x-matroska'))).toBe(false);
+  });
 });

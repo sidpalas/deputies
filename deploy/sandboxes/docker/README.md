@@ -11,9 +11,26 @@ It intentionally mirrors the Daytona sandbox tooling so agent tasks see a simila
 - Postgres and PostgreSQL client tools installed on top of the base for this repo's test workflow
 - Playwright Chromium, its video helper, Linux browser dependencies, and the `deputies-record` demo CLI
 - System ffmpeg for MP4 transcoding and media inspection
+- Baseline DejaVu, Liberation, Noto, and Noto Color Emoji fonts with fontconfig
 - Git, Git LFS, SSH, jq, rsync, zsh, vim, and sudo
 
 The shared base leaves Postgres and Playwright out by default. This Docker-provider example image includes both because this repo's full checks need database and browser test support. Derivative images may remove or replace them if their workload does not need them.
+
+### Project-Specific Fonts
+
+The baseline set covers common browser defaults, not every proprietary or project-specific typeface. Prefer repository-owned `@font-face` assets for deterministic local, CI, and sandbox rendering. Applications that intentionally depend on another system font should derive a custom image:
+
+```dockerfile
+FROM ghcr.io/sidpalas/deputies-docker-sandbox:latest
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends fonts-noto-cjk \
+  && fc-cache -f \
+  && rm -rf /var/lib/apt/lists/*
+USER sandbox
+```
+
+For licensed fonts, copy them from an authorized build context into `/usr/local/share/fonts/<project>/`, run `fc-cache -f`, and verify redistribution rights. During capture, wait for `document.fonts.ready` and treat failed font requests or fallback rendering as a verification failure.
 
 Use the published image for normal local development:
 

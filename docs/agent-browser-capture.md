@@ -18,6 +18,25 @@ If Chromium is unavailable, do not fail the run over capture. Use any available 
 
 Prefer built assets and a preview server over a dev server while recording. This avoids the long-running esbuild process being OOM-killed under sandbox memory pressure. Target the app's loopback URL directly.
 
+## Verify Fonts
+
+Font substitution changes text metrics and can make an otherwise correct page wrap or overflow differently from a user's browser. Before screenshots or recording, wait for the page's fonts and check for failed font requests:
+
+```js
+const failedFonts = [];
+page.on('response', (response) => {
+  if (response.request().resourceType() === 'font' && !response.ok()) {
+    failedFonts.push(`${response.status()} ${response.url()}`);
+  }
+});
+
+await page.goto('http://127.0.0.1:5173');
+await page.evaluate(() => document.fonts.ready);
+if (failedFonts.length) throw new Error(`Font requests failed:\n${failedFonts.join('\n')}`);
+```
+
+Also inspect a screenshot from the same context before recording. If a required font is absent or a remote font cannot be fetched, do not present the capture as pixel-accurate. Prefer repository-owned `@font-face` assets so local, CI, and sandbox rendering agree. When the application intentionally relies on a system font, install that font in the sandbox image and run `fc-cache -f` before capture.
+
 ## Record With The Helper
 
 Create a scenario module that exports a default async function. It receives `page`, `caption`, and cursor-aware `click` and `hover` helpers:
@@ -26,6 +45,7 @@ Create a scenario module that exports a default async function. It receives `pag
 // /tmp/demo.mjs
 export default async ({ page, caption, click }) => {
   await page.goto('http://127.0.0.1:5173');
+  await page.evaluate(() => document.fonts.ready);
   await caption('Open the changed screen');
   await click(page.getByRole('button', { name: 'Continue' }));
   await page.getByRole('heading', { name: 'Complete' }).waitFor();
@@ -36,7 +56,21 @@ export default async ({ page, caption, click }) => {
 deputies-record /tmp/demo.mjs --output-dir /tmp/browser-demo
 ```
 
-The command records one 1280x720 browser context, limits the scenario to 60 seconds, closes Chromium before transcoding, and prints JSON containing the final path, duration, size, and format. It prefers MP4 and falls back to WebM if ffmpeg is unavailable or conversion fails.
+The command records one 1280x720 browser context by default, limits the scenario to 60 seconds, closes Chromium before transcoding, and prints JSON containing the unique final path, duration, size, format, resolved `viewport`, and `warnings`. It prefers MP4 and falls back to WebM if ffmpeg is unavailable or conversion fails. Scenarios may accept `signal` and pass it to their own network or subprocess work so the 60-second timeout cancels that work too.
+
+Choose a viewport that matches the experience being demonstrated:
+
+```bash
+deputies-record /tmp/demo.mjs --preset desktop # 1440x900
+deputies-record /tmp/demo.mjs --preset laptop  # 1280x720 (default)
+deputies-record /tmp/demo.mjs --preset tablet  # 768x1024
+deputies-record /tmp/demo.mjs --preset mobile  # 390x844
+deputies-record /tmp/demo.mjs --width 1600 --height 1000
+```
+
+Use separate captures when validating multiple responsive breakpoints. Do not resize the page from inside a scenario because the recorded video dimensions remain fixed.
+
+`warnings` is empty for a clean capture. It lists failed font requests and `FontFace` load errors when the browser may have substituted fallback fonts. Publish the artifact if it is still useful, but disclose every warning in the user-facing response and state that text wrapping and layout may differ from production. Do not call a warned capture pixel-accurate.
 
 ## Raw Playwright Fallback
 

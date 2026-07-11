@@ -2,11 +2,11 @@
 
 Date: 2026-07-11
 
-## Decision
+## Provisional Recommendation
 
-Use a native Pi `browser` tool backed by a run-scoped Playwright daemon inside the sandbox. Each tool call should execute a short-lived CLI through `SandboxHandle.exec` and communicate with the daemon over a private Unix-domain socket.
+The current evidence favors a native Pi `browser` tool backed by a run-scoped Playwright daemon inside the sandbox. Each tool call would execute a short-lived CLI through `SandboxHandle.exec` and communicate with the daemon over a private Unix-domain socket.
 
-Do not route an in-sandbox Playwright MCP server through the browser-facing service preview. Reconsider MCP only after Deputies has a provider-neutral, worker-facing HTTP tunnel that works for remote Docker orchestrators as well as Daytona.
+This is not a final transport decision: neither option completed an end-to-end browser-tool spike. Do not implement the MCP route through the browser-facing service preview without first adding a provider-neutral, worker-facing HTTP tunnel that works for remote Docker orchestrators as well as Daytona.
 
 ## Options Evaluated
 
@@ -66,4 +66,4 @@ Screenshots should return a sandbox path. The control-plane reads the PNG throug
 
 ## Outcome
 
-Option (b) is the lower-risk provider-neutral architecture. The Daytona lifecycle premise is empirically validated. Production implementation should start only after the runner has a run-scoped disposable mechanism; without guaranteed cleanup, persistent sandboxes can accumulate Chromium processes.
+Option (b) appears to be the lower-risk provider-neutral architecture, and generic detached-process survival on Daytona is empirically validated. Before making the final decision, run a focused implementation spike with an actual Playwright daemon and Unix socket on both Docker and Daytona, verify authenticated screenshot delivery, and complete the MCP transport test on an image containing the sandbox bridge. Production implementation should also wait for a run-scoped disposable mechanism; without guaranteed cleanup, persistent sandboxes can accumulate Chromium processes.
