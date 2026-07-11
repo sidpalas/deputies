@@ -6,6 +6,10 @@ As of this notice, this repository does not intentionally vendor source code, as
 
 This file is a compliance checkpoint for contributors and coding agents. It is not legal advice.
 
+## Sandbox Image Packages
+
+Browser-enabled sandbox images bundle operating-system packages distributed by Ubuntu or Debian, including ffmpeg and its LGPL/GPL codec dependencies such as x264. Deputies invokes these tools only as separate subprocesses and does not link their libraries into application code. Package copyright, license, and corresponding-source information is available from the image's distribution repositories.
+
 ## Referenced Prior Art
 
 ### Junior

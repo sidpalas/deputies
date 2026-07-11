@@ -6,13 +6,20 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/sandbox-bridge/package.json packages/sandbox-bridge/package.json
+COPY packages/browser-demo-recorder/package.json packages/browser-demo-recorder/package.json
 
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-  corepack enable && pnpm install --filter @deputies/sandbox-bridge... --frozen-lockfile
+  corepack enable && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pnpm install \
+    --filter @deputies/sandbox-bridge... \
+    --filter @deputies/browser-demo-recorder... \
+    --frozen-lockfile
 
 COPY packages/sandbox-bridge packages/sandbox-bridge
+COPY packages/browser-demo-recorder packages/browser-demo-recorder
 
-RUN pnpm --dir packages/sandbox-bridge build
+RUN pnpm --dir packages/sandbox-bridge build \
+  && pnpm --dir packages/browser-demo-recorder build \
+  && pnpm --dir packages/browser-demo-recorder pack --pack-destination /tmp
 
 FROM node:24-trixie-slim AS sandbox-provider-minimal-uat
 
@@ -78,8 +85,9 @@ RUN --mount=type=cache,target=/root/.npm \
 RUN curl -fsSL https://mise.run | sh \
   && mv /root/.local/bin/mise /usr/local/bin/mise
 
-RUN mkdir -p /opt/deputies/sandbox-bridge
+RUN mkdir -p /opt/deputies/sandbox-bridge /opt/deputies/browser-demo-recorder
 
 COPY --from=bridge-build /app/packages/sandbox-bridge/dist /opt/deputies/sandbox-bridge/dist
 COPY --from=bridge-build /app/packages/sandbox-bridge/package.json /opt/deputies/sandbox-bridge/package.json
+COPY --from=bridge-build /tmp/deputies-browser-demo-recorder-0.0.0.tgz /opt/deputies/browser-demo-recorder/package.tgz
 COPY --chmod=0755 deploy/sandboxes/base/ensure-sandbox-bridge.sh /opt/deputies/ensure-sandbox-bridge.sh

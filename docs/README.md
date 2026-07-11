@@ -15,6 +15,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Executor Data Tools](./executor-data-tools.md): using Executor Cloud or self-hosted Executor to give agents access to third-party MCP, CLI, API, and data tools.
 - [Web UI](./web-ui.md): separate Vite React operator UI, browser auth, and static deployment notes.
 - [Deputies App Preview](./deputies-app-preview.md): agent runbook for running the Deputies app from a branch inside a sandbox behind the outer service preview.
+- [Agent Browser Capture](./agent-browser-capture.md): agent runbook for visually verifying UI changes and publishing screenshots and demo videos.
 - [Repository Setup Scripts](./repository-setup-scripts.md): `.agents/setup` convention for repo-owned sandbox preparation before agent work begins.
 - [Access Groups](./access-groups.md): RBAC roles, session access policies, group management, and GitHub auth allowlists.
 - [Local Development](./contributing-local-development.md): contributor setup, Postgres, Portless, Docker Compose, Pi runner setup, and local integrations.
@@ -24,6 +25,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Prior Art](./prior-art.md): comparison with Open-Inspect/background-agents, Open SWE, Junior, and Mistle, plus non-open-source hosted-agent references.
 - [Roadmap](./roadmap.md): phased implementation sequence and acceptance criteria.
 - [Product Documentation](./product/): PRDs, technical specs, research notes, and durable product decisions.
+- [Browser Tool Transport Spike](./product/research/2026-07-11-browser-tool-transport-spike.md): Phase 2 evaluation and native sandbox browser-tool decision.
 - [Third Party Notices](../THIRD_PARTY_NOTICES.md): license and attribution checkpoint for referenced prior-art projects.
 
 ## Repository Layout

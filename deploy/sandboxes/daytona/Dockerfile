@@ -4,12 +4,14 @@ ARG DEPUTIES_SANDBOX_BASE_IMAGE=deputies-sandbox-base:local
 ARG PLAYWRIGHT_VERSION=1.59.1
 ARG PLAYWRIGHT_CHROMIUM_REVISION=1217
 ARG PLAYWRIGHT_CHROMIUM_VERSION=147.0.7727.15
+ARG PLAYWRIGHT_FFMPEG_REVISION=1011
 ARG PLAYWRIGHT_INSTALL_TIMEOUT=12m
 
 FROM node:24-trixie-slim AS playwright-browsers
 ARG TARGETARCH
 ARG PLAYWRIGHT_CHROMIUM_REVISION
 ARG PLAYWRIGHT_CHROMIUM_VERSION
+ARG PLAYWRIGHT_FFMPEG_REVISION
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
@@ -42,6 +44,22 @@ RUN set -eux; \
   chmod -R a+rX /ms-playwright; \
   rm -f /tmp/chromium.zip
 
+RUN set -eux; \
+  case "${TARGETARCH}" in \
+    amd64) ffmpeg_archive="ffmpeg-linux.zip" ;; \
+    arm64) ffmpeg_archive="ffmpeg-linux-arm64.zip" ;; \
+    *) echo "Unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+  esac; \
+  ffmpeg_dir="/ms-playwright/ffmpeg-${PLAYWRIGHT_FFMPEG_REVISION}"; \
+  mkdir -p "${ffmpeg_dir}"; \
+  curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 --max-time 300 \
+    -o /tmp/playwright-ffmpeg.zip \
+    "https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/${PLAYWRIGHT_FFMPEG_REVISION}/${ffmpeg_archive}"; \
+  timeout 2m unzip -q /tmp/playwright-ffmpeg.zip -d "${ffmpeg_dir}"; \
+  touch "${ffmpeg_dir}/INSTALLATION_COMPLETE"; \
+  chmod -R a+rX /ms-playwright; \
+  rm -f /tmp/playwright-ffmpeg.zip
+
 FROM ${DEPUTIES_SANDBOX_BASE_IMAGE}
 ARG PLAYWRIGHT_VERSION
 ARG PLAYWRIGHT_INSTALL_TIMEOUT
@@ -56,10 +74,12 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
   apt-get update \
-  && apt-get install -y --no-install-recommends postgresql postgresql-contrib
+  && apt-get install -y --no-install-recommends ffmpeg postgresql postgresql-contrib
 
 RUN --mount=type=cache,target=/root/.npm \
-  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g "playwright@${PLAYWRIGHT_VERSION}"
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g \
+    "playwright@${PLAYWRIGHT_VERSION}" \
+    /opt/deputies/browser-demo-recorder/package.tgz
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \

@@ -12,7 +12,8 @@ If your Daytona target supports privileged Docker, `deploy/local/docker-compose.
 
 - Shared Deputies sandbox base image
 - Node.js 24 and Corepack/pnpm
-- Playwright Chromium and Linux browser dependencies installed explicitly
+- Playwright Chromium, its video helper, Linux browser dependencies, and the `deputies-record` demo CLI
+- System ffmpeg for MP4 transcoding and media inspection
 - Postgres and PostgreSQL client tools installed explicitly
 - Git, Git LFS, SSH, jq, rsync, and zsh
 
@@ -34,7 +35,7 @@ Build from the repository root only when changing this image or publishing a for
 
 ```sh
 docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/sandboxes/base/Dockerfile -t deputies-sandbox-base:local --load .
-docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/sandboxes/daytona/Dockerfile -t ghcr.io/<owner>/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1 --push .
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f deploy/sandboxes/daytona/Dockerfile -t ghcr.io/<owner>/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1-ffmpeg7 --push .
 ```
 
 Or use mise:

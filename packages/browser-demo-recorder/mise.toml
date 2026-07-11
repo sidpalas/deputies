@@ -1,0 +1,11 @@
+[tasks.build]
+description = "Build the browser demo recorder"
+run = "pnpm build"
+
+[tasks.typecheck]
+description = "Typecheck the browser demo recorder"
+run = "pnpm typecheck"
+
+[tasks.test]
+description = "Run browser demo recorder tests"
+run = "pnpm test"

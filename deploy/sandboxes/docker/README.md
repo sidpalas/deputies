@@ -9,7 +9,8 @@ It intentionally mirrors the Daytona sandbox tooling so agent tasks see a simila
 - Ubuntu 24.04 base
 - Node.js 24 and Corepack/pnpm
 - Postgres and PostgreSQL client tools installed on top of the base for this repo's test workflow
-- Playwright Chromium and Linux browser dependencies
+- Playwright Chromium, its video helper, Linux browser dependencies, and the `deputies-record` demo CLI
+- System ffmpeg for MP4 transcoding and media inspection
 - Git, Git LFS, SSH, jq, rsync, zsh, vim, and sudo
 
 The shared base leaves Postgres and Playwright out by default. This Docker-provider example image includes both because this repo's full checks need database and browser test support. Derivative images may remove or replace them if their workload does not need them.
