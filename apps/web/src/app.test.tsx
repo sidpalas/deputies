@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './app.js';
-import { listEvents } from './api.js';
+import { listEvents, type ReasoningLevel } from './api.js';
 import { request } from './api-request.js';
 
 const { codeToHtmlMock } = vi.hoisted(() => ({
@@ -54,6 +54,7 @@ type MockApiOptions = {
   repositories?: unknown[];
   branches?: unknown[];
   models?: string[];
+  defaultReasoningLevel?: ReasoningLevel;
   messages?: unknown[];
   messagesBySession?: Record<string, unknown[]>;
   events?: unknown[];
@@ -261,6 +262,7 @@ it('submits the selected model without inherited repo or branch overrides', asyn
         repository: { provider: 'github', owner: 'owner', repo: 'repo' },
         branch: 'feature',
         model: 'openai/gpt-4.1',
+        reasoningLevel: 'max',
       },
     },
   });
@@ -272,7 +274,29 @@ it('submits the selected model without inherited repo or branch overrides', asyn
   fireEvent.keyDown(composer, { key: 'Enter' });
 
   await waitFor(() => expect(submittedMessageBodies).toHaveLength(1));
-  expect(submittedMessageBodies[0]).toEqual({ prompt: 'follow up', model: 'openai/gpt-4.1' });
+  expect(submittedMessageBodies[0]).toEqual({
+    prompt: 'follow up',
+    model: 'openai/gpt-4.1',
+    reasoningLevel: 'max',
+  });
+});
+
+it('shows the configured default and submits a reasoning override when starting a session', async () => {
+  const submittedMessageBodies: unknown[] = [];
+  mockApi({ submittedMessageBodies, repositories: [], defaultReasoningLevel: 'high' });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  expect(screen.getByText('Default (High)')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Max' }));
+  fireEvent.change(screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...'), {
+    target: { value: 'think hard' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+  await waitFor(() => expect(submittedMessageBodies).toHaveLength(1));
+  expect(submittedMessageBodies[0]).toMatchObject({ prompt: 'think hard', reasoningLevel: 'max' });
 });
 
 it('allows starting a session without repository options', async () => {
@@ -3238,7 +3262,11 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === '/models' && method === 'GET') {
       const models = options.models ?? ['anthropic/claude-sonnet', 'openai/gpt-4.1'];
-      return jsonResponse({ models, defaultModel: models[0] ?? null });
+      return jsonResponse({
+        models,
+        defaultModel: models[0] ?? null,
+        defaultReasoningLevel: options.defaultReasoningLevel ?? null,
+      });
     }
 
     if (url.pathname === '/setup/status' && method === 'GET') {

@@ -588,6 +588,9 @@ export class AutomationService {
     return {
       environment,
       ...(typeof context.model === 'string' && context.model ? { model: context.model } : {}),
+      ...(typeof context.reasoningLevel === 'string' && context.reasoningLevel
+        ? { reasoningLevel: context.reasoningLevel }
+        : {}),
     };
   }
 

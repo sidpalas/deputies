@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import type { AppConfig } from '../config/index.js';
 import { extractRepositoryReference, type RepositoryReference } from '../repositories/extract.js';
+import { isReasoningLevel, type ReasoningLevel } from '../runner/reasoning.js';
 
 export async function readJsonBody(c: Context, maxBytes: number): Promise<Record<string, unknown>> {
   const text = await readRawBody(c, maxBytes, 'JSON body');
@@ -86,6 +87,18 @@ export function parseModelBody(
     throw new HttpRequestError(400, 'invalid_request', 'Expected model to be one of the configured model choices');
   }
   return model;
+}
+
+export function parseReasoningLevelBody(value: unknown): ReasoningLevel | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (!isReasoningLevel(value)) {
+    throw new HttpRequestError(
+      400,
+      'invalid_request',
+      'Expected reasoningLevel to be one of: off, minimal, low, medium, high, xhigh, max',
+    );
+  }
+  return value;
 }
 
 export function parseBranchBody(value: unknown): string | undefined {

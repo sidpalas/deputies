@@ -16,6 +16,7 @@ import {
   type SessionHeader,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import type { ArtifactService } from '../artifacts/service.js';
 import type { EnvironmentService } from '../environments/service.js';
 import { validateEnvironmentContext } from '../environments/tool.js';
@@ -41,6 +42,7 @@ import {
 import { type RepositoryToolServices, type RepositoryToolState } from '../repositories/tool.js';
 import { sandboxRepositoryShell } from '../repositories/shell.js';
 import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
+import { REASONING_LEVELS, type ReasoningLevel } from '../runner/reasoning.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
 import { startSandboxService } from '../sandbox/service-process.js';
 import { PI_SESSION_DATA_VERSION, type PiSessionData, type PiSessionStore } from './session-store.js';
@@ -77,11 +79,11 @@ const DEPUTIES_SYSTEM_PROMPT = [
 // Deputies' same-name custom tools so filesystem and shell access goes through SandboxHandle.
 const PI_NO_TOOLS: NonNullable<CreateAgentSessionOptions['noTools']> = 'builtin';
 const PI_SUBAGENT_MAX_DEPTH = 4;
-const PI_THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 const BEDROCK_AUTHENTICATED_SENTINEL = '<authenticated>';
 
 export type PiRunnerOptions = {
   model: string;
+  reasoningLevelDefault?: ReasoningLevel;
   authFile?: string;
   authBase64?: string;
   sessionStore?: PiSessionStore;
@@ -120,7 +122,6 @@ type PiToolSetContext = {
 type PiModelSelection = {
   provider: string;
   modelId: string;
-  thinkingLevel?: CreateAgentSessionOptions['thinkingLevel'];
 };
 
 type PiMcpSetup = {
@@ -236,13 +237,14 @@ export class PiRunner implements Runner {
     };
 
     try {
+      const thinkingLevel = resolveReasoningLevel(model, input.reasoningLevel ?? this.options.reasoningLevelDefault);
       const created = await createAgentSession({
         cwd,
         agentDir: this.agentDir,
         authStorage: this.authStorage,
         modelRegistry,
         model,
-        ...(modelSelection.thinkingLevel ? { thinkingLevel: modelSelection.thinkingLevel } : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
         sessionManager: lease.manager,
         resourceLoader,
         noTools: PI_NO_TOOLS,
@@ -498,13 +500,17 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
     runSubagent,
     mcpTools: params.mcpTools,
   });
+  const thinkingLevel = resolveReasoningLevel(
+    model,
+    params.input.reasoningLevel ?? params.options.reasoningLevelDefault,
+  );
   const created = await createAgentSession({
     cwd,
     agentDir: params.agentDir,
     authStorage: params.authStorage,
     modelRegistry: params.modelRegistry,
     model,
-    ...(params.modelSelection.thinkingLevel ? { thinkingLevel: params.modelSelection.thinkingLevel } : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
     sessionManager,
     resourceLoader,
     noTools: PI_NO_TOOLS,
@@ -756,18 +762,17 @@ function parseModelSelection(model: string): PiModelSelection {
     throw new Error(`Pi model must use provider/model format, received: ${model}`);
   }
 
-  const provider = model.slice(0, slash);
-  const modelAndThinking = model.slice(slash + 1);
-  const colon = modelAndThinking.lastIndexOf(':');
-  if (colon <= 0) return { provider, modelId: modelAndThinking };
-  const suffix = modelAndThinking.slice(colon + 1);
-  if (!PI_THINKING_LEVELS.has(suffix)) return { provider, modelId: modelAndThinking };
+  return { provider: model.slice(0, slash), modelId: model.slice(slash + 1) };
+}
 
-  return {
-    provider,
-    modelId: modelAndThinking.slice(0, colon),
-    thinkingLevel: suffix as PiModelSelection['thinkingLevel'],
-  };
+function resolveReasoningLevel(model: Model<Api>, requested: ReasoningLevel | undefined): ReasoningLevel | undefined {
+  if (!requested) return undefined;
+  const supported = new Set(getSupportedThinkingLevels(model));
+  for (let index = REASONING_LEVELS.indexOf(requested); index >= 0; index -= 1) {
+    const candidate = REASONING_LEVELS[index];
+    if (candidate && supported.has(candidate)) return candidate;
+  }
+  return 'off';
 }
 
 function normalizePiEvent(event: AgentSessionEvent, input: RunnerInput): NormalizedEvent | null {

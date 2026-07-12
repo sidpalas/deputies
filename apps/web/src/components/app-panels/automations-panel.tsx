@@ -13,6 +13,7 @@ import {
   type Environment,
   type Group,
   type ModelChoice,
+  type ReasoningLevel,
   type RepositoryOption,
   type Session,
 } from '../../api.js';
@@ -37,6 +38,7 @@ import {
   type OptionPickerOption,
 } from './option-picker.js';
 import { formatDate, statusTextClass } from './shared.js';
+import { defaultReasoningLevelLabel, REASONING_LEVEL_OPTIONS, reasoningLevelFromContext } from './reasoning-level.js';
 
 type AutomationForm = {
   id: string;
@@ -51,6 +53,7 @@ type AutomationForm = {
   repository: string;
   branch: string;
   model: string;
+  reasoningLevel: ReasoningLevel | '';
   prompt: string;
   enabled: boolean;
 };
@@ -115,6 +118,7 @@ export function AutomationsPanel(props: {
   repositoryOptionsLoading: boolean;
   repositoryOptionsError: string;
   modelChoices: ModelChoice[];
+  defaultReasoningLevel: ReasoningLevel | '';
   selectedAutomationId: string;
   showOpenSidebar: boolean;
   openSidebarLabel?: string;
@@ -537,8 +541,8 @@ export function AutomationsPanel(props: {
                   </label>
                 </div>
 
-                <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(12rem,20rem)]">
-                  <div className="grid gap-3">
+                <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(12rem,20rem)_minmax(8rem,12rem)]">
+                  <div className="order-1 xl:order-none">
                     <Field label="Codebase" htmlFor="automation-codebase">
                       <CodebasePicker
                         id="automation-codebase"
@@ -554,76 +558,98 @@ export function AutomationsPanel(props: {
                         disabled={!canEditDefinition}
                       />
                     </Field>
-                    {selectedEnvironment ? (
-                      <EnvironmentRevisionPolicy
-                        environment={selectedEnvironment}
-                        form={form}
-                        disabled={!canEditDefinition}
-                        saveHint={revisionPolicySaveHint}
-                        onChange={(policy) =>
-                          setForm({
-                            ...form,
-                            environmentRevisionPolicy: policy,
-                            environmentRevisionId: policy === 'pinned' ? selectedEnvironment.currentRevisionId : '',
-                            environmentRevisionNumber:
-                              policy === 'pinned' ? selectedEnvironment.currentRevisionNumber : null,
-                          })
-                        }
-                      />
-                    ) : null}
-                    {hasBranchControls ? (
-                      <div>
-                        <Button
-                          className="h-10 px-3"
-                          type="button"
-                          variant={branchControlsOpen ? 'default' : 'secondary'}
-                          size="sm"
-                          onClick={() => setBranchControlsOpen((open) => !open)}
-                          disabled={!canEditDefinition}
-                          aria-expanded={branchControlsOpen}
-                        >
-                          {branchControlLabel}
-                        </Button>
-                      </div>
-                    ) : null}
-                    {branchControlsOpen && form.repository ? (
-                      <div className="max-w-xs min-w-0">
-                        <BranchPicker
-                          id="automation-branch"
-                          value={form.branch}
-                          branches={branchOptions}
-                          loading={branchOptionsLoading}
-                          error={branchOptionsError}
-                          onChange={(value) => setForm({ ...form, branch: value })}
-                          placeholder="Default"
-                          disabled={!canEditDefinition}
-                        />
-                      </div>
-                    ) : null}
-                    {branchControlsOpen && selectedEnvironment ? (
-                      <EnvironmentBranchOverridesEditor
-                        environment={selectedEnvironment}
-                        value={form.environmentBranchOverrides}
-                        disabled={!canEditDefinition}
-                        onLoadBranches={(repository) =>
-                          loadAutomationEnvironmentRepositoryBranches(repository, props.token)
-                        }
-                        onChange={(value) => setForm({ ...form, environmentBranchOverrides: value })}
-                      />
-                    ) : null}
                   </div>
-                  <Field label="Model" htmlFor="automation-model">
-                    <OptionPicker
-                      id="automation-model"
-                      label="Model"
-                      value={form.model}
-                      options={displayedModelOptions}
-                      emptyLabel="Default model"
-                      allowEmpty={Boolean(form.model)}
-                      onChange={(value) => setForm({ ...form, model: value })}
-                      disabled={!canEditDefinition || props.modelChoices.length <= 1}
-                    />
-                  </Field>
+                  <div className="order-3 xl:order-none">
+                    <Field label="Model" htmlFor="automation-model">
+                      <OptionPicker
+                        id="automation-model"
+                        label="Model"
+                        value={form.model}
+                        options={displayedModelOptions}
+                        emptyLabel="Default model"
+                        allowEmpty={Boolean(form.model)}
+                        onChange={(value) => setForm({ ...form, model: value })}
+                        disabled={!canEditDefinition || props.modelChoices.length <= 1}
+                      />
+                    </Field>
+                  </div>
+                  <div className="order-4 xl:order-none">
+                    <Field label="Reasoning" htmlFor="automation-reasoning">
+                      <OptionPicker
+                        id="automation-reasoning"
+                        label="Reasoning"
+                        value={form.reasoningLevel}
+                        options={REASONING_LEVEL_OPTIONS}
+                        emptyLabel={defaultReasoningLevelLabel(props.defaultReasoningLevel)}
+                        allowEmpty={Boolean(form.reasoningLevel)}
+                        onChange={(value) => setForm({ ...form, reasoningLevel: value as ReasoningLevel | '' })}
+                        disabled={!canEditDefinition}
+                      />
+                    </Field>
+                  </div>
+                  {selectedEnvironment || hasBranchControls ? (
+                    <div className="order-2 grid gap-3 xl:order-none xl:col-span-3">
+                      {selectedEnvironment ? (
+                        <div className="max-w-2xl">
+                          <EnvironmentRevisionPolicy
+                            environment={selectedEnvironment}
+                            form={form}
+                            disabled={!canEditDefinition}
+                            saveHint={revisionPolicySaveHint}
+                            onChange={(policy) =>
+                              setForm({
+                                ...form,
+                                environmentRevisionPolicy: policy,
+                                environmentRevisionId: policy === 'pinned' ? selectedEnvironment.currentRevisionId : '',
+                                environmentRevisionNumber:
+                                  policy === 'pinned' ? selectedEnvironment.currentRevisionNumber : null,
+                              })
+                            }
+                          />
+                        </div>
+                      ) : null}
+                      {hasBranchControls ? (
+                        <div>
+                          <Button
+                            className="h-10 px-3"
+                            type="button"
+                            variant={branchControlsOpen ? 'default' : 'secondary'}
+                            size="sm"
+                            onClick={() => setBranchControlsOpen((open) => !open)}
+                            disabled={!canEditDefinition}
+                            aria-expanded={branchControlsOpen}
+                          >
+                            {branchControlLabel}
+                          </Button>
+                        </div>
+                      ) : null}
+                      {branchControlsOpen && form.repository ? (
+                        <div className="max-w-xs min-w-0">
+                          <BranchPicker
+                            id="automation-branch"
+                            value={form.branch}
+                            branches={branchOptions}
+                            loading={branchOptionsLoading}
+                            error={branchOptionsError}
+                            onChange={(value) => setForm({ ...form, branch: value })}
+                            placeholder="Default"
+                            disabled={!canEditDefinition}
+                          />
+                        </div>
+                      ) : null}
+                      {branchControlsOpen && selectedEnvironment ? (
+                        <EnvironmentBranchOverridesEditor
+                          environment={selectedEnvironment}
+                          value={form.environmentBranchOverrides}
+                          disabled={!canEditDefinition}
+                          onLoadBranches={(repository) =>
+                            loadAutomationEnvironmentRepositoryBranches(repository, props.token)
+                          }
+                          onChange={(value) => setForm({ ...form, environmentBranchOverrides: value })}
+                        />
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
 
                 <Field label="Prompt" htmlFor="automation-prompt">
@@ -881,6 +907,7 @@ function emptyForm(groups: Group[]): AutomationForm {
     repository: '',
     branch: '',
     model: '',
+    reasoningLevel: '',
     prompt: '',
     enabled: true,
   };
@@ -904,6 +931,7 @@ function formFromAutomation(automation: Automation): AutomationForm {
     repository: repositoryContextLabel(automation.context?.repository),
     branch: typeof automation.context?.branch === 'string' ? automation.context.branch : '',
     model: typeof automation.context?.model === 'string' ? automation.context.model : '',
+    reasoningLevel: reasoningLevelFromContext(automation.context?.reasoningLevel),
     prompt: automation.prompt,
     enabled: automation.enabled,
   };
@@ -937,6 +965,7 @@ function automationFormInput(form: AutomationForm, token: string, environment: E
     repository: form.environmentId ? '' : form.repository.trim(),
     branch: form.environmentId ? '' : form.branch.trim(),
     model: form.model,
+    reasoningLevel: form.reasoningLevel,
   };
 }
 

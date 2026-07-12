@@ -262,11 +262,15 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
             inheritedModel={model}
             modelChoices={modelChoices}
             modelUnavailableReason=""
+            reasoningLevel=""
+            inheritedReasoningLevel=""
+            defaultReasoningLevel=""
             onCodebaseChange={() => undefined}
             onEnvironmentBranchOverridesChange={() => undefined}
             onEnvironmentRepositoryBranchesLoad={async () => []}
             onBranchChange={() => undefined}
             onModelChange={() => undefined}
+            onReasoningLevelChange={() => undefined}
             onFocusChange={() => undefined}
             onSubmit={async () => false}
           />

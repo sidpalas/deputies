@@ -477,7 +477,10 @@ describe('WorkerService', () => {
     await services.messages.enqueue({
       sessionId: session.id,
       prompt: 'second',
-      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'new-repo' } },
+      context: {
+        repository: { provider: 'github', owner: 'manaflow-ai', repo: 'new-repo' },
+        reasoningLevel: 'max',
+      },
     });
     const runner = new CaptureRunner();
 
@@ -495,7 +498,9 @@ describe('WorkerService', () => {
 
     expect(runner.inputs[0]?.context).toEqual({
       repository: { provider: 'github', owner: 'manaflow-ai', repo: 'new-repo' },
+      reasoningLevel: 'max',
     });
+    expect(runner.inputs[0]?.reasoningLevel).toBe('max');
   });
 
   it('lets runners update durable session context during a run', async () => {

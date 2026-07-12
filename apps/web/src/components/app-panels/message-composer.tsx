@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FocusEvent, FormEvent, TouchEvent } from 'react';
 import { SendHorizontal } from 'lucide-react';
-import type { BranchOption, Environment, ModelChoice, RepositoryOption } from '../../api.js';
+import type { BranchOption, Environment, ModelChoice, ReasoningLevel, RepositoryOption } from '../../api.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
@@ -20,6 +20,7 @@ import {
   OptionPicker,
 } from './option-picker.js';
 import { blurFocusedTextControl, formatModelLabel, submitOnEnter } from './shared.js';
+import { defaultReasoningLevelLabel, reasoningLevelLabel, REASONING_LEVEL_OPTIONS } from './reasoning-level.js';
 
 export function MessageComposer(props: {
   archived: boolean;
@@ -46,11 +47,15 @@ export function MessageComposer(props: {
   inheritedModel: string;
   modelChoices: ModelChoice[];
   modelUnavailableReason: string;
+  reasoningLevel: ReasoningLevel | '';
+  inheritedReasoningLevel: ReasoningLevel | '';
+  defaultReasoningLevel: ReasoningLevel | '';
   onCodebaseChange: (value: string) => void;
   onEnvironmentBranchOverridesChange: (value: EnvironmentBranchOverrides) => void;
   onEnvironmentRepositoryBranchesLoad: (repository: EnvironmentBranchOverrideRepository) => Promise<BranchOption[]>;
   onBranchChange: (value: string) => void;
   onModelChange: (value: string) => void;
+  onReasoningLevelChange: (value: ReasoningLevel | '') => void;
   onFocusChange: (focused: boolean) => void;
   onSubmit: (input: { prompt: string }) => Promise<boolean>;
 }) {
@@ -191,6 +196,22 @@ export function MessageComposer(props: {
             emptyLabel={props.inheritedModel ? formatModelLabel(props.inheritedModel) : 'Default model'}
             onChange={props.onModelChange}
             disabled={props.archived || props.readOnly || props.modelChoices.length <= 1}
+          />
+          <OptionPicker
+            className="min-w-0 flex-[0.8_2_8rem]"
+            triggerClassName="h-8 text-xs"
+            direction="up"
+            label="Reasoning"
+            value={props.reasoningLevel}
+            options={REASONING_LEVEL_OPTIONS}
+            emptyLabel={
+              props.inheritedReasoningLevel
+                ? reasoningLevelLabel(props.inheritedReasoningLevel)
+                : defaultReasoningLevelLabel(props.defaultReasoningLevel)
+            }
+            allowEmpty={Boolean(props.reasoningLevel)}
+            onChange={(value) => props.onReasoningLevelChange(value as ReasoningLevel | '')}
+            disabled={props.archived || props.readOnly}
           />
           {props.modelUnavailableReason ? (
             <p className="basis-full rounded-md border border-warning/50 bg-warning/10 px-2 py-1.5 text-warning-foreground dark:text-warning">

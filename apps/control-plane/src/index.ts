@@ -391,6 +391,7 @@ async function createRunner(): Promise<Runner> {
   if (config.runner === 'pi') {
     const piOptions: PiRunnerOptions = {
       model,
+      ...(config.runnerReasoningLevelDefault ? { reasoningLevelDefault: config.runnerReasoningLevelDefault } : {}),
       ...(config.openaiCodexAuthFile ? { authFile: config.openaiCodexAuthFile } : {}),
       ...(config.openaiCodexAuthBase64 ? { authBase64: config.openaiCodexAuthBase64 } : {}),
       modelUnavailableReason: (inputModel: string | undefined) =>

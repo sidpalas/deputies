@@ -4,6 +4,7 @@ export { ApiError, apiConnectionDelayedEvent, apiConnectionOkEvent, getApiBaseUr
 
 export type ApiAuthMode = 'none' | 'bearer' | 'session';
 export type AuthProvider = 'static' | 'github';
+export type ReasoningLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type Health = {
   status: 'ok' | 'degraded';
@@ -235,6 +236,7 @@ export type ModelChoices = {
   models: string[];
   modelChoices: ModelChoice[];
   defaultModel: string | null;
+  defaultReasoningLevel: ReasoningLevel | null;
 };
 
 export type ModelChoice = {
@@ -453,6 +455,7 @@ export async function createAutomation(input: {
   environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
+  reasoningLevel?: ReasoningLevel | '';
   branch?: string;
 }): Promise<Automation> {
   const body = await request<{ automation: Automation }>('/automations', {
@@ -477,6 +480,7 @@ export async function updateAutomation(input: {
   environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
+  reasoningLevel?: ReasoningLevel | '';
   branch?: string;
 }): Promise<Automation> {
   const body = await request<{ automation: Automation }>(`/automations/${input.automationId}`, {
@@ -612,6 +616,7 @@ function automationRequestBody(input: {
   environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
+  reasoningLevel?: ReasoningLevel | '';
   branch?: string;
 }): Record<string, unknown> {
   const usesEnvironment = Boolean(input.environmentId);
@@ -631,6 +636,7 @@ function automationRequestBody(input: {
       : {}),
     ...(!usesEnvironment && input.repository !== undefined ? { repository: input.repository } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(input.reasoningLevel !== undefined ? { reasoningLevel: input.reasoningLevel } : {}),
     ...(!usesEnvironment && input.branch !== undefined ? { branch: input.branch } : {}),
   };
 }
@@ -881,6 +887,7 @@ export async function enqueueMessage(input: {
   environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
   model?: string;
+  reasoningLevel?: ReasoningLevel;
   branch?: string;
 }): Promise<Message> {
   const requestBody: {
@@ -889,6 +896,7 @@ export async function enqueueMessage(input: {
     environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
     repository?: string | RepositoryInput;
     model?: string;
+    reasoningLevel?: ReasoningLevel;
     branch?: string;
   } = {
     prompt: input.prompt,
@@ -897,6 +905,7 @@ export async function enqueueMessage(input: {
   if (input.environmentBranchOverrides) requestBody.environmentBranchOverrides = input.environmentBranchOverrides;
   if (input.repository) requestBody.repository = input.repository;
   if (input.model) requestBody.model = input.model;
+  if (input.reasoningLevel) requestBody.reasoningLevel = input.reasoningLevel;
   if (input.branch) requestBody.branch = input.branch;
   const body = await request<{ message: Message }>(`/sessions/${input.sessionId}/messages`, {
     method: 'POST',

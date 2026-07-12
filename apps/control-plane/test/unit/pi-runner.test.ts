@@ -64,7 +64,8 @@ vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
         provider,
         api: 'openai-codex-responses',
         baseUrl: 'https://example.test',
-        reasoning: true,
+        reasoning: id !== 'non-reasoning',
+        ...(id === 'max-reasoning' ? { thinkingLevelMap: { max: 'max' } } : {}),
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 100_000,
@@ -276,6 +277,68 @@ describe('PiRunner', () => {
       }),
     });
     expect(piMock.createAgentSession.mock.calls[0]![0].thinkingLevel).toBeUndefined();
+  });
+
+  it('uses explicit reasoning levels and safely falls back for unsupported models', async () => {
+    piMock.createAgentSession.mockImplementation(async (options) => ({
+      session: {
+        sessionId: 'pi-session',
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'ok' }],
+            model: options.model.id,
+            stopReason: 'stop',
+          },
+        ],
+        prompt: vi.fn(),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe: () => () => {},
+      },
+      extensionsResult: {},
+    }));
+
+    for (const [modelId, reasoningLevel] of [
+      ['max-reasoning', 'max'],
+      ['limited-reasoning', 'max'],
+      ['non-reasoning', 'high'],
+    ] as const) {
+      await new PiRunner({
+        model: `openai-codex/${modelId}`,
+        authBase64: Buffer.from('{}').toString('base64'),
+      }).run({
+        sessionId: `session-${modelId}`,
+        runId: `run-${modelId}`,
+        messageId: `message-${modelId}`,
+        prompt: 'hello',
+        reasoningLevel,
+        context: {},
+        sandbox: createMemorySandbox(),
+        emit: async () => {},
+      });
+    }
+
+    await new PiRunner({
+      model: 'openai-codex/max-reasoning',
+      reasoningLevelDefault: 'minimal',
+      authBase64: Buffer.from('{}').toString('base64'),
+    }).run({
+      sessionId: 'session-default-reasoning',
+      runId: 'run-default-reasoning',
+      messageId: 'message-default-reasoning',
+      prompt: 'hello',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async () => {},
+    });
+
+    expect(piMock.createAgentSession.mock.calls.map(([options]) => options.thinkingLevel)).toEqual([
+      'max',
+      'high',
+      'off',
+      'minimal',
+    ]);
   });
 
   it('runs subagents in-process and caps nested registration at depth 4', async () => {

@@ -58,6 +58,7 @@ import {
   type BranchOption,
   type Group,
   type ModelChoice,
+  type ReasoningLevel,
   type RepositoryOption,
   type SessionSearchResult,
   type SessionTagSummary,
@@ -98,6 +99,7 @@ import {
   waitForRealtimeReconnect,
   type ActiveProgressByMessageId,
 } from './app-state.js';
+import { reasoningLevelFromContext } from './components/app-panels/reasoning-level.js';
 import { Button } from './components/ui/button.js';
 import {
   archivedSessionsOpenStorageKey,
@@ -354,6 +356,7 @@ export function App() {
   const [setupStatusError, setSetupStatusError] = useState('');
   const [newThreadGroupId, setNewThreadGroupId] = useState('');
   const [newThreadModel, setNewThreadModel] = useState('');
+  const [newThreadReasoningLevel, setNewThreadReasoningLevel] = useState<ReasoningLevel | ''>('');
   const [newThreadEnvironmentId, setNewThreadEnvironmentId] = useState('');
   const [newThreadEnvironmentBranchOverrides, setNewThreadEnvironmentBranchOverrides] =
     useState<EnvironmentBranchOverrides>({});
@@ -361,12 +364,14 @@ export function App() {
   const [newThreadPrompt, setNewThreadPrompt] = useState('');
   const [newThreadRepository, setNewThreadRepository] = useState('');
   const [defaultModel, setDefaultModel] = useState('');
+  const [defaultReasoningLevel, setDefaultReasoningLevel] = useState<ReasoningLevel | ''>('');
   const [followUpEnvironmentId, setFollowUpEnvironmentId] = useState('');
   const [followUpEnvironmentBranchOverrides, setFollowUpEnvironmentBranchOverrides] =
     useState<EnvironmentBranchOverrides>({});
   const [followUpRepository, setFollowUpRepository] = useState('');
   const [followUpBranch, setFollowUpBranch] = useState('');
   const [followUpModel, setFollowUpModel] = useState('');
+  const [followUpReasoningLevel, setFollowUpReasoningLevel] = useState<ReasoningLevel | ''>('');
   const [editingMessageId, setEditingMessageId] = useState('');
   const [messageDraft, setMessageDraft] = useState('');
   const [draftToken, setDraftToken] = useState(token);
@@ -586,6 +591,8 @@ export function App() {
       }`
     : (selectedRepository ?? '');
   const selectedSessionModel = typeof selectedSession?.context?.model === 'string' ? selectedSession.context.model : '';
+  const selectedSessionReasoningLevel = reasoningLevelFromContext(selectedSession?.context?.reasoningLevel);
+  const selectedFollowUpReasoningLevel = followUpReasoningLevel || selectedSessionReasoningLevel;
   const availableModelValues = modelChoices.filter((model) => model.available).map((model) => model.value);
   const selectedFollowUpModel = resolveSelectableModel(
     followUpModel,
@@ -785,6 +792,7 @@ export function App() {
         const availableModels = choices.filter((model) => model.available).map((model) => model.value);
         setModelChoices(choices);
         setDefaultModel(models.defaultModel ?? models.models[0] ?? '');
+        setDefaultReasoningLevel(models.defaultReasoningLevel ?? '');
         setNewThreadModel((current) => {
           if (current && availableModels.includes(current)) return current;
           if (models.defaultModel && availableModels.includes(models.defaultModel)) return models.defaultModel;
@@ -1748,6 +1756,7 @@ export function App() {
             ? { repository: firstRepository }
             : {}),
         ...(newThreadModel ? { model: newThreadModel } : {}),
+        ...(newThreadReasoningLevel ? { reasoningLevel: newThreadReasoningLevel } : {}),
         ...(!firstEnvironmentId && firstBranch ? { branch: firstBranch } : {}),
       });
       const sessionContext = mergeDisplaySessionContext(
@@ -1840,6 +1849,7 @@ export function App() {
             ? { repository: followUpRepository.trim() }
             : {}),
         ...(selectedFollowUpModel ? { model: selectedFollowUpModel } : {}),
+        ...(selectedFollowUpReasoningLevel ? { reasoningLevel: selectedFollowUpReasoningLevel } : {}),
         ...(!followUpEnvironmentId && followUpBranch ? { branch: followUpBranch } : {}),
       });
       setSessionDetail((current) => ({ ...current, messages: [...current.messages, message] }));
@@ -2208,6 +2218,7 @@ export function App() {
     setFollowUpEnvironmentBranchOverrides({});
     setFollowUpBranch('');
     setFollowUpModel('');
+    setFollowUpReasoningLevel('');
     clearSessionDetail();
     eventCursor.current = 0;
   }
@@ -2235,6 +2246,7 @@ export function App() {
     setFollowUpRepository('');
     setFollowUpBranch('');
     setFollowUpModel('');
+    setFollowUpReasoningLevel('');
     setSidebarOpen(false);
   }
 
@@ -3036,6 +3048,7 @@ export function App() {
                     repositoryOptionsLoading={repositoryOptionsLoading}
                     repositoryOptionsError={repositoryOptionsError}
                     modelChoices={modelChoices}
+                    defaultReasoningLevel={defaultReasoningLevel}
                     selectedAutomationId={selectedAutomationId}
                     showOpenSidebar={!sidebarOpen}
                     openSidebarLabel="Open automations"
@@ -3091,6 +3104,8 @@ export function App() {
                     model={newThreadModel}
                     modelChoices={modelChoices}
                     modelUnavailableReason={newThreadModelUnavailableReason}
+                    reasoningLevel={newThreadReasoningLevel}
+                    defaultReasoningLevel={defaultReasoningLevel}
                     showOpenSidebar={!sidebarOpen}
                     openSidebarLabel={
                       sidebarPanel === 'groups' && canViewGroups
@@ -3109,6 +3124,7 @@ export function App() {
                     onEnvironmentRepositoryBranchesLoad={loadEnvironmentRepositoryBranches}
                     onBranchChange={setNewThreadBranch}
                     onModelChange={setNewThreadModel}
+                    onReasoningLevelChange={setNewThreadReasoningLevel}
                     onSubmit={fireAndForget(handleCreateThread)}
                   />
                 ) : (
@@ -3239,11 +3255,15 @@ export function App() {
                             inheritedModel={selectedSessionModel || defaultModel}
                             modelChoices={modelChoices}
                             modelUnavailableReason={followUpModelUnavailableReason}
+                            reasoningLevel={followUpReasoningLevel}
+                            inheritedReasoningLevel={selectedSessionReasoningLevel}
+                            defaultReasoningLevel={defaultReasoningLevel}
                             onCodebaseChange={handleFollowUpCodebaseChange}
                             onEnvironmentBranchOverridesChange={setFollowUpEnvironmentBranchOverrides}
                             onEnvironmentRepositoryBranchesLoad={loadEnvironmentRepositoryBranches}
                             onBranchChange={setFollowUpBranch}
                             onModelChange={setFollowUpModel}
+                            onReasoningLevelChange={setFollowUpReasoningLevel}
                             onFocusChange={setComposerFocused}
                             onSubmit={handleSendMessage}
                           />

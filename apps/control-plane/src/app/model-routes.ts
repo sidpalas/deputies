@@ -14,6 +14,7 @@ export function registerModelRoutes(
       models,
       modelChoices: modelChoices(config, services.modelAvailability),
       defaultModel: config.runnerModelDefault ?? models[0] ?? null,
+      defaultReasoningLevel: config.runnerReasoningLevelDefault ?? null,
     });
   });
 }

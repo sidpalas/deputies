@@ -203,6 +203,7 @@ describe('loadConfig', () => {
         UNSAFE_AUTH_GITHUB_ALLOW_ALL: 'true',
         DATABASE_URL: 'postgres://example',
         RUNNER_MODEL_DEFAULT: 'anthropic/claude-haiku-4-5',
+        RUNNER_REASONING_LEVEL_DEFAULT: 'max',
         OPENAI_CODEX_AUTH_FILE: '/tmp/pi-auth.json',
         OPENAI_CODEX_AUTH_BASE64: 'eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19',
         RUNNER_STATE_STORE: 'memory',
@@ -341,6 +342,7 @@ describe('loadConfig', () => {
       unsafeAuthGithubAllowAll: true,
       databaseUrl: 'postgres://example',
       runnerModelDefault: 'anthropic/claude-haiku-4-5',
+      runnerReasoningLevelDefault: 'max',
       openaiCodexAuthFile: '/tmp/pi-auth.json',
       openaiCodexAuthBase64: 'eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19',
       runnerStateStore: 'memory',
@@ -928,6 +930,9 @@ describe('loadConfig', () => {
     );
     expect(() => loadConfig({ API_AUTH_MODE: 'none', WEB_SEARCH_PROVIDER: 'bing' })).toThrow(
       'Expected one of disabled, auto, brave, duckduckgo',
+    );
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', RUNNER_REASONING_LEVEL_DEFAULT: 'extreme' })).toThrow(
+      'Expected one of off, minimal, low, medium, high, xhigh, max',
     );
   });
 

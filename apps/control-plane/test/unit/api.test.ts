@@ -116,6 +116,7 @@ describe('core API', () => {
       loadConfig({
         API_AUTH_MODE: 'none',
         RUNNER_MODEL_DEFAULT: 'anthropic/claude-sonnet',
+        RUNNER_REASONING_LEVEL_DEFAULT: 'high',
         RUNNER_MODEL_CHOICES:
           'anthropic/claude-sonnet,amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0,openai-codex/gpt-5.5',
       }),
@@ -153,6 +154,7 @@ describe('core API', () => {
           unavailableReason: 'Codex auth expired.',
         },
       ],
+      defaultReasoningLevel: 'high',
     });
   });
 
@@ -189,6 +191,26 @@ describe('core API', () => {
     });
     expect(anthropic.status).toBe(202);
     expectMessageResponse(await anthropic.json());
+  });
+
+  it('validates and persists message reasoning levels', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Reasoning level' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const accepted = await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
+      prompt: 'think deeply',
+      reasoningLevel: 'max',
+    });
+    expect(accepted.status).toBe(202);
+    await expect(accepted.json()).resolves.toMatchObject({ message: { context: { reasoningLevel: 'max' } } });
+    await expect(store.getSession(session.id)).resolves.toMatchObject({ context: { reasoningLevel: 'max' } });
+
+    const rejected = await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
+      prompt: 'invalid',
+      reasoningLevel: 'extreme',
+    });
+    expect(rejected.status).toBe(400);
+    await expect(rejected.json()).resolves.toMatchObject({ error: 'invalid_request' });
   });
 
   it('maps GitHub branch authorization failures to stable API errors', async () => {

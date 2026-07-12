@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createAutomation } from './api.js';
+import { createAutomation, updateAutomation } from './api.js';
 
 describe('automation API requests', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -17,6 +17,7 @@ describe('automation API requests', () => {
       environmentId: 'environment-1',
       repository: 'acme/api',
       branch: 'main',
+      reasoningLevel: 'max',
     });
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
@@ -25,7 +26,19 @@ describe('automation API requests', () => {
       prompt: 'Check the codebase',
       scheduleCron: '0 9 * * *',
       environmentId: 'environment-1',
+      reasoningLevel: 'max',
     });
+  });
+
+  it('can clear a saved automation reasoning level', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ automation: { id: 'automation-1' } }), { status: 200 }));
+
+    await updateAutomation({ automationId: 'automation-1', token: 'test-token', reasoningLevel: '' });
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(request.body as string)).toEqual({ reasoningLevel: '' });
   });
 
   it('keeps repository fields for a direct-repository automation', async () => {

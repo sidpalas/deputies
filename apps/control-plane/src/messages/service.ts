@@ -203,7 +203,7 @@ function mergeSessionContext(
   if (!messageContext) return undefined;
   const nextContext = { ...(sessionContext ?? {}) };
   let changed = false;
-  for (const key of ['repository', 'model', 'branch', 'environment']) {
+  for (const key of ['repository', 'model', 'reasoningLevel', 'branch', 'environment']) {
     if (!Object.prototype.hasOwnProperty.call(messageContext, key)) continue;
     nextContext[key] = messageContext[key];
     changed = true;

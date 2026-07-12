@@ -2,6 +2,7 @@ import { getModels, type KnownProvider } from '@earendil-works/pi-ai/compat';
 import { sanitizeMcpNamePart } from '../mcp/client.js';
 import type { McpServerConfig } from '../mcp/types.js';
 import { AMAZON_BEDROCK_INFERENCE_PROFILE_MODEL_IDS, AMAZON_BEDROCK_PROVIDER } from '../runner/bedrock.js';
+import { REASONING_LEVELS, type ReasoningLevel } from '../runner/reasoning.js';
 
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'flue' | 'pi';
@@ -108,6 +109,7 @@ export type AppConfig = {
   runnerStateStore: 'postgres' | 'memory';
   runnerModelDefault?: string;
   runnerModelChoices: string[];
+  runnerReasoningLevelDefault?: ReasoningLevel;
   openaiCodexAuthFile?: string;
   openaiCodexAuthBase64?: string;
   webSearchProvider: WebSearchProviderKind;
@@ -363,6 +365,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.GITHUB_OAUTH_CALLBACK_URL) config.githubOAuthCallbackUrl = env.GITHUB_OAUTH_CALLBACK_URL;
   if (env.DATABASE_URL) config.databaseUrl = env.DATABASE_URL;
   if (env.RUNNER_MODEL_DEFAULT) config.runnerModelDefault = env.RUNNER_MODEL_DEFAULT;
+  if (env.RUNNER_REASONING_LEVEL_DEFAULT) {
+    config.runnerReasoningLevelDefault = parseEnum(
+      env.RUNNER_REASONING_LEVEL_DEFAULT,
+      REASONING_LEVELS,
+      REASONING_LEVELS[0],
+    );
+  }
   if (env.OPENAI_CODEX_AUTH_FILE) config.openaiCodexAuthFile = env.OPENAI_CODEX_AUTH_FILE;
   if (env.OPENAI_CODEX_AUTH_BASE64) config.openaiCodexAuthBase64 = env.OPENAI_CODEX_AUTH_BASE64;
   const webSearchBraveApiKey = env.WEB_SEARCH_BRAVE_API_KEY ?? env.BRAVE_API_KEY;

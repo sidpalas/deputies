@@ -63,6 +63,7 @@ describe('scheduled automations', () => {
       environmentId: environment.id,
       context: {
         model: 'anthropic/claude-sonnet',
+        reasoningLevel: 'high',
         environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'web', branch: 'release' }],
       },
     });
@@ -71,6 +72,7 @@ describe('scheduled automations', () => {
 
     expect(result.message?.context).toEqual({
       model: 'anthropic/claude-sonnet',
+      reasoningLevel: 'high',
       environment: {
         id: environment.id,
         revisionId: environment.currentRevisionId,
@@ -414,6 +416,7 @@ describe('scheduled automations', () => {
         repository: 'acme/widget',
         branch: 'main',
         model: 'anthropic/claude-sonnet',
+        reasoningLevel: 'max',
       }),
     );
     expect(createResponse.status).toBe(201);
@@ -428,6 +431,7 @@ describe('scheduled automations', () => {
         repository: { provider: 'github', owner: 'acme', repo: 'widget' },
         branch: 'main',
         model: 'anthropic/claude-sonnet',
+        reasoningLevel: 'max',
       },
     });
 
@@ -442,7 +446,10 @@ describe('scheduled automations', () => {
 
     const updateResponse = await app.request(
       `/automations/${createBody.automation.id}`,
-      jsonRequest({ name: 'Updated API automation', repository: '', branch: '', model: '' }, 'PATCH'),
+      jsonRequest(
+        { name: 'Updated API automation', repository: '', branch: '', model: '', reasoningLevel: '' },
+        'PATCH',
+      ),
     );
     expect(updateResponse.status).toBe(200);
     const updateBody = (await updateResponse.json()) as { automation: { name: string; context?: unknown } };

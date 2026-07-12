@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { PanelLeftOpen } from 'lucide-react';
-import type { BranchOption, Environment, Group, ModelChoice, RepositoryOption } from '../../api.js';
+import type { BranchOption, Environment, Group, ModelChoice, ReasoningLevel, RepositoryOption } from '../../api.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Textarea } from '../ui/textarea.js';
@@ -18,6 +18,7 @@ import {
   OptionPicker,
 } from './option-picker.js';
 import { submitOnEnter } from './shared.js';
+import { defaultReasoningLevelLabel, REASONING_LEVEL_OPTIONS } from './reasoning-level.js';
 
 export function NewThreadPanel(props: {
   canCallApi: boolean;
@@ -42,6 +43,8 @@ export function NewThreadPanel(props: {
   model: string;
   modelChoices: ModelChoice[];
   modelUnavailableReason: string;
+  reasoningLevel: ReasoningLevel | '';
+  defaultReasoningLevel: ReasoningLevel | '';
   showOpenSidebar: boolean;
   openSidebarLabel?: string;
   onOpenSidebar: () => void;
@@ -52,6 +55,7 @@ export function NewThreadPanel(props: {
   onEnvironmentRepositoryBranchesLoad: (repository: EnvironmentBranchOverrideRepository) => Promise<BranchOption[]>;
   onBranchChange: (value: string) => void;
   onModelChange: (value: string) => void;
+  onReasoningLevelChange: (value: ReasoningLevel | '') => void;
   onSubmit: (event: FormEvent) => void;
 }) {
   const [branchControlsOpen, setBranchControlsOpen] = useState(false);
@@ -172,6 +176,21 @@ export function NewThreadPanel(props: {
                   emptyLabel="Default model"
                   onChange={props.onModelChange}
                   disabled={!props.canCallApi || props.modelChoices.length <= 1}
+                />
+              </div>
+              <div className="min-w-0 flex-[0.55_1_8rem]">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="new-thread-reasoning">
+                  Reasoning
+                </label>
+                <OptionPicker
+                  id="new-thread-reasoning"
+                  label="Reasoning"
+                  value={props.reasoningLevel}
+                  options={REASONING_LEVEL_OPTIONS}
+                  emptyLabel={defaultReasoningLevelLabel(props.defaultReasoningLevel)}
+                  allowEmpty={Boolean(props.reasoningLevel)}
+                  onChange={(value) => props.onReasoningLevelChange(value as ReasoningLevel | '')}
+                  disabled={!props.canCallApi}
                 />
               </div>
             </div>

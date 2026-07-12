@@ -87,6 +87,7 @@ import {
   parseBranchBody,
   parseCursor,
   parseModelBody,
+  parseReasoningLevelBody,
   parseRepositoryBody,
   readJsonBody,
 } from './request.js';
@@ -593,12 +594,13 @@ export function createApp(config: AppConfig, services = createServices()) {
 
     try {
       const model = parseModelBody(body.model, config);
+      const reasoningLevel = parseReasoningLevelBody(body.reasoningLevel);
       const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModelDefault);
       if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
       const environmentId = optionalString(body.environmentId);
       const context = environmentId
-        ? await environmentMessageContext(c, config, services, session, environmentId, body, model)
-        : directRepositoryMessageContext(body, model);
+        ? await environmentMessageContext(c, config, services, session, environmentId, body, model, reasoningLevel)
+        : directRepositoryMessageContext(body, model, reasoningLevel);
       const message = await services.messages.enqueue({
         sessionId,
         prompt,
@@ -1132,6 +1134,7 @@ async function environmentMessageContext(
   environmentId: string,
   body: Record<string, unknown>,
   model: string | undefined,
+  reasoningLevel: ReturnType<typeof parseReasoningLevelBody>,
 ): Promise<Record<string, unknown>> {
   if (body.repository !== undefined || body.branch !== undefined) {
     throw new HttpRequestError(400, 'invalid_request', 'Use either environmentId or repository, not both');
@@ -1151,12 +1154,14 @@ async function environmentMessageContext(
   return {
     environment: snapshot,
     ...(model ? { model } : {}),
+    ...(reasoningLevel ? { reasoningLevel } : {}),
   };
 }
 
 function directRepositoryMessageContext(
   body: Record<string, unknown>,
   model: string | undefined,
+  reasoningLevel: ReturnType<typeof parseReasoningLevelBody>,
 ): Record<string, unknown> {
   if (body.environmentBranchOverrides !== undefined) {
     throw new HttpRequestError(400, 'invalid_request', 'environmentBranchOverrides require environmentId');
@@ -1166,6 +1171,7 @@ function directRepositoryMessageContext(
   return {
     ...(repository ? { repository } : {}),
     ...(model ? { model } : {}),
+    ...(reasoningLevel ? { reasoningLevel } : {}),
     ...(repository && branch ? { branch } : {}),
   };
 }

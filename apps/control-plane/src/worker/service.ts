@@ -4,6 +4,7 @@ import { CallbackDispatcher, CallbackService, type CompletionCallbackSender } fr
 import type { AppendEventInput, EventService } from '../events/service.js';
 import { MessageService } from '../messages/service.js';
 import type { Runner, RunnerResult } from '../runner/types.js';
+import { isReasoningLevel } from '../runner/reasoning.js';
 import { SandboxLifecycleService } from '../sandbox/service.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import type {
@@ -264,6 +265,7 @@ export class WorkerService {
             ownerGroupId: session.ownerGroupId,
             prompt: buildBatchPrompt(claimed.messages),
             ...(typeof runContext.model === 'string' ? { model: runContext.model } : {}),
+            ...(isReasoningLevel(runContext.reasoningLevel) ? { reasoningLevel: runContext.reasoningLevel } : {}),
             context: runContext,
             sandbox,
             signal,

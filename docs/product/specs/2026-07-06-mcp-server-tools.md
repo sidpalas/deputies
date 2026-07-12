@@ -18,7 +18,7 @@ Consequences: the model-context footprint of connecting Executor is small and co
 
 Deputies has two runners in `apps/control-plane`:
 
-- **Pi runner** (`src/runner-pi/`, primary going forward) — builds a `customTools: ToolDefinition[]` array per run in `createPiToolSet` (`src/runner-pi/runner.ts:309`) and passes it to `createAgentSession({ noTools: 'builtin', customTools })`. Pi (`@earendil-works/pi-coding-agent` 0.80.3) has **no MCP support**.
+- **Pi runner** (`src/runner-pi/`, primary going forward) — builds a `customTools: ToolDefinition[]` array per run in `createPiToolSet` (`src/runner-pi/runner.ts:309`) and passes it to `createAgentSession({ noTools: 'builtin', customTools })`. Pi (`@earendil-works/pi-coding-agent` 0.80.6) has **no MCP support**.
 - **Flue runner** (`src/runner-flue/`) — assembles tools in `src/runner-flue/runner.ts` (~line 76) and passes them through the agent factory. Flue (`@flue/runtime` 0.11.1) **ships `connectMcpServer(name, options)`**, which connects to a remote MCP server (streamable HTTP or SSE), lists tools with pagination, and adapts them into ordinary Flue tool definitions named `mcp__<server>__<tool>`.
 
 Flue's implementation is the reference design for the Pi adapter. It lives in `node_modules/@flue/runtime/dist/index.mjs` (search `//#region src/mcp.ts`) and does, in order: connect an `@modelcontextprotocol/sdk` `Client` over `StreamableHTTPClientTransport` (or `SSEClientTransport` for legacy servers), paginate `client.listTools()`, then for each tool build a definition with:

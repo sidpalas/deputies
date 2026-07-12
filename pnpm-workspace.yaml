@@ -2,6 +2,11 @@ packages:
   - apps/*
   - packages/*
 minimumReleaseAge: 4320
+minimumReleaseAgeExclude:
+  - '@earendil-works/pi-agent-core'
+  - '@earendil-works/pi-ai'
+  - '@earendil-works/pi-coding-agent'
+  - '@earendil-works/pi-tui'
 allowBuilds:
   '@google/genai': false
   '@mongodb-js/zstd': false

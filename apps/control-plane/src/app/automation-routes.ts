@@ -27,6 +27,7 @@ import {
   optionalString,
   parseBranchBody,
   parseModelBody,
+  parseReasoningLevelBody,
   parseRepositoryBody,
   readJsonBody,
 } from './request.js';
@@ -465,12 +466,14 @@ function parseAutomationCreateContextBody(
   }
   const repository = parseRepositoryBody(body.repository);
   const model = parseModelBody(body.model, config);
+  const reasoningLevel = parseReasoningLevelBody(body.reasoningLevel);
   const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModelDefault);
   if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
   const branch = repository && !hasEnvironment ? parseBranchBody(body.branch) : undefined;
   return {
     ...(!hasEnvironment && repository ? { repository } : {}),
     ...(model ? { model } : {}),
+    ...(reasoningLevel ? { reasoningLevel } : {}),
     ...(!hasEnvironment && repository && branch ? { branch } : {}),
     ...(hasEnvironment && environmentBranchOverrides.length ? { environmentBranchOverrides } : {}),
   };
@@ -490,6 +493,7 @@ function parseAutomationUpdateContextBody(
 ): { changed: boolean; value: Record<string, unknown> | null } {
   const hasRepository = Object.prototype.hasOwnProperty.call(body, 'repository');
   const hasModel = Object.prototype.hasOwnProperty.call(body, 'model');
+  const hasReasoningLevel = Object.prototype.hasOwnProperty.call(body, 'reasoningLevel');
   const hasBranch = Object.prototype.hasOwnProperty.call(body, 'branch');
   const hasEnvironment = Boolean(environmentId);
   if (hasEnvironment && (hasRepository || hasBranch)) {
@@ -501,6 +505,7 @@ function parseAutomationUpdateContextBody(
   if (
     !hasRepository &&
     !hasModel &&
+    !hasReasoningLevel &&
     !hasBranch &&
     !options.environmentBranchOverridesProvided &&
     !options.environmentChanged
@@ -532,6 +537,11 @@ function parseAutomationUpdateContextBody(
     if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
     if (model) next.model = model;
     else delete next.model;
+  }
+  if (hasReasoningLevel) {
+    const reasoningLevel = parseReasoningLevelBody(body.reasoningLevel);
+    if (reasoningLevel) next.reasoningLevel = reasoningLevel;
+    else delete next.reasoningLevel;
   }
   if (hasBranch) {
     const branch = parseBranchBody(body.branch);

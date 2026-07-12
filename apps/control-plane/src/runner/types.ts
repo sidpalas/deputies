@@ -1,5 +1,6 @@
 import type { ModelUsagePayload, NormalizedEvent } from '../events/types.js';
 import type { SandboxHandle } from '../sandbox/types.js';
+import type { ReasoningLevel } from './reasoning.js';
 
 export type RunnerInput = {
   sessionId: string;
@@ -8,6 +9,7 @@ export type RunnerInput = {
   ownerGroupId?: string;
   prompt: string;
   model?: string;
+  reasoningLevel?: ReasoningLevel;
   context: Record<string, unknown>;
   sandbox: SandboxHandle;
   signal?: AbortSignal;
