@@ -56,13 +56,13 @@ export default async ({ page, caption, click }) => {
 deputies-record /tmp/demo.mjs --output-dir /tmp/browser-demo
 ```
 
-The command records one 1280x720 browser context by default, limits the scenario to 60 seconds, closes Chromium before transcoding, and prints JSON containing the unique final path, duration, size, format, resolved `viewport`, and `warnings`. It prefers MP4 and falls back to WebM if ffmpeg is unavailable or conversion fails. Scenarios may accept `signal` and pass it to their own network or subprocess work so the 60-second timeout cancels that work too.
+The command records one 1440x900 browser context by default, limits the scenario to 60 seconds, closes Chromium before transcoding, and prints JSON containing the unique final path, duration, size, format, resolved `viewport`, and `warnings`. It prefers MP4 and falls back to WebM if ffmpeg is unavailable or conversion fails. Scenarios may accept `signal` and pass it to their own network or subprocess work so the 60-second timeout cancels that work too.
 
 Choose a viewport that matches the experience being demonstrated:
 
 ```bash
-deputies-record /tmp/demo.mjs --preset desktop # 1440x900
-deputies-record /tmp/demo.mjs --preset laptop  # 1280x720 (default)
+deputies-record /tmp/demo.mjs --preset desktop # 1920x1080
+deputies-record /tmp/demo.mjs --preset laptop  # 1440x900 (default)
 deputies-record /tmp/demo.mjs --preset tablet  # 768x1024
 deputies-record /tmp/demo.mjs --preset mobile  # 390x844
 deputies-record /tmp/demo.mjs --width 1600 --height 1000
@@ -81,8 +81,8 @@ import { chromium } from 'playwright';
 
 const browser = await chromium.launch({ channel: 'chromium' });
 const context = await browser.newContext({
-  viewport: { width: 1280, height: 720 },
-  recordVideo: { dir: '/tmp/browser-video', size: { width: 1280, height: 720 } },
+  viewport: { width: 1440, height: 900 },
+  recordVideo: { dir: '/tmp/browser-video', size: { width: 1440, height: 900 } },
 });
 await context.addInitScript(() => {
   const install = () => {

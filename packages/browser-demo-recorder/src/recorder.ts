@@ -10,8 +10,8 @@ const scenarioTimeoutMs = 60_000;
 export type Viewport = { width: number; height: number };
 
 export const viewportPresets = {
-  desktop: { width: 1440, height: 900 },
-  laptop: { width: 1280, height: 720 },
+  desktop: { width: 1920, height: 1080 },
+  laptop: { width: 1440, height: 900 },
   tablet: { width: 768, height: 1024 },
   mobile: { width: 390, height: 844 },
 } as const satisfies Record<string, Viewport>;

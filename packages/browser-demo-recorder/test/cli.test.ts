@@ -7,7 +7,7 @@ describe('parseArgs', () => {
     expect(parseArgs(['scenario.mjs', '--output-dir', 'captures'])).toEqual({
       scenarioPath: path.resolve('scenario.mjs'),
       outputDir: path.resolve('captures'),
-      viewport: { width: 1280, height: 720 },
+      viewport: { width: 1440, height: 900 },
     });
   });
 

@@ -17,7 +17,7 @@ describe.skipIf(!enabled)('browser demo recorder smoke', () => {
         expect(result.path).toMatch(/browser-demo-[0-9a-f-]+\.(mp4|webm)$/);
         expect(result.sizeBytes).toBeGreaterThan(0);
         expect(result.durationMs).toBeGreaterThan(0);
-        expect(result.viewport).toEqual({ width: 1280, height: 720 });
+        expect(result.viewport).toEqual({ width: 1440, height: 900 });
         expect(result.warnings).toEqual([]);
       }
       const files = await readdir(outputDir);
