@@ -13,6 +13,7 @@ Examples that may fit here later:
 Current packages:
 
 - `browser-milestones`: shared browser milestone telemetry payload types and validation.
+- `browser-demo-recorder`: Playwright-based CLI for consistent short browser demo artifacts.
 - `sandbox-bridge`: in-container bridge process for sandbox exec and filesystem APIs.
 
 Deployable applications and services belong in `apps/`, not `packages/`.

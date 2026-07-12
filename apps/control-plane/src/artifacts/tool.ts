@@ -33,7 +33,7 @@ type ArtifactCreateInput = {
 
 export const artifactToolDescription =
   'Manage durable artifacts visible in the product UI. Use action=create to publish a file from the current sandbox for screenshots, generated images, reports, large logs, and other files the user should be able to view or download. ' +
-  'For create, provide a sandbox file path, artifact type, and optional title/content type. Use a user-facing title such as "Generated image", "Screenshot", or "Test report", not process context like "retry attempt". Prefer kebab-case download filenames with a useful extension, such as generated-image.png, test-report.md, run-log.txt, or browser-video.mp4. Use type=video only for browser-playable MP4 artifacts; publish AVI, MOV, MKV, and other non-browser-playable videos as type=file. The tool returns an artifact ID, downloadUrl, and markdownLink. If you mention the artifact in your response, use markdownLink as-is or use downloadUrl as the markdown href; do not wrap it in the session URL.';
+  'For create, provide a sandbox file path, artifact type, and optional title/content type. Use a user-facing title such as "Generated image", "Screenshot", or "Test report", not process context like "retry attempt". Prefer kebab-case download filenames with a useful extension, such as generated-image.png, test-report.md, run-log.txt, or browser-video.mp4. For type=video, prefer MP4 (H.264/yuv420p); WebM is accepted. Publish AVI, MOV, MKV, and other non-browser-playable videos as type=file. The tool returns an artifact ID, downloadUrl, and markdownLink. If you mention the artifact in your response, use markdownLink as-is or use downloadUrl as the markdown href; do not wrap it in the session URL.';
 
 export const artifactToolParameters = {
   type: 'object',
@@ -139,8 +139,9 @@ function validateVideoArtifact(input: ArtifactCreateInput): void {
   const contentType = input.contentType?.split(';')[0]?.trim().toLowerCase();
   if (extension === '.mp4' && (!contentType || contentType === 'video/mp4')) return;
   if (extension === '.m4v' && (!contentType || contentType === 'video/mp4' || contentType === 'video/x-m4v')) return;
+  if (extension === '.webm' && (!contentType || contentType === 'video/webm')) return;
   throw new Error(
-    'artifact create type=video requires a browser-playable MP4 file. Publish this file as type=file or transcode it to MP4/H.264/yuv420p first.',
+    'artifact create type=video requires a browser-playable MP4, M4V, or WebM file. Publish this file as type=file or transcode it to MP4/H.264/yuv420p first.',
   );
 }
 

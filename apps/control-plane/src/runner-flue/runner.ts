@@ -432,7 +432,8 @@ function withToolGuidance(
       'Artifact tool guidance:',
       '- Use artifact({ action: "create", ... }) for files the user should view or download, including screenshots, images, reports, logs, and videos.',
       '- If you mention a created artifact in your final response, use the markdownLink returned by the artifact tool as-is, or use its downloadUrl as the markdown href. Do not wrap artifact download URLs in the session URL.',
-      '- Use artifact type=video only for browser-playable MP4 files. If you create AVI, MOV, MKV, or another video format, publish it as type=file so it is download-only.',
+      '- After user-visible UI changes, use Playwright when available to screenshot changed screens and read each PNG before claiming success; record short multi-step flows when practical.',
+      '- Prefer MP4 (H.264/yuv420p) for artifact type=video; WebM is accepted. Publish AVI, MOV, MKV, and other video formats as type=file.',
       '',
     );
   }

@@ -16,7 +16,8 @@ export function isImageArtifact(artifact: Artifact): boolean {
 export function isBrowserPlayableVideoArtifact(artifact: Artifact): boolean {
   const contentType = stringPayloadValue(artifact.payload.contentType)?.split(';')[0]?.trim().toLowerCase();
   const extension = fileExtension(stringPayloadValue(artifact.payload.fileName) ?? artifactName(artifact));
-  return contentType === 'video/mp4' || extension === '.mp4' || extension === '.m4v';
+  if (contentType) return contentType === 'video/mp4' || contentType === 'video/x-m4v' || contentType === 'video/webm';
+  return ['.mp4', '.m4v', '.webm'].includes(extension);
 }
 
 export function isTextPreviewableArtifact(artifact: Artifact): boolean {

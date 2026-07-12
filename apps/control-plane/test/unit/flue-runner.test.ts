@@ -761,7 +761,7 @@ describe('FlueRunner', () => {
     }
   });
 
-  it('rejects non-browser-playable video artifacts as type video', async () => {
+  it('accepts WebM and rejects non-browser-playable video artifacts as type video', async () => {
     const store = new MemoryStore();
     const eventsService = new EventService(store);
     const artifacts = new ArtifactService(
@@ -781,7 +781,9 @@ describe('FlueRunner', () => {
       context: {},
     });
     const sandbox = createFilesystemSandbox('session-1');
-    await sandbox.fs!.writeFile('/workspace/small-video.avi', 'fake avi');
+    await sandbox.fs!.writeFile('/workspace/demo.webm', 'fake webm');
+    await sandbox.fs!.writeFile('/workspace/demo-without-mime.webm', 'fake webm');
+    await sandbox.fs!.writeFile('/workspace/small-video.mkv', 'fake mkv');
     const tool = createArtifactTool({
       artifacts,
       sandbox,
@@ -794,12 +796,31 @@ describe('FlueRunner', () => {
     await expect(
       tool.execute({
         action: 'create',
-        path: '/workspace/small-video.avi',
+        path: '/workspace/demo.webm',
         type: 'video',
-        title: 'Small AVI video',
-        contentType: 'video/x-msvideo',
+        title: 'Browser demo',
+        contentType: 'video/webm',
       }),
-    ).rejects.toThrow('type=video requires a browser-playable MP4 file');
+    ).resolves.toBeDefined();
+
+    await expect(
+      tool.execute({
+        action: 'create',
+        path: '/workspace/demo-without-mime.webm',
+        type: 'video',
+        title: 'Browser demo without MIME',
+      }),
+    ).resolves.toBeDefined();
+
+    await expect(
+      tool.execute({
+        action: 'create',
+        path: '/workspace/small-video.mkv',
+        type: 'video',
+        title: 'Small MKV video',
+        contentType: 'video/x-matroska',
+      }),
+    ).rejects.toThrow('type=video requires a browser-playable MP4, M4V, or WebM file');
   });
 
   it('restores persisted Flue session state after abort', async () => {

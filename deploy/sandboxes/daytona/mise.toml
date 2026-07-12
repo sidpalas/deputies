@@ -15,7 +15,7 @@ docker buildx build \
   --provenance=false \
   --sbom=false \
   -f Dockerfile \
-  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1} \
+  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1-ffmpeg6} \
   --load \
   ../../..
 """
@@ -37,7 +37,7 @@ docker buildx build \
   --provenance=false \
   --sbom=false \
   -f Dockerfile \
-  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1-2} \
+  -t ${DAYTONA_IMAGE:-ghcr.io/sidpalas/deputies-daytona-sandbox:ubuntu24-node24-pg16-playwright1.59.1-ffmpeg6} \
   --push \
   ../../..
 """
