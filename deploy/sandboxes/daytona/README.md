@@ -15,6 +15,8 @@ If your Daytona target supports privileged Docker, `deploy/local/docker-compose.
 - Playwright Chromium, its video helper, Linux browser dependencies, and the `deputies-record` demo CLI
 - System ffmpeg for MP4 transcoding and media inspection
 - Baseline DejaVu, Liberation, Noto, and Noto Color Emoji fonts with fontconfig
+- `agent-browser` for stateful interactive verification using the bundled Chromium
+- `tini` as PID 1 so idle browser daemons are reaped cleanly
 - Postgres and PostgreSQL client tools installed explicitly
 - Git, Git LFS, SSH, jq, rsync, and zsh
 

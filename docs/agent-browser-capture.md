@@ -8,6 +8,7 @@ Use the recorder helper when it is installed:
 
 ```sh
 command -v deputies-record
+command -v agent-browser
 command -v ffmpeg
 test -d "${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}"
 ```
@@ -17,6 +18,41 @@ If Chromium is unavailable, do not fail the run over capture. Use any available 
 ## Start The App
 
 Prefer built assets and a preview server over a dev server while recording. This avoids the long-running esbuild process being OOM-killed under sandbox memory pressure. Target the app's loopback URL directly.
+
+## Verify Interactively
+
+When `agent-browser` is installed, use it to confirm the flow before writing the polished recording scenario. Deputies injects a run-specific session name into the agent guidance; include that same `--session` value on every command so concurrent runs remain isolated.
+
+```sh
+agent-browser --session deputies-<run-id> open http://127.0.0.1:5173
+agent-browser --session deputies-<run-id> set viewport 1440 900
+agent-browser --session deputies-<run-id> wait '#app'
+agent-browser --session deputies-<run-id> snapshot -i -c
+agent-browser --session deputies-<run-id> click @e1
+agent-browser --session deputies-<run-id> wait --text 'Complete'
+agent-browser --session deputies-<run-id> screenshot /workspace/verified.png
+```
+
+Use the sandbox `read` tool on the screenshot; a path printed by the CLI is not visual verification. Use `batch --bail` for consecutive commands that do not require inspecting an intermediate snapshot, especially on remote sandboxes:
+
+```sh
+agent-browser --session deputies-<run-id> batch --bail \
+  'set viewport 1440 900' \
+  'wait --text "Ready"' \
+  'screenshot /workspace/ready.png'
+```
+
+For SPAs, wait for an expected selector, text, URL, or JavaScript readiness condition. Avoid fixed sleeps. `wait --load networkidle` is inappropriate when the application keeps WebSockets or polling requests open. Element refs come from the latest snapshot and may become stale after navigation or major DOM updates; take another snapshot before continuing.
+
+After interactions that can open a popup or `target=_blank`, run `agent-browser --session deputies-<run-id> tab` and explicitly select the new tab by its stable `t<N>` identifier. Close the browser after verification:
+
+```sh
+agent-browser --session deputies-<run-id> close
+```
+
+The image configures a two-minute idle timeout as a cleanup backstop. Sandbox teardown remains the final cleanup guarantee. By default the CLI uses the image's Playwright Chromium through `AGENT_BROWSER_EXECUTABLE_PATH`; operators can override that variable or use `--cdp <url>` to target another compatible browser endpoint.
+
+Do not drive a long demo click-by-click with `agent-browser`. Once the workflow is correct, encode it as a deterministic `deputies-record` scenario.
 
 ## Verify Fonts
 

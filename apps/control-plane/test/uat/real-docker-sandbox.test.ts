@@ -74,6 +74,50 @@ describe.skipIf(!enabled)('real Docker sandbox UAT', () => {
 
     await waitForPreview(preview.targetUrl, preview.targetHeaders, 'preview ok');
   }, 60_000);
+
+  it('verifies a browser flow and reads its screenshot through the sandbox', async () => {
+    await requireDockerImage(image);
+    const lifecycle = new SandboxLifecycleService(store, provider);
+    const { record, sandbox } = await lifecycle.ensure(sessionId);
+    sandboxRecord = record;
+    const page = `data:text/html;base64,${Buffer.from(
+      '<title>Browser UAT</title><h1 id="status">Ready</h1><button onclick="document.querySelector(\'#status\').textContent=\'Complete\'">Continue</button>',
+    ).toString('base64')}`;
+
+    await expect(
+      sandbox.exec({
+        command: `agent-browser --session docker-uat open '${page}'`,
+        cwd: sandbox.workspacePath,
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    await expect(
+      sandbox.exec({
+        command:
+          'agent-browser --session docker-uat batch --bail "set viewport 1440 900" "wait --text Ready" "snapshot -i -c"',
+        cwd: sandbox.workspacePath,
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toMatchObject({ exitCode: 0, stdout: expect.stringContaining('Continue') });
+    await expect(
+      sandbox.exec({
+        command:
+          'agent-browser --session docker-uat click @e2 && agent-browser --session docker-uat wait --text Complete && agent-browser --session docker-uat screenshot /workspace/docker-browser-uat.png',
+        cwd: sandbox.workspacePath,
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    const screenshot = await sandbox.fs?.readFileBuffer('docker-browser-uat.png');
+    expect(screenshot && Buffer.from(screenshot).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    await expect(
+      sandbox.exec({
+        command: 'agent-browser --session docker-uat close',
+        cwd: sandbox.workspacePath,
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+  }, 60_000);
 });
 
 class MemorySandboxStore implements SandboxStore {

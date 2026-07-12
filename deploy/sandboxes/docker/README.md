@@ -12,6 +12,8 @@ It intentionally mirrors the Daytona sandbox tooling so agent tasks see a simila
 - Playwright Chromium, its video helper, Linux browser dependencies, and the `deputies-record` demo CLI
 - System ffmpeg for MP4 transcoding and media inspection
 - Baseline DejaVu, Liberation, Noto, and Noto Color Emoji fonts with fontconfig
+- `agent-browser` for stateful interactive verification using the bundled Chromium
+- `tini` as PID 1 so idle browser daemons are reaped cleanly
 - Git, Git LFS, SSH, jq, rsync, zsh, vim, and sudo
 
 The shared base leaves Postgres and Playwright out by default. This Docker-provider example image includes both because this repo's full checks need database and browser test support. Derivative images may remove or replace them if their workload does not need them.

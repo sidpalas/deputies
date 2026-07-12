@@ -12,6 +12,8 @@ Browser-enabled sandbox images bundle operating-system packages distributed by U
 
 The images also redistribute Playwright's standalone ffmpeg helper revision 1011 from `https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1011/`. This helper is used internally by Playwright video recording, is distributed under LGPL 2.1, and includes its upstream `COPYING.LGPLv2.1` file in `/ms-playwright/ffmpeg-1011/`.
 
+Browser-enabled images redistribute the standalone `agent-browser` binary from Vercel Labs, version 0.31.1, from `https://github.com/vercel-labs/agent-browser`. It is distributed under the Apache License 2.0 and is used as an unmodified subprocess for interactive browser verification.
+
 ## Referenced Prior Art
 
 ### Junior
