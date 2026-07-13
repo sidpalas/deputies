@@ -62,6 +62,23 @@ If copying material from Mistle:
 - Include the MIT License text with redistributed copied material.
 - Do not imply upstream endorsement.
 
+### Centaur
+
+- Upstream repository: https://github.com/paradigmxyz/centaur
+- License: Apache License 2.0 OR MIT License, at the user's option
+- Upstream commit reviewed: `3c6e84d97bcac83947d38bd0fc4a6b07b8a83ce6`
+- Copyright notice observed: none in the root license file
+- Current use in this repository: design comparison and summarized patterns in `docs/prior-art.md`
+
+If copying material from Centaur:
+
+- Choose and comply with one of the offered licenses.
+- Preserve existing copyright notices and license headers.
+- Include the selected license text with redistributed copied material.
+- Preserve upstream `NOTICE` contents if a future upstream version includes a `NOTICE` file and Apache-2.0 is selected.
+- Mark significant changes to copied Apache-2.0-licensed files where appropriate.
+- Do not imply upstream endorsement.
+
 ## Excluded Source-Available Material
 
 The following source-available material must not be used as open source prior art for Deputies implementation work:

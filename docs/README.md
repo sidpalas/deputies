@@ -20,7 +20,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Development Tasks](./development-tasks.md): where to put `package.json` scripts versus `mise` tasks in this monorepo.
 - [Deployment](./deployment.md): provider-agnostic deployment topology, env vars, integrations, sandbox providers, and operations checklist.
 - [Testing Strategy](./testing-strategy.md): unit, integration, e2e, UAT, adversarial, prompt/context, and emulator-backed tests.
-- [Prior Art](./prior-art.md): comparison with Open-Inspect/background-agents, Open SWE, Junior, and Mistle, plus non-open-source hosted-agent references.
+- [Prior Art](./prior-art.md): comparison with Open-Inspect/background-agents, Open SWE, Junior, Mistle, and Centaur, plus non-open-source hosted-agent references.
 - [Roadmap](./roadmap.md): phased implementation sequence and acceptance criteria.
 - [Product Documentation](./product/): PRDs, technical specs, research notes, and durable product decisions.
 - [Third Party Notices](../THIRD_PARTY_NOTICES.md): license and attribution checkpoint for referenced prior-art projects.
@@ -55,12 +55,13 @@ The implementation should combine the strongest portable ideas from the referenc
 Open-Inspect-style durable sessions/events/artifacts
 + Open SWE-style source normalization/follow-up/token patterns
 + Mistle-style runtime plans/credential brokering/lifecycle workflows
++ Centaur-style lease-fenced adoption/replay/delivery recovery
 + Pi runner adapter
 + portable Node/Postgres deployment model
 + provider-neutral sandbox interface
 ```
 
-This means product state lives in our Postgres-backed control plane, Pi runner behavior is isolated behind `runner-pi`, external systems normalize into source-specific message context, sandbox/run launch plans stay explicit, and sandbox providers plug in through a stable interface; a shared provider conformance test suite is planned. Cloud/provider-specific capabilities such as snapshots, stop/start, WebSocket bridges, gateway-mediated egress, or object storage are optional optimizations rather than correctness requirements.
+This means product state lives in our Postgres-backed control plane, Pi runner behavior is isolated behind `runner-pi`, external systems normalize into source-specific message context, sandbox/run launch plans stay explicit, and sandbox providers plug in through a stable interface; a shared provider conformance test suite is planned. Recoverable providers may add lease-fenced replay and reattachment, but fail-and-retry remains the honest fallback. Cloud/provider-specific capabilities such as snapshots, stop/start, WebSocket bridges, gateway-mediated egress, recoverable process output, or object storage are optional optimizations rather than correctness requirements.
 
 ## Runner Direction
 

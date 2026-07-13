@@ -1,11 +1,12 @@
-# Prior Art: Open-Inspect, Open SWE, Junior, And Mistle
+# Prior Art: Open-Inspect, Open SWE, Junior, Mistle, And Centaur
 
-This document compares the portable Deputies background-agent design with four reference systems:
+This document compares the portable Deputies background-agent design with five reference systems:
 
 - `background-agents`, also referred to as Open-Inspect in its docs.
 - `open-swe-`, the LangGraph/Deep Agents implementation.
 - `junior`, an open source Slack bot agent project with plugin, skill, sandbox, eval, and telemetry patterns.
 - `mistle`, an open source background-agent platform with sandbox profiles, runtime plans, control/data-plane services, credential brokering, tunnels, and triggers.
+- `centaur`, an open source team-agent platform with durable executions, replayable output, sandbox ownership leases, restart adoption, workflows, and recoverable Slack delivery.
 
 The goal is not to copy any system directly. The goal is to identify durable patterns that fit a portable, provider-neutral implementation.
 
@@ -13,18 +14,18 @@ See [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) before copying impl
 
 ## Summary Comparison
 
-| Area                | This Design                                          | Open-Inspect / background-agents                    | Open SWE                                          | Junior                                           | Mistle                                                      |
-| ------------------- | ---------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
-| Harness             | Pi behind runner adapter                             | OpenCode in sandbox runtime                         | Deep Agents / LangGraph                           | Pi agent core behind Slack runtime               | Codex/OpenCode/Pi behind `sandboxd` runtime adapters        |
-| Control plane       | Portable Node service + Postgres                     | Cloudflare Workers + Durable Objects + D1/KV        | LangGraph server/webapp + thread metadata/store   | Hono/Nitro request runtime + Redis/memory state  | Dashboard + control-plane and data-plane services           |
-| Deployment target   | Railway, ECS, Kubernetes, local                      | Cloudflare + Modal/Daytona                          | LangSmith/LangGraph oriented, pluggable sandboxes | Vercel/serverless-oriented app shell             | Local Docker Compose, Docker/E2B, self-hosting roadmap      |
-| Session state       | Postgres tables                                      | Durable Object SQLite per session + D1 shared state | LangGraph thread state and metadata               | Conversation state adapter + turn checkpoints    | Control/data-plane DB records + active runtime plan         |
-| Queueing            | Postgres messages + leases                           | DO-local message queue                              | LangGraph store queue for busy threads            | Thread locks, timeout resume, pending auth state | OpenWorkflow durable workflows + idempotency keys           |
-| Events              | Append-only Postgres event log + SSE                 | DO event table + WebSocket fanout                   | Agent/tool stream plus source replies             | Slack-visible replies/status + structured evals  | Lifecycle telemetry + tunnel/runtime stream routing         |
-| Sandbox abstraction | Provider interface + capabilities                    | Provider lifecycle manager for Modal/Daytona        | Sandbox backend protocol selected by env          | Sandbox executor + dependency snapshot profiles  | Sandbox profile + compiled runtime plan + provider adapters |
-| Runtime bridge      | Optional, provider-dependent                         | Required sandbox bridge/supervisor                  | Provider-specific backend wrappers                | Tool wrapper + sandbox executor facade           | `sandboxd`, gateway tunnel, and runtime-specific proxies    |
-| Integrations        | Thin adapters with source-specific normalized inputs | Slack/GitHub/Linear bots call control plane         | Webhooks normalize into LangGraph thread IDs      | Rich Slack routing, outbound, OAuth contracts    | Definition registry, bindings, managed egress, triggers     |
-| Testing             | Agent-first layered tests + emulate                  | Strong production code, infra-specific tests/docs   | Python tests around utility/webhook behavior      | MSW Slack tests + rubric evals                   | Strict schema validation, CI, system/test harness packages  |
+| Area                | This Design                                          | Open-Inspect / background-agents                    | Open SWE                                          | Junior                                           | Mistle                                                      | Centaur                                                   |
+| ------------------- | ---------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------- |
+| Harness             | Pi behind runner adapter                             | OpenCode in sandbox runtime                         | Deep Agents / LangGraph                           | Pi agent core behind Slack runtime               | Codex/OpenCode/Pi behind `sandboxd` runtime adapters        | Codex-compatible adapters for Amp, Claude Code, and Codex |
+| Control plane       | Portable Node service + Postgres                     | Cloudflare Workers + Durable Objects + D1/KV        | LangGraph server/webapp + thread metadata/store   | Hono/Nitro request runtime + Redis/memory state  | Dashboard + control-plane and data-plane services           | Rust services + Postgres                                  |
+| Deployment target   | Railway, ECS, Kubernetes, local                      | Cloudflare + Modal/Daytona                          | LangSmith/LangGraph oriented, pluggable sandboxes | Vercel/serverless-oriented app shell             | Local Docker Compose, Docker/E2B, self-hosting roadmap      | Kubernetes, with k3s for local development                |
+| Session state       | Postgres tables                                      | Durable Object SQLite per session + D1 shared state | LangGraph thread state and metadata               | Conversation state adapter + turn checkpoints    | Control/data-plane DB records + active runtime plan         | Postgres sessions, messages, executions, and events       |
+| Queueing            | Postgres messages + leases                           | DO-local message queue                              | LangGraph store queue for busy threads            | Thread locks, timeout resume, pending auth state | OpenWorkflow durable workflows + idempotency keys           | Execution claims/leases + durable workflow engine         |
+| Events              | Append-only Postgres event log + SSE                 | DO event table + WebSocket fanout                   | Agent/tool stream plus source replies             | Slack-visible replies/status + structured evals  | Lifecycle telemetry + tunnel/runtime stream routing         | Cursor replay + Postgres notification/polling + SSE       |
+| Sandbox abstraction | Provider interface + capabilities                    | Provider lifecycle manager for Modal/Daytona        | Sandbox backend protocol selected by env          | Sandbox executor + dependency snapshot profiles  | Sandbox profile + compiled runtime plan + provider adapters | Backend interface + desired/observed lifecycle manager    |
+| Runtime bridge      | Optional, provider-dependent                         | Required sandbox bridge/supervisor                  | Provider-specific backend wrappers                | Tool wrapper + sandbox executor facade           | `sandboxd`, gateway tunnel, and runtime-specific proxies    | Stdio harness protocol + recoverable recorded output      |
+| Integrations        | Thin adapters with source-specific normalized inputs | Slack/GitHub/Linear bots call control plane         | Webhooks normalize into LangGraph thread IDs      | Rich Slack routing, outbound, OAuth contracts    | Definition registry, bindings, managed egress, triggers     | Slack/API clients + separately recoverable delivery state |
+| Testing             | Agent-first layered tests + emulate                  | Strong production code, infra-specific tests/docs   | Python tests around utility/webhook behavior      | MSW Slack tests + rubric evals                   | Strict schema validation, CI, system/test harness packages  | Fake harness, DB recovery, and sandbox contract tests     |
 
 ## Non-Open-Source References
 
@@ -635,11 +636,149 @@ Avoid:
 - Building runtime-client and agent-runtime registries unless multiple runtimes become a real product requirement.
 - Making Mistle's runtime architecture the product state model.
 
-## Additional Pattern To Adopt From All Four
+## What We Should Adopt From Centaur
+
+Centaur is most useful as prior art for recovering in-flight agent work and external delivery after a control-plane restart. Its Rust/Postgres control plane keeps chat clients thin, stores execution output durably, and can adopt work previously owned by another replica. Deputies should adopt those semantics where its runner and sandbox providers can support them, not Centaur's Kubernetes-first stack or multi-harness implementation.
+
+### 1. Lease-Fenced Execution Adoption
+
+Centaur gives stdout consumption a renewable database lease. On restart, an adoption loop claims expired ownership, replays recorded output, terminalizes work when replay contains completion, or reattaches to a still-running sandbox. Graceful shutdown first fences new claims and then releases unfinished work for another replica.
+
+Deputies already has renewable run leases and fences terminal run updates by `leaseOwner`, but stale runs are currently failed rather than adopted. Extend this only behind explicit runner/provider capabilities:
+
+- Persist the native execution id and last consumed output cursor when the runtime exposes them.
+- Require current lease ownership for output appends and terminal writes.
+- Replay recorded output before attaching to a live stream so restart gaps are not lost.
+- Attempt adoption before declaring a stale run failed when the sandbox reports a recoverable execution.
+- Fence new claims during graceful worker shutdown, then release or expire remaining leases for peers.
+- Keep fail-and-retry as the honest fallback for providers or runners that cannot reattach.
+
+Do not pretend Pi or a provider supports resumable process I/O when it does not. This is a capability-driven recovery tier, not a new baseline correctness dependency.
+
+### 2. Desired And Observed Sandbox State
+
+Centaur separates sandbox policy from backend mechanics and treats readiness as more than process existence. Its Kubernetes backend checks pod readiness, its manager reconciles desired and observed state, and its cleanup path requires an unreferenced sandbox to be observed in two consecutive sweeps before deletion.
+
+Adopt:
+
+- Keep lifecycle policy in `SandboxLifecycleService` and provider mechanics behind `SandboxProvider`.
+- Distinguish provider existence, process running, and agent-attachable readiness where providers expose that detail.
+- Add a recoverable-output capability separately from generic exec/stream support.
+- Use two-pass orphan confirmation before deleting provider resources that no durable sandbox record references.
+- Keep stop-before-destroy retention for known idle sandboxes; orphan hysteresis addresses a different race.
+
+### 3. Durable Delivery Obligations
+
+Centaur's Slack client treats execution completion and terminal Slack rendering as separate recoverable obligations. It stores the last event cursor, retries delivery independently, and repairs terminal executions that were never rendered after restart.
+
+Deputies already has the right core boundary in `callback_deliveries`. Preserve and extend it rather than moving delivery into the runner:
+
+- A terminal run must not imply successful Slack, GitHub, or generic callback delivery.
+- Delivery claims, attempts, errors, and terminal status remain durable and independently replayable.
+- Streaming integrations should persist their last consumed product-event cursor when incremental rendering is added.
+- Startup recovery should find terminal runs with pending or missing required delivery obligations without rerunning the agent.
+- Platform idempotency keys should be stable across delivery retries where the external API supports them.
+
+### 4. Semantic Runtime Events And Fake Harnesses
+
+Centaur adapts Amp, Claude Code, and Codex to one thread/turn/tool event protocol and tests the adapters against fake native harnesses that cover deltas, final-only output, interrupts, multi-turn reuse, and subagent events.
+
+Deputies should preserve Pi as the only real runner while adopting the test shape:
+
+- Normalize semantic product events at `runner-pi`; do not expose Pi's raw stream as the public event contract.
+- Test delta ordering, final-only responses, tool start/completion, cancellation, malformed output, and multi-turn continuation with deterministic fake runtime streams.
+- Contract-test the same normalized event sequence through persistence and SSE replay.
+- Add another real runner only after a product requirement justifies the compatibility surface.
+
+### 5. Low-Cardinality Operational Telemetry
+
+Centaur labels HTTP metrics with matched route templates instead of raw paths, normalizes execution/sandbox outcome labels, and enriches structured logs with trace and span identifiers.
+
+Adopt alongside Junior's agent-readable telemetry guidance:
+
+- Use route templates, provider names, runner types, lifecycle states, and bounded outcome codes as metric dimensions.
+- Keep session, run, sandbox, and external-thread ids in trace/log correlation fields, not metric labels.
+- Measure queue delay, execution duration, first product event, callback delay, sandbox startup, lease loss, and adoption outcome.
+- Use standard OpenTelemetry exporters rather than custom process-lifetime dedupe state.
+
+### 6. Protocol-Only Extension Workers
+
+Centaur's workflow split has the right intended ownership: the durable engine owns leases, retries, waits, checkpoints, cancellation, and terminal state, while Python handlers communicate over NDJSON and execute user logic.
+
+If Deputies later supports user-defined workflow runtimes:
+
+- Keep orchestration durability in the trusted control plane.
+- Give extension workers a narrow versioned protocol, not direct access to the product database.
+- Reject unsupported retry, timeout, or cancellation options instead of silently ignoring them.
+- Reserve stdout for protocol frames and route logs through a separate bounded channel.
+
+## What We Should Avoid From Centaur
+
+### 1. Network Reachability As Authorization
+
+Centaur's core session and admin routes appear to be mounted without the authentication middleware used by its MCP and file-proxy routes, despite clients sending bearer credentials. Kubernetes NetworkPolicy narrows reachability but does not authenticate a principal or authorize a resource.
+
+Deputies must preserve fail-closed API startup and resource-boundary authorization:
+
+- Authenticate every non-health route.
+- Authorize the principal against the specific session, run, sandbox, artifact, workflow, or tool.
+- Treat network policy as defense in depth only.
+- Keep access-group checks in service/store boundaries that cannot be bypassed by another transport.
+
+### 2. Non-Atomic Terminal State And Events
+
+Centaur commits terminal execution state, session state, and terminal events in separate database operations. A crash can leave a completed execution without the event that closes an execution-scoped stream.
+
+Deputies currently has a similar gap: `completeRunBatch`, `failRunBatch`, and `finalizeRunCancellation` commit terminal run/message state before `WorkerService` appends terminal product events. Correct this rather than treating Centaur as validation of the current shape:
+
+- Commit terminal run/message state and required terminal events in one store transaction.
+- Create or activate required callback-delivery obligations in that transaction when they are not already durable.
+- Allocate event sequences under the same transaction and publish/wake stream readers only after commit.
+- Add crash-point integration tests proving terminal rows cannot exist without their terminal events.
+
+### 3. Fail-Open Sandbox Capabilities
+
+Centaur's fallback capability profile enables repository-cache, API, and observability access; missing tool allowlists can expose all installed tools; generic proxy egress is open by default.
+
+Avoid:
+
+- Treating absent policy as permission.
+- Installing or exposing every discovered tool when no allowlist is configured.
+- Giving sandboxes control-plane API or observability access by default.
+- Allowing broad outbound hosts merely because credentials are injected by a proxy.
+
+Deputies launch plans should resolve explicit grants and fail closed when policy cannot be loaded.
+
+### 4. Privileged Extension Hosts And Unsafe Tool Transport
+
+Centaur's Python workflow compatibility host can connect directly to the primary Postgres database. Tool shims pass structured payloads in process arguments, telemetry records command arguments, and captured output is not clearly bounded.
+
+Avoid:
+
+- Direct extension-worker access to product tables.
+- Secrets or tool payloads in process arguments.
+- Raw argument logging.
+- Unbounded subprocess output in model-visible context.
+- Heuristic source parsing as the authoritative tool schema.
+
+Use explicit schemas, stdin or authenticated local RPC for payloads, output limits, redaction, and narrow control-plane operations.
+
+### 5. Kubernetes And Multi-Harness Breadth As Requirements
+
+Centaur's Kubernetes sandbox model, custom harness protocol, proxy, workflow engine, and multiple native harness adapters are substantial operational commitments.
+
+Avoid:
+
+- Requiring Kubernetes for local or production Deputies deployments.
+- Replacing the small runner/provider interfaces with a platform-wide runtime protocol before a second runner exists.
+- Assuming image-level `USER` declarations replace provider-enforced container security settings.
+- Counting opt-in or silently skipped database/provider tests as required recovery coverage.
+
+## Additional Pattern To Adopt From All Five
 
 ### Normalize Early, Specialize Late
 
-All four systems work best where external inputs are normalized before hitting the agent.
+All five systems work best where external inputs are normalized before hitting the agent.
 
 Adopt:
 
@@ -651,7 +790,7 @@ This keeps integrations simple and makes tests easier.
 
 ### Design For Resumption
 
-All four systems assume agent work may outlive the request that started it.
+All five systems assume agent work may outlive the request that started it.
 
 Adopt:
 
@@ -664,7 +803,7 @@ Adopt:
 
 ### Make Sandbox State Observable
 
-All four systems benefit from visible sandbox lifecycle state, even when the exact delivery mechanism differs.
+All five systems benefit from visible sandbox lifecycle state, even when the exact delivery mechanism differs.
 
 Adopt event types for:
 
@@ -685,6 +824,8 @@ Junior remains a useful reference model for Slack-specific product contracts: ex
 
 Mistle is the strongest open source reference for a full hosted-agent platform: compiled runtime plans, credential brokering through managed egress, optional sandbox daemons, provider adapters, durable data-plane startup workflows, trigger delivery routes, and reconnectable runtime surfaces. Deputies should adopt these as boundary and lifecycle patterns while staying smaller, portable, and runner-adapter-centered.
 
+Centaur is the strongest reference for in-flight execution recovery: lease-fenced output ownership, replay-before-reattach, restart adoption, desired/observed sandbox reconciliation, recoverable external delivery, semantic harness tests, and low-cardinality telemetry. Deputies should use these patterns to harden its existing leases, callbacks, sandbox lifecycle, and event contracts while correcting the terminal-state/event transaction gap and preserving fail-closed authorization and capabilities.
+
 Use Pi as the real-agent runtime boundary, not as the entire product state model. Pi should own conversation mechanics, tools, subagents, live runtime events, and sandbox interaction. The product should own durable background-work semantics, integrations, replayable product events, artifacts, queueing, leases, and operational state.
 
 The resulting design is:
@@ -694,6 +835,7 @@ Open-Inspect-style durable sessions/events/artifacts
 + Open SWE-style source normalization/follow-up/token handling
 + Junior-style Slack contracts/plugin manifest/eval/telemetry ideas
 + Mistle-style runtime plans/credential brokering/lifecycle workflows
++ Centaur-style lease-fenced adoption/replay/delivery recovery
 + Pi runner adapter
 + portable Postgres/Node deployment model
 + provider-neutral sandbox interface
