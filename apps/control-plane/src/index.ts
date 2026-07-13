@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { AppLifecycle, installProcessShutdownHandlers, type CloseableResource } from './app/lifecycle.js';
-import { configuredModels } from './app/model-availability.js';
 import { createServer, createServices, createWorkerHealthServer } from './app/server.js';
 import { createArtifactObjectStorage } from './artifacts/storage.js';
 import { HttpCompletionCallbackSender, type CompletionCallbackSender } from './callbacks/service.js';
@@ -32,10 +31,6 @@ import { SlackCompletionCallbackSender } from './integrations/slack/callback-sen
 import { SlackRunProgressNotifier } from './integrations/slack/progress-notifier.js';
 import { FakeRunner } from './runner/fake.js';
 import type { Runner } from './runner/types.js';
-import { RealFlueAgentFactory, type RealFlueAgentFactoryOptions } from './runner-flue/agent-factory.js';
-import { loadOpenAICodexApiKey } from './runner/openai-codex-auth.js';
-import { FlueRunner } from './runner-flue/runner.js';
-import { PostgresFlueSessionStore } from './runner-flue/session-store.js';
 import { PiRunner, type PiRunnerOptions } from './runner-pi/runner.js';
 import { PostgresPiSessionStore } from './runner-pi/session-store.js';
 import { sandboxBridgeSkippedCookieNames } from './sandbox/bridge-env.js';
@@ -388,97 +383,41 @@ async function createRunner(): Promise<Runner> {
 
   const model = requireRunnerModelDefault(config);
   const deputy = createDeputyToolServices();
-  if (config.runner === 'pi') {
-    const piOptions: PiRunnerOptions = {
-      model,
-      ...(config.runnerReasoningLevelDefault ? { reasoningLevelDefault: config.runnerReasoningLevelDefault } : {}),
-      ...(config.openaiCodexAuthFile ? { authFile: config.openaiCodexAuthFile } : {}),
-      ...(config.openaiCodexAuthBase64 ? { authBase64: config.openaiCodexAuthBase64 } : {}),
-      modelUnavailableReason: (inputModel: string | undefined) =>
-        services.modelAvailability.unavailableFor(inputModel || model)?.reason,
-      setupScript: repositorySetupScript,
-    };
-    if (artifactObjectStorage) {
-      piOptions.artifacts = services.artifacts;
-      piOptions.artifactToolMaxBytes = config.artifactCreateMaxBytes;
-    }
-    if (webSearch) piOptions.webSearch = webSearch;
-    if (config.mcpServers.length) {
-      piOptions.mcp = {
-        servers: config.mcpServers,
-        connectTimeoutMs: config.mcpConnectTimeoutMs,
-        toolTimeoutMs: config.mcpToolTimeoutMs,
-        toolResultMaxChars: config.mcpToolResultMaxChars,
-        responseMaxBytes: config.mcpResponseMaxBytes,
-      };
-    }
-    if (deputy) piOptions.deputy = deputy;
-    piOptions.repositoryAccess = createRepositoryAccess();
-    piOptions.environments = services.environments;
-    piOptions.externalResources = services.externalResources;
-    if (services.sandboxKeepalive) piOptions.sandboxKeepalive = services.sandboxKeepalive;
-    piOptions.sandboxKeepaliveMaxExtensionMs = config.sandboxKeepaliveMaxExtensionMs;
-    if (config.runnerStateStore === 'postgres') {
-      const sessionStore = new PostgresPiSessionStore(requireDatabaseUrl(config));
-      resources.push(sessionStore);
-      piOptions.sessionStore = sessionStore;
-    }
-    return new PiRunner(piOptions);
-  }
-
-  const options: RealFlueAgentFactoryOptions = {
+  const piOptions: PiRunnerOptions = {
     model,
-  };
-  console.warn('RUNNER=flue is deprecated and will be removed. Use RUNNER=pi for real agent work.');
-  if (configuredModels(config).some((configuredModel) => configuredModel.startsWith('openai-codex/'))) {
-    const codexAuth = {};
-    if (config.openaiCodexAuthFile) Object.assign(codexAuth, { authFile: config.openaiCodexAuthFile });
-    if (config.openaiCodexAuthBase64) Object.assign(codexAuth, { authBase64: config.openaiCodexAuthBase64 });
-    try {
-      const { apiKey } = await loadOpenAICodexApiKey(codexAuth);
-      options.providers = { 'openai-codex': { apiKey } };
-      services.modelAvailability.clearPrefix('openai-codex/');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Codex authentication could not be loaded.';
-      services.modelAvailability.setPrefixUnavailable('openai-codex/', {
-        code: 'openai_codex_auth_unavailable',
-        reason: message,
-        action: 'Re-authenticate Codex, then refresh this page.',
-      });
-      console.error(`OpenAI Codex models unavailable: ${message}`);
-    }
-  }
-  if (config.runnerStateStore === 'postgres') {
-    const sessionStore = new PostgresFlueSessionStore(requireDatabaseUrl(config));
-    resources.push(sessionStore);
-    options.sessionStore = sessionStore;
-  }
-
-  return new FlueRunner(new RealFlueAgentFactory(options), {
-    repositoryAccess: createRepositoryAccess(),
-    environments: services.environments,
-    ...(artifactObjectStorage ? { artifacts: services.artifacts } : {}),
-    ...(webSearch ? { webSearch } : {}),
-    ...(config.mcpServers.length
-      ? {
-          mcp: {
-            servers: config.mcpServers,
-            connectTimeoutMs: config.mcpConnectTimeoutMs,
-            toolTimeoutMs: config.mcpToolTimeoutMs,
-            toolResultMaxChars: config.mcpToolResultMaxChars,
-            responseMaxBytes: config.mcpResponseMaxBytes,
-          },
-        }
-      : {}),
-    ...(deputy ? { deputy } : {}),
-    externalResources: services.externalResources,
-    artifactToolMaxBytes: config.artifactCreateMaxBytes,
-    ...(services.sandboxKeepalive ? { sandboxKeepalive: services.sandboxKeepalive } : {}),
-    sandboxKeepaliveMaxExtensionMs: config.sandboxKeepaliveMaxExtensionMs,
+    ...(config.runnerReasoningLevelDefault ? { reasoningLevelDefault: config.runnerReasoningLevelDefault } : {}),
+    ...(config.openaiCodexAuthFile ? { authFile: config.openaiCodexAuthFile } : {}),
+    ...(config.openaiCodexAuthBase64 ? { authBase64: config.openaiCodexAuthBase64 } : {}),
+    modelUnavailableReason: (inputModel: string | undefined) =>
+      services.modelAvailability.unavailableFor(inputModel || model)?.reason,
     setupScript: repositorySetupScript,
-    modelUnavailableReason: (inputModel) =>
-      services.modelAvailability.unavailableFor(inputModel || config.runnerModelDefault)?.reason,
-  });
+  };
+  if (artifactObjectStorage) {
+    piOptions.artifacts = services.artifacts;
+    piOptions.artifactToolMaxBytes = config.artifactCreateMaxBytes;
+  }
+  if (webSearch) piOptions.webSearch = webSearch;
+  if (config.mcpServers.length) {
+    piOptions.mcp = {
+      servers: config.mcpServers,
+      connectTimeoutMs: config.mcpConnectTimeoutMs,
+      toolTimeoutMs: config.mcpToolTimeoutMs,
+      toolResultMaxChars: config.mcpToolResultMaxChars,
+      responseMaxBytes: config.mcpResponseMaxBytes,
+    };
+  }
+  if (deputy) piOptions.deputy = deputy;
+  piOptions.repositoryAccess = createRepositoryAccess();
+  piOptions.environments = services.environments;
+  piOptions.externalResources = services.externalResources;
+  if (services.sandboxKeepalive) piOptions.sandboxKeepalive = services.sandboxKeepalive;
+  piOptions.sandboxKeepaliveMaxExtensionMs = config.sandboxKeepaliveMaxExtensionMs;
+  if (config.runnerStateStore === 'postgres') {
+    const sessionStore = new PostgresPiSessionStore(requireDatabaseUrl(config));
+    resources.push(sessionStore);
+    piOptions.sessionStore = sessionStore;
+  }
+  return new PiRunner(piOptions);
 }
 
 function createDeputyToolServices(): DeputyToolBaseServices | undefined {

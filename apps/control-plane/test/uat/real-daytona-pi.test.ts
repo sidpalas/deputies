@@ -4,11 +4,11 @@ import { Pool } from 'pg';
 import { runMigrations } from '../../src/db/migrate.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
-const enabled = process.env.RUN_REAL_DAYTONA_FLUE_UAT === 'true';
+const enabled = process.env.RUN_REAL_DAYTONA_PI_UAT === 'true';
 const hasRequiredEnv = Boolean(testDatabaseUrl && process.env.DAYTONA_API_KEY && process.env.RUNNER_MODEL_DEFAULT);
 const uatPort = 4594;
 
-describe.skipIf(!enabled || !hasRequiredEnv)('real Daytona + Flue UAT', () => {
+describe.skipIf(!enabled || !hasRequiredEnv)('real Daytona + Pi UAT', () => {
   let pool: Pool;
   let server: ChildProcess | undefined;
 
@@ -29,7 +29,7 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Daytona + Flue UAT', () => {
         DATABASE_URL: testDatabaseUrl!,
         PORT: String(uatPort),
         RUN_MODE: 'combined',
-        RUNNER: 'flue',
+        RUNNER: 'pi',
         SANDBOX_PROVIDER: 'daytona',
         RUNNER_STATE_STORE: 'postgres',
       },
@@ -50,21 +50,21 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Daytona + Flue UAT', () => {
     await pool.end();
   });
 
-  it('runs a Flue prompt against a real Daytona sandbox', async () => {
-    const createSession = await postJson('/sessions', { title: 'Real Daytona Flue UAT' });
+  it('runs a Pi prompt against a real Daytona sandbox', async () => {
+    const createSession = await postJson('/sessions', { title: 'Real Daytona Pi UAT' });
     expect(createSession.status).toBe(201);
     const { session } = (await createSession.json()) as { session: { id: string } };
 
     const createMessage = await postJson(`/sessions/${session.id}/messages`, {
       prompt:
-        'Use the shell to run: mkdir -p /tmp/flue-uat && printf flue-daytona-uat > /tmp/flue-uat/result.txt && cat /tmp/flue-uat/result.txt. Then reply with the exact output.',
+        'Use the shell to run: mkdir -p /tmp/pi-uat && printf pi-daytona-uat > /tmp/pi-uat/result.txt && cat /tmp/pi-uat/result.txt. Then reply with the exact output.',
     });
     expect(createMessage.status).toBe(202);
 
     await waitForEventCount(session.id, 'message_completed', 1, 180_000);
 
     const followUp = await postJson(`/sessions/${session.id}/messages`, {
-      prompt: 'Use the shell to run: cat /tmp/flue-uat/result.txt. Then reply with the exact output.',
+      prompt: 'Use the shell to run: cat /tmp/pi-uat/result.txt. Then reply with the exact output.',
     });
     expect(followUp.status).toBe(202);
 

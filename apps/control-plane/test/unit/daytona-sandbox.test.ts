@@ -20,7 +20,7 @@ describe('DaytonaSandboxProvider', () => {
       idleTimeoutMs: 900_000,
       resources: { cpu: 2, gpu: 1, memory: 4, disk: 10 },
       envVars: { NODE_ENV: 'test' },
-      labels: { app: 'flue-bg-agents' },
+      labels: { app: 'deputies' },
     });
     const handle = await provider.create({ sessionId: 'session-1', metadata: { owner: 'test' } });
 
@@ -29,7 +29,7 @@ describe('DaytonaSandboxProvider', () => {
       image: 'ubuntu:latest',
       autoStopInterval: 15,
       resources: { cpu: 2, gpu: 1, memory: 4, disk: 10 },
-      labels: { app: 'flue-bg-agents', 'flue-session-id': 'session-1' },
+      labels: { app: 'deputies', 'deputies-session-id': 'session-1' },
     });
     const envVars = (createCalls[0] as { envVars: Record<string, string> }).envVars;
     expect(envVars).toMatchObject({

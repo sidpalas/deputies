@@ -2,22 +2,21 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig, requireRunnerModelDefault } from '../../src/config/index.js';
-import { RealFlueAgentFactory } from '../../src/runner-flue/agent-factory.js';
-import { FlueRunner } from '../../src/runner-flue/runner.js';
 import type { RepositoryAccessProvider } from '../../src/repositories/setup.js';
+import { PiRunner } from '../../src/runner-pi/runner.js';
 import { LocalSandboxProvider } from '../../src/sandbox/local.js';
 import type { SandboxHandle } from '../../src/sandbox/types.js';
 
-const enabled = process.env.RUN_REAL_LOCAL_FLUE_UAT === 'true';
+const enabled = process.env.RUN_REAL_LOCAL_PI_UAT === 'true';
 const hasRequiredEnv = Boolean(process.env.RUNNER_MODEL_DEFAULT);
 
-describe.skipIf(!enabled || !hasRequiredEnv)('real Flue + local sandbox UAT', () => {
+describe.skipIf(!enabled || !hasRequiredEnv)('real Pi + local sandbox UAT', () => {
   let rootDir: string;
   let provider: LocalSandboxProvider;
   let sandbox: SandboxHandle | undefined;
 
   beforeEach(async () => {
-    rootDir = await mkdtemp(join(tmpdir(), 'deputies-real-local-flue-uat-'));
+    rootDir = await mkdtemp(join(tmpdir(), 'deputies-real-local-pi-uat-'));
     provider = new LocalSandboxProvider({ rootDir });
   });
 
@@ -27,19 +26,20 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Flue + local sandbox UAT', ()
     sandbox = undefined;
   });
 
-  it('runs a real Flue prompt with a prepared local git repository', async () => {
+  it('runs a real Pi prompt with a prepared local git repository', async () => {
     const config = loadConfig(process.env);
-    sandbox = await provider.create({ sessionId: 'real-local-flue-uat' });
+    sandbox = await provider.create({ sessionId: 'real-local-pi-uat' });
     const remotePath = await createLocalGitRemote(sandbox);
     const events: unknown[] = [];
 
-    const result = await new FlueRunner(new RealFlueAgentFactory({ model: requireRunnerModelDefault(config) }), {
+    const result = await new PiRunner({
+      model: requireRunnerModelDefault(config),
       repositoryAccess: { github: new LocalGitAccessProvider(remotePath) },
       setupScript: { enabled: true, timeoutMs: config.repositorySetupScriptTimeoutMs },
     }).run({
-      sessionId: 'real-local-flue-uat',
-      runId: 'real-local-flue-uat-run',
-      messageId: 'real-local-flue-uat-message',
+      sessionId: 'real-local-pi-uat',
+      runId: 'real-local-pi-uat-run',
+      messageId: 'real-local-pi-uat-message',
       prompt: 'Use the shell to run `cat README.md`, then reply with the exact file contents only.',
       context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
       sandbox,
@@ -48,7 +48,7 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Flue + local sandbox UAT', ()
       },
     });
 
-    expect(result.text).toContain('LOCAL_FLUE_UAT_OK');
+    expect(result.text).toContain('LOCAL_PI_UAT_OK');
     expect(JSON.stringify(events)).not.toContain('ghs_secret_token');
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -57,12 +57,12 @@ describe.skipIf(!enabled || !hasRequiredEnv)('real Flue + local sandbox UAT', ()
           provider: 'github',
           owner: 'manaflow-ai',
           repo: 'manaflow',
-          workspacePath: `${sandbox.workspacePath}/manaflow`,
+          workspacePath: `${sandbox.workspacePath}/manaflow-ai/manaflow`,
         }),
       }),
     );
     expect(events).toContainEqual(expect.objectContaining({ type: 'setup_script_finished' }));
-    await expect(sandbox.fs?.readFile('manaflow-ai/manaflow/README.md')).resolves.toBe('LOCAL_FLUE_UAT_OK\n');
+    await expect(sandbox.fs?.readFile('manaflow-ai/manaflow/README.md')).resolves.toBe('LOCAL_PI_UAT_OK\n');
     await expect(sandbox.fs?.readFile('manaflow-ai/manaflow/.setup-ran')).resolves.toBe('');
   }, 180_000);
 });
@@ -76,7 +76,7 @@ async function createLocalGitRemote(sandbox: SandboxHandle): Promise<string> {
       'git init seed',
       "git -C seed config user.name 'Test User'",
       "git -C seed config user.email 'test@example.com'",
-      "printf 'LOCAL_FLUE_UAT_OK\\n' > seed/README.md",
+      "printf 'LOCAL_PI_UAT_OK\\n' > seed/README.md",
       'mkdir -p seed/.agents',
       "printf '#!/usr/bin/env bash\\nset -eu\\ntouch .setup-ran\\n' > seed/.agents/setup",
       'chmod +x seed/.agents/setup',

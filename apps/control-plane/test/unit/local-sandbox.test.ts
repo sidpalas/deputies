@@ -1,12 +1,9 @@
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FlueRunner } from '../../src/runner-flue/runner.js';
-import type { FlueAgentFactory } from '../../src/runner-flue/types.js';
 import { prepareRepositoryShellSetup, type RepositoryAccessProvider } from '../../src/repositories/setup.js';
 import { LocalSandboxProvider } from '../../src/sandbox/local.js';
-import type { SandboxExecInput, SandboxHandle } from '../../src/sandbox/types.js';
-import type { NormalizedEvent } from '../../src/events/types.js';
+import type { SandboxHandle } from '../../src/sandbox/types.js';
 
 describe('LocalSandboxProvider', () => {
   let rootDir: string;
@@ -147,68 +144,6 @@ describe('LocalSandboxProvider', () => {
     ).resolves.toMatchObject({ stdout: `${remotePath}\n` });
     expect(`${result.stdout}\n${result.stderr}`).not.toContain('ghs_secret_token');
   });
-
-  it('runs FlueRunner startup repository setup through local sandbox shell', async () => {
-    const provider = new LocalSandboxProvider({ rootDir });
-    const sandbox = await provider.create({ sessionId: 'session-1' });
-    const remotePath = await createLocalGitRemote(sandbox);
-    const events: NormalizedEvent[] = [];
-    const calls: Parameters<FlueAgentFactory['create']>[0][] = [];
-    const abort = new AbortController();
-    const factory: FlueAgentFactory = {
-      async create(input) {
-        calls.push(input);
-        return {
-          async shell(command, options) {
-            return input.sandbox.exec(shellInput(command, options));
-          },
-          async session() {
-            return {
-              async shell(command, options) {
-                expect(options?.signal).toBe(abort.signal);
-                return input.sandbox.exec(shellInput(command, options));
-              },
-              async prompt() {
-                const readme = await input.sandbox.fs?.readFile('manaflow-ai/manaflow/README.md');
-                return { text: `readme: ${readme?.trim()}` };
-              },
-              abort() {},
-            };
-          },
-        };
-      },
-    };
-
-    const result = await new FlueRunner(factory, {
-      repositoryAccess: { github: new LocalGitAccessProvider(remotePath) },
-    }).run({
-      sessionId: 'session-1',
-      runId: 'run-1',
-      messageId: 'message-1',
-      prompt: 'inspect repo',
-      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
-      sandbox,
-      signal: abort.signal,
-      emit: async (event) => {
-        events.push(event);
-      },
-    });
-
-    expect(calls[0]).toMatchObject({ cwd: `${sandbox.workspacePath}/manaflow-ai/manaflow` });
-    expect(result.text).toBe('readme: hello local git');
-    expect(events.map((event) => event.type)).toEqual([
-      'run_started',
-      'repository_ready',
-      'agent_text_delta',
-      'run_completed',
-    ]);
-    expect(events[1]?.payload).toMatchObject({
-      owner: 'manaflow-ai',
-      repo: 'manaflow',
-      workspacePath: `${sandbox.workspacePath}/manaflow-ai/manaflow`,
-    });
-    await expect(sandbox.fs?.readFile('manaflow-ai/manaflow/README.md')).resolves.toBe('hello local git\n');
-  });
 });
 
 async function createLocalGitRemote(sandbox: SandboxHandle): Promise<string> {
@@ -231,18 +166,6 @@ async function createLocalGitRemote(sandbox: SandboxHandle): Promise<string> {
   });
   if (result.exitCode !== 0) throw new Error(`Failed to create local git remote:\n${result.stdout}\n${result.stderr}`);
   return `${sandbox.workspacePath}/remote.git`;
-}
-
-function shellInput(
-  command: string,
-  options: { cwd?: string; env?: Record<string, string>; timeout?: number; signal?: AbortSignal } | undefined,
-): SandboxExecInput {
-  const input: SandboxExecInput = { command };
-  if (options?.cwd) input.cwd = options.cwd;
-  if (options?.env) input.env = options.env;
-  if (options?.timeout !== undefined) input.timeoutMs = options.timeout;
-  if (options?.signal) input.signal = options.signal;
-  return input;
 }
 
 class LocalGitAccessProvider implements RepositoryAccessProvider {

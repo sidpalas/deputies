@@ -12,7 +12,7 @@ Deputies is a control plane for delegating engineering work to [background agent
 - Runs agent work in durable background sessions with searchable, paginated activity history.
 - Streams progress, tool diagnostics, artifacts, and final responses into the web UI.
 - Lets users star, tag, filter, search, archive, and resume sessions.
-- Built on [Pi](https://pi.dev/) for real agent work; the legacy Flue runner is deprecated and remains temporarily available during removal.
+- Built on [Pi](https://pi.dev/) for real agent work, with a fake runner for deterministic smoke tests.
 - Supports Slack, GitHub, generic webhook, and scheduled automation workflows with callback delivery tracking.
 - Supports GitHub OAuth login, static login, access groups, and session ownership controls for browser access.
 - Works with [Daytona](https://www.daytona.io/), Docker, Tensorlake, Kubernetes Agent Sandbox, and AWS Lambda MicroVM sandbox providers, plus fake and unsafe local providers for tests and trusted development.

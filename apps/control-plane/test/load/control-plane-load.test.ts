@@ -423,7 +423,7 @@ class ProfilingSandboxProvider implements SandboxProvider {
 
 async function truncateAppTables(pool: Pool): Promise<void> {
   await pool.query(
-    'TRUNCATE pi_sessions, flue_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, auth_sessions, auth_accounts, auth_users, sessions RESTART IDENTITY CASCADE',
+    'TRUNCATE pi_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, events, runs, messages, session_sequence_counters, webhook_sources, auth_sessions, auth_accounts, auth_users, sessions RESTART IDENTITY CASCADE',
   );
 }
 

@@ -28,7 +28,7 @@ Background-agent systems fail at boundaries:
 - A sandbox reconnect creates a new workspace instead of resuming.
 - A callback announces success before a PR exists.
 - A provider-specific assumption leaks into the core workflow.
-- Flue session state is confused with product session state.
+- Runner session state is confused with product session state.
 
 DDD helps because it names these concepts and keeps the invariants close to the code that owns them.
 
@@ -117,13 +117,11 @@ Concepts:
 - `RunnerInput`
 - `RunnerResult`
 - `PiRunner`
-- `FlueRunner` (deprecated legacy runner)
 - `FakeRunner`
 
 Invariants:
 
 - Pi SDK runtime imports stay in `runner-pi`; config may import Pi's model catalog and auth helpers may import Pi OAuth packages.
-- Only `runner-flue` imports `@flue/runtime` while the deprecated Flue runner exists.
 - Runner emits normalized events.
 - Runner does not own product session state.
 - Runner runtime state is persisted separately through runner-owned session stores.
@@ -133,7 +131,6 @@ Modules:
 ```txt
 apps/control-plane/src/runner
 apps/control-plane/src/runner-pi
-apps/control-plane/src/runner-flue
 ```
 
 ### Integration Context
@@ -205,7 +202,7 @@ Invariants:
 
 - Domain modules depend on store interfaces, not SQL details.
 - Store code does not import domain services.
-- Product state and Flue runtime state are stored separately.
+- Product state and Pi runtime state are stored separately.
 - Memory storage is for deterministic tests and local experiments; durable product behavior uses Postgres.
 
 Modules:
@@ -263,7 +260,7 @@ External systems must be translated at the boundary.
 | GitHub webhooks   | source-specific normalized event + prompt context + callback target          |
 | Linear webhooks   | planned normalized event + repo resolution + callback target                 |
 | Generic webhooks  | required simple payload shape -> session/message/context/callback target     |
-| Flue              | `Runner` interface + Flue session store                                      |
+| Pi                | `Runner` interface + Pi session store                                        |
 | Sandbox providers | `SandboxProvider` interface + capabilities                                   |
 
 Do not let external payload shapes leak into core session/message/run services.
@@ -284,7 +281,6 @@ apps/control-plane/src/db/migrations           # SQL migrations
 apps/control-plane/src/runner/types.ts         # runner port
 apps/control-plane/src/worker/service.ts       # durable work coordinator
 apps/control-plane/src/runner-pi               # Pi runner adapter
-apps/control-plane/src/runner-flue             # deprecated Flue runner adapter
 apps/control-plane/src/sandbox/types.ts        # sandbox provider port
 ```
 
@@ -310,4 +306,4 @@ When adding a feature:
 4. Put provider-specific logic behind interfaces.
 5. Add tests at the domain boundary and at one user-visible boundary.
 
-If a change requires importing Pi SDK packages outside `runner-pi`, importing `@flue/runtime` outside `runner-flue`, importing provider SDKs outside `sandbox`, or importing Slack/GitHub/Linear types into `sessions`, the boundary is probably wrong.
+If a change requires importing Pi SDK packages outside `runner-pi`, importing provider SDKs outside `sandbox`, or importing Slack/GitHub/Linear types into `sessions`, the boundary is probably wrong.

@@ -235,8 +235,8 @@ Unit-test this helper directly (`apps/control-plane/test/unit/`).
 
 - Add `tags` and `last_activity_at` to `sessionSelectColumns` / row mapper / insert / update
   statements (find every site that reads or writes session rows — `createSession`,
-  `updateSession`, `updateSessionWithEvent`, `archiveSession`; the flue/pi runner tables in
-  migrations 004/007 are unrelated and untouched). Apply the §3a activity-bump rule at each raw
+  `updateSession`, `updateSessionWithEvent`, `archiveSession`; the runner state table is unrelated
+  and untouched). Apply the §3a activity-bump rule at each raw
   status-transition UPDATE.
 - In `listSessionsWithLatestSandbox` and `searchSessions` (the `matched_sessions` CTE WHERE at
   postgres.ts:812), append predicates next to the existing `groupId` handling:

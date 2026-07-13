@@ -10,7 +10,7 @@ Deputies has runner-native subagent mechanisms for quick intra-run delegation, b
 
 ## Goals
 
-- Expose an opt-in `deputies` tool for Flue and Pi runners.
+- Expose an opt-in `deputies` tool for the Pi runner.
 - Keep implementation runner-agnostic in `sessions/deputy-tool.ts`, with thin runner adapters.
 - Enforce scoped agent authorization for read, spawn, follow-up, and cancel actions.
 - Persist parent/child lineage for UI visibility and auditability.
@@ -20,7 +20,7 @@ Deputies has runner-native subagent mechanisms for quick intra-run delegation, b
 
 ## Non-Goals
 
-- Replacing Flue `session.task()` or the Pi `subagent` tool for work that should die with the current run.
+- Replacing the Pi `subagent` tool for work that should die with the current run.
 - Cascading parent cancellation or archival to spawned children.
 - Shipping a public MCP server in the first implementation.
 
@@ -28,7 +28,7 @@ Deputies has runner-native subagent mechanisms for quick intra-run delegation, b
 
 - `sessions/deputy-tool.ts` owns schema validation, policy checks, durable session operations, and result serialization.
 - `auth/agent-authorization.ts` defines the session-agent policy: read organization-visible or same-group sessions, spawn only in the acting group, write/cancel only non-archived direct children.
-- Flue and Pi adapters expose the same `deputies` action surface when `DEPUTY_TOOL_ENABLED=true`.
+- The Pi adapter exposes the `deputies` action surface when `DEPUTY_TOOL_ENABLED=true`.
 - `spawn` creates a child session with status `queued`, parent lineage, inherited access fields, and an initial pending message.
 - `idempotencyKey` deterministically derives child session/message IDs so retrying returns the same child without consuming more quota.
 - `notifyOnComplete=true` stores child context that is consumed once when the child reaches a terminal outcome. Successful parent notifications are informational and output-free; failure notifications include bounded diagnostic error text.

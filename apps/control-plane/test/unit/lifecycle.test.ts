@@ -12,7 +12,7 @@ describe('AppLifecycle', () => {
         },
         {
           close() {
-            calls.push('flue-store');
+            calls.push('runner-store');
           },
         },
       ],
@@ -21,7 +21,7 @@ describe('AppLifecycle', () => {
     await lifecycle.shutdown('test');
     await lifecycle.shutdown('duplicate');
 
-    expect(calls).toEqual(['store', 'flue-store']);
+    expect(calls).toEqual(['store', 'runner-store']);
   });
 
   it('stops worker loop before closing resources', async () => {

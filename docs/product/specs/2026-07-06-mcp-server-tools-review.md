@@ -4,14 +4,14 @@ Two independent reviews (standard + adversarial) of the MCP implementation on br
 
 Verification status at review time: `tsc --noEmit` clean; unit suite 516/517 (the one failure is pre-existing and unrelated — `setup-script.test.ts` blocks on machines with `commit.gpgsign=true`; do not chase it).
 
-**Confirmed clean (do not change):** credential redaction end to end (bearer value unreachable from errors, logs, events, session history, model context, artifacts; asserted in tests), config validation echoing field/index but never header values, name sanitization/duplicate rejection parity with Flue's reference, subagent connection sharing without reconnect, opt-in gating (feature fully off when `MCP_SERVERS` unset), connect-concurrent-with-repo-prep, non-fatal connect failure with `withSetupNote` note.
+**Confirmed clean (do not change):** credential redaction end to end (bearer value unreachable from errors, logs, events, session history, model context, artifacts; asserted in tests), config validation echoing field/index but never header values, name sanitization/duplicate rejection behavior, subagent connection sharing without reconnect, opt-in gating (feature fully off when `MCP_SERVERS` unset), connect-concurrent-with-repo-prep, non-fatal connect failure with `withSetupNote` note.
 
 ## Fix Status
 
 - [x] 1. Response buffering capped with `MCP_RESPONSE_MAX_BYTES` and response-body limiting fetch wrappers for streamable HTTP and SSE.
 - [x] 2. Streamable HTTP bare `GET` remains blocked, but `GET` with `last-event-id` is allowed for SDK stream resumption.
 - [x] 3. Pi post-connect setup failures close established MCP connections before rethrowing.
-- [x] 4. Resolved with option (b): `MCP_TOOL_TIMEOUT_MS` and `MCP_TOOL_RESULT_MAX_CHARS` are documented as Pi/shared-client-only; deprecated Flue native MCP still uses connect timeout and response byte cap.
+- [x] 4. `MCP_TOOL_TIMEOUT_MS` and `MCP_TOOL_RESULT_MAX_CHARS` are enforced by the Pi/shared client.
 - [x] 5. MCP errors now log/throw allowlisted categories instead of raw error names/messages.
 - [x] 6. Post-sanitization tool-name collisions are suffixed instead of dropping the server.
 - [x] 7. Tool result formatting/truncation now runs inside the redacting tool-call guard.
@@ -40,13 +40,7 @@ Verification status at review time: `tsc --noEmit` clean; unit suite 516/517 (th
 
 `apps/control-plane/src/runner-pi/runner.ts:148-216`. Connections close in the connect-failure catch (:153-156) and the run `finally` (:275), but a throw from `getSessionLease` (:159, async, store/DB-backed), the `Pi model is not available` throw (:164), or `resourceLoader.reload()` (:167) leaks the connected MCP clients (abort listeners, timers, server-side Executor session). With `MCP_SERVERS` set, every early-failed run leaks.
 
-**Fix:** either move the MCP connect to just before the existing `try` with nothing throwable in between, or wrap the whole post-connect region so any throw before the main `try` closes connections (e.g. `try { lease/model/loader … } catch (e) { await closeAll(); throw e; }`). The Flue runner does not have this gap — only synchronous tool assembly sits in its window; mirror that shape.
-
-## Decide (spec deviation, resolution depends on Flue deprecation)
-
-### 4. Flue runner ignores `MCP_TOOL_TIMEOUT_MS` and `MCP_TOOL_RESULT_MAX_CHARS`
-
-`apps/control-plane/src/runner-flue/runner.ts:308-338`. `connectFlueMcpServers` uses only `connectTimeoutMs`; Flue's native `connectMcpServer` calls `callTool` with no per-call timeout and formats results with no truncation. On the Flue runner a hung call stalls until run-level abort and oversized results bypass the char cap. **However:** main's #83 (this branch is one commit behind; expect a conflicting rebase of `runner-flue/runner.ts` and `src/index.ts`) deprecated the Flue runner. Resolution options: (a) implement both knobs by wrapping Flue's tool definitions, or (b) document the knobs as Pi-only in config comments + spec + deploy docs. Given the deprecation, (b) is acceptable — but it must be explicit, not silent. Rebase onto main before fixing anything in this file.
+**Fix:** either move the MCP connect to just before the existing `try` with nothing throwable in between, or wrap the whole post-connect region so any throw before the main `try` closes connections (e.g. `try { lease/model/loader … } catch (e) { await closeAll(); throw e; }`).
 
 ## Minor
 
@@ -54,12 +48,11 @@ Verification status at review time: `tsc --noEmit` clean; unit suite 516/517 (th
 6. **One sanitization collision disables the whole server** — `client.ts:133-151`. Two tool names colliding post-sanitization (`a.b` vs `a_b` → `mcp__s__a_b`) throws and drops every tool from that server. Fix: skip/suffix the colliding tool (e.g. `_2`) or exclude just the duplicates, log the safe tool names involved, keep the rest of the server usable.
 7. **`formatMcpResult` runs outside the redacting try/catch** — `client.ts:77`. Pathologically deep `structuredContent` can make `JSON.stringify` throw a raw `RangeError` that bypasses `redactedToolError` and truncation. Fix: move formatting+truncation inside the guarded region (or its own try/catch mapping to the redacted error path).
 8. **Unbounded `listTools` pagination and schema size** — `client.ts:52-59, 161-167`. Bounded only by the 10s connect budget. Fix: cap accumulated tool count (e.g. 1,000) and total listed bytes; treat exceeding the cap as a connect failure (non-fatal to the run, as usual).
-9. **Missing spec-mandated lifecycle tests** — `test/unit/pi-runner.test.ts`, `test/unit/flue-runner.test.ts`. Add: connections closed on run abort; connections closed on run failure (this is the regression test for finding 3 — make it fail before the fix); run-signal abort propagates into an in-flight `callTool`; tool-call error at runner level surfaces redacted. Also add tests for the fixes to 1 (oversized body → redacted error, no OOM) and 2 (GET with `last-event-id` passes through, bare GET still 405).
+9. **Missing spec-mandated lifecycle tests** — `test/unit/pi-runner.test.ts`. Add: connections closed on run abort; connections closed on run failure (this is the regression test for finding 3 — make it fail before the fix); run-signal abort propagates into an in-flight `callTool`; tool-call error at runner level surfaces redacted. Also add tests for the fixes to 1 (oversized body → redacted error, no OOM) and 2 (GET with `last-event-id` passes through, bare GET still 405).
 10. **`.env.example` not updated** — add the `MCP_SERVERS` + `MCP_*` block alongside the existing `WEB_SEARCH_*` documentation (lines ~115-121).
 11. **Dead branch in `readMcpString`** — `apps/control-plane/src/config/index.ts`: the `required=false` branch throws even for `undefined` and is never exercised; remove the parameter or fix the branch.
 
 ## Process notes
 
-- Rebase onto latest `main` first (#83 touches `runner-flue/runner.ts` and `src/index.ts`; resolve before finding 4).
 - After fixes: `tsc --noEmit`, full unit suite (`npx pnpm@11.5.2` if plain pnpm is broken), and update `2026-07-06-mcp-server-tools.md` if any behavior/config surface changed (e.g. new `MCP_RESPONSE_MAX_BYTES` knob, Pi-only knob documentation).
 - Do not weaken the redaction guarantees while fixing 5/7 — the tests asserting header-value non-leakage must keep passing, and new error text must come from allowlisted categories only.

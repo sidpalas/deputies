@@ -14,19 +14,16 @@ Implemented so far:
 - Memory-backed `AppStore` for deterministic unit tests.
 - Docker Compose local Postgres.
 - SQL migration runner.
-- Postgres-backed `AppStore` for sessions, messages, events, runs, sandboxes, artifacts, Pi sessions, legacy Flue sessions, generic webhooks, callbacks, external thread mappings, and sequence counters.
+- Postgres-backed `AppStore` for sessions, messages, events, runs, sandboxes, artifacts, Pi sessions, generic webhooks, callbacks, external thread mappings, and sequence counters.
 - Durable worker loop with run leases, heartbeat renewal, stale lease recovery, batched same-session message claiming, queue pause/edit/cancel behavior, and active-run cancellation finalization.
 - DB-backed generic webhook sources with bearer auth, prompt prefixes, thread reuse, and delivery dedupe.
 - Architecture fitness tests for core import boundaries.
 - Postgres-backed Pi `SessionStore` and `runner-pi` adapter seam.
-- Legacy Postgres-backed Flue `SessionStore` and deprecated `runner-flue` adapter seam.
-- Daytona SDK dependency, sandbox provider adapter, and Flue `SandboxFactory` bridge.
+- Daytona SDK dependency and sandbox provider adapter.
 - Real Pi runner wiring behind `RUNNER=pi`.
-- Legacy Flue agent factory wiring remains behind deprecated `RUNNER=flue` during removal.
 - Sandbox lifecycle persistence with active sandbox reconnect/reuse.
-- Opt-in legacy real Daytona/Flue built-artifact UAT scaffold.
-- Flue live event normalization for text deltas, tools, commands, and tasks.
-- Built-artifact E2E coverage for API auth, sandbox reuse, webhook auth separation, and legacy real Daytona/Flue follow-up persistence.
+- Opt-in real Daytona/Pi built-artifact UAT scaffold.
+- Built-artifact E2E coverage for API auth, sandbox reuse, webhook auth separation, and real Daytona/Pi follow-up persistence.
 - Artifact persistence, optional filesystem/S3-compatible object storage, and generic HTTP completion callbacks.
 - Session artifact list/download/preview API.
 - Graceful shutdown for HTTP server, worker loop, and Postgres-backed resources.
@@ -34,10 +31,10 @@ Implemented so far:
 - App-level Postgres worker integration test.
 - Daytona sandbox idle cleanup with stop-before-destroy retention policy and advisory-lock reaper coordination.
 - Vite React operator UI with provider-aware session-cookie login, session list/search, queued message editing/cancelling, active-run cancellation, archive/restore, SSE streaming, artifact panels, callback status, and per-run diagnostics derived from replayed/streamed events.
-- GitHub App runtime access for allowlisted repositories, including real GitHub token minting, Flue-runner repository refresh, and opt-in real GitHub + Daytona clone UAT coverage.
+- GitHub App runtime access for allowlisted repositories, including real GitHub token minting, Pi-runner repository refresh, and opt-in real GitHub + Daytona clone UAT coverage.
 - GitHub webhook ingress for issue, PR, PR review comment, and PR review events with signature verification, delivery dedupe, repository/user/repository-owner allowlists, required trigger-phrase gating when webhooks are enabled, session mapping, bounded context fetching, received reactions, and completion comments through the callback dispatcher.
 - Agent runtime GitHub repository tooling for repository selection/preparation, authenticated `gh`, and authenticated guarded `git` operations inside prepared sandbox repositories.
-- Agent-created stored artifacts through Pi and legacy Flue artifact tools, with SeaweedFS-backed local Compose storage and web UI image/text previews.
+- Agent-created stored artifacts through Pi artifact tools, with SeaweedFS-backed local Compose storage and web UI image/text previews.
 
 Still open from the early phases:
 
@@ -135,7 +132,7 @@ Acceptance criteria:
 - Stale processing messages recover.
 - Failed runner marks message/run failed and emits failure event.
 
-Status: implemented for fake, Pi, and legacy Flue runner paths. The worker claims pending messages transactionally, batches all queued messages for one session, enforces one active/cancelling run per session, executes the configured runner, renews heartbeats, recovers stale leases, supports active-run cancellation, and marks success/failure/cancel terminal states. More recovery policy can be added later when retry limits are introduced.
+Status: implemented for fake and Pi runner paths. The worker claims pending messages transactionally, batches all queued messages for one session, enforces one active/cancelling run per session, executes the configured runner, renews heartbeats, recovers stale leases, supports active-run cancellation, and marks success/failure/cancel terminal states. More recovery policy can be added later when retry limits are introduced.
 
 ## Phase 4: Generic Webhook Integration
 
@@ -163,7 +160,7 @@ Status: implemented for the first DB-backed shape. Webhook sources are stored in
 
 ## Phase 5: Runner Adapter
 
-Goal: connect real agent execution behind the runner interface. New real-agent work uses Pi; Flue is deprecated and retained only for legacy sessions while it is removed.
+Goal: connect real Pi agent execution behind the runner interface.
 
 Deliverables:
 
@@ -185,7 +182,7 @@ Acceptance criteria:
 - Real Pi runner uses Pi tools/session APIs rather than a parallel harness.
 - Pi text/tool/task events are persisted as normalized events.
 
-Status: implemented for Pi. The Postgres-backed Pi session store exists, `PiRunner` is wired behind `RUNNER=pi`, Pi uses sandbox-backed tools, and Pi events are normalized into product events. The older Postgres-backed Flue `SessionStore`, `FlueRunner`, and real Flue factory remain as deprecated legacy support while removal is prepared.
+Status: implemented for Pi. The Postgres-backed Pi session store exists, `PiRunner` is wired behind `RUNNER=pi`, Pi uses sandbox-backed tools, and Pi events are normalized into product events.
 
 ## Phase 6: Sandbox Provider
 
@@ -207,7 +204,7 @@ Acceptance criteria:
 - Unhealthy sandbox fails clearly or is recreated according to policy.
 - Tests use fake provider without real infrastructure.
 
-Status: implemented for the current provider set. The fake provider and Daytona provider adapter exist. Daytona creation, connection, start, stop, health, destroy, exec, and filesystem operations are unit-tested with an SDK-shaped fake client. The `sandboxes` table persists provider sandbox IDs, workspace paths, status, metadata, and health timestamps. The worker reuses ready/stopped active sandboxes for follow-up messages, restarts stopped Daytona sandboxes before reconnect, and creates a replacement if health/connect fails. Idle cleanup stops sandboxes before retention destroy, and archive destroys active sandboxes immediately. Real Daytona UAT is opt-in. Active-run cancellation propagates through repository setup shell calls, Flue prompt handles, local sandbox child processes, Docker/Kubernetes bridge fetches, and bridge-side command termination. Daytona observes cancellation before and during SDK `executeCommand` calls so Deputies stops waiting, but remains a provider-specific interruption gap because the current SDK path exposes timeouts but no explicit remote command cancel; future hardening should add provider conformance coverage and account for SDK backends that cannot interrupt running commands.
+Status: implemented for the current provider set. The fake provider and Daytona provider adapter exist. Daytona creation, connection, start, stop, health, destroy, exec, and filesystem operations are unit-tested with an SDK-shaped fake client. The `sandboxes` table persists provider sandbox IDs, workspace paths, status, metadata, and health timestamps. The worker reuses ready/stopped active sandboxes for follow-up messages, restarts stopped Daytona sandboxes before reconnect, and creates a replacement if health/connect fails. Idle cleanup stops sandboxes before retention destroy, and archive destroys active sandboxes immediately. Real Daytona UAT is opt-in. Active-run cancellation propagates through repository setup shell calls, Pi prompt handling, local sandbox child processes, Docker/Kubernetes bridge fetches, and bridge-side command termination. Daytona observes cancellation before and during SDK `executeCommand` calls so Deputies stops waiting, but remains a provider-specific interruption gap because the current SDK path exposes timeouts but no explicit remote command cancel; future hardening should add provider conformance coverage and account for SDK backends that cannot interrupt running commands.
 
 ## Phase 7: UAT Suite
 

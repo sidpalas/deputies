@@ -12,7 +12,7 @@ export type PostgresStoreSuiteContext = {
 };
 
 const truncateTables =
-  'TRUNCATE pi_sessions, flue_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, session_search_docs, search_index_cursor, events, runs, messages, session_sequence_counters, webhook_sources, automation_invocations, automations, environment_activity, environment_group_shares, environment_revision_repositories, environment_revisions, environments, sessions RESTART IDENTITY CASCADE';
+  'TRUNCATE pi_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, session_search_docs, search_index_cursor, events, runs, messages, session_sequence_counters, webhook_sources, automation_invocations, automations, environment_activity, environment_group_shares, environment_revision_repositories, environment_revisions, environments, sessions RESTART IDENTITY CASCADE';
 
 export function setupPostgresStoreSuite(suiteName: string, assign: (context: PostgresStoreSuiteContext) => void): void {
   let databaseUrl = '';
@@ -47,7 +47,7 @@ async function resetSuiteDatabase(baseDatabaseUrl: string, suiteName: string): P
   const databaseName = new URL(suiteDatabaseUrl).pathname.replace(/^\//, '');
   if (!/test/i.test(databaseName)) {
     throw new Error(
-      `Refusing to reset database "${databaseName}": TEST_DATABASE_URL must point at a dedicated test database (name containing "test", e.g. flue_test)`,
+      `Refusing to reset database "${databaseName}": TEST_DATABASE_URL must point at a dedicated test database (name containing "test", e.g. deputies_test)`,
     );
   }
 

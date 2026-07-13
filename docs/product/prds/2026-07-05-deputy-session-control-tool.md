@@ -11,7 +11,7 @@ Agents can delegate short in-run subtasks through runner-native task tools, but 
 ## Goals
 
 - Expose an opt-in `deputies` agent tool for durable session coordination.
-- Keep the core implementation runner-agnostic, with thin Flue and Pi adapters.
+- Keep the core implementation runner-agnostic, with a thin Pi adapter.
 - Enforce scoped agent authorization for reading, spawning, messaging, and cancelling sessions.
 - Persist parent/child lineage so users and agents can inspect durable delegated work.
 - Make spawning retry-safe with idempotency keys and transactional first-message creation.
@@ -39,7 +39,7 @@ Agents can delegate short in-run subtasks through runner-native task tools, but 
 
 ## Acceptance Criteria
 
-- Flue and Pi runners expose the tool only when enabled.
+- The Pi runner exposes the tool only when enabled.
 - Postgres creates the child session, first message, child events, and parent `session_spawned` event atomically.
 - Idempotent spawn replay returns the existing child without consuming additional spawn quota.
 - Web UI shows parent/child lineage and labels deputy-authored messages.

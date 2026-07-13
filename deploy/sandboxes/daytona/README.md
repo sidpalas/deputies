@@ -131,7 +131,7 @@ TEST_DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies_test
 API_AUTH_MODE=none
 ```
 
-UAT tests that require external credentials remain opt-in. For example, `apps/control-plane/test/uat/real-daytona-flue.test.ts` only runs when `RUN_REAL_DAYTONA_FLUE_UAT=true` and the required Daytona/model/database env vars are set.
+UAT tests that require external credentials remain opt-in. For example, `apps/control-plane/test/uat/real-daytona-pi.test.ts` only runs when `RUN_REAL_DAYTONA_PI_UAT=true` and the required Daytona/model/database env vars are set.
 
 ## Start Only Postgres
 
