@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.18.0](https://github.com/sidpalas/deputies/compare/v0.17.1...v0.18.0) (2026-07-13)
+
+
+### Features
+
+* expose pi reasoning levels ([55d69bc](https://github.com/sidpalas/deputies/commit/55d69bc98a8e39765abd5eb4109a479d533ab761))
+* route Tensorlake previews through sandbox bridge ([26b8c21](https://github.com/sidpalas/deputies/commit/26b8c210d0ba20aba01aaa911c7d69b97c493511))
+
+
+### Bug Fixes
+
+* limit control-plane test workers ([688f4a6](https://github.com/sidpalas/deputies/commit/688f4a658241e10a57f467d51b1a932e8247b75c))
+* preserve sessions after environment changes ([4f6a8db](https://github.com/sidpalas/deputies/commit/4f6a8dbe249a271dda7f22f67cca47f5d5185b98))
+
+
+### Code Refactoring
+
+* remove deprecated flue runner ([#97](https://github.com/sidpalas/deputies/issues/97)) ([8694f84](https://github.com/sidpalas/deputies/commit/8694f849a7719c6d661ca02b2554af70f4be87c1))
+
 ## [0.17.1](https://github.com/sidpalas/deputies/compare/v0.17.0...v0.17.1) (2026-07-10)
 
 
