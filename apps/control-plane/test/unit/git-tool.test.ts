@@ -1,27 +1,21 @@
-import { createGitTool, type AgentRef } from '../../src/runner-flue/git-tool.js';
+import { executeGitTool } from '../../src/repositories/git-tool.js';
 import type { GitHubRepositoryAccess } from '../../src/integrations/github/types.js';
-import type { RepositoryToolServices } from '../../src/runner-flue/repository-tool.js';
+import type { RepositoryToolServices } from '../../src/repositories/tool.js';
+import type { RepositoryShell } from '../../src/repositories/shell.js';
 
-describe('authenticated git Flue tool', () => {
+describe('authenticated git tool', () => {
   it('runs git inside the sandbox repo with command-scoped auth', async () => {
     const shells: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = [];
-    const agentRef: AgentRef = {
-      current: {
-        async session() {
-          throw new Error('not used');
-        },
-        async shell(command, options) {
-          const shell: { command: string; cwd?: string; env?: Record<string, string> } = { command };
-          if (options?.cwd) shell.cwd = options.cwd;
-          if (options?.env) shell.env = options.env;
-          shells.push(shell);
-          return { exitCode: 0, stdout: 'pushed', stderr: '' };
-        },
-      },
+    const shell: RepositoryShell = async (command, options) => {
+      const shell: { command: string; cwd?: string; env?: Record<string, string> } = { command };
+      if (options?.cwd) shell.cwd = options.cwd;
+      if (options?.env) shell.env = options.env;
+      shells.push(shell);
+      return { exitCode: 0, stdout: 'pushed', stderr: '' };
     };
-    const tool = createGitTool({ agentRef, repository: repositoryServices(agentRef) });
+    const repository = repositoryServices(shell);
 
-    const result = await tool.execute({ args: ['push', 'origin', 'sp/test'] });
+    const result = await executeGitTool(repository, { args: ['push', 'origin', 'sp/test'] });
 
     expect(result).toBe('exitCode: 0\nstdout:\npushed');
     expect(shells).toEqual([
@@ -47,42 +41,41 @@ describe('authenticated git Flue tool', () => {
 
   it('redacts the full auth header from command output', async () => {
     const authHeader = `Authorization: Basic ${Buffer.from('x-access-token:ghs_secret_token').toString('base64')}`;
-    const agentRef: AgentRef = {
-      current: {
-        async session() {
-          throw new Error('not used');
-        },
-        async shell() {
-          return { exitCode: 0, stdout: authHeader, stderr: '' };
-        },
-      },
-    };
-    const tool = createGitTool({ agentRef, repository: repositoryServices(agentRef) });
+    const repository = repositoryServices(async () => ({ exitCode: 0, stdout: authHeader, stderr: '' }));
 
-    await expect(tool.execute({ args: ['config', '--list'] })).resolves.toBe('exitCode: 0\nstdout:\n[redacted]');
+    await expect(executeGitTool(repository, { args: ['config', '--list'] })).resolves.toBe(
+      'exitCode: 0\nstdout:\n[redacted]',
+    );
   });
 
   it('rejects executable names and top-level flags', async () => {
-    const tool = createGitTool({ agentRef: {}, repository: repositoryServices({}) });
+    const repository = repositoryServices();
 
-    await expect(tool.execute({ args: ['git', 'push'] })).rejects.toThrow('omit the git executable name');
-    await expect(tool.execute({ args: ['-c', 'http.extraHeader=bad', 'push'] })).rejects.toThrow('explicit subcommand');
+    await expect(executeGitTool(repository, { args: ['git', 'push'] })).rejects.toThrow('omit the git executable name');
+    await expect(executeGitTool(repository, { args: ['-c', 'http.extraHeader=bad', 'push'] })).rejects.toThrow(
+      'explicit subcommand',
+    );
   });
 
   it('rejects risky push options and refspecs', async () => {
-    const tool = createGitTool({ agentRef: {}, repository: repositoryServices({}) });
+    const repository = repositoryServices();
 
-    await expect(tool.execute({ args: ['push', '--force', 'origin', 'main'] })).rejects.toThrow('not available');
-    await expect(tool.execute({ args: ['push', 'origin', '+main'] })).rejects.toThrow('force refspecs');
-    await expect(tool.execute({ args: ['push', 'origin', ':old-branch'] })).rejects.toThrow('delete refspecs');
+    await expect(executeGitTool(repository, { args: ['push', '--force', 'origin', 'main'] })).rejects.toThrow(
+      'not available',
+    );
+    await expect(executeGitTool(repository, { args: ['push', 'origin', '+main'] })).rejects.toThrow('force refspecs');
+    await expect(executeGitTool(repository, { args: ['push', 'origin', ':old-branch'] })).rejects.toThrow(
+      'delete refspecs',
+    );
   });
 
   it('requires a prepared repository', async () => {
-    const services = repositoryServices({});
+    const services = repositoryServices();
     delete services.state.prepared;
-    const tool = createGitTool({ agentRef: {}, repository: services });
 
-    await expect(tool.execute({ args: ['push', 'origin', 'sp/test'] })).rejects.toThrow('has not been prepared');
+    await expect(executeGitTool(services, { args: ['push', 'origin', 'sp/test'] })).rejects.toThrow(
+      'has not been prepared',
+    );
   });
 });
 
@@ -95,7 +88,7 @@ const access: GitHubRepositoryAccess = {
   auth: { type: 'bearer', token: 'ghs_secret_token' },
 };
 
-function repositoryServices(agentRef: AgentRef): RepositoryToolServices {
+function repositoryServices(shell?: RepositoryShell): RepositoryToolServices {
   return {
     github: {
       async getRepositoryAccess() {
@@ -103,7 +96,7 @@ function repositoryServices(agentRef: AgentRef): RepositoryToolServices {
       },
     },
     sandbox: { workspacePath: '/workspace' } as never,
-    agentRef,
+    shell: () => shell,
     state: {
       context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } },
       prepared: {

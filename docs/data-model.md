@@ -33,7 +33,6 @@ runs
 events
 sandboxes
 artifacts
-flue_sessions
 pi_sessions
 external_threads
 integration_deliveries
@@ -68,7 +67,6 @@ Current implemented tables:
 - `events`
 - `sandboxes`
 - `artifacts`
-- `flue_sessions`
 - `pi_sessions`
 - `external_threads`
 - `integration_deliveries`
@@ -84,7 +82,6 @@ Planned tables:
 Identifier policy:
 
 - Product entity IDs are application-generated UUID strings. SQL tables should use `uuid` columns once the table participates in production behavior.
-- Flue-owned IDs are `text` because their format is owned by Flue.
 - Provider/external IDs are `text` because their format is owned by the provider.
 - Per-session cursor sequences should be allocated by database-backed counters or equivalent transactional logic, not by counting rows in application memory.
 
@@ -613,7 +610,7 @@ Current implementation:
 
 - `008_artifacts_callbacks.sql` creates `artifacts` and `callback_deliveries`.
 - Runner-returned artifacts are persisted after successful runs and emitted as `artifact_created` events.
-- Stored artifact content can be created by runner-returned artifact bytes or by the Flue `artifact({ action: "create" })` tool, which copies a sandbox file into configured object storage.
+- Stored artifact content can be created by runner-returned artifact bytes or by the Pi artifact tool, which copies a sandbox file into configured object storage.
 - Object storage is optional and selected with `ARTIFACT_STORAGE_PROVIDER=disabled|filesystem|s3`; stored blob artifacts fail clearly when storage is disabled.
 - Session artifacts are readable through `GET /sessions/:sessionId/artifacts`.
 - Stored artifacts are downloadable through `GET /sessions/:sessionId/artifacts/:artifactId/download`.
@@ -625,33 +622,6 @@ Current implementation:
 Stores runner-owned internal session history for durable runner continuation. This is separate from product session state.
 
 Product state remains in `sessions`, `messages`, `runs`, `events`, `artifacts`, and `sandboxes`. Runner runtime tables are opaque SDK state used only by the runner adapter that wrote them.
-
-Changing a product session from one runner to another does not continue the previous runner's internal history. For example, a legacy session that starts on deprecated `RUNNER=flue` can later receive work with `RUNNER=pi`, but Pi starts a new Pi runtime history for that product session. The product UI still shows the prior messages/events, but the Pi agent does not read or convert `flue_sessions`. Cross-runner continuation requires an explicit transcript conversion layer or a future runner-agnostic transcript store.
-
-The runner tables are intentionally separate for now. A future shared `agent_sessions` table is viable, but it should include an explicit `runner` discriminator, runner-owned key, product `session_id`, schema/data version fields, and tests that prevent one runner from loading another runner's state. Without those guardrails, a shared table makes divergent SDK shapes easier to mix accidentally, weakens table-level constraints such as Pi's `sessions(id)` foreign key, and couples Flue and Pi storage migrations even though each runtime owns a different opaque format.
-
-### Flue Sessions
-
-Stores deprecated Flue runner internal session history for legacy Node deployments. New deployments should use Pi sessions instead.
-
-Suggested columns:
-
-```txt
-id text primary key
-data jsonb not null
-version int not null default 1
-created_at timestamptz not null
-updated_at timestamptz not null
-```
-
-Rules:
-
-- Treat `data` as opaque Flue-owned serialized state.
-- Use a custom Postgres-backed Flue session store in production and CI.
-- Do not rely on Flue's Node in-memory default outside local experiments.
-- The current `flue_sessions` table is implemented by `004_flue_sessions.sql` and stores only Flue's opaque session store key as `id`; it does not persist separate `agent_id`, `session_id`, or `app_session_id` metadata columns.
-
-See [Flue Persistence](./flue-persistence.md) for details.
 
 ### Pi Sessions
 
@@ -671,7 +641,6 @@ Rules:
 - Treat `data` as opaque Pi-owned serialized state.
 - The stored JSON shape is `{ version, header, entries }`, where `header` and `entries` are Pi SDK session records.
 - `id` is the product `sessions.id`; deleting the product session cascades Pi runtime state.
-- Pi does not read `flue_sessions`, and Flue does not read `pi_sessions`.
 
 ## External Threads
 

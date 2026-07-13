@@ -1,13 +1,13 @@
 # Prior Art: Open-Inspect, Open SWE, Junior, And Mistle
 
-This document compares the portable Flue background-agent design with four reference systems:
+This document compares the portable Deputies background-agent design with four reference systems:
 
 - `background-agents`, also referred to as Open-Inspect in its docs.
 - `open-swe-`, the LangGraph/Deep Agents implementation.
 - `junior`, an open source Slack bot agent project with plugin, skill, sandbox, eval, and telemetry patterns.
 - `mistle`, an open source background-agent platform with sandbox profiles, runtime plans, control/data-plane services, credential brokering, tunnels, and triggers.
 
-The goal is not to copy any system directly. The goal is to identify durable patterns that fit a portable, provider-neutral Flue implementation.
+The goal is not to copy any system directly. The goal is to identify durable patterns that fit a portable, provider-neutral implementation.
 
 See [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) before copying implementation code, schemas, tests, fixtures, config, prompts, or substantial documentation from any referenced project.
 
@@ -15,7 +15,7 @@ See [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) before copying impl
 
 | Area                | This Design                                          | Open-Inspect / background-agents                    | Open SWE                                          | Junior                                           | Mistle                                                      |
 | ------------------- | ---------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
-| Harness             | Flue behind runner adapter                           | OpenCode in sandbox runtime                         | Deep Agents / LangGraph                           | Pi agent core behind Slack runtime               | Codex/OpenCode/Pi behind `sandboxd` runtime adapters        |
+| Harness             | Pi behind runner adapter                             | OpenCode in sandbox runtime                         | Deep Agents / LangGraph                           | Pi agent core behind Slack runtime               | Codex/OpenCode/Pi behind `sandboxd` runtime adapters        |
 | Control plane       | Portable Node service + Postgres                     | Cloudflare Workers + Durable Objects + D1/KV        | LangGraph server/webapp + thread metadata/store   | Hono/Nitro request runtime + Redis/memory state  | Dashboard + control-plane and data-plane services           |
 | Deployment target   | Railway, ECS, Kubernetes, local                      | Cloudflare + Modal/Daytona                          | LangSmith/LangGraph oriented, pluggable sandboxes | Vercel/serverless-oriented app shell             | Local Docker Compose, Docker/E2B, self-hosting roadmap      |
 | Session state       | Postgres tables                                      | Durable Object SQLite per session + D1 shared state | LangGraph thread state and metadata               | Conversation state adapter + turn checkpoints    | Control/data-plane DB records + active runtime plan         |
@@ -49,11 +49,11 @@ Adopt the concept, not the Cloudflare implementation.
 In this design:
 
 - Durable Object has become Postgres-backed product state.
-- DO-local SQLite has become regular Postgres tables for sessions, messages, runs, events, sandboxes, artifacts, external threads, integration deliveries, callbacks, and Flue session blobs.
+- DO-local SQLite has become regular Postgres tables for sessions, messages, runs, events, sandboxes, artifacts, external threads, integration deliveries, callbacks, and Pi session state.
 - WebSocket hibernation has become replayable event cursors over SSE.
 - Per-session actor exclusivity has become Postgres run leases and worker claim rules.
 
-Keep the distinction between product state and Flue runtime state. Product sessions own user-visible state and work orchestration. Flue session persistence is stored opaquely in `flue_sessions` and should not become the product database.
+Keep the distinction between product state and Pi runtime state. Product sessions own user-visible state and work orchestration. Pi session persistence is stored opaquely and should not become the product database.
 
 ### 2. Append-Only Events With Replay
 
@@ -205,7 +205,7 @@ Adopt:
 - Same-session follow-ups queue in `messages`.
 - Worker enforces one active or cancelling run per session.
 - Worker claims pending same-session messages transactionally and preserves sequence order.
-- Mid-turn injection can remain a future optimization only if Flue exposes a clean, tested hook.
+- Mid-turn injection can remain a future optimization only if Pi exposes a clean, tested hook.
 
 ### 3. Pluggable Sandbox Backend
 
@@ -262,7 +262,7 @@ Preserve the verification rule:
 
 Open SWE can lean on LangGraph thread metadata and state.
 
-Avoid making Flue session history our only system of record.
+Avoid making Pi session history our only system of record.
 
 Use Postgres for product state:
 
@@ -274,7 +274,7 @@ Use Postgres for product state:
 - sandboxes
 - external thread mappings
 
-Flue history is runner state, not the whole product database.
+Pi history is runner state, not the whole product database.
 
 ### 2. Prompt-Only Enforcement For Critical Workflow Gates
 
@@ -413,7 +413,7 @@ Avoid:
 
 Junior uses markdown skill files with frontmatter in `packages/junior/src/chat/skills.ts` and prompt composition in `packages/junior/src/chat/prompt.ts`. Example package skills include `packages/junior-sentry/skills/sentry/SPEC.md` and `packages/junior-sentry/skills/sentry/SKILL.md`.
 
-Flue owns the skill/runtime capability surface. Deputies should adopt Junior's skill documentation pattern only for serious Flue skills or roles that become product-supported:
+Pi owns the runtime capability surface. Deputies should adopt Junior's skill documentation pattern only for serious skills or instruction modules that become product-supported:
 
 - `SPEC.md` for skill intent, scope, runtime contract, evaluation, and maintenance.
 - `SKILL.md` for activation, workflow, guardrails, and reference links.
@@ -557,7 +557,7 @@ Mistle registers Codex, OpenCode, and Pi as first-class agent runtimes in `packa
 
 Adopt:
 
-- Keep Pi behind `runner-pi` as the primary runtime boundary, keep deprecated Flue isolated behind `runner-flue` until removal, and preserve a clean adapter seam for future direct CLI/runtime support.
+- Keep Pi behind `runner-pi` as the runtime boundary and preserve a clean adapter seam for future direct CLI/runtime support.
 - Normalize runtime readiness, stream URLs, terminal access, and lifecycle signals at the product boundary instead of assuming every agent runtime behaves the same.
 - Put runtime-specific quirks in adapters, not in session orchestration, integration callbacks, or UI components.
 
@@ -625,14 +625,14 @@ Avoid:
 - Pinning direct upstream CLI/runtime versions as operationally critical dependencies without upgrade and protocol regression tests.
 - Treating snapshots as correctness requirements rather than startup optimizations.
 
-### 5. Replacing Flue With A Bespoke Runtime Platform
+### 5. Replacing Pi With A Bespoke Runtime Platform
 
-Mistle's runtime plan, sandbox daemon, and runtime proxies are instructive, but Deputies' core design is Flue behind a runner adapter.
+Mistle's runtime plan, sandbox daemon, and runtime proxies are instructive, but Deputies' core design is Pi behind a runner adapter.
 
 Avoid:
 
-- Reimplementing Flue conversation mechanics, tools, skills, task delegation, live events, and sandbox connector shape in product code.
-- Building runtime-client and agent-runtime registries unless multiple non-Flue runtimes become a real product requirement.
+- Reimplementing Pi conversation mechanics, tools, skills, task delegation, and live events in product code.
+- Building runtime-client and agent-runtime registries unless multiple runtimes become a real product requirement.
 - Making Mistle's runtime architecture the product state model.
 
 ## Additional Pattern To Adopt From All Four
@@ -685,7 +685,7 @@ Junior remains a useful reference model for Slack-specific product contracts: ex
 
 Mistle is the strongest open source reference for a full hosted-agent platform: compiled runtime plans, credential brokering through managed egress, optional sandbox daemons, provider adapters, durable data-plane startup workflows, trigger delivery routes, and reconnectable runtime surfaces. Deputies should adopt these as boundary and lifecycle patterns while staying smaller, portable, and runner-adapter-centered.
 
-Use Pi as the real-agent runtime boundary, not as the entire product state model. Pi should own conversation mechanics, tools, subagents, live runtime events, and sandbox interaction for new work. Deprecated Flue remains isolated behind `runner-flue` only during removal. The product should own durable background-work semantics, integrations, replayable product events, artifacts, queueing, leases, and operational state.
+Use Pi as the real-agent runtime boundary, not as the entire product state model. Pi should own conversation mechanics, tools, subagents, live runtime events, and sandbox interaction. The product should own durable background-work semantics, integrations, replayable product events, artifacts, queueing, leases, and operational state.
 
 The resulting design is:
 
@@ -695,7 +695,6 @@ Open-Inspect-style durable sessions/events/artifacts
 + Junior-style Slack contracts/plugin manifest/eval/telemetry ideas
 + Mistle-style runtime plans/credential brokering/lifecycle workflows
 + Pi runner adapter
-+ legacy Flue runner adapter during removal
 + portable Postgres/Node deployment model
 + provider-neutral sandbox interface
 ```

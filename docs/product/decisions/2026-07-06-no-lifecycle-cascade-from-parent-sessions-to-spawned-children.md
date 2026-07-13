@@ -18,7 +18,7 @@ The deputy session control surface lets an agent in a running session spawn new 
 
 The deciding principle is that the system already has two delegation mechanisms with intentionally different lifecycles, and the choice between them is the lifecycle decision:
 
-- Intra-run subagents, such as Flue `session.task()` and the Pi `subagent` tool, live inside the parent's run and abort with it. Work that should die with its initiator belongs there.
+- Intra-run subagents created with the Pi `subagent` tool live inside the parent's run and abort with it. Work that should die with its initiator belongs there.
 - `deputies.spawn` creates an independent product session: a separate feature, a bug discovered along the way, or a handoff. Choosing `spawn` asserts that the work is an independent durable record that may outlive the parent.
 
 Cascading cancellation would turn spawned children back into subagents with extra steps and erase the distinction the tool guidance teaches the model. It also fights the architecture: children are ordinary sessions claimed by other workers under their own run leases, and a spawned child is user-visible and multiplayer. A human may already have sent it follow-up messages that cascade would destroy.

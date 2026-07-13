@@ -158,7 +158,7 @@ Credential handling:
 - `GITHUB_ALLOWED_REPOSITORIES` is optional but, when configured, additionally gates inbound GitHub webhooks and runtime repository access. Entries are matched case-insensitively and support exact `owner/repo` entries plus `owner/*` owner-wide patterns.
 - `GITHUB_WEBHOOK_TRIGGER_PHRASES` replaces trigger handles. Issue/PR/comment/review text must include one configured activation phrase, such as `/deputies`, `deputies:`, `@deputies`, or an org team mention like `@acme/deputies`. Bare values like `deputies` match `@deputies`, `/deputies`, `deputies:`, and standalone boundary-delimited `deputies`.
 
-The intended runtime model is snapshot-friendly: Daytona images/snapshots may pre-bake common repos and build artifacts, but every Flue run still refreshes or repairs the requested repository as its first sandbox shell step so reused/stale sandboxes get current code and fresh credentials.
+The intended runtime model is snapshot-friendly: Daytona images/snapshots may pre-bake common repos and build artifacts, but every Pi run still refreshes or repairs the requested repository as its first sandbox shell step so reused/stale sandboxes get current code and fresh credentials.
 
 Repository-scoped messages can carry context in either shape:
 
@@ -254,14 +254,14 @@ Current emulator caveat: published `emulate@0.5.0` rejects valid GitHub App JWTs
 
 ```sh
 RUN_REAL_GITHUB_APP_UAT=true API_AUTH_MODE=none GITHUB_APP_ID=... GITHUB_APP_PRIVATE_KEY=... GITHUB_ALLOWED_REPOSITORIES=owner/repo pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-github-app.test.ts
-RUN_REAL_GITHUB_DAYTONA_UAT=true API_AUTH_MODE=none GITHUB_APP_ID=... GITHUB_APP_PRIVATE_KEY=... GITHUB_ALLOWED_REPOSITORIES=owner/repo DAYTONA_API_KEY=... pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-github-app.test.ts
+RUN_REAL_GITHUB_DAYTONA_UAT=true API_AUTH_MODE=none GITHUB_APP_ID=... GITHUB_APP_PRIVATE_KEY=... GITHUB_ALLOWED_REPOSITORIES=owner/repo DAYTONA_API_KEY=... RUNNER_MODEL_DEFAULT=... OPENAI_API_KEY=... pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-github-app.test.ts
 ```
 
-The first UAT mints a real installation token and performs a non-mutating local `git ls-remote`. The second creates a real Daytona sandbox and verifies the Flue-runner startup path clones/fetches the repository inside the sandbox.
+The first UAT mints a real installation token and performs a non-mutating local `git ls-remote`. The second creates a real Daytona sandbox and verifies the Pi-runner startup path clones/fetches the repository inside the sandbox.
 
 ### GitHub Current Design And Remaining Work
 
-This section combines the strongest patterns from Background Agents/Open Inspect and Open SWE while preserving this service's boundaries: integrations normalize external events, workers own sandbox lifecycle, Flue owns runner startup shell setup, and GitHub-specific API/push/PR details stay in GitHub adapters. Some webhook, repository-access, callback, and testing items are already implemented; provider-owned branch/PR helpers and richer permission checks remain future work.
+This section combines the strongest patterns from Background Agents/Open Inspect and Open SWE while preserving this service's boundaries: integrations normalize external events, workers own sandbox lifecycle, Pi owns runner startup shell setup, and GitHub-specific API/push/PR details stay in GitHub adapters. Some webhook, repository-access, callback, and testing items are already implemented; provider-owned branch/PR helpers and richer permission checks remain future work.
 
 #### 1. Webhook ingress and dedupe
 
@@ -386,7 +386,7 @@ Keep runtime GitHub auth fresh whenever a reused sandbox performs repository ope
 - Continue minting/accessing short-lived tokens during runner startup setup for clone/fetch.
 - Re-mint or refresh auth before push/PR operations, not only at sandbox creation time.
 - If a future sandbox provider supports outbound proxy or secret injection, implement it behind the sandbox provider boundary; do not require it for all providers.
-- Prefer Flue `session.shell(..., { env })` command-scoped auth for Daytona until a stronger provider-native mechanism exists.
+- Prefer command-scoped sandbox auth for Daytona until a stronger provider-native mechanism exists.
 
 Acceptance criteria:
 
@@ -471,7 +471,7 @@ Current implementation:
 - Prompts use Slack channel/user names when `SLACK_BOT_TOKEN` has `channels:read` or `groups:read` for channel lookup and `users:read` for user lookup; raw Slack IDs remain in message context only.
 - Running Slack-originated work gets a best-effort `:hourglass_flowing_sand:` reaction through the Slack progress notifier plugin.
 - Completed Slack replies get a best-effort `:white_check_mark:` reaction through the Slack callback sender.
-- `apps/control-plane/src/integrations/slack` owns Slack auth, types, prompts, client helpers, and service orchestration. It must not import runners, sandboxes, or Flue.
+- `apps/control-plane/src/integrations/slack` owns Slack auth, types, prompts, client helpers, and service orchestration. It must not import runners or sandboxes.
 
 Local HTTPS emulation:
 

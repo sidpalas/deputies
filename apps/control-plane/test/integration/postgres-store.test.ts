@@ -1,8 +1,6 @@
-import type { SessionData } from '@flue/runtime';
 import type { Pool } from 'pg';
 import { createServices } from '../../src/app/server.js';
 import { normalizeAppendInput } from '../../src/events/service.js';
-import { PostgresFlueSessionStore } from '../../src/runner-flue/session-store.js';
 import {
   PI_SESSION_DATA_VERSION,
   PostgresPiSessionStore,
@@ -111,28 +109,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       environmentId: environment.id,
       environmentRevisionId: environment.currentRevisionId,
     });
-  });
-
-  it('persists Flue session data opaquely', async () => {
-    const flueStore = new PostgresFlueSessionStore(databaseUrl);
-    try {
-      const data: SessionData = {
-        version: 5,
-        affinityKey: 'aff_01ARZ3NDEKTSV4RRFFQ69G5FAV',
-        entries: [],
-        leafId: null,
-        metadata: { appSessionId: 'session-1' },
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-      };
-
-      await flueStore.save('agent-1:default', data);
-      await expect(flueStore.load('agent-1:default')).resolves.toEqual(data);
-      await flueStore.delete('agent-1:default');
-      await expect(flueStore.load('agent-1:default')).resolves.toBeNull();
-    } finally {
-      await flueStore.close();
-    }
   });
 
   it('persists Pi session data opaquely', async () => {

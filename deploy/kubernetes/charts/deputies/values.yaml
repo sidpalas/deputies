@@ -81,7 +81,7 @@ postgres:
     port: port
 
 config:
-  runner: flue
+  runner: pi
   sandboxProvider: daytona
   sandboxWorkspacePath: /workspace
   apiAuthMode: none

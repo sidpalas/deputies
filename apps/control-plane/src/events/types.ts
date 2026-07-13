@@ -92,7 +92,7 @@ export type NormalizedEventPayloadMap = {
     stdoutTail: string;
     stderrTail: string;
   };
-  agent_text_delta: { text: string; flueSessionId?: string | undefined };
+  agent_text_delta: { text: string };
   agent_response_final: { text: string; model?: string; usage?: ModelUsagePayload };
   tool_started: ToolStartedPayload;
   tool_finished: ToolFinishedPayload;
@@ -121,7 +121,6 @@ type ToolStartedPayload = {
   toolCallId?: string | undefined;
   command?: string;
   args?: unknown;
-  flueSessionId?: string | undefined;
   taskId?: string | undefined;
   prompt?: string | undefined;
   agent?: string | undefined;
@@ -135,7 +134,6 @@ type ToolFinishedPayload = {
   toolCallId?: string | undefined;
   isError?: boolean | undefined;
   result?: unknown;
-  flueSessionId?: string | undefined;
   command?: string | undefined;
   exitCode?: number | undefined;
   taskId?: string | undefined;

@@ -1,8 +1,12 @@
-import { createGitHubCliTool, type GitHubCliRunner } from '../../src/runner-flue/github-cli-tool.js';
+import {
+  executeGitHubCliTool,
+  type GitHubCliRunner,
+  type GitHubCliToolOptions,
+} from '../../src/repositories/github-cli-tool.js';
 import type { GitHubRepositoryAccess } from '../../src/integrations/github/types.js';
-import type { RepositoryToolServices } from '../../src/runner-flue/repository-tool.js';
+import type { RepositoryToolServices } from '../../src/repositories/tool.js';
 
-describe('GitHub CLI Flue tool', () => {
+describe('GitHub CLI tool', () => {
   it('runs gh with only repository-scoped installation token env and redacts output', async () => {
     const originalSecret = process.env.CONTROL_PLANE_SECRET;
     process.env.CONTROL_PLANE_SECRET = 'do-not-inherit';
@@ -110,14 +114,12 @@ describe('GitHub CLI Flue tool', () => {
       access,
       workspacePath: '/workspace/manaflow',
     };
-    services.agentRef.current = {
-      shell: async (command: string) => {
-        if (command === 'git log -1 --pretty=format:%s%n%n%b')
-          return { exitCode: 0, stdout: 'Filled title\n\nFilled body', stderr: '' };
-        if (command === 'git branch --show-current') return { exitCode: 0, stdout: 'sp/filled\n', stderr: '' };
-        return { exitCode: 1, stdout: '', stderr: 'unexpected command' };
-      },
-    } as never;
+    services.shell = () => async (command: string) => {
+      if (command === 'git log -1 --pretty=format:%s%n%n%b')
+        return { exitCode: 0, stdout: 'Filled title\n\nFilled body', stderr: '' };
+      if (command === 'git branch --show-current') return { exitCode: 0, stdout: 'sp/filled\n', stderr: '' };
+      return { exitCode: 1, stdout: '', stderr: 'unexpected command' };
+    };
     const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
       if (String(url).endsWith('/repos/manaflow-ai/manaflow') && init?.method === 'GET') {
         return new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 });
@@ -180,12 +182,10 @@ describe('GitHub CLI Flue tool', () => {
       access,
       workspacePath: '/workspace/manaflow',
     };
-    services.agentRef.current = {
-      shell: async (command: string) => {
-        if (command === 'git branch --show-current') return { exitCode: 0, stdout: 'sp/edit\n', stderr: '' };
-        return { exitCode: 1, stdout: '', stderr: 'unexpected command' };
-      },
-    } as never;
+    services.shell = () => async (command: string) => {
+      if (command === 'git branch --show-current') return { exitCode: 0, stdout: 'sp/edit\n', stderr: '' };
+      return { exitCode: 1, stdout: '', stderr: 'unexpected command' };
+    };
     const requests: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
       requests.push({ url: String(url), init: init ?? {} });
@@ -359,9 +359,16 @@ function repositoryServices(): RepositoryToolServices {
       },
     },
     sandbox: { workspacePath: '/workspace' } as never,
-    agentRef: {},
+    shell: () => undefined,
     state: { context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } } },
     emit: async () => {},
     eventBase: { sessionId: 'session-1', runId: 'run-1', messageId: 'message-1' },
+  };
+}
+
+function createGitHubCliTool(repository: RepositoryToolServices, options: GitHubCliToolOptions) {
+  return {
+    execute: (params: Record<string, unknown>, signal?: AbortSignal) =>
+      executeGitHubCliTool(repository, options, params, signal),
   };
 }

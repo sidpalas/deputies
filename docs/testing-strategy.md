@@ -81,9 +81,9 @@ Current local policy:
 - `mise run //apps/web:e2e` runs Playwright browser tests such as responsive context-panel coverage.
 - `mise run //deploy/docker-compose:smoke:full-stack` is an opt-in Docker smoke that builds the local Postgres, SeaweedFS, built control-plane, and built web/Caddy stack, then drives Playwright through Caddy. It verifies deployed-style API proxying for browser routes such as `/repositories` and `/models` plus basic session creation against Postgres.
 - `pnpm check` and `mise run //:check` run formatting, package typechecks, and package unit tests; they do not run Playwright E2E tests.
-- Legacy real local Flue UAT is opt-in while `RUNNER=flue` remains available: set `RUN_REAL_LOCAL_FLUE_UAT=true`, `API_AUTH_MODE=none`, `RUNNER_MODEL_DEFAULT`, and the model provider credentials required by that model before running `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-local-flue.test.ts`.
+- Real local Pi UAT is opt-in: set `RUN_REAL_LOCAL_PI_UAT=true`, `API_AUTH_MODE=none`, `RUNNER_MODEL_DEFAULT`, and the model provider credentials required by that model before running `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-local-pi.test.ts`.
 - Real Docker sandbox UAT is opt-in: use `DOCKER_SANDBOX_IMAGE=ghcr.io/sidpalas/deputies-docker-sandbox:latest`, set `RUN_REAL_DOCKER_SANDBOX_UAT=true`, and run `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-docker-sandbox.test.ts` to verify create, stop/start, reconnect, bridge exec/fs, live preview proxying, and cleanup against a real Docker daemon. Build `deputies-sandbox:local` only when testing unpublished sandbox image changes.
-- Legacy real Daytona/Flue UAT is opt-in while `RUNNER=flue` remains available: build first and set `RUN_REAL_DAYTONA_FLUE_UAT=true`, `API_AUTH_MODE=none`, `TEST_DATABASE_URL`, `DAYTONA_API_KEY`, `RUNNER_MODEL_DEFAULT`, and the model provider credentials required by that model before running `mise run //apps/control-plane:test:uat`.
+- Real Daytona/Pi UAT is opt-in: build first and set `RUN_REAL_DAYTONA_PI_UAT=true`, `API_AUTH_MODE=none`, `TEST_DATABASE_URL`, `DAYTONA_API_KEY`, `RUNNER_MODEL_DEFAULT`, and the model provider credentials required by that model before running `mise run //apps/control-plane:test:uat`.
 - `mise run //deploy/local:infra:up` starts the normal local Postgres and SeaweedFS baseline from `deploy/local/docker-compose.yml`; Postgres creates both `deputies` and `deputies_test`.
 - Sandboxes without nested virtualization should not assume Docker or Docker Compose is available. Use `./deploy/sandboxes/daytona/start-postgres.sh` to start Postgres directly in sandbox images that include the helper scripts, then set `DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies` and `TEST_DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies_test`.
 - For broad verification inside sandbox images that include the Daytona helper scripts, run `./deploy/sandboxes/daytona/full-check.sh`; it starts Postgres, installs dependencies, runs migrations, and exercises API and web checks including Playwright e2e.
@@ -92,7 +92,7 @@ Current local policy:
 - Do not run `control-plane:test:load` concurrently with integration or UAT tests against the same `TEST_DATABASE_URL`; it also resets shared tables.
 - Load test knobs: `LOAD_SESSION_COUNT` defaults to `1000`, `LOAD_MESSAGES_PER_SESSION` defaults to `2`, `LOAD_WORKER_COUNT` defaults to `10`, and `LOAD_MAX_SECONDS` defaults to `120`. Additional load profiles cover high-contention worker claiming, read-heavy session/event histories, and concurrent generic webhook ingestion. The worker backlog profile emits per-method timing summaries for store, event, runner, sandbox-provider, and `processNext` calls so regressions can be attributed to claim, event append, sandbox persistence, runner, and finalization paths. Useful knobs include `LOAD_CONTENTION_SESSION_COUNT`, `LOAD_CONTENTION_WORKER_COUNT`, `LOAD_READ_SESSION_COUNT`, `LOAD_READ_EVENTS_PER_SESSION`, `LOAD_READ_HOT_SESSION_EVENTS`, `LOAD_WEBHOOK_DELIVERY_COUNT`, `LOAD_WEBHOOK_CONCURRENCY`, latency thresholds such as `LOAD_MAX_LIST_SESSIONS_MS`, and `LOAD_REPORT_PATH` for newline-delimited JSON benchmark summaries.
 - Testcontainers is deferred until we need fully hermetic per-run databases.
-- Architecture fitness tests currently run with unit tests and enforce Flue SDK isolation, integration-to-runner separation, and store-to-domain-service separation.
+- Architecture fitness tests currently run with unit tests and enforce Pi SDK isolation, integration-to-runner separation, and store-to-domain-service separation.
 - API tests exercise the Hono app through the Node adapter so middleware, routing, JSON responses, and SSE behavior remain covered as transport internals change.
 - Slack unit/API tests cover request signature verification, URL verification challenge handling, dedupe, bot-message ignore, app mention session creation, thread follow-up session reuse, allowlist authorization, archived-session handling, prior-thread context fetching/deduping, Slack text entity decoding, readable channel/user prompt metadata, and prompt fallback behavior when Slack scopes are missing.
 - GitHub unit/API tests cover webhook signature verification, delivery dedupe, event normalization, repository/user/org allowlists, trigger-phrase gating, archived-session recovery comments, bounded context fetching, completion callback comments, runtime installation token handling, repository prepare/list/set behavior, and guarded `gh`/`git` tool behavior.
@@ -238,12 +238,12 @@ Acceptance tests:
 - Health endpoint returns ready state.
 - Generic webhook returns `202` and creates session/message.
 - Built fake-runner flow completes through the worker and emits sandbox lifecycle events.
-- Opt-in legacy real Daytona/Flue flow provisions a hosted sandbox, runs through deprecated `RUNNER=flue`, and completes a message.
+- Opt-in real Daytona/Pi flow provisions a hosted sandbox, runs through `RUNNER=pi`, and completes a message.
 - Product API auth rejects unauthenticated session routes while leaving health public, including bearer and session-cookie modes.
 - Follow-up messages reuse the same active sandbox and expose `sandbox_ready.created=false`.
 - Generic webhook auth remains independent from product API auth.
 - Real Docker sandbox UAT starts a tiny server inside the sandbox and fetches it through the provider service endpoint.
-- Legacy real Daytona/Flue follow-up UAT validates persistent sandbox filesystem and Flue tool events while that runner remains available.
+- Real Daytona/Pi follow-up UAT validates persistent sandbox filesystem and Pi tool events.
 - Generic webhook UAT validates HTTP completion callbacks and artifact events using a local callback server.
 - Invalid auth returns stable JSON error.
 - Duplicate delivery does not create duplicate messages.
@@ -284,7 +284,7 @@ Prompt injection tests should assert that prompt builders separate external cont
 
 ## Prompt And Context Tests
 
-Prompt templates, Flue roles, and skills should be treated as code.
+Prompt templates, Pi extensions, and skills should be treated as code.
 
 MVP prompt tests:
 
@@ -298,7 +298,7 @@ MVP prompt tests:
 
 Later evals:
 
-- Promptfoo-style routing tests for Flue skills/roles.
+- Promptfoo-style routing tests for Pi skills and instructions.
 - Multi-model weekly regression for important routing behavior.
 - Quality scoring for agent-facing Markdown if a tool is selected.
 
@@ -310,11 +310,10 @@ These checks are especially important for agentic development. If modules can on
 
 Required rules:
 
-- `api` must not import `runner-pi` or `runner-flue`.
-- `integrations` must not import `runner-pi` or `runner-flue`.
+- `api` must not import `runner-pi`.
+- `integrations` must not import `runner-pi`.
 - `store` must not import domain modules.
 - Pi SDK runtime imports stay in `runner-pi`; config may import Pi's model catalog and auth helpers may import Pi OAuth packages.
-- Only `runner-flue` imports `@flue/runtime` while the deprecated Flue runner exists.
 - Public event types must be declared in one shared module.
 - Public API responses must have schemas.
 - Callback core must not import concrete integrations; integrations may provide callback sender plugins.

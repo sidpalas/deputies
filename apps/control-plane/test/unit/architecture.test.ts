@@ -10,10 +10,7 @@ describe('architecture boundaries', () => {
     const files = await sourceFiles();
     const offenders: string[] = [];
 
-    const rules = [
-      { sdk: '@flue/runtime', allowed: (path: string) => path.startsWith('runner-flue/') },
-      { sdk: '@daytona/sdk', allowed: (path: string) => path === 'sandbox/daytona.ts' },
-    ];
+    const rules = [{ sdk: '@daytona/sdk', allowed: (path: string) => path === 'sandbox/daytona.ts' }];
 
     for (const file of files) {
       const text = await readFile(file, 'utf8');
@@ -34,11 +31,7 @@ describe('architecture boundaries', () => {
 
     for (const file of files) {
       const text = await readFile(file, 'utf8');
-      if (
-        internalImports(file, text).some(
-          (path) => path.startsWith('runner/') || path.startsWith('runner-pi/') || path.startsWith('runner-flue/'),
-        )
-      ) {
+      if (internalImports(file, text).some((path) => path.startsWith('runner/') || path.startsWith('runner-pi/'))) {
         offenders.push(relative(root, file));
       }
     }
@@ -52,7 +45,7 @@ describe('architecture boundaries', () => {
 
     for (const file of files) {
       const text = await readFile(file, 'utf8');
-      if (internalImports(file, text).some((path) => path.startsWith('runner-pi/') || path.startsWith('runner-flue/')))
+      if (internalImports(file, text).some((path) => path.startsWith('runner-pi/')))
         offenders.push(relative(root, file));
     }
 
@@ -65,7 +58,6 @@ describe('architecture boundaries', () => {
 
     expect(imports.some((path) => path.startsWith('store/'))).toBe(true);
     expect(imports.some((path) => path.startsWith('runner-pi/'))).toBe(true);
-    expect(imports.some((path) => path.startsWith('runner-flue/'))).toBe(true);
     expect(imports.some((path) => path.startsWith('sandbox/'))).toBe(true);
     expect(imports.some((path) => path.startsWith('integrations/'))).toBe(true);
   });
@@ -89,7 +81,7 @@ describe('architecture boundaries', () => {
   it('prevents runner implementations from importing api/app or integrations', async () => {
     const files = (await sourceFiles()).filter((file) => {
       const path = relative(srcRoot, file);
-      return path.startsWith('runner-pi/') || path.startsWith('runner-flue/');
+      return path.startsWith('runner-pi/');
     });
     const offenders: string[] = [];
 

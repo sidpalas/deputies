@@ -188,7 +188,7 @@ Notes:
 - `headers` are attached by the control-plane worker's MCP transport and are not forwarded to the sandbox.
 - `allowedTools` is optional and filters original, unprefixed MCP tool names.
 - `MCP_RESPONSE_MAX_BYTES` is a transport-level cap enforced while receiving MCP responses for both streamable HTTP and SSE.
-- `MCP_TOOL_TIMEOUT_MS` and `MCP_TOOL_RESULT_MAX_CHARS` are enforced by the Pi/shared MCP client. The deprecated Flue native MCP adapter ignores those two per-call/text-result knobs, but still uses the connect timeout and response byte cap.
+- `MCP_TOOL_TIMEOUT_MS` and `MCP_TOOL_RESULT_MAX_CHARS` are enforced by the Pi/shared MCP client.
 - A server that cannot connect for a run is skipped non-fatally; the agent receives a prompt note that the tools are unavailable.
 
 ## Postgres And Migrations
@@ -332,8 +332,6 @@ RUNNER=pi
 RUNNER_MODEL_DEFAULT=anthropic/claude-haiku-4-5
 ```
 
-`RUNNER=flue` is deprecated and kept only for legacy deployments while the Flue runner is removed. Do not use it for new deployments.
-
 Provider credentials:
 
 ```sh
@@ -416,7 +414,7 @@ DEPUTY_MAX_SPAWNS_PER_RUN=3
 
 Set `DEPUTY_TOOL_ENABLED=false` to hide the tool for a conservative deployment.
 
-When enabled for `RUNNER=pi` or deprecated `RUNNER=flue`, the tool runs in the trusted worker process and writes product sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions inherit the parent's owner group, visibility, and write policy, and copy the triggering message's author user as creator attribution when present. They can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`. Successful completion follow-ups are informational and output-free; agents can explicitly request bounded newest-first transcript pages with `get_session` when the child result matters.
+When enabled for `RUNNER=pi`, the tool runs in the trusted worker process and writes product sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions inherit the parent's owner group, visibility, and write policy, and copy the triggering message's author user as creator attribution when present. They can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`. Successful completion follow-ups are informational and output-free; agents can explicitly request bounded newest-first transcript pages with `get_session` when the child result matters.
 
 Before relying on the default in production, review the organization-level coordination policy, worker capacity, and session-spawn limits. Use `DEPUTY_TOOL_ENABLED=false` if the deployment needs a conservative rollout.
 

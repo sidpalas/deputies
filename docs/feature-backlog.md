@@ -34,8 +34,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Prompt templates and snapshot tests for Slack/GitHub/Linear inputs.
 - Better repo resolution from Slack/GitHub/Linear context.
 - Setup/install hook observability beyond `repository_ready`.
-- Upstream Flue cancellation improvement for built-in bash/tool execution.
-- OpenAI Codex OAuth refresh hardening for deployed workers: current loading can refresh expired access tokens at startup, but Flue then uses a static provider API key; static base64 auth variables can become stale when refresh tokens rotate; durable refresh state likely needs a writable auth file/volume or refresh-token-specific secret flow; avoid naive whole-run retry on 401 because agent/tool side effects may duplicate.
+- OpenAI Codex OAuth refresh hardening for deployed workers: static base64 auth variables can become stale when refresh tokens rotate; durable refresh state likely needs a writable auth file/volume or refresh-token-specific secret flow; avoid naive whole-run retry on 401 because agent/tool side effects may duplicate.
 
 ## Automations
 

@@ -1,4 +1,4 @@
-import { createServiceTool } from '../../src/runner-flue/service-tool.js';
+import { executeServiceTool, type ServiceToolServices } from '../../src/sessions/service-tool.js';
 
 describe('service tool', () => {
   it('publishes, lists, and unpublishes services in session context', async () => {
@@ -244,4 +244,12 @@ function createKeepalive() {
       };
     },
   } as never;
+}
+
+function createServiceTool(services: ServiceToolServices) {
+  return {
+    async execute(params: Record<string, unknown>): Promise<string> {
+      return JSON.stringify(await executeServiceTool(services, params));
+    },
+  };
 }

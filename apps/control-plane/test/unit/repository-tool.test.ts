@@ -1,9 +1,9 @@
-import { createRepositoryTool, type RepositoryToolServices } from '../../src/runner-flue/repository-tool.js';
-import type { AgentRef } from '../../src/runner-flue/git-tool.js';
+import { executeRepositoryTool, type RepositoryToolServices } from '../../src/repositories/tool.js';
 import type { GitHubRepositoryAccess } from '../../src/integrations/github/types.js';
 import type { NormalizedEvent } from '../../src/events/types.js';
+import type { RepositoryShell } from '../../src/repositories/shell.js';
 
-describe('repository Flue tool', () => {
+describe('repository tool', () => {
   it('reports current repository status and allowed repositories', async () => {
     const services = repositoryServices();
     const tool = createRepositoryTool(services);
@@ -121,22 +121,15 @@ describe('repository Flue tool', () => {
   it('prepares the active repository inside the sandbox', async () => {
     const shells: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = [];
     const events: NormalizedEvent[] = [];
-    const agentRef: AgentRef = {
-      current: {
-        async session() {
-          throw new Error('not used');
-        },
-        async shell(command, options) {
-          const shell: { command: string; cwd?: string; env?: Record<string, string> } = { command };
-          if (options?.cwd) shell.cwd = options.cwd;
-          if (options?.env) shell.env = options.env;
-          shells.push(shell);
-          return { exitCode: 0, stdout: 'prepared', stderr: '' };
-        },
-      },
+    const shell: RepositoryShell = async (command, options) => {
+      const shell: { command: string; cwd?: string; env?: Record<string, string> } = { command };
+      if (options?.cwd) shell.cwd = options.cwd;
+      if (options?.env) shell.env = options.env;
+      shells.push(shell);
+      return { exitCode: 0, stdout: 'prepared', stderr: '' };
     };
     const services = repositoryServices({
-      agentRef,
+      shell: () => shell,
       emit: async (event) => {
         events.push(event);
       },
@@ -181,37 +174,22 @@ describe('repository Flue tool', () => {
       { exitCode: 0, stdout: 'deputies-setup:run reason=cloned hash=abc123 exec=0\n', stderr: '' },
       { exitCode: 0, stdout: 'setup ok', stderr: '' },
     ];
-    const agentRef: AgentRef = {
-      current: {
-        async session() {
-          throw new Error('not used');
-        },
-        async shell(command, options) {
-          const shell: { command: string; cwd?: string; env?: Record<string, string> } = { command };
-          if (options?.cwd) shell.cwd = options.cwd;
-          if (options?.env) shell.env = options.env;
-          shells.push(shell);
-          return shellResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' };
-        },
-      },
+    const shell: RepositoryShell = async (command, options) => {
+      const shell: { command: string; cwd?: string; env?: Record<string, string> } = { command };
+      if (options?.cwd) shell.cwd = options.cwd;
+      if (options?.env) shell.env = options.env;
+      shells.push(shell);
+      return shellResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' };
     };
     const services = repositoryServices({
-      agentRef,
-      sandbox: {
-        workspacePath: '/workspace',
-        async exec(input: { command: string; cwd?: string; env?: Record<string, string> }) {
-          const call: { command: string; cwd?: string; env?: Record<string, string> } = { command: input.command };
-          if (input.cwd) call.cwd = input.cwd;
-          if (input.env) call.env = input.env;
-          execCalls.push(call);
-          const now = new Date();
-          return {
-            ...(execResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' }),
-            startedAt: now,
-            completedAt: now,
-          };
-        },
-      } as never,
+      shell: () => shell,
+      setupShell: () => async (command, options) => {
+        const call: { command: string; cwd?: string; env?: Record<string, string> } = { command };
+        if (options?.cwd) call.cwd = options.cwd;
+        if (options?.env) call.env = options.env;
+        execCalls.push(call);
+        return execResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' };
+      },
       setupScript: { enabled: true, timeoutMs: 600_000 },
       emit: async (event) => {
         events.push(event);
@@ -241,29 +219,10 @@ describe('repository Flue tool', () => {
       { exitCode: 0, stdout: 'deputies-setup:run reason=cloned hash=abc123 exec=1\n', stderr: '' },
       { exitCode: 1, stdout: 'bad stdout', stderr: 'bad stderr' },
     ];
-    const agentRef: AgentRef = {
-      current: {
-        async session() {
-          throw new Error('not used');
-        },
-        async shell() {
-          return shellResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' };
-        },
-      },
-    };
+    const shell: RepositoryShell = async () => shellResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' };
     const services = repositoryServices({
-      agentRef,
-      sandbox: {
-        workspacePath: '/workspace',
-        async exec() {
-          const now = new Date();
-          return {
-            ...(execResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' }),
-            startedAt: now,
-            completedAt: now,
-          };
-        },
-      } as never,
+      shell: () => shell,
+      setupShell: () => async () => execResponses.shift() ?? { exitCode: 0, stdout: '', stderr: '' },
       setupScript: { enabled: true, timeoutMs: 600_000 },
     });
     services.state.context = { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } };
@@ -303,10 +262,16 @@ function repositoryServices(overrides: Partial<RepositoryToolServices> = {}): Re
       },
     },
     sandbox: { workspacePath: '/workspace' } as never,
-    agentRef: {},
+    shell: () => undefined,
     state: { context: {} },
     emit: async () => {},
     eventBase: { sessionId: 'session-1', runId: 'run-1', messageId: 'message-1' },
     ...overrides,
+  };
+}
+
+function createRepositoryTool(services: RepositoryToolServices) {
+  return {
+    execute: (params: Record<string, unknown>, signal?: AbortSignal) => executeRepositoryTool(services, params, signal),
   };
 }

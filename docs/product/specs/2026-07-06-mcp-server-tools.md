@@ -16,19 +16,14 @@ Deputies users want agents to reach 3rd-party data sources without forking Deput
 
 Consequences: the model-context footprint of connecting Executor is small and constant; agent-side tool filtering and proxy-mode patterns are unnecessary _for Executor_ (still relevant for other MCP servers); and approval-gated policies work without any Deputies-side approval machinery. The [MCP Proxy docs'](https://executor.sh/docs/mcp-proxy) "tools join your catalog" language describes the catalog _behind_ `execute`, not the MCP tool list.
 
-Deputies has two runners in `apps/control-plane`:
-
-- **Pi runner** (`src/runner-pi/`, primary going forward) — builds a `customTools: ToolDefinition[]` array per run in `createPiToolSet` (`src/runner-pi/runner.ts:309`) and passes it to `createAgentSession({ noTools: 'builtin', customTools })`. Pi (`@earendil-works/pi-coding-agent` 0.80.6) has **no MCP support**.
-- **Flue runner** (`src/runner-flue/`) — assembles tools in `src/runner-flue/runner.ts` (~line 76) and passes them through the agent factory. Flue (`@flue/runtime` 0.11.1) **ships `connectMcpServer(name, options)`**, which connects to a remote MCP server (streamable HTTP or SSE), lists tools with pagination, and adapts them into ordinary Flue tool definitions named `mcp__<server>__<tool>`.
-
-Flue's implementation is the reference design for the Pi adapter. It lives in `node_modules/@flue/runtime/dist/index.mjs` (search `//#region src/mcp.ts`) and does, in order: connect an `@modelcontextprotocol/sdk` `Client` over `StreamableHTTPClientTransport` (or `SSEClientTransport` for legacy servers), paginate `client.listTools()`, then for each tool build a definition with:
+The Pi runner builds a `customTools: ToolDefinition[]` array per run and passes it to `createAgentSession({ noTools: 'builtin', customTools })`. Pi had no native MCP support when this spec was written. The now-removed Flue runner's MCP implementation served as historical design input for the Pi adapter, including these behaviors:
 
 - name `mcp__<server>__<tool>` (unsupported chars → `_`, duplicates rejected);
 - description composed from original name, server name, optional title, and the tool's own description;
 - parameters = the MCP `inputSchema` normalized (`type` defaults to `object`, `properties` defaults to `{}`);
 - an `execute` that calls `client.callTool({ name, arguments }, undefined, { signal })`, validates `structuredContent` against `outputSchema` (Ajv) when present, formats content parts (text / image / audio / resource / resource_link) into a single text block, and throws when `result.isError`.
 
-Key execution-boundary fact (see `docs/architecture.md` "Flue Custom Tools"): custom tools run in the **trusted control-plane worker process**, not the sandbox. An MCP tool handler therefore calls Executor from the control plane; Executor auth headers never enter the sandbox. This matches Executor's own security model.
+Key execution-boundary fact: custom tools run in the **trusted control-plane worker process**, not the sandbox. An MCP tool handler therefore calls Executor from the control plane; Executor auth headers never enter the sandbox. This matches Executor's own security model.
 
 Relevant precedent in this repo: `src/runner-pi/web-search-tool.ts` wraps a plain JSON-Schema object as `ToolDefinition['parameters']` via a cast (`webSearchToolParameters as unknown as ToolDefinition['parameters']`). MCP `inputSchema` is JSON Schema, so the same pass-through works.
 
@@ -42,7 +37,7 @@ Relevant precedent in this repo: `src/runner-pi/web-search-tool.ts` wraps a plai
 ## Goals
 
 - Operators of Deputies (cloud or self-hosted) can point their deployment at one or more remote MCP servers — primarily a self-hosted Executor instance — via environment configuration only.
-- Tools from those servers appear to the agent as ordinary tools (`mcp__<server>__<tool>`) in the **Pi runner** (primary) and the **Flue runner** (parity).
+- Tools from those servers appear to the agent as ordinary tools (`mcp__<server>__<tool>`) in the Pi runner.
 - MCP tool calls execute in the control-plane process; auth headers to the MCP endpoint are never exposed to the sandbox, prompts, events, artifacts, or logs.
 - Tool start/finish activity flows through the existing normalized event pipeline with no event-schema changes (Pi's `tool_execution_start/end` → `tool_started`/`tool_finished` already handles any custom tool; see `normalizePiEvent` in `src/runner-pi/runner.ts:662`).
 - Pi subagents get the same MCP tools as the parent session without reconnecting per subagent.
@@ -89,17 +84,17 @@ Config type: `mcpServers: McpServerConfig[]` (empty array when unset → feature
 
 ### 2. Shared MCP client module (`src/mcp/`)
 
-New runner-agnostic module so Pi and Flue don't duplicate protocol logic:
+New runner-agnostic MCP client module:
 
 - `src/mcp/types.ts` — `McpServerConfig`, `McpToolSpec` (adapted name, original name, description, JSON-Schema parameters), `McpConnection` (`tools: McpToolSpec[]`, `callTool(originalName, args, signal)`, `close()`).
-- `src/mcp/client.ts` — `connectMcpServer(config, options)` built directly on `@modelcontextprotocol/sdk` (`Client`, `StreamableHTTPClientTransport`, lazily-imported `SSEClientTransport`). Port Flue's logic faithfully:
+- `src/mcp/client.ts` — `connectMcpServer(config, options)` built directly on `@modelcontextprotocol/sdk` (`Client`, `StreamableHTTPClientTransport`, lazily-imported `SSEClientTransport`):
   - paginate `listTools` via `nextCursor`, capped by total listed tool count and listed tool bytes;
   - adapted naming `mcp__<server>__<tool>` with sanitization; post-sanitization collisions are suffixed (`_2`, `_3`, ...) so the rest of the server stays usable;
   - description composition (original name, server, title, description);
   - `inputSchema` normalization (default `type: 'object'`, `properties: {}`);
   - result formatting for text/image/audio/resource/resource_link/structuredContent parts, `isError` → thrown error whose message is the formatted text;
   - close the client on connect/list failure before rethrowing.
-  - Differences from Flue, deliberate: skip Ajv output-schema validation (avoid a new heavy dependency; structured content is still included in the formatted text), and apply `MCP_TOOL_RESULT_MAX_CHARS` truncation.
+  - skip Ajv output-schema validation (avoid a new heavy dependency; structured content is still included in the formatted text), and apply `MCP_TOOL_RESULT_MAX_CHARS` truncation.
   - Every `callTool` uses `AbortSignal.any([runSignal, AbortSignal.timeout(toolTimeoutMs)])`.
   - The custom fetch wrapper enforces `MCP_RESPONSE_MAX_BYTES` on both streamable HTTP and SSE responses, blocks only bare streamable-HTTP `GET` requests, and allows `GET` requests carrying `last-event-id` so SDK stream resumption still works.
   - Error hygiene: catch transport errors and rethrow with server `name` + original tool name only; never include header values or full request dumps.
@@ -112,19 +107,11 @@ New runner-agnostic module so Pi and Flue don't duplicate protocol logic:
 - Pass the resulting tool definitions into `createPiToolSet` through `PiToolSetContext` (add `mcpTools?: ToolDefinition[]`). Because `createPiToolSet` is also called by `runPiSubagent`, subagents automatically share the same live connections — thread `mcpTools` through `RunPiSubagentInput` rather than reconnecting.
 - Close all connections in the existing `finally` block, after `session.dispose()`, before `persistAndCleanup`. Connection lifetime == run lifetime (no cross-run caching in v1; see Risks).
 
-### 4. Flue runner integration (`src/runner-flue/`)
+### 4. Wiring (`src/index.ts`)
 
-Use Flue's native `connectMcpServer` (exported from `@flue/runtime`) rather than the shared client, since it already produces Flue `ToolDefinition`s with identical naming:
+In `createRunner()` (`src/index.ts:361`): pass `config.mcpServers` and knobs into `PiRunnerOptions` when non-empty. No store, worker, event, or web changes required.
 
-- In `FlueRunner.run` (`src/runner-flue/runner.ts`, where the `tools` array is built ~line 76): connect configured servers, append `connection.tools`, and `close()` each connection in the run's cleanup path. Same non-fatal failure policy as Pi.
-- `FlueRunnerOptions` gains the same `mcpServers` config. The `allowedTools` filter is applied by filtering `connection.tools` on the adapted suffix.
-- Flue's native MCP adapter is deprecated and does not honor `MCP_TOOL_TIMEOUT_MS` or `MCP_TOOL_RESULT_MAX_CHARS`; those two knobs are Pi/shared-client-only. Flue still uses `MCP_CONNECT_TIMEOUT_MS` and the custom fetch response byte cap.
-
-### 5. Wiring (`src/index.ts`)
-
-In `createRunner()` (`src/index.ts:361`): pass `config.mcpServers` (and knobs) into `PiRunnerOptions` and `FlueRunner` options when non-empty. No store, worker, event, or web changes required.
-
-### 6. Documentation
+### 5. Documentation
 
 - `docs/architecture.md` — extend "Choosing an extension point" with the remote-MCP path now being concrete: control-plane-hosted MCP client, credential boundary, Executor as the recommended aggregation proxy.
 - Deployment docs (`deploy/` READMEs, AWS reference env list) — document `MCP_SERVERS` and the knobs, with an Executor self-hosted example (`https://<executor-host>/mcp`).
@@ -144,7 +131,6 @@ None. No migrations. Session persistence is unaffected (MCP tools are recreated 
 
 - `test/unit/mcp-client.test.ts` — use the MCP SDK's `InMemoryTransport.createLinkedPair()` with an in-test `McpServer` to cover: tool listing with pagination and caps, name sanitization and collision suffixing, schema normalization, `allowedTools` filtering, result formatting for each content part type, `isError` → thrown, truncation cap, transport byte cap, per-call timeout, abort-signal propagation, streamable-HTTP `GET` resumption behavior, connect failure closes the client.
 - `test/unit/pi-runner.test.ts` (extend existing) — with a fake/in-memory MCP server configured: MCP tools present in the session's custom tools; a prompted tool call round-trips; connect failure keeps the run alive and prepends the unavailability note; connections closed after the run, after run failure, after abort, and after early post-connect setup failure; subagent tool set includes MCP tools without a second connect.
-- `test/unit/flue-runner.test.ts` (extend existing) — MCP tools appended and connection closed on completion/failure/abort.
 - Config tests in `test/unit/config.test.ts` — parse/validate `MCP_SERVERS` (valid, invalid JSON, missing fields, duplicate names, bad transport), defaults for knobs including `MCP_RESPONSE_MAX_BYTES`.
 - Manual UAT against the real Executor instance. **Endpoint already verified directly (2026-07-06)**: authenticated `initialize` → 200 (server `executor` 1.0.0), unauthenticated → 401, `tools/list` → the 3 code-mode tools, and a real `tools/call` (`skills`) round-trips. Remaining UAT after implementation: set `MCP_SERVERS` with the instance URL and `Authorization: Bearer <api-key>` header, run a Deputies session that exercises an Executor-proxied integration end-to-end (`execute` → `tools.search` → integration call → `emit`), verify `mcp__executor__*` tool events render in the web UI, and exercise a paused/`resume` round-trip and a blocked-policy call to confirm both surface cleanly.
 - Repo checks: run tests per `AGENTS.md` (`npx pnpm@11.5.2 install`, mise tasks; CI runs unit tests).
@@ -156,8 +142,7 @@ Single PR containing the whole feature. Suggested implementation order within th
 1. Config parsing + validation (`MCP_SERVERS` and knobs) and the `@modelcontextprotocol/sdk` dependency, with config tests.
 2. Shared `src/mcp/` client module with its unit tests (in-memory MCP server).
 3. Pi runner integration (primary): `runner-pi/mcp-tools.ts`, `runUnlocked` lifecycle, subagent threading, wiring in `src/index.ts`, pi-runner tests.
-4. Flue runner parity via `connectMcpServer`, flue-runner tests.
-5. Docs: `docs/architecture.md` extension-point update, deploy env documentation with an Executor example, `docs/feature-backlog.md` update.
+4. Docs: `docs/architecture.md` extension-point update, deploy env documentation with an Executor example, `docs/feature-backlog.md` update.
 
 Manual UAT against the real Executor instance happens after merge/deploy (see Testing Plan) since it needs the deployed environment and instance credentials.
 
@@ -181,8 +166,7 @@ Feature is off unless `MCP_SERVERS` is set, so rollout is opt-in per deployment.
 ## Links
 
 - Related PRD: none (operator-facing config feature; this spec stands alone)
-- Related decisions: `docs/architecture.md` §Flue Custom Tools / Choosing an extension point
+- Related decisions: `docs/architecture.md` §Runner Custom Tools / Choosing an extension point
 - Reference: https://executor.sh/docs/mcp-proxy , https://executor.sh/docs/hosted/docker (endpoint `/mcp`, streamable HTTP)
-- Reference implementation: `@flue/runtime` `connectMcpServer` — `node_modules/@flue/runtime/dist/index.mjs` (`//#region src/mcp.ts`) and `docs/guide/tools.md` in that package
 - Repo precedent for JSON-Schema Pi tools: `apps/control-plane/src/runner-pi/web-search-tool.ts`
 - Prior art (design input only, not dependencies): https://pi.dev/packages/pi-mcp-adapter (proxy tool + lazy lifecycle patterns), https://pi.dev/packages/context-mode (rejected — executes code in the host process)

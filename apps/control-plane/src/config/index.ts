@@ -5,7 +5,7 @@ import { AMAZON_BEDROCK_INFERENCE_PROFILE_MODEL_IDS, AMAZON_BEDROCK_PROVIDER } f
 import { REASONING_LEVELS, type ReasoningLevel } from '../runner/reasoning.js';
 
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
-export type RunnerKind = 'fake' | 'flue' | 'pi';
+export type RunnerKind = 'fake' | 'pi';
 export type SandboxProviderKind =
   | 'fake'
   | 'unsafe-local'
@@ -241,7 +241,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
         'REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS',
       ) * 1000,
     runMode,
-    runner: parseEnum(env.RUNNER, ['fake', 'flue', 'pi'], 'fake'),
+    runner: parseEnum(env.RUNNER, ['fake', 'pi'], 'fake'),
     sandboxProvider: parseEnum(
       env.SANDBOX_PROVIDER,
       ['fake', 'unsafe-local', 'docker', 'daytona', 'tensorlake', 'superserve', 'lambda-microvm', 'k8s-agent-sandbox'],
@@ -692,7 +692,7 @@ export function requireAgentSandboxOrchestratorToken(config: AppConfig): string 
 
 export function requireRunnerModelDefault(config: AppConfig): string {
   if (!config.runnerModelDefault) {
-    throw new Error('RUNNER_MODEL_DEFAULT is required when RUNNER=pi or deprecated RUNNER=flue');
+    throw new Error('RUNNER_MODEL_DEFAULT is required when RUNNER=pi');
   }
 
   return config.runnerModelDefault;

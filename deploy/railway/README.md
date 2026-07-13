@@ -41,8 +41,6 @@ RUNNER=pi
 RUNNER_MODEL_DEFAULT=<provider/model>
 ```
 
-`RUNNER=flue` is deprecated and kept only for existing legacy deployments while the Flue runner is removed.
-
 Then configure one of the supported model auth paths:
 
 ```sh
@@ -141,7 +139,7 @@ MCP_RESPONSE_MAX_BYTES=5242880
 ```
 
 Keep the Executor API key in Railway service variables. Deputies attaches the header from the control-plane worker process; it is not copied into sandbox environment variables.
-`MCP_TOOL_TIMEOUT_MS` and `MCP_TOOL_RESULT_MAX_CHARS` are enforced by the Pi/shared MCP client; the deprecated Flue native MCP adapter ignores those two knobs.
+`MCP_TOOL_TIMEOUT_MS` and `MCP_TOOL_RESULT_MAX_CHARS` are enforced by the Pi/shared MCP client.
 
 GitHub runtime repository access:
 
