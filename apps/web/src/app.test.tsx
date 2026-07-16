@@ -647,13 +647,47 @@ it('reopens the sessions side panel when navigating back to sessions from the fo
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Access' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Sessions/ }));
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
   expect(screen.getByPlaceholderText('Search sessions...')).toBeInTheDocument();
   expect(screen.getByText('Archived')).toBeInTheDocument();
   expect(screen.queryByPlaceholderText('Search groups...')).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Access' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Sessions' }));
+  expect(screen.getByRole('menuitem', { name: /Access/ })).toBeInTheDocument();
+});
+
+it('keeps page navigation collapsed until the page switcher is opened', async () => {
+  mockApi({ authMode: 'session', currentUser: user });
+  render(<App />);
+
+  const switcher = await screen.findByRole('button', { name: 'Switch page, current page Sessions' });
+  expect(screen.queryByRole('menu', { name: 'Pages' })).not.toBeInTheDocument();
+
+  fireEvent.click(switcher);
+  expect(screen.getByRole('menuitem', { name: /Sessions/ })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByRole('menuitem', { name: /Automations/ })).toBeInTheDocument();
+  expect(screen.getByRole('menuitem', { name: /Access/ })).toBeInTheDocument();
+  expect(screen.getByRole('menuitem', { name: /Environments/ })).toBeInTheDocument();
+  expect(screen.getByRole('menuitem', { name: /Setup/ })).toBeInTheDocument();
+
+  fireEvent.keyDown(document, { key: 'Escape' });
+  expect(screen.queryByRole('menu', { name: 'Pages' })).not.toBeInTheDocument();
+  expect(switcher).toHaveFocus();
+});
+
+it('cycles the compact theme action through every theme preference', async () => {
+  mockApi();
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Theme: System. Change theme' }));
+  expect(localStorage.getItem('deputies-theme')).toBe('light');
+  expect(screen.getByRole('button', { name: 'Theme: Light. Change theme' })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Theme: Light. Change theme' }));
+  expect(localStorage.getItem('deputies-theme')).toBe('dark');
+  expect(screen.getByRole('button', { name: 'Theme: Dark. Change theme' })).toBeInTheDocument();
 });
 
 it('keeps the groups page open until a session is selected', async () => {
@@ -731,7 +765,8 @@ it('persists and restores the setup page view on refresh', async () => {
 
   const rendered = render(<App />);
   expect(await screen.findByRole('heading', { name: 'Setup guide' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Setup' })).toHaveAttribute('aria-current', 'page');
+  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Setup' }));
+  expect(screen.getByRole('menuitem', { name: /Setup/ })).toHaveAttribute('aria-current', 'page');
 
   rendered.unmount();
   render(<App />);
@@ -748,7 +783,8 @@ it('opens the sessions sidebar from the setup page', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Open sessions' }));
 
   expect(screen.getByPlaceholderText('Search sessions...')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Setup' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Sessions/ }));
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
 });
 
@@ -762,7 +798,8 @@ it('opens the access sidebar from the setup page when access is the active sideb
   fireEvent.click(screen.getByRole('button', { name: 'Open access' }));
 
   expect(screen.getByPlaceholderText('Search groups...')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Access' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Setup' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Access/ }));
   expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
 });
 

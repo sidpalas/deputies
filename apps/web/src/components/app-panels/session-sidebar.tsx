@@ -2,17 +2,26 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SyntheticEvent } from 'react';
 import {
   Archive,
+  Bot,
+  Check,
   ChevronDown,
+  ChevronsUpDown,
   FilePlus2,
+  KeyRound,
+  Layers3,
+  LogOut,
   MessageCircle,
+  MessagesSquare,
   Monitor,
   Moon,
   PanelLeftClose,
   Plus,
   RefreshCw,
   RotateCcw,
+  Settings2,
   Star,
   Sun,
+  UsersRound,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -255,8 +264,7 @@ export function ThreadSidebar(props: {
           </>
         )}
       </div>
-      <ThemeToggle preference={props.themePreference} onChange={props.onThemeChange} />
-      <ApiStatusFooter
+      <SidebarFooter
         authRequired={props.authRequired}
         canViewGroups={props.canViewGroups}
         canViewAutomations={props.canViewAutomations}
@@ -264,6 +272,7 @@ export function ThreadSidebar(props: {
         canViewSetup={props.canViewSetup}
         health={props.health}
         navPage={props.navPage}
+        themePreference={props.themePreference}
         token={props.token}
         onOpenGroups={props.onOpenGroups}
         onOpenAutomations={props.onOpenAutomations}
@@ -271,6 +280,7 @@ export function ThreadSidebar(props: {
         onOpenSessions={props.onOpenSessions}
         onOpenSetup={props.onOpenSetup}
         onSignOut={props.onSignOut}
+        onThemeChange={props.onThemeChange}
       />
     </div>
   );
@@ -449,50 +459,36 @@ function FilterChip(props: { active: boolean; icon: LucideIcon; label: string; t
   );
 }
 
-export function ThemeToggle(props: { preference: ThemePreference; onChange: (value: ThemePreference) => void }) {
-  const options: { value: ThemePreference; label: string; icon: typeof Monitor }[] = [
-    { value: 'system', label: 'System theme', icon: Monitor },
-    { value: 'light', label: 'Light theme', icon: Sun },
-    { value: 'dark', label: 'Dark theme', icon: Moon },
-  ];
+type NavigationPage = 'sessions' | 'setup' | 'groups' | 'automations' | 'environments';
 
-  return (
-    <div
-      className="mt-3 grid grid-cols-3 gap-1 rounded-md border border-border bg-muted/60 p-1"
-      aria-label="Theme preference"
-    >
-      {options.map((option) => {
-        const Icon = option.icon;
-        const active = props.preference === option.value;
-        return (
-          <button
-            className={cn(
-              'inline-flex h-8 items-center justify-center rounded border border-transparent text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
-              active && 'border-border bg-card text-foreground shadow-sm',
-            )}
-            key={option.value}
-            type="button"
-            onClick={() => props.onChange(option.value)}
-            aria-label={option.label}
-            aria-pressed={active}
-            title={option.label}
-          >
-            <Icon className="h-4 w-4" />
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+const navigationPages: Array<{
+  id: NavigationPage;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+}> = [
+  { id: 'sessions', label: 'Sessions', description: 'Run and review agent work', icon: MessagesSquare },
+  { id: 'automations', label: 'Automations', description: 'Schedule recurring work', icon: Bot },
+  { id: 'groups', label: 'Access', description: 'Manage groups and permissions', icon: UsersRound },
+  { id: 'environments', label: 'Environments', description: 'Configure execution environments', icon: Layers3 },
+  { id: 'setup', label: 'Setup', description: 'Review deployment configuration', icon: Settings2 },
+];
 
-export function ApiStatusFooter(props: {
+const themeOptions: Array<{ value: ThemePreference; label: string; icon: LucideIcon }> = [
+  { value: 'system', label: 'System', icon: Monitor },
+  { value: 'light', label: 'Light', icon: Sun },
+  { value: 'dark', label: 'Dark', icon: Moon },
+];
+
+export function SidebarFooter(props: {
   authRequired: boolean;
   canViewGroups: boolean;
   canViewAutomations: boolean;
   canViewEnvironments: boolean;
   canViewSetup: boolean;
   health: Health | null;
-  navPage: 'sessions' | 'setup' | 'groups' | 'automations' | 'environments';
+  navPage: NavigationPage;
+  themePreference: ThemePreference;
   token: string;
   onOpenGroups: () => void;
   onOpenAutomations: () => void;
@@ -500,69 +496,147 @@ export function ApiStatusFooter(props: {
   onOpenSessions: () => void;
   onOpenSetup: () => void;
   onSignOut: () => void;
+  onThemeChange: (value: ThemePreference) => void;
 }) {
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const navigationRef = useRef<HTMLDivElement>(null);
+  const currentPage = navigationPages.find((page) => page.id === props.navPage) ?? navigationPages[0]!;
+  const CurrentPageIcon = currentPage.icon;
+  const theme = themeOptions.find((option) => option.value === props.themePreference) ?? themeOptions[0]!;
+  const ThemeIcon = theme.icon;
+  const showSignOut = props.authRequired && (props.token || props.health?.apiAuthMode === 'session');
+  const visiblePages = navigationPages.filter((page) => {
+    if (page.id === 'groups') return props.canViewGroups;
+    if (page.id === 'automations') return props.canViewAutomations;
+    if (page.id === 'environments') return props.canViewEnvironments;
+    if (page.id === 'setup') return props.canViewSetup;
+    return true;
+  });
+
+  useEffect(() => {
+    if (!navigationOpen) return;
+
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (event.target instanceof Node && navigationRef.current?.contains(event.target)) return;
+      setNavigationOpen(false);
+    }
+
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      setNavigationOpen(false);
+      navigationRef.current?.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.focus();
+    }
+
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [navigationOpen]);
+
+  const pageActions: Record<NavigationPage, () => void> = {
+    sessions: props.onOpenSessions,
+    automations: props.onOpenAutomations,
+    groups: props.onOpenGroups,
+    environments: props.onOpenEnvironments,
+    setup: props.onOpenSetup,
+  };
+
+  function navigate(page: NavigationPage) {
+    setNavigationOpen(false);
+    pageActions[page]();
+  }
+
+  function cycleTheme() {
+    const currentIndex = themeOptions.findIndex((option) => option.value === props.themePreference);
+    const nextTheme = themeOptions[(currentIndex + 1) % themeOptions.length] ?? themeOptions[0]!;
+    props.onThemeChange(nextTheme.value);
+  }
+
   return (
-    <div className="mt-3 shrink-0 border-t border-border pt-3 text-left text-xs text-muted-foreground">
-      <div className="flex flex-wrap gap-1">
-        <Button
-          className="h-7 px-2 text-xs"
-          variant={props.navPage === 'sessions' ? 'default' : 'secondary'}
-          size="sm"
-          aria-current={props.navPage === 'sessions' ? 'page' : undefined}
-          onClick={props.onOpenSessions}
+    <div
+      className="relative mt-3 flex shrink-0 gap-2 border-t border-border pt-3 text-left"
+      ref={navigationRef}
+      aria-label="Sidebar navigation"
+    >
+      {navigationOpen ? (
+        <div
+          className="absolute bottom-[calc(100%+0.5rem)] left-0 z-50 max-h-[min(26rem,calc(100dvh-8rem))] w-full overflow-y-auto rounded-lg border border-border bg-card p-1.5 text-card-foreground shadow-xl"
+          role="menu"
+          aria-label="Pages"
         >
-          Sessions
+          <p className="px-2 pb-1 pt-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+            Go to
+          </p>
+          {visiblePages.map((page) => {
+            const Icon = page.icon;
+            const active = page.id === props.navPage;
+            return (
+              <button
+                key={page.id}
+                type="button"
+                className={cn(
+                  'group flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  active && 'bg-primary/10 text-foreground',
+                )}
+                role="menuitem"
+                aria-current={active ? 'page' : undefined}
+                onClick={() => navigate(page.id)}
+              >
+                <span
+                  className={cn(
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground',
+                    active && 'border-primary/40 bg-primary/15 text-primary',
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium leading-tight">{page.label}</span>
+                  <span className="mt-0.5 block truncate text-xs text-muted-foreground">{page.description}</span>
+                </span>
+                {active ? <Check className="h-4 w-4 shrink-0 text-primary" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      <Button
+        className="min-w-0 flex-1 justify-start bg-card px-2.5 text-foreground shadow-sm"
+        variant="secondary"
+        size="sm"
+        aria-expanded={navigationOpen}
+        aria-haspopup="menu"
+        aria-label={`Switch page, current page ${currentPage.label}`}
+        onClick={() => setNavigationOpen((open) => !open)}
+      >
+        <CurrentPageIcon className="h-4 w-4 shrink-0 text-primary" />
+        <span className="min-w-0 flex-1 truncate text-left">{currentPage.label}</span>
+        <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      </Button>
+      {showSignOut ? (
+        <Button
+          className="h-8 w-8 shrink-0"
+          variant="secondary"
+          size="icon"
+          onClick={props.onSignOut}
+          aria-label={props.health?.apiAuthMode === 'session' ? 'Sign out' : 'Clear token'}
+          title={props.health?.apiAuthMode === 'session' ? 'Sign out' : 'Clear token'}
+        >
+          {props.health?.apiAuthMode === 'session' ? <LogOut className="h-4 w-4" /> : <KeyRound className="h-4 w-4" />}
         </Button>
-        {props.canViewAutomations ? (
-          <Button
-            className="h-7 px-2 text-xs"
-            variant={props.navPage === 'automations' ? 'default' : 'secondary'}
-            size="sm"
-            aria-current={props.navPage === 'automations' ? 'page' : undefined}
-            onClick={props.onOpenAutomations}
-          >
-            Automations
-          </Button>
-        ) : null}
-        {props.canViewGroups ? (
-          <Button
-            className="h-7 px-2 text-xs"
-            variant={props.navPage === 'groups' ? 'default' : 'secondary'}
-            size="sm"
-            aria-current={props.navPage === 'groups' ? 'page' : undefined}
-            onClick={props.onOpenGroups}
-          >
-            Access
-          </Button>
-        ) : null}
-        {props.canViewEnvironments ? (
-          <Button
-            className="h-7 px-2 text-xs"
-            variant={props.navPage === 'environments' ? 'default' : 'secondary'}
-            size="sm"
-            aria-current={props.navPage === 'environments' ? 'page' : undefined}
-            onClick={props.onOpenEnvironments}
-          >
-            Environments
-          </Button>
-        ) : null}
-        {props.canViewSetup ? (
-          <Button
-            className="h-7 px-2 text-xs"
-            variant={props.navPage === 'setup' ? 'default' : 'secondary'}
-            size="sm"
-            aria-current={props.navPage === 'setup' ? 'page' : undefined}
-            onClick={props.onOpenSetup}
-          >
-            Setup
-          </Button>
-        ) : null}
-        {props.authRequired && (props.token || props.health?.apiAuthMode === 'session') ? (
-          <Button className="h-7 px-2 text-xs" variant="secondary" size="sm" onClick={props.onSignOut}>
-            {props.health?.apiAuthMode === 'session' ? 'Sign out' : 'Clear token'}
-          </Button>
-        ) : null}
-      </div>
+      ) : null}
+      <Button
+        className="h-8 w-8 shrink-0"
+        variant="secondary"
+        size="icon"
+        onClick={cycleTheme}
+        aria-label={`Theme: ${theme.label}. Change theme`}
+        title={`Theme: ${theme.label}. Click to change.`}
+      >
+        <ThemeIcon className="h-4 w-4" />
+      </Button>
     </div>
   );
 }

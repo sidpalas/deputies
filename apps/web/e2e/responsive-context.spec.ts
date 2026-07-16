@@ -32,17 +32,24 @@ test('keeps context collapsed around tablet and small desktop widths', async ({ 
   await expect(page.getByRole('heading', { name: 'Context' })).not.toBeVisible();
 });
 
-test('keeps the mobile sessions modal footer reachable on short screens', async ({ page }) => {
+test('keeps the mobile sessions navigation dock reachable on short screens', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 480 });
   await page.goto('/');
 
   await page.getByRole('button', { name: 'Open sessions' }).click();
-  const setupTab = page.getByRole('button', { name: 'Setup' });
-  await expect(setupTab).toBeVisible();
+  const pageSwitcher = page.getByRole('button', { name: 'Switch page, current page Sessions' });
+  const themeAction = page.getByRole('button', { name: 'Theme: System. Change theme' });
+  await expect(pageSwitcher).toBeVisible();
+  await expect(themeAction).toBeVisible();
 
-  const box = await setupTab.boundingBox();
-  expect(box).not.toBeNull();
-  expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(480);
+  for (const control of [pageSwitcher, themeAction]) {
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(480);
+  }
+
+  await pageSwitcher.click();
+  await expect(page.getByRole('menuitem', { name: /Setup/ })).toBeVisible();
 });
 
 test('shows context as a sidebar on wide screens', async ({ page }) => {

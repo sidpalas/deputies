@@ -6,7 +6,7 @@ import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
 import { formatDate } from './shared.js';
-import { ApiStatusFooter, ThemeToggle } from './session-sidebar.js';
+import { SidebarFooter } from './session-sidebar.js';
 import type { ConnectionStatus, ThemePreference } from './types.js';
 
 export function AutomationsSidebar(props: {
@@ -168,8 +168,7 @@ export function AutomationsSidebar(props: {
         ) : null}
       </div>
 
-      <ThemeToggle preference={props.themePreference} onChange={props.onThemeChange} />
-      <ApiStatusFooter
+      <SidebarFooter
         authRequired={props.authRequired}
         canViewGroups={props.canViewGroups}
         canViewAutomations={props.canViewAutomations}
@@ -177,6 +176,7 @@ export function AutomationsSidebar(props: {
         canViewSetup={props.canViewSetup}
         health={props.health}
         navPage={props.navPage}
+        themePreference={props.themePreference}
         token={props.token}
         onOpenGroups={props.onOpenGroups}
         onOpenAutomations={props.onOpenAutomations}
@@ -184,6 +184,7 @@ export function AutomationsSidebar(props: {
         onOpenSessions={props.onOpenSessions}
         onOpenSetup={props.onOpenSetup}
         onSignOut={props.onSignOut}
+        onThemeChange={props.onThemeChange}
       />
     </div>
   );
