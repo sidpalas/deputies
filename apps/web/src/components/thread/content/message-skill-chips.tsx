@@ -58,13 +58,15 @@ export function MessageSkillChips(props: {
           props.onOpenSkill ? (
           <button
             key={`${name}:${index}`}
-            className="inline-flex h-6 max-w-[min(16rem,100%)] items-center gap-1 whitespace-nowrap rounded-md border border-primary/30 bg-primary/10 px-2 text-xs font-medium text-foreground hover:bg-primary/20"
+            className="group inline-flex max-w-[min(16rem,100%)] rounded-md"
             type="button"
             title="Open invoked skill revision"
             aria-label={`Open invoked ${name} skill revision`}
             onClick={() => props.onOpenSkill?.(managedSkillId, revisionId)}
           >
-            {content}
+            <Badge className="h-6 max-w-full gap-1 whitespace-nowrap border border-primary/30 bg-primary/10 text-foreground group-hover:bg-primary/20">
+              {content}
+            </Badge>
           </button>
         ) : (
           <Badge
