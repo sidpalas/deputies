@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.19.0](https://github.com/sidpalas/deputies/compare/v0.18.0...v0.19.0) (2026-07-17)
+
+
+### Features
+
+* add agent skills and revisions ([#99](https://github.com/sidpalas/deputies/issues/99)) ([2216df0](https://github.com/sidpalas/deputies/commit/2216df01209434302b375df96787fc90bd8927e9))
+* improve sidebar navigation ([45096e4](https://github.com/sidpalas/deputies/commit/45096e4823eca1540f44e2948202152f64dfc0e7))
+
+
+### Documentation
+
+* add Centaur prior art review ([0e43f8e](https://github.com/sidpalas/deputies/commit/0e43f8e7c31488eca55508c81788d6d94f79ad64))
+
 ## [0.18.0](https://github.com/sidpalas/deputies/compare/v0.17.1...v0.18.0) (2026-07-13)
 
 
