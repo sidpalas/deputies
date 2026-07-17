@@ -25,6 +25,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/control-plane/package.json apps/control-plane/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/browser-milestones packages/browser-milestones
+COPY packages/sandbox-bridge/package.json packages/sandbox-bridge/package.json
 
 RUN pnpm install --prod --frozen-lockfile --filter deputies-control-plane
 
