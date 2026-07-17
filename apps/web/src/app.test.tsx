@@ -349,6 +349,24 @@ it('guards revision changes from a dirty environment editor', async () => {
   expect(window.location.search).toBe('?environment=environment-1&revision=environment-revision-1');
 });
 
+it('does not prompt to discard changes after saving an environment', async () => {
+  window.history.replaceState({}, '', '/?environment=environment-1');
+  mockApi({
+    environments: [environmentFixture()],
+    repositories: [{ fullName: 'owner/current-repo', owner: 'owner', name: 'current-repo' }],
+  });
+  const confirm = vi.spyOn(window, 'confirm');
+  render(<App />);
+
+  const save = await screen.findByRole('button', { name: 'Save environment' });
+  const name = await screen.findByLabelText('Name');
+  fireEvent.change(name, { target: { value: 'Updated production' } });
+  fireEvent.click(save);
+
+  await waitFor(() => expect(name).toHaveValue('Updated production'));
+  expect(confirm).not.toHaveBeenCalled();
+});
+
 it('keeps skills navigation available when one group skill list fails', async () => {
   mockApi({ skills: [], skillListStatusByScope: { group: 403 } });
   render(<App />);
@@ -397,6 +415,77 @@ it('confirms before leaving a skill with unsaved changes', async () => {
   expect(
     await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...'),
   ).toBeVisible();
+});
+
+it('does not prompt to discard changes after saving a skill', async () => {
+  mockApi({
+    skills: [
+      {
+        id: 'skill-1',
+        name: 'review-change',
+        description: 'Review a change carefully.',
+        currentRevisionId: 'revision-2',
+        currentRevisionNumber: 2,
+        body: '# Review',
+        ownerKind: 'user',
+        autoLoad: true,
+        enabled: true,
+        shareMode: 'none',
+        source: 'personal',
+        canManage: true,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    ],
+  });
+  const confirm = vi.spyOn(window, 'confirm');
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Skills/ }));
+  fireEvent.click((await screen.findByText('review-change')).closest('button')!);
+  fireEvent.change(await screen.findByLabelText(/^Description/), { target: { value: 'Updated review guidance.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save skill' }));
+
+  await waitFor(() => expect(screen.getByLabelText(/^Description/)).toHaveValue('Updated review guidance.'));
+  expect(confirm).not.toHaveBeenCalled();
+});
+
+it('does not prompt to discard changes after saving skill sharing', async () => {
+  mockApi({
+    skills: [
+      {
+        id: 'skill-1',
+        name: 'review-change',
+        description: 'Review a change carefully.',
+        currentRevisionId: 'revision-2',
+        currentRevisionNumber: 2,
+        body: '# Review',
+        ownerKind: 'group',
+        ownerGroupId: group.id,
+        autoLoad: true,
+        enabled: true,
+        shareMode: 'none',
+        source: 'group',
+        canManage: true,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    ],
+  });
+  const confirm = vi.spyOn(window, 'confirm');
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Skills/ }));
+  fireEvent.click((await screen.findByText('review-change')).closest('button')!);
+  fireEvent.click(await screen.findByLabelText('All groups'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save skill' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save skill' })).toBeDisabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Skills' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Sessions/ }));
+
+  expect(confirm).not.toHaveBeenCalled();
 });
 
 it('protects dirty skill edits when archiving from the sidebar and allows restore after success', async () => {
@@ -3793,6 +3882,34 @@ function mockApi(options: MockApiOptions = {}) {
       return jsonResponse({ environments: options.environments ?? [] });
     }
 
+    const updateEnvironmentMatch = url.pathname.match(/^\/environments\/([^/]+)$/);
+    if (updateEnvironmentMatch && method === 'PATCH') {
+      const environmentId = updateEnvironmentMatch[1]!;
+      const environments = options.environments as Array<Record<string, unknown>> | undefined;
+      const current = environments?.find((environment) => environment.id === environmentId);
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const repositories = Array.isArray(body.repositories)
+        ? body.repositories.map((repository, index) => ({
+            ...(repository as Record<string, unknown>),
+            id: `repository-${index + 1}`,
+            position: index,
+          }))
+        : Array.isArray(current?.repositories)
+          ? current.repositories
+          : [];
+      return jsonResponse({
+        environment: {
+          ...(current ?? {}),
+          ...body,
+          id: environmentId,
+          repositories,
+          currentRevisionId: `${String(current?.currentRevisionId ?? 'revision')}-saved`,
+          currentRevisionNumber: Number(current?.currentRevisionNumber ?? 0) + 1,
+          updatedAt: session.updatedAt,
+        },
+      });
+    }
+
     const environmentRevisionsMatch = url.pathname.match(/^\/environments\/([^/]+)\/revisions$/);
     if (environmentRevisionsMatch && method === 'GET') {
       return jsonResponse({ revisions: options.environmentRevisions?.[environmentRevisionsMatch[1]!] ?? [] });
@@ -3816,6 +3933,57 @@ function mockApi(options: MockApiOptions = {}) {
       }
       if (skills === undefined) return jsonResponse({ error: 'not_found', message: 'Not found' }, 404);
       return jsonResponse({ skills: options.invocationSkills ?? skills });
+    }
+
+    const updateSkillMatch = url.pathname.match(/^\/skills\/([^/]+)$/);
+    if (updateSkillMatch && method === 'PATCH' && skills) {
+      const skillId = updateSkillMatch[1]!;
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      skills = skills.map((candidate) => {
+        if (typeof candidate !== 'object' || candidate === null || !('id' in candidate) || candidate.id !== skillId) {
+          return candidate;
+        }
+        const current = candidate as Record<string, unknown>;
+        const contentChanged = ['name', 'description', 'body'].some(
+          (field) => body[field] !== undefined && body[field] !== current[field],
+        );
+        const { groupIds, expectedCurrentRevisionId: _expectedCurrentRevisionId, ...updates } = body;
+        return {
+          ...current,
+          ...updates,
+          ...(Array.isArray(groupIds) ? { shareGroupIds: groupIds } : {}),
+          ...(contentChanged
+            ? {
+                currentRevisionId: `${String(current.currentRevisionId ?? 'revision')}-saved`,
+                currentRevisionNumber: Number(current.currentRevisionNumber ?? 0) + 1,
+              }
+            : {}),
+          updatedAt: session.updatedAt,
+        };
+      });
+      return jsonResponse({
+        skill: skills.find(
+          (candidate) =>
+            typeof candidate === 'object' && candidate !== null && 'id' in candidate && candidate.id === skillId,
+        ),
+      });
+    }
+
+    const updateSkillSharesMatch = url.pathname.match(/^\/skills\/([^/]+)\/shares$/);
+    if (updateSkillSharesMatch && method === 'PUT' && skills) {
+      const skillId = updateSkillSharesMatch[1]!;
+      const body = JSON.parse(String(init?.body)) as { shareMode: string; groupIds?: string[] };
+      skills = skills.map((candidate) =>
+        typeof candidate === 'object' && candidate !== null && 'id' in candidate && candidate.id === skillId
+          ? { ...candidate, shareMode: body.shareMode, shareGroupIds: body.groupIds ?? [] }
+          : candidate,
+      );
+      return jsonResponse({
+        skill: skills.find(
+          (candidate) =>
+            typeof candidate === 'object' && candidate !== null && 'id' in candidate && candidate.id === skillId,
+        ),
+      });
     }
 
     const skillRevisionsMatch = url.pathname.match(/^\/skills\/([^/]+)\/revisions$/);

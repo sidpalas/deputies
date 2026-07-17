@@ -4,7 +4,6 @@ import {
   createSkill,
   listSkillRevisions,
   promoteSkill,
-  setSkillShares,
   updateSkill,
   type Group,
   type Skill,
@@ -80,14 +79,16 @@ export function SkillsPanel(props: {
       : selected;
   const selectedArchived = Boolean(selected?.archivedAt);
   const selectedGroupOwned = selected?.ownerKind === 'group';
+  const groupOwned = Boolean(selectedGroupOwned || (!selected && form.ownerGroupId));
   const canEdit = selected ? Boolean(selected.canManage) && !selectedArchived && !viewedRevision : true;
   const nameError = skillNameValidationError(form.name);
   const bodySizeBytes = new TextEncoder().encode(form.body).byteLength;
   const complete = Boolean(!nameError && form.name && form.description.trim() && bodySizeBytes <= 65_536);
   const baselineForm = displayed ? skillFormFromSkill(displayed) : emptySkillForm();
   const skillDirty = skillFieldsChanged(form, baselineForm);
-  const sharingDirty = Boolean(selected && selectedGroupOwned && sharingFieldsChanged(form, baselineForm));
+  const sharingDirty = Boolean(groupOwned && sharingFieldsChanged(form, baselineForm));
   const dirty = skillDirty || sharingDirty;
+  const sharingComplete = !groupOwned || form.shareMode !== 'specific' || form.shareGroupIds.length > 0;
   useEditorDirty(dirty, props.onDirtyChange);
 
   useEffect(() => {
@@ -95,7 +96,7 @@ export function SkillsPanel(props: {
   }, [displayed?.id, displayed?.archivedAt, displayed?.currentRevisionId, props.selectedSkillId, viewedRevision?.id]);
 
   async function save() {
-    if (!canEdit || !complete || !skillDirty || saving) return;
+    if (!canEdit || !complete || !sharingComplete || !dirty || saving) return;
     setSaving(true);
     try {
       const saved = form.id
@@ -107,6 +108,12 @@ export function SkillsPanel(props: {
             body: form.body,
             autoLoad: form.autoLoad,
             enabled: form.enabled,
+            ...(selectedGroupOwned && sharingDirty
+              ? {
+                  shareMode: form.shareMode,
+                  ...(form.shareMode === 'specific' ? { groupIds: form.shareGroupIds } : {}),
+                }
+              : {}),
             ...(selected?.currentRevisionId ? { expectedCurrentRevisionId: selected.currentRevisionId } : {}),
           })
         : await createSkill({
@@ -116,37 +123,15 @@ export function SkillsPanel(props: {
             body: form.body,
             autoLoad: form.autoLoad,
             ...(form.ownerGroupId ? { ownerGroupId: form.ownerGroupId } : {}),
+            ...(form.ownerGroupId
+              ? {
+                  shareMode: form.shareMode,
+                  ...(form.shareMode === 'specific' ? { groupIds: form.shareGroupIds } : {}),
+                }
+              : {}),
           });
       props.onSkillSaved(saved);
-      setForm((current) => ({
-        ...skillFormFromSkill(saved),
-        shareMode: current.shareMode,
-        shareGroupIds: current.shareGroupIds,
-      }));
-    } catch (error) {
-      props.onError(error);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function saveShares() {
-    if (!selected?.canManage || !selectedGroupOwned || selectedArchived || !sharingDirty || saving) return;
-    if (form.shareMode === 'specific' && !form.shareGroupIds.length) return;
-    setSaving(true);
-    try {
-      const saved = await setSkillShares({
-        skillId: selected.id,
-        token: props.token,
-        shareMode: form.shareMode,
-        ...(form.shareMode === 'specific' ? { groupIds: form.shareGroupIds } : {}),
-      });
-      props.onSkillChanged(saved);
-      setForm((current) => ({
-        ...current,
-        shareMode: saved.shareMode,
-        shareGroupIds: saved.shareGroupIds ?? [],
-      }));
+      setForm(skillFormFromSkill(saved));
     } catch (error) {
       props.onError(error);
     } finally {
@@ -219,7 +204,7 @@ export function SkillsPanel(props: {
                 <h2 className="min-w-0 text-lg font-semibold">{selected ? 'Edit skill' : 'New skill'}</h2>
                 {selected ? (
                   <div className="flex shrink-0 items-center gap-2">
-                    {skillDirty ? <UnsavedIndicator /> : null}
+                    {dirty ? <UnsavedIndicator /> : null}
                     {selected.canManage && selected.currentRevisionId && selected.currentRevisionNumber ? (
                       <RevisionSelector
                         currentRevisionId={selected.currentRevisionId}
@@ -269,7 +254,13 @@ export function SkillsPanel(props: {
                       id="skill-owner"
                       className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                       value={form.ownerGroupId}
-                      onChange={(event) => setForm({ ...form, ownerGroupId: event.target.value })}
+                      onChange={(event) =>
+                        setForm({
+                          ...form,
+                          ownerGroupId: event.target.value,
+                          ...(!event.target.value ? { shareMode: 'none' as const, shareGroupIds: [] } : {}),
+                        })
+                      }
                     >
                       <option value="">My personal skills</option>
                       {props.creatableGroups.map((group) => (
@@ -337,8 +328,49 @@ export function SkillsPanel(props: {
                     </label>
                   ) : null}
                 </div>
+                {groupOwned && !viewedRevision ? (
+                  <div className="rounded-md border border-border bg-muted/20 p-4">
+                    <div className="flex items-center gap-2">
+                      <Share2 className="h-4 w-4 text-primary" />
+                      <h3 className="text-sm font-semibold text-foreground">Sharing</h3>
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Sharing grants read and invocation access. It never grants edit access.
+                    </p>
+                    {!selected || selected.canManage ? (
+                      <>
+                        <fieldset className="mt-4 grid gap-2 text-sm" disabled={!canEdit}>
+                          {(['none', 'specific', 'all_groups'] as const).map((mode) => (
+                            <label key={mode} className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="skill-share-mode"
+                                checked={form.shareMode === mode}
+                                onChange={() => setForm({ ...form, shareMode: mode })}
+                              />
+                              {shareModeLabel(mode)}
+                            </label>
+                          ))}
+                        </fieldset>
+                        {form.shareMode === 'specific' ? (
+                          <div className="mt-3">
+                            <SharingGroupPicker
+                              groups={props.groups}
+                              ownerGroupId={selected?.ownerGroupId ?? form.ownerGroupId}
+                              selectedGroupIds={form.shareGroupIds}
+                              disabled={!canEdit}
+                              onSelectedGroupIdsChange={(shareGroupIds) => setForm({ ...form, shareGroupIds })}
+                            />
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <p className="mt-4 text-sm text-foreground">{readOnlyShareModeSummary(selected.shareMode)}</p>
+                    )}
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap gap-2">
-                  <Button type="submit" disabled={!canEdit || !complete || !skillDirty || saving}>
+                  <Button type="submit" disabled={!canEdit || !complete || !sharingComplete || !dirty || saving}>
                     <Save className="h-4 w-4" /> {selected ? 'Save skill' : 'Create skill'}
                   </Button>
                   {selected ? (
@@ -373,68 +405,6 @@ export function SkillsPanel(props: {
                 saving={saving || dirty}
                 onPromote={(groupId) => void promote(groupId)}
               />
-            ) : null}
-
-            {selected && !viewedRevision && selectedGroupOwned ? (
-              <Card className="p-5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <Share2 className="h-4 w-4 text-primary" />
-                    <h2 className="text-lg font-semibold">Sharing</h2>
-                  </div>
-                  {sharingDirty ? (
-                    <span className="rounded border border-warning/40 bg-warning/10 px-2 py-1 text-xs text-warning-foreground dark:text-warning">
-                      Unsaved sharing changes
-                    </span>
-                  ) : null}
-                </div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Sharing grants read and invocation access. It never grants edit access.
-                </p>
-                {selected.canManage ? (
-                  <>
-                    <fieldset className="mt-4 grid gap-2 text-sm" disabled={selectedArchived}>
-                      {(['none', 'specific', 'all_groups'] as const).map((mode) => (
-                        <label key={mode} className="flex items-center gap-2">
-                          <input
-                            type="radio"
-                            name="skill-share-mode"
-                            checked={form.shareMode === mode}
-                            onChange={() => setForm({ ...form, shareMode: mode })}
-                          />
-                          {shareModeLabel(mode)}
-                        </label>
-                      ))}
-                    </fieldset>
-                    {form.shareMode === 'specific' ? (
-                      <div className="mt-3">
-                        <SharingGroupPicker
-                          groups={props.groups}
-                          ownerGroupId={selected.ownerGroupId ?? ''}
-                          selectedGroupIds={form.shareGroupIds}
-                          disabled={selectedArchived}
-                          onSelectedGroupIdsChange={(shareGroupIds) => setForm({ ...form, shareGroupIds })}
-                        />
-                      </div>
-                    ) : null}
-                    <Button
-                      className="mt-4"
-                      variant="secondary"
-                      onClick={() => void saveShares()}
-                      disabled={
-                        selectedArchived ||
-                        saving ||
-                        !sharingDirty ||
-                        (form.shareMode === 'specific' && !form.shareGroupIds.length)
-                      }
-                    >
-                      Save sharing
-                    </Button>
-                  </>
-                ) : (
-                  <p className="mt-4 text-sm text-foreground">{readOnlyShareModeSummary(selected.shareMode)}</p>
-                )}
-              </Card>
             ) : null}
           </>
         )}

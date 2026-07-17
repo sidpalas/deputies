@@ -143,6 +143,46 @@ describe('skills API', () => {
     expect(invalidModeShape.status).toBe(400);
   });
 
+  it('creates and updates group skill sharing atomically without revisioning sharing-only changes', async () => {
+    const creator = await createUser('atomic-sharing-creator', [[ownerGroupId, 'member']]);
+    const createdResponse = await post('/skills', creator, {
+      ownerGroupId,
+      name: 'atomic-sharing',
+      description: 'Created with sharing',
+      body: '# Shared',
+      shareMode: 'specific',
+      groupIds: [targetGroupId],
+    });
+    expect(createdResponse.status).toBe(201);
+    const created = (await createdResponse.json()) as {
+      skill: { id: string; currentRevisionNumber: number; shareMode: string; shareGroupIds: string[] };
+    };
+    expect(created.skill).toMatchObject({
+      currentRevisionNumber: 1,
+      shareMode: 'specific',
+      shareGroupIds: [targetGroupId],
+    });
+
+    const combinedResponse = await patch(`/skills/${created.skill.id}`, creator, {
+      description: 'Updated with sharing',
+      shareMode: 'all_groups',
+    });
+    expect(combinedResponse.status).toBe(200);
+    await expect(combinedResponse.json()).resolves.toMatchObject({
+      skill: { description: 'Updated with sharing', currentRevisionNumber: 2, shareMode: 'all_groups' },
+    });
+
+    const sharingOnlyResponse = await patch(`/skills/${created.skill.id}`, creator, { shareMode: 'none' });
+    expect(sharingOnlyResponse.status).toBe(200);
+    await expect(sharingOnlyResponse.json()).resolves.toMatchObject({
+      skill: { currentRevisionNumber: 2, shareMode: 'none' },
+    });
+    const revisions = (await (await request(`/skills/${created.skill.id}/revisions`, creator)).json()) as {
+      revisions: unknown[];
+    };
+    expect(revisions.revisions).toHaveLength(2);
+  });
+
   it('lists authorized revision metadata and canonicalizes managed invocations to immutable pins', async () => {
     const creator = await createUser('revision-creator', [[ownerGroupId, 'member']]);
     const viewer = await createUser('revision-viewer', [[ownerGroupId, 'viewer']]);

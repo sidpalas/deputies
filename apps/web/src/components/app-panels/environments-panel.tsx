@@ -362,55 +362,6 @@ export function EnvironmentsPanel(props: {
                 </Field>
               </div>
 
-              <div className="rounded-md border border-border bg-muted/20 p-4">
-                <div className="flex items-center gap-2">
-                  <Share2 className="h-4 w-4 text-primary" />
-                  <h3 className="text-sm font-semibold text-foreground">Sharing</h3>
-                </div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Sharing grants use and read access. Management stays with the owner group.
-                </p>
-                <div className="mt-4 grid min-w-0 gap-3 xl:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
-                  <fieldset className="grid self-start gap-2 text-sm" disabled={!canEdit}>
-                    <legend className="sr-only">Sharing</legend>
-                    {(['private', 'selected_groups', 'all_groups'] as const).map((mode) => (
-                      <label key={mode} className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="environment-share-mode"
-                          checked={form.shareMode === mode}
-                          onChange={() => updateShareMode(mode)}
-                        />
-                        {environmentShareModeLabel(mode)}
-                      </label>
-                    ))}
-                  </fieldset>
-                  <div className="min-w-0">
-                    {form.shareMode === 'all_groups' ? (
-                      <div className="flex min-w-0 gap-2 rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning-foreground dark:text-warning">
-                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                        <p className="min-w-0">
-                          All current and future active groups can use this environment and its repositories. Management
-                          stays with {ownerGroup?.name ?? 'the owner group'}.
-                        </p>
-                      </div>
-                    ) : form.shareMode === 'selected_groups' ? (
-                      <SharingGroupPicker
-                        groups={props.groups}
-                        ownerGroupId={form.ownerGroupId}
-                        selectedGroupIds={form.sharedGroupIds}
-                        disabled={!canEdit}
-                        onSelectedGroupIdsChange={(sharedGroupIds) => setForm({ ...form, sharedGroupIds })}
-                      />
-                    ) : (
-                      <p className="flex min-h-10 min-w-0 items-center text-sm text-muted-foreground">
-                        Only members of {ownerGroup?.name ?? 'the owner group'} can view and use this environment.
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-foreground">Repositories</h3>
@@ -480,6 +431,55 @@ export function EnvironmentsPanel(props: {
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+
+              <div className="rounded-md border border-border bg-muted/20 p-4">
+                <div className="flex items-center gap-2">
+                  <Share2 className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold text-foreground">Sharing</h3>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Sharing grants use and read access. Management stays with the owner group.
+                </p>
+                <div className="mt-4 grid min-w-0 gap-3 xl:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
+                  <fieldset className="grid self-start gap-2 text-sm" disabled={!canEdit}>
+                    <legend className="sr-only">Sharing</legend>
+                    {(['private', 'selected_groups', 'all_groups'] as const).map((mode) => (
+                      <label key={mode} className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="environment-share-mode"
+                          checked={form.shareMode === mode}
+                          onChange={() => updateShareMode(mode)}
+                        />
+                        {environmentShareModeLabel(mode)}
+                      </label>
+                    ))}
+                  </fieldset>
+                  <div className="min-w-0">
+                    {form.shareMode === 'all_groups' ? (
+                      <div className="flex min-w-0 gap-2 rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning-foreground dark:text-warning">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <p className="min-w-0">
+                          All current and future active groups can use this environment and its repositories. Management
+                          stays with {ownerGroup?.name ?? 'the owner group'}.
+                        </p>
+                      </div>
+                    ) : form.shareMode === 'selected_groups' ? (
+                      <SharingGroupPicker
+                        groups={props.groups}
+                        ownerGroupId={form.ownerGroupId}
+                        selectedGroupIds={form.sharedGroupIds}
+                        disabled={!canEdit}
+                        onSelectedGroupIdsChange={(sharedGroupIds) => setForm({ ...form, sharedGroupIds })}
+                      />
+                    ) : (
+                      <p className="flex min-h-10 min-w-0 items-center text-sm text-muted-foreground">
+                        Only members of {ownerGroup?.name ?? 'the owner group'} can view and use this environment.
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
 

@@ -350,7 +350,10 @@ export function App() {
   const [navigation, setNavigation] = useState<NavigationState>(loadInitialNavigationState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [environmentEditorDirty, setEnvironmentEditorDirty] = useState(false);
+  const environmentEditorDirtyRef = useRef(false);
+  function setEnvironmentEditorDirty(dirty: boolean) {
+    environmentEditorDirtyRef.current = dirty;
+  }
   const [sessionDetail, setSessionDetail] = useState<SessionDetailState>(emptySessionDetail);
   const [repositoryOptionsState, setRepositoryOptionsState] = useState<AsyncState<RepositoryOption[]>>({
     data: [],
@@ -595,7 +598,7 @@ export function App() {
         (next.sidebarPanel !== 'environments' ||
           next.selectedEnvironmentId !== navigation.selectedEnvironmentId ||
           next.selectedEnvironmentRevisionId !== navigation.selectedEnvironmentRevisionId);
-      if (!leavingDirtyEnvironment || !environmentEditorDirty) return true;
+      if (!leavingDirtyEnvironment || !environmentEditorDirtyRef.current) return true;
       if (!window.confirm('Discard unsaved environment changes?')) return false;
       setEnvironmentEditorDirty(false);
       return true;
@@ -2547,7 +2550,7 @@ export function App() {
 
   function confirmDiscardEditorChanges(): boolean {
     if (sidebarPanel === 'skills' && !skillsWorkspace.actions.confirmDiscard()) return false;
-    if (sidebarPanel === 'environments' && environmentEditorDirty) {
+    if (sidebarPanel === 'environments' && environmentEditorDirtyRef.current) {
       if (!window.confirm('Discard unsaved environment changes?')) return false;
       setEnvironmentEditorDirty(false);
     }

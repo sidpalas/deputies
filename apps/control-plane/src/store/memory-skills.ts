@@ -27,6 +27,16 @@ export class MemorySkillStore implements SkillStore {
     if (this.skills.has(record.id)) throw new Error(`Skill already exists: ${record.id}`);
     this.assertSkillOwner(record);
     if (record.ownerKind === 'group') this.assertActiveGroup(record.ownerGroupId);
+    if (
+      record.ownerKind === 'user' &&
+      ((record.shareMode !== undefined && record.shareMode !== 'none') || Boolean(record.shareGroupIds?.length))
+    ) {
+      throw new Error(`Personal skill cannot be shared: ${record.id}`);
+    }
+    const shareGroupIds =
+      record.ownerKind === 'group' && record.shareMode === 'specific'
+        ? this.validatedSkillShares({ shareGroupIds: [], id: record.id }, record.shareGroupIds ?? [])
+        : [];
     const ownerId = record.ownerKind === 'group' ? record.ownerGroupId : record.ownerUserId;
     this.assertSkillNameAvailable(record.revision.name, record.ownerKind, ownerId);
     const revision: SkillRevisionRecord = { ...record.revision, skillId: record.id, revisionNumber: 1 };
@@ -39,7 +49,7 @@ export class MemorySkillStore implements SkillStore {
       currentRevisionNumber: revision.revisionNumber,
       autoLoad: record.autoLoad ?? true,
       enabled: record.enabled ?? true,
-      shareGroupIds: [],
+      shareGroupIds,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       ...(record.ownerKind === 'group'
@@ -49,6 +59,7 @@ export class MemorySkillStore implements SkillStore {
     };
     this.skillRevisions.set(revision.id, cloneSkillRevision(revision));
     this.skills.set(skill.id, skill);
+    if (shareGroupIds.length) this.replaceSkillShares(skill.id, [], shareGroupIds);
     return cloneSkill(skill);
   }
 
@@ -79,6 +90,11 @@ export class MemorySkillStore implements SkillStore {
         existing.id,
       );
     }
+    if (input.sharing && existing.ownerKind !== 'group') {
+      throw new Error(`Personal skill cannot be shared: ${input.id}`);
+    }
+    const shareGroupIds =
+      input.sharing?.shareMode === 'specific' ? this.validatedSkillShares(existing, input.sharing.groupIds) : undefined;
     const revision: SkillRevisionRecord | undefined = input.revision
       ? {
           ...input.revision,
@@ -100,7 +116,14 @@ export class MemorySkillStore implements SkillStore {
         : {}),
       ...(input.autoLoad !== undefined ? { autoLoad: input.autoLoad } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.sharing
+        ? {
+            shareMode: input.sharing.shareMode,
+            ...(shareGroupIds ? { shareGroupIds } : {}),
+          }
+        : {}),
     };
+    if (shareGroupIds) this.replaceSkillShares(existing.id, existing.shareGroupIds, shareGroupIds);
     if (revision) this.skillRevisions.set(revision.id, cloneSkillRevision(revision));
     this.skills.set(input.id, updated);
     return cloneSkill(updated);
@@ -155,11 +178,10 @@ export class MemorySkillStore implements SkillStore {
     const existing = this.skills.get(id);
     if (!existing || existing.ownerKind !== 'group') return null;
     this.assertActiveSkill(existing);
-    this.assertActiveGroup(existing.ownerGroupId);
-    if (shareMode === 'specific') this.replaceSkillShares(existing, groupIds);
-    const current = this.skills.get(id);
-    if (!current || current.ownerKind !== 'group') return null;
-    const updated: SkillRecord = { ...current, shareMode, updatedAt: now };
+    const shareGroupIds =
+      shareMode === 'specific' ? this.validatedSkillShares(existing, groupIds) : existing.shareGroupIds;
+    if (shareMode === 'specific') this.replaceSkillShares(existing.id, existing.shareGroupIds, shareGroupIds);
+    const updated: SkillRecord = { ...existing, shareMode, shareGroupIds, updatedAt: now };
     this.skills.set(id, updated);
     return cloneSkill(updated);
   }
@@ -280,19 +302,22 @@ export class MemorySkillStore implements SkillStore {
     if (conflict) throw new StoreConflictError('skill_name_exists', 'Skill name already exists');
   }
 
-  private replaceSkillShares(skill: SkillRecord, groupIds: string[]): void {
+  private validatedSkillShares(skill: Pick<SkillRecord, 'id' | 'shareGroupIds'>, groupIds: string[]): string[] {
     const replacement = [...new Set(groupIds)].sort(compareStringAsc);
     const existing = new Set(skill.shareGroupIds);
     for (const groupId of replacement) {
       if (!existing.has(groupId)) this.assertActiveGroup(groupId);
     }
-    for (const groupId of skill.shareGroupIds) this.skillSharesByGroup.get(groupId)?.delete(skill.id);
+    return replacement;
+  }
+
+  private replaceSkillShares(skillId: string, previousGroupIds: string[], replacement: string[]): void {
+    for (const groupId of previousGroupIds) this.skillSharesByGroup.get(groupId)?.delete(skillId);
     for (const groupId of replacement) {
       const skillIds = this.skillSharesByGroup.get(groupId) ?? new Set<string>();
-      skillIds.add(skill.id);
+      skillIds.add(skillId);
       this.skillSharesByGroup.set(groupId, skillIds);
     }
-    this.skills.set(skill.id, { ...skill, shareGroupIds: replacement });
   }
 
   private assertActiveSkill(skill: SkillRecord): void {

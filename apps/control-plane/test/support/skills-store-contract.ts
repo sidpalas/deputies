@@ -213,7 +213,12 @@ export function defineSkillsStoreContract(getStore: () => AppStore): void {
         }),
       ).rejects.toMatchObject({ code: 'skill_update_conflict' });
 
-      await store.setSkillShares(created.id, 'specific', [targetGroup], at(3));
+      await store.updateSkill({
+        id: created.id,
+        expectedCurrentRevisionId: revised.currentRevisionId,
+        sharing: { shareMode: 'specific', groupIds: [targetGroup] },
+        updatedAt: at(3),
+      });
       await expect(store.listSkillRevisions(created.id)).resolves.toHaveLength(2);
       const pinned = await store.listSkillsForRun({
         ownerGroupId: targetGroup,
@@ -492,6 +497,24 @@ export function defineSkillsStoreContract(getStore: () => AppStore): void {
       expect((await store.listSkillsForGroups([ownerGroup])).map(({ id }) => id)).toEqual([groupSkill.id]);
       await expect(store.listSkillsForGroups([])).resolves.toEqual([]);
       await expect(store.listSkillsSharedIntoGroups([])).resolves.toEqual([]);
+    });
+
+    it('creates group skills with their initial shares and revision in one write', async () => {
+      const store = getStore();
+      await seed(store);
+      const record = skill('00000000-0000-4000-8000-000000000333', 'shared-at-creation', {
+        ownerKind: 'group',
+        ownerGroupId: ownerGroup,
+      });
+      const created = await store.createSkill({
+        ...record,
+        shareMode: 'specific',
+        shareGroupIds: [targetGroup],
+      });
+
+      expect(created).toMatchObject({ shareMode: 'specific', shareGroupIds: [targetGroup], currentRevisionNumber: 1 });
+      expect((await store.listSkillsSharedIntoGroups([targetGroup])).map(({ id }) => id)).toEqual([created.id]);
+      await expect(store.listSkillRevisions(created.id)).resolves.toHaveLength(1);
     });
 
     it('resolves eligible run candidates with invocation and archived-owner filtering', async () => {

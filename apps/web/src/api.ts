@@ -717,6 +717,8 @@ export async function createSkill(input: {
   body: string;
   autoLoad?: boolean;
   ownerGroupId?: string;
+  shareMode?: SkillShareMode;
+  groupIds?: string[];
 }): Promise<Skill> {
   const body = await request<{ skill: Skill }>('/skills', {
     method: 'POST',
@@ -727,6 +729,8 @@ export async function createSkill(input: {
       body: input.body,
       ...(input.autoLoad !== undefined ? { autoLoad: input.autoLoad } : {}),
       ...(input.ownerGroupId ? { ownerGroupId: input.ownerGroupId } : {}),
+      ...(input.shareMode !== undefined ? { shareMode: input.shareMode } : {}),
+      ...(input.shareMode === 'specific' ? { groupIds: input.groupIds ?? [] } : {}),
     },
   });
   return body.skill;
@@ -740,6 +744,8 @@ export async function updateSkill(input: {
   body?: string;
   autoLoad?: boolean;
   enabled?: boolean;
+  shareMode?: SkillShareMode;
+  groupIds?: string[];
   expectedCurrentRevisionId?: string;
 }): Promise<Skill> {
   const body = await request<{ skill: Skill }>(`/skills/${input.skillId}`, {
@@ -751,6 +757,8 @@ export async function updateSkill(input: {
       ...(input.body !== undefined ? { body: input.body } : {}),
       ...(input.autoLoad !== undefined ? { autoLoad: input.autoLoad } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.shareMode !== undefined ? { shareMode: input.shareMode } : {}),
+      ...(input.shareMode === 'specific' ? { groupIds: input.groupIds ?? [] } : {}),
       ...(input.expectedCurrentRevisionId ? { expectedCurrentRevisionId: input.expectedCurrentRevisionId } : {}),
     },
   });

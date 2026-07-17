@@ -94,7 +94,16 @@ export class PostgresSkillStore implements SkillStore {
             record.updatedAt,
           ],
         );
+        if (
+          record.ownerKind === 'user' &&
+          ((record.shareMode !== undefined && record.shareMode !== 'none') || Boolean(record.shareGroupIds?.length))
+        ) {
+          throw new Error(`Personal skill cannot be shared: ${record.id}`);
+        }
         await insertSkillRevision(client, revision);
+        if (record.ownerKind === 'group' && record.shareMode === 'specific') {
+          await replaceSkillShares(client, record.id, record.shareGroupIds ?? [], record.updatedAt);
+        }
         return requireSkill(await getSkillWithClient(client, record.id), record.id);
       });
     } catch (error) {
@@ -145,6 +154,13 @@ export class PostgresSkillStore implements SkillStore {
         }
         if (input.autoLoad !== undefined) addUpdate('auto_load', input.autoLoad);
         if (input.enabled !== undefined) addUpdate('enabled', input.enabled);
+        if (input.sharing) {
+          if (existing.owner_kind !== 'group') throw new Error(`Personal skill cannot be shared: ${input.id}`);
+          if (input.sharing.shareMode === 'specific') {
+            await replaceSkillShares(client, input.id, input.sharing.groupIds, input.updatedAt);
+          }
+          addUpdate('share_mode', input.sharing.shareMode);
+        }
         const result = await client.query(
           `UPDATE skills SET ${updates.join(', ')} WHERE id = $1 AND archived_at IS NULL RETURNING id`,
           values,
@@ -216,28 +232,7 @@ export class PostgresSkillStore implements SkillStore {
       if (!skill || skill.owner_kind !== 'group') return null;
 
       if (shareMode === 'specific') {
-        const replacement = [...new Set(groupIds)];
-        const existing = await client.query<{ group_id: string }>(
-          'SELECT group_id FROM skill_group_shares WHERE skill_id = $1',
-          [id],
-        );
-        const existingGroupIds = new Set(existing.rows.map((share) => share.group_id));
-        await lockActiveSkillGroups(
-          client,
-          replacement.filter((groupId) => !existingGroupIds.has(groupId)),
-        );
-        await client.query(
-          `DELETE FROM skill_group_shares
-           WHERE skill_id = $1 AND NOT (group_id = ANY($2::uuid[]))`,
-          [id, replacement],
-        );
-        await client.query(
-          `INSERT INTO skill_group_shares (skill_id, group_id, created_at)
-           SELECT $1, group_id, $3
-           FROM unnest($2::uuid[]) AS group_id
-           ON CONFLICT (skill_id, group_id) DO NOTHING`,
-          [id, replacement, now],
-        );
+        await replaceSkillShares(client, id, groupIds, now);
       }
 
       await client.query('UPDATE skills SET share_mode = $2, updated_at = $3 WHERE id = $1 AND archived_at IS NULL', [
@@ -497,6 +492,31 @@ async function insertSkillRevision(client: PoolClient, revision: SkillRevisionRe
       revision.actorUserId ?? null,
       revision.createdAt,
     ],
+  );
+}
+
+async function replaceSkillShares(client: PoolClient, skillId: string, groupIds: string[], now: Date): Promise<void> {
+  const replacement = [...new Set(groupIds)];
+  const existing = await client.query<{ group_id: string }>(
+    'SELECT group_id FROM skill_group_shares WHERE skill_id = $1',
+    [skillId],
+  );
+  const existingGroupIds = new Set(existing.rows.map((share) => share.group_id));
+  await lockActiveSkillGroups(
+    client,
+    replacement.filter((groupId) => !existingGroupIds.has(groupId)),
+  );
+  await client.query(
+    `DELETE FROM skill_group_shares
+     WHERE skill_id = $1 AND NOT (group_id = ANY($2::uuid[]))`,
+    [skillId, replacement],
+  );
+  await client.query(
+    `INSERT INTO skill_group_shares (skill_id, group_id, created_at)
+     SELECT $1, group_id, $3
+     FROM unnest($2::uuid[]) AS group_id
+     ON CONFLICT (skill_id, group_id) DO NOTHING`,
+    [skillId, replacement, now],
   );
 }
 

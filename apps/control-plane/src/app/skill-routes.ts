@@ -91,6 +91,16 @@ export function registerSkillRoutes(
     } else if (auth.bypass) {
       return writeError(c, 400, 'invalid_request', 'Personal skills require an authenticated user');
     }
+    const sharing =
+      body.shareMode !== undefined || body.groupIds !== undefined
+        ? await parseSkillSharingRequest(
+            c,
+            services,
+            ownerGroupId ? { ownerKind: 'group', shareGroupIds: [] } : { ownerKind: 'user', shareGroupIds: [] },
+            body,
+          )
+        : undefined;
+    if (sharing instanceof Response) return sharing;
 
     try {
       const owner = ownerGroupId ? { ownerGroupId } : { ownerUserId: auth.bypass ? '' : auth.user.id };
@@ -99,6 +109,12 @@ export function registerSkillRoutes(
         description: body.description as string,
         body: body.body as string,
         ...(body.autoLoad !== undefined ? { autoLoad: body.autoLoad } : {}),
+        ...(sharing
+          ? {
+              shareMode: sharing.shareMode,
+              ...(sharing.shareMode === 'specific' ? { shareGroupIds: sharing.groupIds } : {}),
+            }
+          : {}),
         ...owner,
         ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
         actor: skillMutationActor(auth),
@@ -167,6 +183,11 @@ export function registerSkillRoutes(
     if (!canManageSkill(auth, skill)) return writeError(c, 403, 'forbidden', 'Skill management access is required');
     if (skill.archivedAt) return writeError(c, 409, 'skill_archived', 'Restore this skill before editing it');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    const sharing =
+      body.shareMode !== undefined || body.groupIds !== undefined
+        ? await parseSkillSharingRequest(c, services, skill, body)
+        : undefined;
+    if (sharing instanceof Response) return sharing;
     for (const field of ['autoLoad', 'enabled'] as const) {
       if (body[field] !== undefined && typeof body[field] !== 'boolean') {
         return writeError(c, 400, 'invalid_request', `Expected boolean field: ${field}`);
@@ -190,6 +211,12 @@ export function registerSkillRoutes(
         ...(body.body !== undefined ? { body: body.body as string } : {}),
         ...(autoLoad !== undefined ? { autoLoad } : {}),
         ...(enabled !== undefined ? { enabled } : {}),
+        ...(sharing
+          ? {
+              shareMode: sharing.shareMode,
+              ...(sharing.shareMode === 'specific' ? { shareGroupIds: sharing.groupIds } : {}),
+            }
+          : {}),
         actor: skillMutationActor(auth),
       });
       return c.json({ skill: await serializeSkill(services, auth, updated, skillSourceForAuth(auth, updated)) });
@@ -239,31 +266,11 @@ export function registerSkillRoutes(
     if (!skill) return writeError(c, 404, 'not_found', 'Skill not found');
     if (!canManageSkill(auth, skill)) return writeError(c, 403, 'forbidden', 'Skill management access is required');
     if (skill.archivedAt) return writeError(c, 409, 'skill_archived', 'Restore this skill before editing it');
-    if (skill.ownerKind !== 'group') return writeError(c, 400, 'invalid_request', 'Personal skills cannot be shared');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const shareMode = parseShareMode(body.shareMode);
-    if (!shareMode) return writeError(c, 400, 'invalid_request', 'Expected valid shareMode');
-    const groupIds = parseGroupIds(body.groupIds);
-    if (shareMode === 'specific' && (!groupIds || !groupIds.length)) {
-      return writeError(c, 400, 'invalid_request', 'Specific sharing requires at least one groupId');
-    }
-    if (shareMode !== 'specific' && body.groupIds !== undefined) {
-      return writeError(c, 400, 'invalid_request', 'groupIds is only valid for specific sharing');
-    }
-    if (shareMode === 'specific') {
-      if (!groupIds) return writeError(c, 400, 'invalid_request', 'Expected groupIds to be an array of strings');
-      const existingShareGroupIds = new Set(skill.shareGroupIds);
-      for (const groupId of groupIds) {
-        if (!uuidPattern.test(groupId))
-          return writeError(c, 400, 'invalid_request', `Expected valid groupId: ${groupId}`);
-        const group = await services.store.getGroup(groupId);
-        if (!group) return writeError(c, 404, 'not_found', `Group not found: ${groupId}`);
-        if (group.archivedAt && !existingShareGroupIds.has(groupId))
-          return writeError(c, 409, 'archived_group', `Cannot share skills with archived group: ${groupId}`);
-      }
-    }
+    const sharing = await parseSkillSharingRequest(c, services, skill, body);
+    if (sharing instanceof Response) return sharing;
     try {
-      const updated = await services.skills.setShares(skill.id, shareMode, groupIds ?? []);
+      const updated = await services.skills.setShares(skill.id, sharing.shareMode, sharing.groupIds);
       return c.json({ skill: await serializeSkill(services, auth, updated, 'group') });
     } catch (error) {
       return skillErrorResponse(c, error);
@@ -395,6 +402,38 @@ function skillSourceForAuth(auth: RequestAuthorization, skill: SkillRecord): 'pe
 
 function parseShareMode(value: unknown): SkillShareMode | null {
   return value === 'none' || value === 'specific' || value === 'all_groups' ? value : null;
+}
+
+async function parseSkillSharingRequest(
+  c: Context,
+  services: AppServices,
+  skill: Pick<SkillRecord, 'ownerKind' | 'shareGroupIds'>,
+  body: Record<string, unknown>,
+): Promise<{ shareMode: SkillShareMode; groupIds: string[] } | Response> {
+  if (skill.ownerKind !== 'group') return writeError(c, 400, 'invalid_request', 'Personal skills cannot be shared');
+  const shareMode = parseShareMode(body.shareMode);
+  if (!shareMode) return writeError(c, 400, 'invalid_request', 'Expected valid shareMode');
+  const groupIds = parseGroupIds(body.groupIds);
+  if (shareMode === 'specific' && (!groupIds || !groupIds.length)) {
+    return writeError(c, 400, 'invalid_request', 'Specific sharing requires at least one groupId');
+  }
+  if (shareMode !== 'specific' && body.groupIds !== undefined) {
+    return writeError(c, 400, 'invalid_request', 'groupIds is only valid for specific sharing');
+  }
+  if (shareMode === 'specific') {
+    if (!groupIds) return writeError(c, 400, 'invalid_request', 'Expected groupIds to be an array of strings');
+    const existingShareGroupIds = new Set(skill.shareGroupIds);
+    for (const groupId of groupIds) {
+      if (!uuidPattern.test(groupId))
+        return writeError(c, 400, 'invalid_request', `Expected valid groupId: ${groupId}`);
+      const group = await services.store.getGroup(groupId);
+      if (!group) return writeError(c, 404, 'not_found', `Group not found: ${groupId}`);
+      if (group.archivedAt && !existingShareGroupIds.has(groupId)) {
+        return writeError(c, 409, 'archived_group', `Cannot share skills with archived group: ${groupId}`);
+      }
+    }
+  }
+  return { shareMode, groupIds: groupIds ?? [] };
 }
 
 function parseGroupIds(value: unknown): string[] | null {

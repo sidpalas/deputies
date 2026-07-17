@@ -22,6 +22,8 @@ type CreateSkillInputBase = {
   description: string;
   body: string;
   autoLoad?: boolean;
+  shareMode?: SkillShareMode;
+  shareGroupIds?: string[];
   createdByUserId?: string;
   actor?: SkillMutationActor;
 };
@@ -37,6 +39,8 @@ export type UpdateSkillInput = {
   body?: string;
   autoLoad?: boolean;
   enabled?: boolean;
+  shareMode?: SkillShareMode;
+  shareGroupIds?: string[];
   actor?: SkillMutationActor;
 };
 
@@ -53,6 +57,7 @@ export class SkillService {
     const name = validateSkillName(input.name);
     const description = validateSkillDescription(input.description);
     const body = validateSkillBody(input.body);
+    const sharing = createSkillSharing(input);
     const record = {
       id,
       revision: skillRevision({
@@ -65,7 +70,8 @@ export class SkillService {
       }),
       autoLoad: input.autoLoad ?? true,
       enabled: true,
-      shareMode: 'none' as const,
+      shareMode: sharing.shareMode,
+      shareGroupIds: sharing.shareGroupIds,
       ...(input.createdByUserId ? { createdByUserId: input.createdByUserId } : {}),
       createdAt: now,
       updatedAt: now,
@@ -92,9 +98,11 @@ export class SkillService {
     const description = fields.description ?? existing.description;
     const body = fields.body ?? existing.body;
     const contentChanged = name !== existing.name || description !== existing.description || body !== existing.body;
+    const sharing = skillSharingUpdate(existing, input);
     const liveChanged =
       (input.autoLoad !== undefined && input.autoLoad !== existing.autoLoad) ||
-      (input.enabled !== undefined && input.enabled !== existing.enabled);
+      (input.enabled !== undefined && input.enabled !== existing.enabled) ||
+      sharing?.changed;
     if (!contentChanged && !liveChanged) return existing;
     const now = new Date(Math.max(Date.now(), existing.updatedAt.getTime() + 1));
     return this.store.updateSkill({
@@ -115,6 +123,7 @@ export class SkillService {
         : {}),
       ...(input.autoLoad !== undefined ? { autoLoad: input.autoLoad } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(sharing?.changed ? { sharing: { shareMode: sharing.shareMode, groupIds: sharing.shareGroupIds } } : {}),
     });
   }
 
@@ -139,12 +148,7 @@ export class SkillService {
   }
 
   async setShares(id: string, shareMode: SkillShareMode, groupIds: string[]): Promise<SkillRecord> {
-    const existing = await this.requireSkill(id);
-    assertMutable(existing);
-    if (existing.ownerKind !== 'group') {
-      throw new SkillServiceError('invalid_owner', 'Personal skills cannot be shared');
-    }
-    return (await this.store.setSkillShares(id, shareMode, groupIds, new Date())) ?? this.notFound(id);
+    return this.update({ id, shareMode, ...(shareMode === 'specific' ? { shareGroupIds: groupIds } : {}) });
   }
 
   listPersonal(userId: string): Promise<SkillRecord[]> {
@@ -214,6 +218,50 @@ export class SkillService {
   private notFound(id: string): never {
     throw new SkillServiceError('not_found', `Skill not found: ${id}`);
   }
+}
+
+function createSkillSharing(input: CreateSkillInput): { shareMode: SkillShareMode; shareGroupIds: string[] } {
+  if (!('ownerGroupId' in input) || input.ownerGroupId === undefined) {
+    if (input.shareMode !== undefined || input.shareGroupIds !== undefined) {
+      throw new SkillServiceError('invalid_owner', 'Personal skills cannot be shared');
+    }
+    return { shareMode: 'none', shareGroupIds: [] };
+  }
+  const shareMode = input.shareMode ?? 'none';
+  if (shareMode !== 'specific' && input.shareGroupIds !== undefined) {
+    throw new SkillServiceError('invalid_sharing', 'Share groups are only valid for specific sharing');
+  }
+  const shareGroupIds = shareMode === 'specific' ? [...new Set(input.shareGroupIds ?? [])].sort() : [];
+  if (shareMode === 'specific' && !shareGroupIds.length) {
+    throw new SkillServiceError('invalid_sharing', 'Specific sharing requires at least one group');
+  }
+  return { shareMode, shareGroupIds };
+}
+
+function skillSharingUpdate(
+  existing: SkillRecord,
+  input: Pick<UpdateSkillInput, 'shareMode' | 'shareGroupIds'>,
+): { shareMode: SkillShareMode; shareGroupIds: string[]; changed: boolean } | undefined {
+  if (input.shareMode === undefined && input.shareGroupIds === undefined) return undefined;
+  if (existing.ownerKind !== 'group') {
+    throw new SkillServiceError('invalid_owner', 'Personal skills cannot be shared');
+  }
+  const shareMode = input.shareMode ?? existing.shareMode;
+  if (shareMode !== 'specific' && input.shareGroupIds !== undefined) {
+    throw new SkillServiceError('invalid_sharing', 'Share groups are only valid for specific sharing');
+  }
+  const shareGroupIds =
+    shareMode === 'specific' ? [...new Set(input.shareGroupIds ?? existing.shareGroupIds)].sort() : [];
+  if (shareMode === 'specific' && !shareGroupIds.length) {
+    throw new SkillServiceError('invalid_sharing', 'Specific sharing requires at least one group');
+  }
+  return {
+    shareMode,
+    shareGroupIds,
+    changed:
+      shareMode !== existing.shareMode ||
+      (shareMode === 'specific' && shareGroupIds.join('\0') !== [...existing.shareGroupIds].sort().join('\0')),
+  };
 }
 
 function validateSkillFields(input: { name?: unknown; description?: unknown; body?: unknown }): {
@@ -304,6 +352,7 @@ export class SkillServiceError extends Error {
       | 'invalid_name'
       | 'invalid_description'
       | 'invalid_body'
+      | 'invalid_sharing'
       | 'skill_archived',
     message: string,
   ) {

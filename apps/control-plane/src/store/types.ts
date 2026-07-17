@@ -609,6 +609,7 @@ type CreateSkillRecordBase = {
   autoLoad?: boolean;
   enabled?: boolean;
   shareMode?: SkillShareMode;
+  shareGroupIds?: string[];
   createdByUserId?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -627,6 +628,10 @@ export type UpdateSkillRecord = {
   revision?: SkillRevisionWrite;
   autoLoad?: boolean;
   enabled?: boolean;
+  sharing?: {
+    shareMode: SkillShareMode;
+    groupIds: string[];
+  };
 };
 
 export type CreateAutomationInvocationRecord = {

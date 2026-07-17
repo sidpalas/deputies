@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Group, Skill } from './api.js';
 import {
   groupsPanelOpenStorageKey,
@@ -38,7 +38,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
   onError: (error: unknown) => void;
   canNavigate: (navigation: T) => boolean;
 }) {
-  const [editorDirty, setEditorDirty] = useState(false);
+  const editorDirtyRef = useRef(false);
   const [newThreadError, setNewThreadError] = useState('');
   const { selectedSkillId, selectedSkillRevisionId } = input.navigation;
 
@@ -78,10 +78,14 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
   );
 
   function confirmDiscard(): boolean {
-    if (!editorDirty) return true;
+    if (!editorDirtyRef.current) return true;
     if (!window.confirm('Discard unsaved skill changes?')) return false;
     setEditorDirty(false);
     return true;
+  }
+
+  function setEditorDirty(dirty: boolean) {
+    editorDirtyRef.current = dirty;
   }
 
   const navigation = useAppNavigation({
@@ -222,7 +226,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
   async function archiveFromSidebar(skillId: string) {
     if (
       skillId === selectedSkillId &&
-      editorDirty &&
+      editorDirtyRef.current &&
       !window.confirm('Discard unsaved changes and archive this skill?')
     )
       return;

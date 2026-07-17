@@ -709,7 +709,38 @@ it('creates a managed skill and moves a personal skill with confirmation', async
   expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toEqual({ groupId: group.id });
 });
 
-it('updates group sharing and keeps shared-in skills read only', async () => {
+it('includes sharing in the create form only for group-owned skills', async () => {
+  const onSaved = vi.fn();
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    jsonResponse({
+      skill: {
+        ...skill,
+        ownerKind: 'group',
+        ownerGroupId: group.id,
+        source: 'group',
+        shareMode: 'all_groups',
+      },
+    }),
+  );
+  render(<SkillsPanel {...skillsPanelProps(null, onSaved)} />);
+
+  expect(screen.queryByRole('heading', { name: 'Sharing' })).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Owner'), { target: { value: group.id } });
+  expect(screen.getByRole('heading', { name: 'Sharing' })).toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText('All groups'));
+  fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'shared-skill' } });
+  fireEvent.change(screen.getByLabelText(/^Description/), { target: { value: 'Share this skill.' } });
+  fireEvent.change(screen.getByLabelText(/^Markdown body/), { target: { value: '# Shared' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create skill' }));
+
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({
+    ownerGroupId: group.id,
+    shareMode: 'all_groups',
+  });
+});
+
+it('saves group sharing with the skill and keeps shared-in skills read only', async () => {
   const groupSkill: Skill = {
     ...skill,
     ownerKind: 'group',
@@ -717,23 +748,23 @@ it('updates group sharing and keeps shared-in skills read only', async () => {
     source: 'group',
     shareMode: 'none',
   };
-  const onChanged = vi.fn();
+  const onSaved = vi.fn();
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return jsonResponse({ skill: { ...groupSkill, ...body } });
   });
-  const panel = render(<SkillsPanel {...skillsPanelProps(groupSkill, () => undefined)} onSkillChanged={onChanged} />);
+  const panel = render(<SkillsPanel {...skillsPanelProps(groupSkill, onSaved)} />);
 
   fireEvent.click(screen.getByLabelText('Specific groups'));
-  expect(screen.getByText('Unsaved sharing changes')).toBeInTheDocument();
+  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
   expect(screen.getByRole('checkbox', { name: 'Platform (owner)' })).toBeChecked();
   expect(screen.getByRole('checkbox', { name: 'Platform (owner)' })).toBeDisabled();
   expect(screen.getByText('1 selected')).toBeInTheDocument();
 
   fireEvent.click(screen.getByLabelText('All groups'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save sharing' }));
-  await waitFor(() => expect(onChanged).toHaveBeenCalled());
-  expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({ shareMode: 'all_groups' });
+  fireEvent.click(screen.getByRole('button', { name: 'Save skill' }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({ shareMode: 'all_groups' });
 
   panel.rerender(
     <SkillsPanel
@@ -741,13 +772,12 @@ it('updates group sharing and keeps shared-in skills read only', async () => {
         { ...groupSkill, source: 'shared', shareMode: 'specific', canManage: false },
         () => undefined,
       )}
-      onSkillChanged={onChanged}
     />,
   );
   expect(await screen.findByText('Read only')).toBeInTheDocument();
   expect(screen.getByLabelText(/^Name/)).toBeDisabled();
   expect(screen.getByText('Shared with specific groups.')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Save sharing' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save skill' })).toBeDisabled();
 });
 
 it('retains an inaccessible existing share when adding a visible group', async () => {
@@ -770,10 +800,10 @@ it('retains an inaccessible existing share when adding a visible group', async (
 
   expect(screen.getByRole('checkbox', { name: /Unavailable group/ })).toBeChecked();
   fireEvent.click(screen.getByRole('checkbox', { name: 'Product' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save sharing' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save skill' }));
 
   await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-  expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({
+  expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({
     shareMode: 'specific',
     groupIds: [inaccessibleGroupId, visibleTarget.id],
   });
