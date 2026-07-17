@@ -196,6 +196,56 @@ export type RepositoryOption = {
 
 export type EnvironmentShareMode = 'private' | 'selected_groups' | 'all_groups';
 
+export type SkillShareMode = 'none' | 'specific' | 'all_groups';
+export type SkillSource = 'personal' | 'group' | 'shared' | 'repo';
+
+export type SkillProvenance =
+  | { kind: 'personal'; ownerUserId?: string }
+  | { kind: 'group' | 'shared'; ownerGroupId?: string; ownerGroupName?: string }
+  | { kind: 'repo'; repo: string };
+
+export type Skill = {
+  id: string;
+  name: string;
+  description: string;
+  body?: string;
+  currentRevisionId?: string;
+  currentRevisionNumber?: number;
+  ownerKind?: 'user' | 'group';
+  ownerUserId?: string;
+  ownerGroupId?: string;
+  ownerGroupName?: string;
+  autoLoad: boolean;
+  enabled: boolean;
+  shareMode: SkillShareMode;
+  shareGroupIds?: string[];
+  source?: SkillSource;
+  provenance?: SkillProvenance;
+  repo?: string;
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  canManage?: boolean;
+};
+
+export type SkillInvocationRef = {
+  id: string;
+  name: string;
+  revisionId?: string;
+};
+
+export type SkillRevision = {
+  id: string;
+  skillId: string;
+  revisionNumber: number;
+  name: string;
+  description: string;
+  body: string;
+  actorType: 'system' | 'user';
+  actorUserId?: string;
+  createdAt: string;
+};
+
 export type EnvironmentRepository = {
   id: string;
   provider: 'github';
@@ -204,6 +254,16 @@ export type EnvironmentRepository = {
   primary: boolean;
   position: number;
   branch?: string;
+};
+
+export type EnvironmentRevision = {
+  id: string;
+  environmentId: string;
+  revisionNumber: number;
+  repositories: Omit<EnvironmentRepository, 'id'>[];
+  actorType: 'system' | 'user';
+  actorUserId?: string;
+  createdAt: string;
 };
 
 export type Environment = {
@@ -553,6 +613,16 @@ export async function listEnvironments(token: string): Promise<Environment[]> {
   return body.environments;
 }
 
+export async function listEnvironmentRevisions(input: {
+  environmentId: string;
+  token: string;
+}): Promise<EnvironmentRevision[]> {
+  const body = await request<{ revisions: EnvironmentRevision[] }>(`/environments/${input.environmentId}/revisions`, {
+    token: input.token,
+  });
+  return body.revisions ?? [];
+}
+
 export async function createEnvironment(input: {
   name: string;
   ownerGroupId: string;
@@ -602,6 +672,133 @@ export async function unarchiveEnvironment(input: { environmentId: string; token
     body: {},
   });
   return body.environment;
+}
+
+export async function listSkills(input: {
+  token: string;
+  scope: 'personal' | 'group' | 'shared';
+  groupId?: string;
+}): Promise<Skill[]> {
+  const query = new URLSearchParams({ scope: input.scope });
+  if (input.groupId) query.set('groupId', input.groupId);
+  const body = await request<{ skills: Skill[] }>(`/skills?${query.toString()}`, { token: input.token });
+  return body.skills;
+}
+
+export async function listSessionSkills(input: { sessionId: string; token: string }): Promise<Skill[]> {
+  const body = await request<{ skills: Skill[] }>(`/sessions/${input.sessionId}/skills`, { token: input.token });
+  return body.skills;
+}
+
+export async function listSkillInvocationCandidates(input: { ownerGroupId: string; token: string }): Promise<Skill[]> {
+  const query = new URLSearchParams({ ownerGroupId: input.ownerGroupId });
+  const body = await request<{ skills: Skill[] }>(`/skills/invocation-candidates?${query.toString()}`, {
+    token: input.token,
+  });
+  return body.skills;
+}
+
+export async function getSkill(input: { skillId: string; token: string }): Promise<Skill> {
+  const body = await request<{ skill: Skill }>(`/skills/${input.skillId}`, { token: input.token });
+  return body.skill;
+}
+
+export async function listSkillRevisions(input: { skillId: string; token: string }): Promise<SkillRevision[]> {
+  const body = await request<{ revisions: SkillRevision[] }>(`/skills/${input.skillId}/revisions`, {
+    token: input.token,
+  });
+  return body.revisions ?? [];
+}
+
+export async function createSkill(input: {
+  token: string;
+  name: string;
+  description: string;
+  body: string;
+  autoLoad?: boolean;
+  ownerGroupId?: string;
+}): Promise<Skill> {
+  const body = await request<{ skill: Skill }>('/skills', {
+    method: 'POST',
+    token: input.token,
+    body: {
+      name: input.name,
+      description: input.description,
+      body: input.body,
+      ...(input.autoLoad !== undefined ? { autoLoad: input.autoLoad } : {}),
+      ...(input.ownerGroupId ? { ownerGroupId: input.ownerGroupId } : {}),
+    },
+  });
+  return body.skill;
+}
+
+export async function updateSkill(input: {
+  skillId: string;
+  token: string;
+  name?: string;
+  description?: string;
+  body?: string;
+  autoLoad?: boolean;
+  enabled?: boolean;
+  expectedCurrentRevisionId?: string;
+}): Promise<Skill> {
+  const body = await request<{ skill: Skill }>(`/skills/${input.skillId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: {
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.body !== undefined ? { body: input.body } : {}),
+      ...(input.autoLoad !== undefined ? { autoLoad: input.autoLoad } : {}),
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.expectedCurrentRevisionId ? { expectedCurrentRevisionId: input.expectedCurrentRevisionId } : {}),
+    },
+  });
+  return body.skill;
+}
+
+export async function archiveSkill(input: { skillId: string; token: string }): Promise<Skill> {
+  const body = await request<{ skill: Skill }>(`/skills/${input.skillId}/archive`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.skill;
+}
+
+export async function restoreSkill(input: { skillId: string; token: string }): Promise<Skill> {
+  const body = await request<{ skill: Skill }>(`/skills/${input.skillId}/restore`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.skill;
+}
+
+export async function promoteSkill(input: { skillId: string; groupId: string; token: string }): Promise<Skill> {
+  const body = await request<{ skill: Skill }>(`/skills/${input.skillId}/promote`, {
+    method: 'POST',
+    token: input.token,
+    body: { groupId: input.groupId },
+  });
+  return body.skill;
+}
+
+export async function setSkillShares(input: {
+  skillId: string;
+  shareMode: SkillShareMode;
+  groupIds?: string[];
+  token: string;
+}): Promise<Skill> {
+  const body = await request<{ skill: Skill }>(`/skills/${input.skillId}/shares`, {
+    method: 'PUT',
+    token: input.token,
+    body: {
+      shareMode: input.shareMode,
+      ...(input.shareMode === 'specific' ? { groupIds: input.groupIds ?? [] } : {}),
+    },
+  });
+  return body.skill;
 }
 
 function automationRequestBody(input: {
@@ -889,6 +1086,8 @@ export async function enqueueMessage(input: {
   model?: string;
   reasoningLevel?: ReasoningLevel;
   branch?: string;
+  skills?: string[];
+  skillRefs?: SkillInvocationRef[];
 }): Promise<Message> {
   const requestBody: {
     prompt: string;
@@ -898,6 +1097,7 @@ export async function enqueueMessage(input: {
     model?: string;
     reasoningLevel?: ReasoningLevel;
     branch?: string;
+    context?: { skills: string[]; skillRefs?: SkillInvocationRef[] };
   } = {
     prompt: input.prompt,
   };
@@ -907,6 +1107,9 @@ export async function enqueueMessage(input: {
   if (input.model) requestBody.model = input.model;
   if (input.reasoningLevel) requestBody.reasoningLevel = input.reasoningLevel;
   if (input.branch) requestBody.branch = input.branch;
+  if (input.skills?.length) {
+    requestBody.context = { skills: input.skills, ...(input.skillRefs ? { skillRefs: input.skillRefs } : {}) };
+  }
   const body = await request<{ message: Message }>(`/sessions/${input.sessionId}/messages`, {
     method: 'POST',
     token: input.token,
@@ -920,11 +1123,18 @@ export async function updateMessage(input: {
   messageId: string;
   prompt: string;
   token: string;
+  skills?: string[];
+  skillRefs?: SkillInvocationRef[];
 }): Promise<Message> {
   const body = await request<{ message: Message }>(`/sessions/${input.sessionId}/messages/${input.messageId}`, {
     method: 'PATCH',
     token: input.token,
-    body: { prompt: input.prompt },
+    body: {
+      prompt: input.prompt,
+      ...(input.skills
+        ? { context: { skills: input.skills, ...(input.skillRefs ? { skillRefs: input.skillRefs } : {}) } }
+        : {}),
+    },
   });
   return body.message;
 }

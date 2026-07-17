@@ -8,6 +8,7 @@ export const groupsPanelViewStorageKey = 'deputies-groups-panel-view';
 export const groupsPanelSelectedGroupStorageKey = 'deputies-groups-panel-selected-group-id';
 export const selectedAutomationStorageKey = 'deputies-selected-automation-id';
 export const selectedEnvironmentStorageKey = 'deputies-selected-environment-id';
+export const selectedSkillStorageKey = 'deputies-selected-skill-id';
 export const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
 export const sessionFiltersStorageKey = 'deputies-session-filters';
 export const archivedAutomationsOpenStorageKey = 'deputies-archived-automations-open';
@@ -44,7 +45,7 @@ export function loadStoredToken(): string {
 
 export function loadInitialSelectedSessionId(): string {
   const query = new URLSearchParams(window.location.search);
-  if (query.get('group') || query.get('automation') || query.get('environment')) return '';
+  if (query.get('group') || query.get('automation') || query.get('environment') || query.get('skill')) return '';
   return query.get('session') ?? sessionStorage.getItem(selectedSessionStorageKey) ?? '';
 }
 
@@ -54,31 +55,46 @@ export function loadInitialIsCreatingThread(): boolean {
     !new URLSearchParams(window.location.search).get('group') &&
     !new URLSearchParams(window.location.search).get('automation') &&
     !new URLSearchParams(window.location.search).get('environment') &&
+    !new URLSearchParams(window.location.search).get('skill') &&
     sessionStorage.getItem(newSessionSelectedStorageKey) === 'true'
   );
 }
 
 export function loadInitialSetupGuideOpen(): boolean {
   const query = new URLSearchParams(window.location.search);
-  if (query.get('session') || query.get('group') || query.get('automation') || query.get('environment')) return false;
+  if (
+    query.get('session') ||
+    query.get('group') ||
+    query.get('automation') ||
+    query.get('environment') ||
+    query.get('skill')
+  )
+    return false;
   return sessionStorage.getItem(setupGuideOpenStorageKey) === 'true';
 }
 
 export function loadInitialGroupsPanelOpen(): boolean {
   const query = new URLSearchParams(window.location.search);
-  if (query.get('session') || query.get('automation') || query.get('environment')) return false;
+  if (query.get('session') || query.get('automation') || query.get('environment') || query.get('skill')) return false;
   if (query.get('group')) return true;
   return sessionStorage.getItem(groupsPanelOpenStorageKey) === 'true';
 }
 
-export function loadInitialSidebarPanel(): 'sessions' | 'groups' | 'automations' | 'environments' {
+export function loadInitialSidebarPanel(): 'sessions' | 'groups' | 'automations' | 'environments' | 'skills' {
   const query = new URLSearchParams(window.location.search);
   if (query.get('session')) return 'sessions';
   if (query.get('automation')) return 'automations';
   if (query.get('environment')) return 'environments';
+  if (query.get('skill')) return 'skills';
   if (query.get('group')) return 'groups';
   const stored = sessionStorage.getItem(sidebarPanelStorageKey);
-  if (stored === 'sessions' || stored === 'groups' || stored === 'automations' || stored === 'environments') {
+  if (
+    stored === 'sessions' ||
+    stored === 'groups' ||
+    stored === 'automations' ||
+    stored === 'environments' ||
+    stored === 'skills'
+  ) {
     return stored;
   }
   return loadInitialGroupsPanelOpen() ? 'groups' : 'sessions';
@@ -105,6 +121,22 @@ export function loadInitialSelectedEnvironmentId(): string {
   const environmentId = new URLSearchParams(window.location.search).get('environment');
   if (environmentId) return environmentId;
   return sessionStorage.getItem(selectedEnvironmentStorageKey) ?? '';
+}
+
+export function loadInitialSelectedEnvironmentRevisionId(): string {
+  const query = new URLSearchParams(window.location.search);
+  return query.get('environment') ? (query.get('revision') ?? '') : '';
+}
+
+export function loadInitialSelectedSkillId(): string {
+  const skillId = new URLSearchParams(window.location.search).get('skill');
+  if (skillId) return skillId;
+  return sessionStorage.getItem(selectedSkillStorageKey) ?? '';
+}
+
+export function loadInitialSelectedSkillRevisionId(): string {
+  const query = new URLSearchParams(window.location.search);
+  return query.get('skill') ? (query.get('revision') ?? '') : '';
 }
 
 export function loadThemePreference(): ThemePreference {

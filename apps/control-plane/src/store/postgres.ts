@@ -1,5 +1,6 @@
 import { Pool, type PoolClient } from 'pg';
 import type { NormalizedEvent } from '../events/types.js';
+import { PostgresSkillStore } from './postgres/skills.js';
 import { StoreConflictError } from './types.js';
 import type {
   AppStore,
@@ -24,6 +25,7 @@ import type {
   CreateSessionRecord,
   CreateSessionWithFirstMessageInput,
   CreateSessionWithFirstMessageResult,
+  CreateSkillRecord,
   CreateWebhookSourceRecord,
   EventDeltaCompactionInput,
   EnvironmentWithDetailsRecord,
@@ -56,8 +58,14 @@ import type {
   SessionTagSummary,
   SessionVisibilityFilter,
   SessionWithSandboxPage,
+  SkillRecord,
+  SkillRevisionRecord,
+  SkillRevisionSelection,
+  SkillRunCandidate,
+  SkillShareMode,
   UpdateAutomationRecord,
   UpdateEnvironmentRecord,
+  UpdateSkillRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -128,7 +136,6 @@ const joinedSessionSelectColumns = sessionSelectColumns
   .split(', ')
   .map((column) => `sessions.${column}`)
   .join(', ');
-
 type SessionSearchRow = SessionWithSandboxRow & {
   snippet: string | null;
   match_kind: SessionSearchMatchKind;
@@ -141,10 +148,12 @@ export type PostgresEventListener = {
 
 export class PostgresStore implements AppStore {
   private readonly pool: Pool;
+  private readonly skillStore: PostgresSkillStore;
   private readonly secretCipher?: SecretCipher;
 
   constructor(databaseUrl: string | Pool, options: { sandboxSecretEncryptionKey?: string } = {}) {
     this.pool = typeof databaseUrl === 'string' ? new Pool({ connectionString: databaseUrl }) : databaseUrl;
+    this.skillStore = new PostgresSkillStore(this.pool);
     if (options.sandboxSecretEncryptionKey)
       this.secretCipher = new SecretCipher(options.sandboxSecretEncryptionKey, 'sandbox-secrets');
   }
@@ -281,6 +290,16 @@ export class PostgresStore implements AppStore {
        JOIN auth_users u ON u.id = s.user_id
        WHERE s.id = $1 AND s.expires_at > $2`,
       [input.sessionId, input.now],
+    );
+    return result.rows[0] ? toAuthUser(result.rows[0]) : null;
+  }
+
+  async getAuthUser(id: string): Promise<AuthUserRecord | null> {
+    const result = await this.pool.query<AuthUserRow>(
+      `SELECT id, username, role, display_name, avatar_url, created_at, updated_at
+       FROM auth_users
+       WHERE id = $1`,
+      [id],
     );
     return result.rows[0] ? toAuthUser(result.rows[0]) : null;
   }
@@ -1267,6 +1286,68 @@ export class PostgresStore implements AppStore {
     return toSession(result.rows[0]);
   }
 
+  async createSkill(record: CreateSkillRecord): Promise<SkillRecord> {
+    return this.skillStore.createSkill(record);
+  }
+
+  async getSkill(id: string): Promise<SkillRecord | null> {
+    return this.skillStore.getSkill(id);
+  }
+
+  async listSkillRevisions(skillId: string): Promise<SkillRevisionRecord[]> {
+    return this.skillStore.listSkillRevisions(skillId);
+  }
+
+  async updateSkill(input: UpdateSkillRecord): Promise<SkillRecord> {
+    return this.skillStore.updateSkill(input);
+  }
+
+  async archiveSkill(input: { skillId: string; archivedAt: Date }): Promise<SkillRecord | null> {
+    return this.skillStore.archiveSkill(input);
+  }
+
+  async restoreSkill(input: { skillId: string; updatedAt: Date }): Promise<SkillRecord | null> {
+    return this.skillStore.restoreSkill(input);
+  }
+
+  async promoteSkill(id: string, groupId: string, now: Date): Promise<SkillRecord | null> {
+    return this.skillStore.promoteSkill(id, groupId, now);
+  }
+
+  async setSkillShares(
+    id: string,
+    shareMode: SkillShareMode,
+    groupIds: string[],
+    now: Date,
+  ): Promise<SkillRecord | null> {
+    return this.skillStore.setSkillShares(id, shareMode, groupIds, now);
+  }
+
+  async listSkillsForUser(userId: string): Promise<SkillRecord[]> {
+    return this.skillStore.listSkillsForUser(userId);
+  }
+
+  async listSkillsForGroups(groupIds: string[]): Promise<SkillRecord[]> {
+    return this.skillStore.listSkillsForGroups(groupIds);
+  }
+
+  async listSkillsSharedIntoGroups(groupIds: string[]): Promise<SkillRecord[]> {
+    return this.skillStore.listSkillsSharedIntoGroups(groupIds);
+  }
+
+  async listSkillInvocationCandidates(input: { ownerGroupId: string; userId?: string }): Promise<SkillRunCandidate[]> {
+    return this.skillStore.listSkillInvocationCandidates(input);
+  }
+
+  async listSkillsForRun(input: {
+    ownerGroupId: string;
+    createdByUserId?: string;
+    invokedNames?: string[];
+    invokedRevisions?: SkillRevisionSelection[];
+  }): Promise<SkillRunCandidate[]> {
+    return this.skillStore.listSkillsForRun(input);
+  }
+
   async createEnvironment(record: CreateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord> {
     try {
       return await this.transaction(async (client) => {
@@ -2051,11 +2132,15 @@ export class PostgresStore implements AppStore {
     sessionId: string;
     messageId: string;
     prompt: string;
+    context?: Record<string, unknown>;
   }): Promise<MessageRecord | null> {
     const result = await this.pool.query<MessageRow>(
-      `UPDATE messages SET prompt = $3 WHERE session_id = $1 AND id = $2 AND status = 'pending'
+      `UPDATE messages
+       SET prompt = $3,
+           context = CASE WHEN $4::boolean THEN $5::jsonb ELSE context END
+       WHERE session_id = $1 AND id = $2 AND status = 'pending'
        RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
-      [input.sessionId, input.messageId, input.prompt],
+      [input.sessionId, input.messageId, input.prompt, input.context !== undefined, input.context ?? null],
     );
     return result.rows[0] ? toMessage(result.rows[0]) : null;
   }

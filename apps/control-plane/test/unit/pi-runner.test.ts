@@ -18,14 +18,22 @@ import {
   type PiSessionData,
 } from '../../src/runner-pi/session-store.js';
 import type { SandboxKeepaliveService } from '../../src/sandbox/service.js';
-import type { FileStat, SandboxFileSystem, SandboxHandle } from '../../src/sandbox/types.js';
+import type { SandboxHandle } from '../../src/sandbox/types.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import { defaultGroupId } from '../../src/store/types.js';
+import { MemorySandboxFileSystem } from '../support/pi-skills.js';
 
 const piMock = vi.hoisted(() => ({
   createAgentSession: vi.fn(),
   openSessionCalls: [] as Array<{ sessionFile: string; agentDir: string; cwd: string; jsonl: string }>,
   openSessionError: undefined as Error | undefined,
+  resourceLoaderOptions: [] as Array<{
+    noSkills?: boolean;
+    skillsOverride?: (base: { skills: unknown[]; diagnostics: unknown[] }) => {
+      skills: unknown[];
+      diagnostics: unknown[];
+    };
+  }>,
 }));
 
 type SandboxPiTool = ReturnType<typeof createSandboxPiToolDefinitions>[number];
@@ -75,6 +83,10 @@ vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
   }
 
   class FakeResourceLoader {
+    constructor(options: (typeof piMock.resourceLoaderOptions)[number]) {
+      piMock.resourceLoaderOptions.push(options);
+    }
+
     async reload() {}
   }
 
@@ -137,6 +149,7 @@ describe('PiRunner', () => {
     piMock.createAgentSession.mockReset();
     piMock.openSessionCalls.length = 0;
     piMock.openSessionError = undefined;
+    piMock.resourceLoaderOptions.length = 0;
   });
 
   it('runs a Pi session and normalizes streamed text and tool events', async () => {
@@ -227,15 +240,213 @@ describe('PiRunner', () => {
     expect(piMock.createAgentSession.mock.calls[0]![0].tools).toBeUndefined();
     expect(events.map((event) => event.type)).toEqual([
       'run_started',
+      'skills_loaded',
       'agent_text_delta',
       'tool_started',
       'tool_finished',
       'run_completed',
     ]);
-    expect(events[1]?.payload).toMatchObject({ text: 'hello from pi' });
-    expect(events[2]?.payload).toMatchObject({ toolName: 'bash', toolCallId: 'tool-1' });
+    expect(events[1]?.payload).toEqual({ skills: [], shadowed: [], diagnostics: [] });
+    expect(events[2]?.payload).toMatchObject({ text: 'hello from pi' });
+    expect(events[3]?.payload).toMatchObject({ toolName: 'bash', toolCallId: 'tool-1' });
     expect(result).toEqual({ text: 'hello from pi', model: 'gpt-5.5', usage });
     expect(dispose).toHaveBeenCalled();
+  });
+
+  it('traces explicit and successful model skill invocations once per run', async () => {
+    const skillPath = '/workspace/.deputies-skills/group/skill-review/revision-review-1/review/SKILL.md';
+    const messages = [
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'reviewed' }],
+        model: 'gpt-5.5',
+        stopReason: 'stop',
+      },
+    ];
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages,
+        async prompt() {
+          listener?.({
+            type: 'tool_execution_start',
+            toolName: 'read',
+            toolCallId: 'read-failed',
+            args: { path: skillPath },
+          });
+          listener?.({
+            type: 'tool_execution_end',
+            toolName: 'read',
+            toolCallId: 'read-failed',
+            isError: true,
+            result: { content: [{ type: 'text', text: 'failed' }] },
+          });
+          for (const toolCallId of ['read-success', 'read-repeated']) {
+            listener?.({ type: 'tool_execution_start', toolName: 'read', toolCallId, args: { path: skillPath } });
+            listener?.({
+              type: 'tool_execution_end',
+              toolName: 'read',
+              toolCallId,
+              isError: false,
+              result: { content: [{ type: 'text', text: '# Review' }] },
+            });
+          }
+        },
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe(callback: (event: AgentSessionEvent) => void) {
+          listener = callback;
+          return () => {
+            listener = undefined;
+          };
+        },
+      },
+      extensionsResult: {},
+    });
+
+    const events: NormalizedEvent[] = [];
+    await new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      skills: {
+        repoScanEnabled: false,
+        listForRun: async () => [
+          {
+            id: 'skill-review',
+            revisionId: 'revision-review-1',
+            revisionNumber: 1,
+            name: 'review',
+            description: 'Review the implementation',
+            body: 'Review carefully.',
+            autoLoad: true,
+            source: 'group',
+            ownerGroupId: 'group-1',
+            ownerGroupName: 'Engineering',
+            createdAt: new Date('2026-01-01T00:00:00Z'),
+          },
+        ],
+      },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      ownerGroupId: 'group-1',
+      createdByUserId: 'user-1',
+      prompt: 'review this',
+      context: { skills: ['review'], skillRefs: [{ id: 'skill-review', name: 'review' }] },
+      skillInvocations: [{ name: 'review', ref: 'skill-review' }],
+      sandbox: createMemorySandbox(),
+      emit: async (event) => {
+        events.push(event);
+      },
+    });
+
+    expect(events.filter((event) => event.type === 'skill_invoked').map((event) => event.payload)).toEqual([
+      {
+        name: 'review',
+        source: 'group',
+        trigger: 'user',
+        ref: 'skill-review',
+        filePath: skillPath,
+        ownerGroupId: 'group-1',
+        ownerGroupName: 'Engineering',
+        skillId: 'skill-review',
+        revisionId: 'revision-review-1',
+        revisionNumber: 1,
+      },
+      {
+        name: 'review',
+        source: 'group',
+        trigger: 'model',
+        ref: 'skill-review',
+        filePath: skillPath,
+        ownerGroupId: 'group-1',
+        ownerGroupName: 'Engineering',
+        skillId: 'skill-review',
+        revisionId: 'revision-review-1',
+        revisionNumber: 1,
+      },
+    ]);
+    expect(
+      events.findIndex((event) => event.type === 'tool_finished' && event.payload.toolCallId === 'read-success'),
+    ).toBeLessThan(events.findIndex((event) => event.type === 'skill_invoked' && event.payload.trigger === 'model'));
+  });
+
+  it('drains skill invocation events before surfacing a prompt failure', async () => {
+    const skillPath = '/workspace/.deputies-skills/group/skill-review/revision-review-1/review/SKILL.md';
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages: [],
+        async prompt() {
+          listener?.({
+            type: 'tool_execution_start',
+            toolName: 'read',
+            toolCallId: 'read-1',
+            args: { path: skillPath },
+          });
+          listener?.({
+            type: 'tool_execution_end',
+            toolName: 'read',
+            toolCallId: 'read-1',
+            isError: false,
+            result: { content: [{ type: 'text', text: '# Review' }] },
+          });
+          throw new Error('prompt failed');
+        },
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe(callback: (event: AgentSessionEvent) => void) {
+          listener = callback;
+          return () => {
+            listener = undefined;
+          };
+        },
+      },
+      extensionsResult: {},
+    });
+
+    const events: NormalizedEvent[] = [];
+    const run = new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      skills: {
+        repoScanEnabled: false,
+        listForRun: async () => [
+          {
+            id: 'skill-review',
+            revisionId: 'revision-review-1',
+            revisionNumber: 1,
+            name: 'review',
+            description: 'Review the implementation',
+            body: 'Review carefully.',
+            autoLoad: true,
+            source: 'group',
+            createdAt: new Date('2026-01-01T00:00:00Z'),
+          },
+        ],
+      },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      ownerGroupId: 'group-1',
+      prompt: 'review this',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async (event) => {
+        if (event.type === 'tool_started') await new Promise((resolve) => setTimeout(resolve, 5));
+        events.push(event);
+      },
+    });
+
+    await expect(run).rejects.toThrow('prompt failed');
+    expect(events.map((event) => event.type)).toContain('skill_invoked');
+    expect(events.findIndex((event) => event.type === 'tool_finished')).toBeLessThan(
+      events.findIndex((event) => event.type === 'skill_invoked'),
+    );
   });
 
   it('keeps Bedrock model version suffixes in Pi model IDs', async () => {
@@ -344,9 +555,23 @@ describe('PiRunner', () => {
   it('runs subagents in-process and caps nested registration at depth 4', async () => {
     let createCount = 0;
     const prompts: string[] = [];
+    const listForRun = vi.fn(async () => [
+      {
+        id: 'skill-review',
+        revisionId: 'revision-review-1',
+        revisionNumber: 1,
+        name: 'review',
+        description: 'Review the implementation',
+        body: 'Review carefully.',
+        autoLoad: false,
+        source: 'group' as const,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+      },
+    ]);
 
     piMock.createAgentSession.mockImplementation(async (options) => {
       const index = createCount++;
+      let listener: ((event: AgentSessionEvent) => void) | undefined;
       const messages = [
         {
           role: 'assistant',
@@ -378,32 +603,74 @@ describe('PiRunner', () => {
               return;
             }
 
+            listener?.({
+              type: 'tool_execution_start',
+              toolName: 'read',
+              toolCallId: 'subagent-skill-read',
+              args: { path: '/workspace/.deputies-skills/group/skill-review/revision-review-1/review/SKILL.md' },
+            });
+            listener?.({
+              type: 'tool_execution_end',
+              toolName: 'read',
+              toolCallId: 'subagent-skill-read',
+              isError: false,
+              result: { content: [{ type: 'text', text: '# Review' }] },
+            });
             messages[0]!.content[0]!.text = 'leaf result';
           },
           abort: vi.fn(),
           dispose: vi.fn(),
-          subscribe: vi.fn(() => () => {}),
+          subscribe: vi.fn((callback: (event: AgentSessionEvent) => void) => {
+            listener = callback;
+            return () => {
+              listener = undefined;
+            };
+          }),
         },
         extensionsResult: {},
       };
     });
 
+    const events: NormalizedEvent[] = [];
     const result = await new PiRunner({
       model: 'openai-codex/gpt-5.5',
       authBase64: Buffer.from('{}').toString('base64'),
+      skills: { repoScanEnabled: false, listForRun },
     }).run({
       sessionId: 'session-1',
       runId: 'run-1',
       messageId: 'message-1',
+      ownerGroupId: 'group-1',
       prompt: 'parent task',
-      context: {},
+      context: { skills: ['review'] },
+      skillInvocations: [{ name: 'review' }],
       sandbox: createMemorySandbox(),
-      emit: async () => {},
+      emit: async (event) => {
+        events.push(event);
+      },
     });
 
     expect(result.text).toBe('leaf result');
     expect(createCount).toBe(5);
-    expect(prompts).toEqual(['0:parent task', '1:child-0', '2:child-1', '3:child-2', '4:child-3']);
+    expect(prompts[0]).toContain(
+      '0:<skill name="review" location="/workspace/.deputies-skills/group/skill-review/revision-review-1/review/SKILL.md">',
+    );
+    expect(prompts[0]).toContain(
+      'References are relative to /workspace/.deputies-skills/group/skill-review/revision-review-1/review.',
+    );
+    expect(prompts[0]).toContain('Review carefully.\n</skill>\n\nparent task');
+    expect(prompts.slice(1)).toEqual(['1:child-0', '2:child-1', '3:child-2', '4:child-3']);
+    expect(listForRun).toHaveBeenCalledTimes(2);
+    expect(piMock.resourceLoaderOptions).toHaveLength(5);
+    for (const loaderOptions of piMock.resourceLoaderOptions) {
+      expect(loaderOptions.noSkills).toBe(true);
+      expect(loaderOptions.skillsOverride?.({ skills: [], diagnostics: [] }).skills).toEqual([]);
+    }
+    expect(
+      events
+        .filter((event) => event.type === 'skill_invoked')
+        .map((event) => [event.payload.trigger, event.payload.ref]),
+    ).toEqual([['user', 'skill-review']]);
   });
 
   it('registers MCP tools, shares them with subagents, and closes connections', async () => {
@@ -1447,12 +1714,13 @@ describe('PiRunner', () => {
     });
     expect(events.map((event) => event.type)).toEqual([
       'run_started',
+      'skills_loaded',
       'repository_ready',
       'setup_script_started',
       'setup_script_finished',
       'run_completed',
     ]);
-    expect(events[3]?.payload).toMatchObject({ isError: true, stdoutTail: 'setup stdout', stderrTail: 'setup stderr' });
+    expect(events[4]?.payload).toMatchObject({ isError: true, stdoutTail: 'setup stdout', stderrTail: 'setup stderr' });
     expect(prompt).toHaveBeenCalledWith(expect.stringContaining('.agents/setup failed'), {
       expandPromptTemplates: false,
     });
@@ -1778,7 +2046,7 @@ const githubAccess: GitHubRepositoryAccess = {
 };
 
 function createMemorySandbox(options: { execCalls?: ExecCall[] } = {}): SandboxHandle {
-  const fs = new MemorySandboxFileSystem();
+  const fs = new MemorySandboxFileSystem('/workspace');
   return {
     provider: 'memory',
     providerSandboxId: 'sandbox-1',
@@ -1827,76 +2095,4 @@ function createMemorySandbox(options: { execCalls?: ExecCall[] } = {}): SandboxH
       return { exitCode: 0, stdout: `ran: ${input.command}`, stderr: '', startedAt: now, completedAt: now };
     },
   };
-}
-
-class MemorySandboxFileSystem implements SandboxFileSystem {
-  private readonly files = new Map<string, Uint8Array>();
-  private readonly directories = new Set(['/workspace']);
-
-  async readFile(filePath: string): Promise<string> {
-    return Buffer.from(await this.readFileBuffer(filePath)).toString('utf8');
-  }
-
-  async readFileBuffer(filePath: string): Promise<Uint8Array> {
-    const content = this.files.get(normalizeSandboxPath(filePath));
-    if (!content) throw new Error(`File not found: ${filePath}`);
-    return content;
-  }
-
-  async writeFile(filePath: string, content: string | Uint8Array): Promise<void> {
-    const normalized = normalizeSandboxPath(filePath);
-    this.addDirectory(path.posix.dirname(normalized));
-    this.files.set(normalized, typeof content === 'string' ? Buffer.from(content) : content);
-  }
-
-  async stat(filePath: string): Promise<FileStat> {
-    const normalized = normalizeSandboxPath(filePath);
-    const content = this.files.get(normalized);
-    if (content) {
-      return { isFile: true, isDirectory: false, isSymbolicLink: false, size: content.byteLength, mtime: new Date() };
-    }
-    if (this.directories.has(normalized)) {
-      return { isFile: false, isDirectory: true, isSymbolicLink: false, size: 0, mtime: new Date() };
-    }
-    throw new Error(`Path not found: ${filePath}`);
-  }
-
-  async readdir(dirPath: string): Promise<string[]> {
-    const normalized = normalizeSandboxPath(dirPath).replace(/\/$/, '');
-    const prefix = `${normalized}/`;
-    const fileEntries = [...this.files.keys()]
-      .filter((filePath) => filePath.startsWith(prefix))
-      .map((filePath) => filePath.slice(prefix.length).split('/')[0]!);
-    const directoryEntries = [...this.directories]
-      .filter((directoryPath) => directoryPath !== normalized && directoryPath.startsWith(prefix))
-      .map((directoryPath) => directoryPath.slice(prefix.length).split('/')[0]!);
-    return [...new Set([...fileEntries, ...directoryEntries])];
-  }
-
-  async exists(filePath: string): Promise<boolean> {
-    const normalized = normalizeSandboxPath(filePath);
-    return this.files.has(normalized) || this.directories.has(normalized);
-  }
-
-  async mkdir(dirPath: string): Promise<void> {
-    this.addDirectory(normalizeSandboxPath(dirPath));
-  }
-
-  async rm(filePath: string): Promise<void> {
-    this.files.delete(normalizeSandboxPath(filePath));
-  }
-
-  private addDirectory(dirPath: string): void {
-    let current = normalizeSandboxPath(dirPath);
-    while (!this.directories.has(current)) {
-      this.directories.add(current);
-      const parent = path.posix.dirname(current);
-      if (parent === current) break;
-      current = parent;
-    }
-  }
-}
-
-function normalizeSandboxPath(filePath: string): string {
-  return path.posix.resolve('/', filePath);
 }

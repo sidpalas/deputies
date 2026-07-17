@@ -22,7 +22,13 @@ describe('FakeRunner', () => {
     expect(result.text).toBe(
       'Fake response for: hello\n\nThis is a fake runner response. Configure the RUNNER, SANDBOX_PROVIDER, and model credential environment variables to run real agent work.',
     );
-    expect(events.map((event) => event.type)).toEqual(['run_started', 'agent_text_delta', 'run_completed']);
+    expect(events.map((event) => event.type)).toEqual([
+      'run_started',
+      'skills_loaded',
+      'agent_text_delta',
+      'run_completed',
+    ]);
+    expect(events[1]?.payload).toEqual({ skills: [], shadowed: [], diagnostics: [] });
   });
 
   it('can return scripted fake artifacts from context', async () => {

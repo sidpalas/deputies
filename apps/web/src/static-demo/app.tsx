@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { PanelLeftOpen } from 'lucide-react';
 import type { ArtifactPreview, ModelChoice, Session, SessionSearchResult } from '../api.js';
 import { MessageComposer, ThreadHeader, ThreadSidebar } from '../components/app-panels.js';
-import type { ThemePreference } from '../components/app-panels.js';
+import type { SidebarFooterProps, ThemePreference } from '../components/app-panels.js';
 import { ChatPanel, DesktopContextPanel, MobileContextPanel } from '../components/thread/thread-content.js';
 import { Button } from '../components/ui/button.js';
 import type { StaticDemoData, StaticDemoSession } from './types.js';
@@ -57,6 +57,26 @@ export function StaticDemoApp() {
   }, [sessions, sessionSearchQuery]);
   const selectedRaw = data?.sessions.find((item) => item.session.id === selectedSessionId) ?? data?.sessions[0] ?? null;
   const selected = selectedRaw ? { ...selectedRaw, session: withSessionDefaults(selectedRaw.session) } : null;
+  const footerProps: SidebarFooterProps = {
+    authRequired: false,
+    canViewGroups: false,
+    canViewAutomations: false,
+    canViewEnvironments: false,
+    canViewSkills: false,
+    canViewSetup: false,
+    health: { status: 'ok', runMode: 'static-demo', apiAuthMode: 'none' },
+    navPage: 'sessions',
+    themePreference,
+    token: '',
+    onOpenGroups: () => undefined,
+    onOpenAutomations: () => undefined,
+    onOpenEnvironments: () => undefined,
+    onOpenSkills: () => undefined,
+    onOpenSessions: () => undefined,
+    onOpenSetup: () => undefined,
+    onSignOut: () => undefined,
+    onThemeChange: setThemePreference,
+  };
 
   if (error) {
     return (
@@ -108,23 +128,16 @@ export function StaticDemoApp() {
           >
             <ThreadSidebar
               archivedSessionsOpen
-              authRequired={false}
               canCallApi={false}
-              canViewGroups={false}
-              canViewAutomations={false}
-              canViewEnvironments={false}
               canStartNewThread={false}
-              canViewSetup={false}
               canWriteSession={() => false}
-              connectionStatus={{ state: 'ok', message: 'Static demo data loaded.' }}
-              health={{ status: 'ok', runMode: 'static-demo', apiAuthMode: 'none' }}
               archivedSessionsLoaded
               archivedSessionsLoading={false}
               hasMoreArchivedSessions={false}
               hasMoreSessions={false}
               loading={false}
               loadingMoreSessions={false}
-              navPage="sessions"
+              footerProps={footerProps}
               searchQuery={sessionSearchQuery}
               searchResults={searchResults}
               searchLoading={false}
@@ -134,8 +147,6 @@ export function StaticDemoApp() {
               sessionTagOptions={[]}
               sessions={sessions}
               selectedSessionId={selected.session.id}
-              themePreference={themePreference}
-              token=""
               onArchive={() => undefined}
               onArchivedSessionsOpenChange={() => undefined}
               onCollapse={() => {
@@ -146,11 +157,6 @@ export function StaticDemoApp() {
               onLoadMoreSearchResults={() => undefined}
               onLoadMoreSessions={() => undefined}
               onNewThread={() => undefined}
-              onOpenAutomations={() => undefined}
-              onOpenEnvironments={() => undefined}
-              onOpenGroups={() => undefined}
-              onOpenSessions={() => undefined}
-              onOpenSetup={() => undefined}
               onRefresh={() => undefined}
               onSearchChange={setSessionSearchQuery}
               onSessionFiltersChange={() => undefined}
@@ -161,8 +167,6 @@ export function StaticDemoApp() {
                 setSelectedSessionId(sessionId);
                 setSidebarOpen(false);
               }}
-              onSignOut={() => undefined}
-              onThemeChange={setThemePreference}
               onUnarchive={() => undefined}
             />
           </aside>
@@ -265,6 +269,8 @@ function StaticSessionView(props: { demoSession: StaticDemoSession; onOpenSideba
             reasoningLevel=""
             inheritedReasoningLevel=""
             defaultReasoningLevel=""
+            skills={[]}
+            skillsEnabled={false}
             onCodebaseChange={() => undefined}
             onEnvironmentBranchOverridesChange={() => undefined}
             onEnvironmentRepositoryBranchesLoad={async () => []}

@@ -3,6 +3,7 @@ import type { Context, Hono } from 'hono';
 import {
   canCreateAutomationInGroup,
   canCreateSessionInGroup,
+  canCreateSkillInGroup,
   canManageAllGroups,
   canManageGroup,
   groupRole,
@@ -195,6 +196,7 @@ function serializeGroupForAuth(group: GroupRecord, auth: RequestAuthorization) {
     membershipRole: groupRole(auth, group.id),
     canCreateSessions: canCreateSessionInGroup(auth, group.id),
     canCreateAutomations: canCreateAutomationInGroup(auth, group),
+    canCreateSkills: canCreateSkillInGroup(auth, group.id),
     canManage: canManageGroup(auth, group.id),
   };
 }

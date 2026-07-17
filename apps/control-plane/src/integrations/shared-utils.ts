@@ -1,8 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../messages/service.js';
 import type { SessionService } from '../sessions/service.js';
-import type { IntegrationDeliveryRecord, IntegrationStore, MessageRecord, SessionRecord } from '../store/types.js';
+import type {
+  EventStore,
+  IntegrationDeliveryRecord,
+  IntegrationStore,
+  MessageRecord,
+  SessionRecord,
+} from '../store/types.js';
 import { defaultGroupId } from '../store/types.js';
+import { resolveIntegrationSkillInvocation, type SkillInvocationRef } from '../skills/invocation.js';
+import type { SkillService } from '../skills/service.js';
 
 export type IntegrationDeliveryRef = {
   source: string;
@@ -39,7 +47,11 @@ export type IntegrationIngress = {
   sessionTags?: string[];
   thread: IntegrationThreadRef;
   title: string;
-  prompt: string;
+  prompt?: string;
+  currentMessageText?: string;
+  renderPrompt?: (currentMessageText: string) => string;
+  skillsEnabled?: boolean;
+  repoSkillsEnabled?: boolean;
   dedupeKey?: string;
   actor?: IntegrationActor;
   repository?: IntegrationRepository;
@@ -109,7 +121,8 @@ export async function getOrCreateExternalThreadSession(
 }
 
 export async function enqueueIntegrationIngress(
-  store: IntegrationStore,
+  store: IntegrationStore & Pick<EventStore, 'getLatestEventByType'>,
+  skills: Pick<SkillService, 'listInvocationCandidates'>,
   sessions: SessionService,
   messages: MessageService,
   input: IntegrationIngress,
@@ -122,28 +135,64 @@ export async function enqueueIntegrationIngress(
     title: input.title,
     ...(input.sessionTags ? { tags: input.sessionTags } : {}),
   });
-  const message = await enqueueIntegrationMessage(messages, session, input);
+  const message = await enqueueIntegrationMessage(store, skills, messages, session, input);
   return { session, message };
 }
 
 export async function enqueueIntegrationMessage(
+  events: Pick<EventStore, 'getLatestEventByType'>,
+  skills: Pick<SkillService, 'listInvocationCandidates'>,
   messages: MessageService,
   session: SessionRecord,
   input: IntegrationIngress,
 ): Promise<MessageRecord> {
   assertIngressSourceMatchesThread(input);
+  const invocation = await integrationSkillInvocation(events, skills, session, input);
+  const currentMessageText = invocation?.text ?? input.currentMessageText;
+  const prompt =
+    currentMessageText !== undefined && input.renderPrompt ? input.renderPrompt(currentMessageText) : input.prompt;
+  if (prompt === undefined) throw new Error('Integration ingress requires prompt text or a prompt renderer');
   return messages.enqueue({
     sessionId: session.id,
-    prompt: input.prompt,
+    prompt,
     ...(input.actor ? { authorName: input.actor.displayName ?? input.actor.externalId } : {}),
     source: input.messageSource ?? input.source,
-    context: integrationMessageContext(input),
+    context: integrationMessageContext(input, invocation ?? undefined),
   });
 }
 
-export function integrationMessageContext(input: IntegrationIngress): Record<string, unknown> {
+async function integrationSkillInvocation(
+  events: Pick<EventStore, 'getLatestEventByType'>,
+  skills: Pick<SkillService, 'listInvocationCandidates'>,
+  session: SessionRecord,
+  input: IntegrationIngress,
+): Promise<{ name: string; text: string; ref: SkillInvocationRef; source: 'group' | 'shared' | 'repo' } | null> {
+  if (!input.currentMessageText) return null;
+  try {
+    const invocation = await resolveIntegrationSkillInvocation({
+      skills,
+      events,
+      ownerGroupId: session.ownerGroupId,
+      sessionId: session.id,
+      repoSkillsEnabled: input.repoSkillsEnabled !== false,
+      skillsEnabled: input.skillsEnabled !== false,
+      currentMessageText: input.currentMessageText,
+    });
+    if (!invocation || invocation.source === 'personal') return null;
+    return { ...invocation, source: invocation.source };
+  } catch {
+    console.warn('Skill lookup degraded for an integration message; the leading token was preserved.');
+    return null;
+  }
+}
+
+export function integrationMessageContext(
+  input: IntegrationIngress,
+  invocation?: { name: string; ref: SkillInvocationRef; source: 'group' | 'shared' | 'repo' },
+): Record<string, unknown> {
+  const { skills: _untrustedSkills, skillRefs: _untrustedSkillRefs, ...context } = input.context ?? {};
   return compactRecord({
-    ...input.context,
+    ...context,
     source: input.source,
     integration: compactRecord({
       source: input.source,
@@ -154,6 +203,13 @@ export function integrationMessageContext(input: IntegrationIngress): Record<str
     repository: input.repository,
     callback: input.callback,
     ...input.sourceContext,
+    ...(invocation
+      ? {
+          skills: [invocation.name],
+          skillRefs: [invocation.ref],
+          skillProvenance: [{ name: invocation.name, source: invocation.source }],
+        }
+      : {}),
   });
 }
 

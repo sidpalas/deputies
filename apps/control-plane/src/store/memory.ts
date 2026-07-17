@@ -1,4 +1,5 @@
 import type { NormalizedEvent } from '../events/types.js';
+import { MemorySkillStore } from './memory-skills.js';
 import { defaultGroupId, StoreConflictError } from './types.js';
 import type {
   AppStore,
@@ -34,6 +35,7 @@ import type {
   CreateSessionRecord,
   CreateSessionWithFirstMessageInput,
   CreateSessionWithFirstMessageResult,
+  CreateSkillRecord,
   ClaimedMessage,
   ClaimedMessageBatch,
   ListAutomationInvocationsOptions,
@@ -56,8 +58,14 @@ import type {
   SessionMessageSummary,
   SessionTranscriptOptions,
   SessionTranscriptPage,
+  SkillRecord,
+  SkillRevisionRecord,
+  SkillRevisionSelection,
+  SkillRunCandidate,
+  SkillShareMode,
   UpdateAutomationRecord,
   UpdateEnvironmentRecord,
+  UpdateSkillRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -84,6 +92,13 @@ export class MemoryStore implements AppStore {
     ],
   ]);
   private readonly groupMembers = new Map<string, GroupMemberRecord>();
+  private readonly skillStore = new MemorySkillStore({
+    userExists: (userId) => this.authUsers.has(userId),
+    getGroupState: (groupId) => {
+      const group = this.groups.get(groupId);
+      return group ? { archived: Boolean(group.archivedAt) } : null;
+    },
+  });
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly messages = new Map<string, MessageRecord[]>();
   private readonly runs = new Map<string, RunRecord>();
@@ -144,6 +159,10 @@ export class MemoryStore implements AppStore {
     const session = this.authSessions.get(input.sessionId);
     if (!session || session.expiresAt <= input.now) return null;
     return this.authUsers.get(session.userId) ?? null;
+  }
+
+  async getAuthUser(id: string): Promise<AuthUserRecord | null> {
+    return this.authUsers.get(id) ?? null;
   }
 
   async deleteAuthSession(sessionId: string): Promise<void> {
@@ -540,6 +559,68 @@ export class MemoryStore implements AppStore {
     const { queuePausedAt: _queuePausedAt, ...updated } = { ...existing, updatedAt: now, lastActivityAt: now };
     this.sessions.set(input.sessionId, updated);
     return updated;
+  }
+
+  async createSkill(record: CreateSkillRecord): Promise<SkillRecord> {
+    return this.skillStore.createSkill(record);
+  }
+
+  async getSkill(id: string): Promise<SkillRecord | null> {
+    return this.skillStore.getSkill(id);
+  }
+
+  async listSkillRevisions(skillId: string): Promise<SkillRevisionRecord[]> {
+    return this.skillStore.listSkillRevisions(skillId);
+  }
+
+  async updateSkill(input: UpdateSkillRecord): Promise<SkillRecord> {
+    return this.skillStore.updateSkill(input);
+  }
+
+  async archiveSkill(input: { skillId: string; archivedAt: Date }): Promise<SkillRecord | null> {
+    return this.skillStore.archiveSkill(input);
+  }
+
+  async restoreSkill(input: { skillId: string; updatedAt: Date }): Promise<SkillRecord | null> {
+    return this.skillStore.restoreSkill(input);
+  }
+
+  async promoteSkill(id: string, groupId: string, now: Date): Promise<SkillRecord | null> {
+    return this.skillStore.promoteSkill(id, groupId, now);
+  }
+
+  async setSkillShares(
+    id: string,
+    shareMode: SkillShareMode,
+    groupIds: string[],
+    now: Date,
+  ): Promise<SkillRecord | null> {
+    return this.skillStore.setSkillShares(id, shareMode, groupIds, now);
+  }
+
+  async listSkillsForUser(userId: string): Promise<SkillRecord[]> {
+    return this.skillStore.listSkillsForUser(userId);
+  }
+
+  async listSkillsForGroups(groupIds: string[]): Promise<SkillRecord[]> {
+    return this.skillStore.listSkillsForGroups(groupIds);
+  }
+
+  async listSkillsSharedIntoGroups(groupIds: string[]): Promise<SkillRecord[]> {
+    return this.skillStore.listSkillsSharedIntoGroups(groupIds);
+  }
+
+  async listSkillInvocationCandidates(input: { ownerGroupId: string; userId?: string }): Promise<SkillRunCandidate[]> {
+    return this.skillStore.listSkillInvocationCandidates(input);
+  }
+
+  async listSkillsForRun(input: {
+    ownerGroupId: string;
+    createdByUserId?: string;
+    invokedNames?: string[];
+    invokedRevisions?: SkillRevisionSelection[];
+  }): Promise<SkillRunCandidate[]> {
+    return this.skillStore.listSkillsForRun(input);
   }
 
   async createAutomation(record: CreateAutomationRecord): Promise<AutomationRecord> {
@@ -957,13 +1038,18 @@ export class MemoryStore implements AppStore {
     sessionId: string;
     messageId: string;
     prompt: string;
+    context?: Record<string, unknown>;
   }): Promise<MessageRecord | null> {
     const sessionMessages = this.messages.get(input.sessionId) ?? [];
     const message = sessionMessages.find(
       (candidate) => candidate.id === input.messageId && candidate.status === 'pending',
     );
     if (!message) return null;
-    const updated = { ...message, prompt: input.prompt };
+    const updated = {
+      ...message,
+      prompt: input.prompt,
+      ...(input.context !== undefined ? { context: structuredClone(input.context) } : {}),
+    };
     sessionMessages[sessionMessages.indexOf(message)] = updated;
     return updated;
   }

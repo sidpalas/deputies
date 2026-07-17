@@ -289,6 +289,7 @@ apps/control-plane/src/
   artifacts/
   sessions/
   messages/
+  skills/
   worker/
   runner/
   runner-pi/
@@ -316,6 +317,7 @@ docs/
 | `app`          | Process bootstrap, run mode, graceful shutdown                                       | Business logic                               |
 | `sessions`     | Durable task workspace lifecycle and status                                          | SQL details, runner calls                    |
 | `messages`     | Prompt/follow-up queue semantics                                                     | Running prompts                              |
+| `skills`       | Managed skill validation, authorization, lifecycle, sharing, and run-time resolution | Runner-specific loading and materialization  |
 | `worker`       | Claiming runnable work and coordinating execution                                    | HTTP concerns                                |
 | `runner-pi`    | Pi initialization, tool wiring, and event normalization                              | Session persistence policy                   |
 | `sandbox`      | Provider interface, lifecycle, health, cleanup                                       | Prompt construction                          |
@@ -332,12 +334,12 @@ docs/
 Allowed dependency direction:
 
 ```txt
-api -> sessions/messages/events/auth
-worker -> messages/sessions/runs/sandbox/runner-pi/events/artifacts
+api -> sessions/messages/skills/events/auth
+worker -> messages/sessions/skills/runs/sandbox/runner-pi/events/artifacts
 integrations -> sessions/messages/events/prompts/auth
 runner-pi -> events/sandbox/prompts
 sandbox -> store/config
-sessions/messages/runs/events/artifacts -> store
+sessions/messages/skills/runs/events/artifacts -> store
 store -> postgres driver + shared record/event types
 ```
 
@@ -464,6 +466,26 @@ Implementations:
 - persist normalized product events separately through the `events` module.
 
 Do not implement a separate subagent runtime for Pi-backed sessions. Product runs are durable work records; intra-run delegation belongs to Pi subagent facilities.
+
+### Skill Loading
+
+The runner resolves skills after repository preparation and before the first prompt. Managed auto-load candidates follow each skill's current revision at run start and include enabled, non-archived personal skills for the session creator, owner-group skills, and skills shared into the session's group. Manual invocations resolve separately for each claimed message: personal candidates belong to that message's author, while group and shared candidates remain scoped to the session group.
+
+The API, not the browser, pins a new manual managed invocation. On message append or pending-message edit it authorizes the current skill, canonicalizes `context.skills` plus `context.skillRefs` to `{ id, name, revisionId }`, and persists that current revision. A client-supplied old revision is rejected, so clients cannot newly replay historical content. At execution, an already-persisted historical pin loads its immutable revision only if live ownership, sharing, enabled, archive, owner-group, and message-author authorization still permit it. Historical name-only messages resolve the current precedence winner. Repository refs use `repo:<owner>/<repo>:<name>` identity and never participate in managed revision pinning.
+
+Auto-load and manual invocation deliberately affect model input differently. Auto-load candidates form Pi's advertised skill catalog and therefore the cacheable system-prompt prefix. A manual invocation is authorized, materialized, and expanded into Pi's native `<skill>` block in the affected message only. It does not enter or reorder the advertised catalog, including when the invoked skill has the same name as an auto-loaded skill. This keeps author-specific personal invocations at the uncached request tail instead of invalidating the session-level catalog when contributors alternate.
+
+Managed name, description, and body live in immutable `skill_revisions`; the `skills` identity holds current revision pointers and live policy. Creation publishes revision 1, and content updates publish only when normalized content differs. Managed skills are serialized as standard `SKILL.md` files under `/workspace/.deputies-skills/<source>/<skill-id>/<revision-id>/<name>/` in the sandbox. Pi continues to use `noSkills: true` so it never scans the worker filesystem. The runner supplies auto-loaded sandbox paths through Pi's `skillsOverride`; the system prompt receives each advertised skill's name, description, and path, and the agent reads the body from the sandbox on demand. For manual invocation, the runner uses Pi's exported frontmatter parser and native `<skill name="…" location="…">` representation so the body is guaranteed to reach the model while relative references still resolve against the materialized base directory.
+
+Prepared repositories are scanned in `.agents/skills/`, `.claude/skills/`, then `.pi/skills/` order. Because Pi's discovery code reads the worker-local filesystem, the runner copies a bounded discovery mirror from each sandbox repository into a temporary worker directory, invokes Pi's loader there, and rewrites `filePath` and `baseDir` back to sandbox paths. Supporting files remain in the repository. A same-named skill mirrored across roots in one repository uses the first root; advertised catalog collisions use personal, owner-group, shared-in, then repository precedence. Request-local invocation does not reorder that catalog.
+
+Repository discovery records advertised, shadowed, and `disable-model-invocation` skills in `skills_loaded`. `GET /sessions/:sessionId/skills` and integration slash lookup use the latest event as their repository discovery index, allowing non-advertised repository skills to be manually invoked after a scan. `GET /skills/invocation-candidates` is the sandbox-free new-thread endpoint and therefore returns only managed personal, selected-group, and shared candidates.
+
+Repo skills are repository-authored, untrusted instructions. Their names and descriptions enter the system prompt, while their bodies and supporting files are read only when the agent chooses or the user invokes the skill. File-count and byte caps bound worker parsing and prompt growth, but operators should enable repository skill loading only for repositories they are willing to treat as agent instructions.
+
+Skill loading is non-fatal. Store resolution, repository mirroring, parsing, or managed-skill materialization failures drop only the affected skills, produce a redacted warning, and appear as diagnostics in the run's `skills_loaded` event. The runner continues without those skills, matching the degradation policy for unavailable MCP servers. `skills_loaded`, including managed revision IDs/numbers, is the canonical resolution audit source; resolved skills are not duplicated into run metadata.
+
+The runner emits `skill_invoked` for explicit user selections and after the first successful `read` of each advertised auto-loaded `SKILL.md` path per run. Managed entries carry skill ID, exact revision ID, and revision number; repository entries carry repository identity without a managed revision. Manually expanded, non-advertised skills emit only the user-triggered event. Model-read matching uses the prepared path and tool-call completion, so failed reads, unrelated files, and repeated reads do not overstate model invocation.
 
 For remote coding agents, the runner uses a two-stage setup pattern:
 

@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FocusEvent, FormEvent, TouchEvent } from 'react';
 import { SendHorizontal } from 'lucide-react';
-import type { BranchOption, Environment, ModelChoice, ReasoningLevel, RepositoryOption } from '../../api.js';
+import type {
+  BranchOption,
+  Environment,
+  ModelChoice,
+  ReasoningLevel,
+  RepositoryOption,
+  Skill,
+  SkillInvocationRef,
+} from '../../api.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
@@ -21,6 +29,8 @@ import {
 } from './option-picker.js';
 import { blurFocusedTextControl, formatModelLabel, submitOnEnter } from './shared.js';
 import { defaultReasoningLevelLabel, reasoningLevelLabel, REASONING_LEVEL_OPTIONS } from './reasoning-level.js';
+import { SkillInvocationField } from './skill-invocation-field.js';
+import { useSkillInvocationDraft } from './skill-invocation-draft.js';
 
 export function MessageComposer(props: {
   archived: boolean;
@@ -50,6 +60,10 @@ export function MessageComposer(props: {
   reasoningLevel: ReasoningLevel | '';
   inheritedReasoningLevel: ReasoningLevel | '';
   defaultReasoningLevel: ReasoningLevel | '';
+  skills: Skill[];
+  skillsEnabled: boolean;
+  skillsLoading?: boolean;
+  skillError?: string;
   onCodebaseChange: (value: string) => void;
   onEnvironmentBranchOverridesChange: (value: EnvironmentBranchOverrides) => void;
   onEnvironmentRepositoryBranchesLoad: (repository: EnvironmentBranchOverrideRepository) => Promise<BranchOption[]>;
@@ -57,7 +71,7 @@ export function MessageComposer(props: {
   onModelChange: (value: string) => void;
   onReasoningLevelChange: (value: ReasoningLevel | '') => void;
   onFocusChange: (focused: boolean) => void;
-  onSubmit: (input: { prompt: string }) => Promise<boolean>;
+  onSubmit: (input: { prompt: string; skills: string[]; skillRefs: SkillInvocationRef[] }) => Promise<boolean>;
 }) {
   const [prompt, setPrompt] = useState('');
   const [promptResetKey, setPromptResetKey] = useState(0);
@@ -78,10 +92,20 @@ export function MessageComposer(props: {
     : branchRepository
       ? `repository:${branchRepository}`
       : '';
-  const hasBranchControls = Boolean(branchControlKey);
   const branchControlLabel = selectedEnvironment && selectedEnvironment.repositories.length > 1 ? 'Branches' : 'Branch';
+  const skillDraft = useSkillInvocationDraft({
+    available: props.skills,
+    enabled: props.skillsEnabled,
+    prompt,
+    onPromptChange: setPrompt,
+  });
 
-  const canSubmit = !props.archived && !props.readOnly && Boolean(prompt.trim()) && !props.modelUnavailableReason;
+  const canSubmit =
+    !props.archived &&
+    !props.readOnly &&
+    Boolean(prompt.trim() || skillDraft.selectedSkills.length) &&
+    !props.modelUnavailableReason;
+  const skillPickerOpen = skillDraft.pickerOpen;
 
   useEffect(() => {
     setBranchControlsOpen(false);
@@ -90,16 +114,29 @@ export function MessageComposer(props: {
   async function submitPrompt() {
     if (!canSubmit) return;
     const submittedPrompt = prompt;
+    const submittedSkills = skillDraft.selectedSkills;
+    const prepared = skillDraft.prepareSubmission();
     blurFocusedTextControl();
     setPromptResetKey((key) => key + 1);
     setPrompt('');
-    const sent = await props.onSubmit({ prompt: submittedPrompt });
-    if (!sent) setPrompt(submittedPrompt);
+    skillDraft.clearSelectedSkills();
+    const sent = await props.onSubmit({
+      ...prepared,
+    });
+    if (!sent) {
+      setPrompt(submittedPrompt);
+      skillDraft.restoreSelectedSkills(submittedSkills);
+    }
   }
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     void submitPrompt();
+  }
+
+  function handlePromptKeyDown(event: Parameters<typeof skillDraft.handlePromptKeyDown>[0]) {
+    if (skillDraft.handlePromptKeyDown(event)) return;
+    submitOnEnter(event);
   }
 
   function handleSubmitTouchStart(event: TouchEvent<HTMLButtonElement>) {
@@ -140,12 +177,23 @@ export function MessageComposer(props: {
       onSubmit={handleSubmit}
     >
       <Card className="bg-card/90">
+        <SkillInvocationField
+          controller={skillDraft}
+          availableCount={props.skills.length}
+          enabled={props.skillsEnabled}
+          disabled={props.archived || props.readOnly}
+          loading={props.skillsLoading}
+          error={props.skillError}
+        />
         <Textarea
           key={promptResetKey}
-          className={cn(props.compactInput ? 'min-h-12' : 'min-h-28', 'border-0 bg-transparent focus:ring-0')}
+          className={cn(
+            props.compactInput || skillPickerOpen ? 'min-h-12' : 'min-h-28',
+            'border-0 bg-transparent focus:ring-0',
+          )}
           value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          onKeyDown={(event) => submitOnEnter(event)}
+          onChange={(event) => skillDraft.changePrompt(event.target.value)}
+          onKeyDown={handlePromptKeyDown}
           placeholder={
             props.archived
               ? 'Restore this archived session before sending new work.'
@@ -155,7 +203,7 @@ export function MessageComposer(props: {
           }
           disabled={props.archived || props.readOnly}
         />
-        <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+        <div className="relative flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
           <CodebasePicker
             className="min-w-0 flex-[2_1_16rem]"
             triggerClassName="h-8 text-xs"
@@ -173,18 +221,59 @@ export function MessageComposer(props: {
             emptyOptionLabel="Use session codebase"
             disabled={props.archived || props.readOnly}
           />
-          {hasBranchControls ? (
-            <Button
-              className="h-8 shrink-0 px-2 text-xs"
-              type="button"
-              variant={branchControlsOpen ? 'default' : 'secondary'}
-              size="sm"
-              onClick={() => setBranchControlsOpen((open) => !open)}
+          {branchRepository ? (
+            <BranchPicker
+              className="min-w-0 max-w-40 flex-[0.8_2_8rem]"
+              triggerClassName="h-8 text-xs"
+              direction="up"
+              value={props.branch}
+              branches={props.branchOptions}
+              loading={props.branchOptionsLoading}
+              error={props.branchOptionsError}
+              onChange={props.onBranchChange}
               disabled={props.archived || props.readOnly}
-              aria-expanded={branchControlsOpen}
+              placeholder={props.inheritedBranch || 'Branch'}
+            />
+          ) : selectedEnvironment ? (
+            <div
+              className="shrink-0"
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setBranchControlsOpen(false);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') setBranchControlsOpen(false);
+              }}
             >
-              {branchControlLabel}
-            </Button>
+              <Button
+                className="h-8 px-2 text-xs"
+                type="button"
+                variant={branchControlsOpen ? 'default' : 'secondary'}
+                size="sm"
+                onClick={() => setBranchControlsOpen((open) => !open)}
+                disabled={props.archived || props.readOnly}
+                aria-expanded={branchControlsOpen}
+                aria-haspopup="dialog"
+              >
+                {branchControlLabel}
+              </Button>
+              {branchControlsOpen ? (
+                <div
+                  className="absolute bottom-full right-2 z-30 mb-1 w-[28rem] max-w-[calc(100%-1rem)] rounded-md border border-border bg-card p-2 text-card-foreground shadow-xl"
+                  role="dialog"
+                  aria-label={`${branchControlLabel} for ${selectedEnvironment.name}`}
+                >
+                  <EnvironmentBranchOverridesEditor
+                    compact
+                    environment={selectedEnvironment}
+                    value={props.environmentBranchOverrides}
+                    direction="down"
+                    disabled={props.archived || props.readOnly}
+                    onLoadBranches={props.onEnvironmentRepositoryBranchesLoad}
+                    onChange={props.onEnvironmentBranchOverridesChange}
+                  />
+                </div>
+              ) : null}
+            </div>
           ) : null}
           <OptionPicker
             className="min-w-0 flex-[1_2_9rem]"
@@ -217,33 +306,6 @@ export function MessageComposer(props: {
             <p className="basis-full rounded-md border border-warning/50 bg-warning/10 px-2 py-1.5 text-warning-foreground dark:text-warning">
               {props.modelUnavailableReason}
             </p>
-          ) : null}
-          {branchControlsOpen && branchRepository ? (
-            <div className="basis-full">
-              <BranchPicker
-                className="min-w-0 max-w-xs"
-                triggerClassName="h-8 text-xs"
-                direction="up"
-                value={props.branch}
-                branches={props.branchOptions}
-                loading={props.branchOptionsLoading}
-                error={props.branchOptionsError}
-                onChange={props.onBranchChange}
-                disabled={props.archived || props.readOnly}
-                placeholder={props.inheritedBranch || 'Branch'}
-              />
-            </div>
-          ) : null}
-          {branchControlsOpen && selectedEnvironment ? (
-            <EnvironmentBranchOverridesEditor
-              compact
-              environment={selectedEnvironment}
-              value={props.environmentBranchOverrides}
-              direction="up"
-              disabled={props.archived || props.readOnly}
-              onLoadBranches={props.onEnvironmentRepositoryBranchesLoad}
-              onChange={props.onEnvironmentBranchOverridesChange}
-            />
           ) : null}
           <Button
             className="ml-auto h-8 w-8 shrink-0 p-0"

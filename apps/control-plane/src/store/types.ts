@@ -26,6 +26,9 @@ export type AutomationKind = 'scheduled';
 export type AutomationInvocationTrigger = 'scheduled' | 'manual';
 export type AutomationInvocationStatus = 'creating' | 'created' | 'skipped' | 'failed';
 export type EnvironmentShareMode = 'private' | 'selected_groups' | 'all_groups';
+export type SkillOwnerKind = 'user' | 'group';
+export type SkillShareMode = 'none' | 'specific' | 'all_groups';
+export type SkillSource = 'personal' | 'group' | 'shared';
 export type EnvironmentRevisionPolicy = 'follow_latest' | 'pinned';
 export type EnvironmentActivityType =
   | 'environment_created'
@@ -92,7 +95,11 @@ export class StoreConflictError extends Error {
       | 'environment_name_exists'
       | 'environment_update_conflict'
       | 'environment_automation_conflict'
-      | 'automation_environment_unavailable',
+      | 'automation_environment_unavailable'
+      | 'skill_name_exists'
+      | 'skill_update_conflict'
+      | 'skill_archived'
+      | 'archived_group',
     message: string,
     readonly details: Record<string, unknown> = {},
   ) {
@@ -375,6 +382,56 @@ export type EnvironmentWithDetailsRecord = EnvironmentRecord & {
   sharedGroupIds: string[];
 };
 
+type SkillRecordBase = {
+  id: string;
+  name: string;
+  description: string;
+  body: string;
+  currentRevisionId: string;
+  currentRevisionNumber: number;
+  autoLoad: boolean;
+  enabled: boolean;
+  shareMode: SkillShareMode;
+  shareGroupIds: string[];
+  createdByUserId?: string;
+  archivedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type SkillRecord = SkillRecordBase &
+  (
+    | { ownerKind: 'group'; ownerGroupId: string; ownerUserId?: never }
+    | { ownerKind: 'user'; ownerUserId: string; ownerGroupId?: never }
+  );
+
+type SkillRevisionRecordBase = {
+  id: string;
+  skillId: string;
+  revisionNumber: number;
+  name: string;
+  description: string;
+  body: string;
+  createdAt: Date;
+};
+
+export type SkillRevisionRecord = SkillRevisionRecordBase &
+  ({ actorType: 'user'; actorUserId: string } | { actorType: 'system'; actorUserId?: never });
+
+export type SkillRevisionWrite = Omit<SkillRevisionRecordBase, 'skillId' | 'revisionNumber'> &
+  ({ actorType: 'user'; actorUserId: string } | { actorType: 'system'; actorUserId?: never });
+
+export type SkillRunCandidate = SkillRecord & {
+  source: SkillSource;
+  resolvedRevisionId: string;
+  resolvedRevisionNumber: number;
+};
+
+export type SkillRevisionSelection = {
+  skillId: string;
+  revisionId: string;
+};
+
 export type AutomationInvocationRecord = {
   id: string;
   automationId: string;
@@ -544,6 +601,32 @@ export type CreateEnvironmentRecord = {
   sharedGroupIds: string[];
   revision: EnvironmentRevisionRecord;
   activities: EnvironmentActivityRecord[];
+};
+
+type CreateSkillRecordBase = {
+  id: string;
+  revision: SkillRevisionWrite;
+  autoLoad?: boolean;
+  enabled?: boolean;
+  shareMode?: SkillShareMode;
+  createdByUserId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type CreateSkillRecord = CreateSkillRecordBase &
+  (
+    | { ownerKind: 'group'; ownerGroupId: string; ownerUserId?: never; shareMode?: SkillShareMode }
+    | { ownerKind: 'user'; ownerUserId: string; ownerGroupId?: never; shareMode?: SkillShareMode }
+  );
+
+export type UpdateSkillRecord = {
+  id: string;
+  expectedCurrentRevisionId: string;
+  updatedAt: Date;
+  revision?: SkillRevisionWrite;
+  autoLoad?: boolean;
+  enabled?: boolean;
 };
 
 export type CreateAutomationInvocationRecord = {
@@ -776,7 +859,12 @@ export interface MessageStore {
   getMessages(sessionId: string): Promise<MessageRecord[]>;
   getSessionMessageSummary(sessionId: string): Promise<SessionMessageSummary>;
   getSessionTranscript(input: SessionTranscriptOptions): Promise<SessionTranscriptPage>;
-  updatePendingMessage(input: { sessionId: string; messageId: string; prompt: string }): Promise<MessageRecord | null>;
+  updatePendingMessage(input: {
+    sessionId: string;
+    messageId: string;
+    prompt: string;
+    context?: Record<string, unknown>;
+  }): Promise<MessageRecord | null>;
   cancelPendingMessage(input: {
     sessionId: string;
     messageId: string;
@@ -930,6 +1018,27 @@ export interface EnvironmentStore {
   }): Promise<EnvironmentWithDetailsRecord | null>;
 }
 
+export interface SkillStore {
+  createSkill(record: CreateSkillRecord): Promise<SkillRecord>;
+  getSkill(id: string): Promise<SkillRecord | null>;
+  listSkillRevisions(skillId: string): Promise<SkillRevisionRecord[]>;
+  updateSkill(input: UpdateSkillRecord): Promise<SkillRecord>;
+  archiveSkill(input: { skillId: string; archivedAt: Date }): Promise<SkillRecord | null>;
+  restoreSkill(input: { skillId: string; updatedAt: Date }): Promise<SkillRecord | null>;
+  promoteSkill(id: string, groupId: string, now: Date): Promise<SkillRecord | null>;
+  setSkillShares(id: string, shareMode: SkillShareMode, groupIds: string[], now: Date): Promise<SkillRecord | null>;
+  listSkillsForUser(userId: string): Promise<SkillRecord[]>;
+  listSkillsForGroups(groupIds: string[]): Promise<SkillRecord[]>;
+  listSkillsSharedIntoGroups(groupIds: string[]): Promise<SkillRecord[]>;
+  listSkillInvocationCandidates(input: { ownerGroupId: string; userId?: string }): Promise<SkillRunCandidate[]>;
+  listSkillsForRun(input: {
+    ownerGroupId: string;
+    createdByUserId?: string;
+    invokedNames?: string[];
+    invokedRevisions?: SkillRevisionSelection[];
+  }): Promise<SkillRunCandidate[]>;
+}
+
 export interface EventStore {
   nextEventSequence(sessionId: string): Promise<number>;
   appendEvent(event: NormalizedEvent & { sequence: number }): Promise<EventRecord>;
@@ -951,6 +1060,7 @@ export interface AuthStore {
   upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord>;
   createAuthSession(record: AuthSessionRecord): Promise<AuthSessionRecord>;
   getAuthUserBySession(input: { sessionId: string; now: Date }): Promise<AuthUserRecord | null>;
+  getAuthUser(id: string): Promise<AuthUserRecord | null>;
   deleteAuthSession(sessionId: string): Promise<void>;
   listAuthUsers(input?: { query?: string }): Promise<AuthUserRecord[]>;
   updateAuthUserRole(input: { userId: string; role: AuthRole; updatedAt: Date }): Promise<AuthUserRecord | null>;
@@ -1019,6 +1129,7 @@ export interface AppStore
     CallbackStore,
     AutomationStore,
     EnvironmentStore,
+    SkillStore,
     EventStore,
     AuthStore,
     GroupStore,

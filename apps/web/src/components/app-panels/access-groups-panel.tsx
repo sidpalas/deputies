@@ -17,7 +17,6 @@ import type {
   Group,
   GroupMember,
   GroupRole,
-  Health,
   Session,
   SessionVisibility,
   SessionWritePolicy,
@@ -27,8 +26,7 @@ import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Input } from '../ui/input.js';
-import { SidebarFooter } from './session-sidebar.js';
-import type { ConnectionStatus, ThemePreference } from './types.js';
+import { SidebarFooter, type SidebarFooterProps } from './sidebar-footer.js';
 
 const archivedGroupsOpenStorageKey = 'deputies-archived-groups-open';
 
@@ -52,35 +50,19 @@ export type AccessGroupMemberSearchState = AccessGroupUserSearchState & {
 };
 
 export function GroupsSidebar(props: {
-  authRequired: boolean;
   canCreateGroups: boolean;
-  canViewGroups: boolean;
-  canViewAutomations: boolean;
-  canViewEnvironments: boolean;
-  canViewSetup: boolean;
-  connectionStatus: ConnectionStatus;
   currentUser: AuthUser | null;
+  footerProps: SidebarFooterProps;
   groups: Group[];
-  health: Health | null;
-  navPage: 'sessions' | 'setup' | 'groups' | 'automations' | 'environments';
   selectedGroupId: string;
   selectedView: 'group' | 'super_admins' | 'new_group';
   superAdminUsers: AuthUser[];
-  themePreference: ThemePreference;
-  token: string;
   onBackToSessions: () => void;
   onCollapse: () => void;
   onArchiveGroup: (groupId: string, archived: boolean) => void;
   onCreateGroup: () => void;
-  onOpenGroups: () => void;
-  onOpenAutomations: () => void;
-  onOpenEnvironments: () => void;
-  onOpenSessions: () => void;
-  onOpenSetup: () => void;
   onSelectGroup: (groupId: string) => void;
   onSelectSuperAdmins: () => void;
-  onSignOut: () => void;
-  onThemeChange: (value: ThemePreference) => void;
 }) {
   const [groupSearch, setGroupSearch] = useState('');
   const [archivedGroupsOpen, setArchivedGroupsOpen] = useState(
@@ -233,24 +215,7 @@ export function GroupsSidebar(props: {
         ) : null}
       </div>
 
-      <SidebarFooter
-        authRequired={props.authRequired}
-        canViewGroups={props.canViewGroups}
-        canViewAutomations={props.canViewAutomations}
-        canViewEnvironments={props.canViewEnvironments}
-        canViewSetup={props.canViewSetup}
-        health={props.health}
-        navPage={props.navPage}
-        themePreference={props.themePreference}
-        token={props.token}
-        onOpenGroups={props.onOpenGroups}
-        onOpenAutomations={props.onOpenAutomations}
-        onOpenEnvironments={props.onOpenEnvironments}
-        onOpenSessions={props.onOpenSessions}
-        onOpenSetup={props.onOpenSetup}
-        onSignOut={props.onSignOut}
-        onThemeChange={props.onThemeChange}
-      />
+      <SidebarFooter {...props.footerProps} />
     </div>
   );
 }

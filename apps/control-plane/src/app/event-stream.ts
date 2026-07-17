@@ -25,14 +25,16 @@ export async function writeGlobalEventStream(
   afterId: number,
   replay: boolean,
   includeAll: boolean,
-  options: { filter?: (event: EventRecord) => boolean | Promise<boolean> } = {},
+  options: {
+    filter?: (event: EventRecord) => boolean | Promise<boolean>;
+  } = {},
 ): Promise<Response> {
   return writeEventStream(c, {
     after: afterId,
     id: (event) => event.id,
     list: async (after, limit) => {
       const batch = await events.listAllBatch(after, limit, includeAll);
-      return { ...batch, events: await filterEvents(batch.events, options.filter) };
+      return batch;
     },
     replay,
     subscribe: (writeEvent) => (includeAll ? events.subscribeAllEvents(writeEvent) : events.subscribeAll(writeEvent)),
@@ -103,18 +105,23 @@ async function writeEventStream(
   const eventFrame = (eventId: number, event: EventRecord) =>
     `id: ${eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 
+  const prepareEvent = async (event: EventRecord): Promise<EventRecord | null> =>
+    options.filter && !(await options.filter(event)) ? null : event;
   const emitEvent = async (event: EventRecord): Promise<void> => {
-    if (options.filter && !(await options.filter(event))) return;
     const eventId = options.id(event);
     if (eventId <= cursor || closed) return;
+    const prepared = await prepareEvent(event);
+    if (!prepared) return;
     cursor = eventId;
-    await write(eventFrame(eventId, event));
+    await write(eventFrame(eventId, prepared));
   };
   const emitEventAndDrain = async (event: EventRecord): Promise<void> => {
     const eventId = options.id(event);
     if (eventId <= cursor || closed) return;
+    const prepared = await prepareEvent(event);
+    if (!prepared) return;
     cursor = eventId;
-    await write(eventFrame(eventId, event));
+    await write(eventFrame(eventId, prepared));
   };
   const enqueueEvent = (event: EventRecord) => {
     emitQueue = emitQueue.then(() => emitEvent(event));
@@ -179,16 +186,4 @@ async function writeEventStream(
       connection: 'keep-alive',
     },
   });
-}
-
-async function filterEvents(
-  events: EventRecord[],
-  filter: ((event: EventRecord) => boolean | Promise<boolean>) | undefined,
-): Promise<EventRecord[]> {
-  if (!filter) return events;
-  const filtered: EventRecord[] = [];
-  for (const event of events) {
-    if (await filter(event)) filtered.push(event);
-  }
-  return filtered;
 }

@@ -7,10 +7,14 @@ import {
   type AgentPrincipal,
 } from '../../src/auth/agent-authorization.js';
 import {
+  canCreateSkillInGroup,
   canCreateSessionInGroup,
+  canInvokeSkillInSession,
   canManageAllGroups,
   canManageGroup,
+  canManageSkill,
   canMoveSession,
+  canReadSkill,
   canReadSession,
   canWriteSession,
   type RequestAuthorization,
@@ -20,6 +24,7 @@ import {
   type AuthUserRecord,
   type GroupMemberRecord,
   type SessionRecord,
+  type SkillRecord,
 } from '../../src/store/types.js';
 
 const now = new Date('2026-05-01T00:00:00.000Z');
@@ -31,6 +36,71 @@ describe('authorization rules', () => {
 
     expect(canReadSession(auth, session({ visibility: 'organization' }))).toBe(true);
     expect(canReadSession(auth, session({ visibility: 'group' }))).toBe(false);
+  });
+
+  it('requires group membership to read skills shared with all groups', () => {
+    const reader = user('reader');
+    const sharedSkill = skill({ ownerGroupId: otherGroupId, shareMode: 'all_groups' });
+
+    expect(canReadSkill(authFor(reader, []), sharedSkill)).toBe(false);
+    expect(canReadSkill(authFor(reader, [member('viewer', reader.id)]), sharedSkill)).toBe(true);
+  });
+
+  it('applies personal and group skill read and management policies', () => {
+    const owner = authFor(user('owner'), [member('member', 'owner', 'owner-group')]);
+    const creator = authFor(user('creator'), [member('member', 'creator', 'owner-group')]);
+    const viewer = authFor(user('viewer'), [member('viewer', 'viewer', 'owner-group')]);
+    const downgradedCreator = authFor(user('creator'), [member('viewer', 'creator', 'owner-group')]);
+    const removedCreator = authFor(user('creator'), []);
+    const admin = authFor(user('admin'), [member('admin', 'admin', 'owner-group')]);
+    const outsider = authFor(user('outsider'), []);
+    const superAdmin = authFor(user('super', 'super_admin'), []);
+    const personal = skill({ ownerKind: 'user', ownerUserId: 'owner' });
+
+    expect(canReadSkill(owner, personal)).toBe(true);
+    expect(canManageSkill(owner, personal)).toBe(true);
+    expect(canReadSkill(outsider, personal)).toBe(false);
+    expect(canManageSkill(superAdmin, personal)).toBe(true);
+
+    const group = skill({ ownerGroupId: 'owner-group', createdByUserId: 'creator' });
+    expect(canReadSkill(viewer, group)).toBe(true);
+    expect(canCreateSkillInGroup(viewer, 'owner-group')).toBe(false);
+    expect(canCreateSkillInGroup(creator, 'owner-group')).toBe(true);
+    expect(canManageSkill(creator, group)).toBe(true);
+    expect(canManageSkill(downgradedCreator, group)).toBe(false);
+    expect(canManageSkill(removedCreator, group)).toBe(false);
+    expect(canManageSkill(admin, group)).toBe(true);
+    expect(canManageSkill(owner, group)).toBe(false);
+  });
+
+  it('grants shared skill read and use without granting management', () => {
+    const sharedMember = authFor(user('shared'), [member('member', 'shared', 'target-group')]);
+    const outsider = authFor(user('outsider'), []);
+    const shared = skill({
+      ownerGroupId: 'owner-group',
+      shareMode: 'specific',
+      shareGroupIds: ['target-group'],
+    });
+    const targetSession = session({ ownerGroupId: 'target-group' });
+
+    expect(canReadSkill(sharedMember, shared)).toBe(true);
+    expect(canManageSkill(sharedMember, shared)).toBe(false);
+    expect(canInvokeSkillInSession(sharedMember, shared, targetSession)).toBe(true);
+    expect(canInvokeSkillInSession(sharedMember, { ...shared, enabled: false }, targetSession)).toBe(false);
+
+    const organizationWide = { ...shared, shareMode: 'all_groups' as const, shareGroupIds: [] };
+    expect(canReadSkill(sharedMember, organizationWide)).toBe(true);
+    expect(canReadSkill(outsider, organizationWide)).toBe(false);
+  });
+
+  it('associates personal skill invocation with the message author rather than the session creator', () => {
+    const owner = authFor(user('owner'), [member('member', 'owner', 'owner-group')]);
+    const creator = authFor(user('creator'), [member('member', 'creator', 'owner-group')]);
+    const personal = skill({ ownerKind: 'user', ownerUserId: 'owner' });
+    const creatorSession = session({ ownerGroupId: 'owner-group', createdByUserId: 'creator' });
+
+    expect(canInvokeSkillInSession(owner, personal, creatorSession, 'owner')).toBe(true);
+    expect(canInvokeSkillInSession(creator, personal, creatorSession, 'creator')).toBe(false);
   });
 
   it('separates group viewer, member, and admin write permissions', () => {
@@ -157,4 +227,24 @@ function session(input: Partial<SessionRecord> = {}): SessionRecord {
     tags: [],
     ...input,
   };
+}
+
+function skill(input: Partial<SkillRecord> = {}): SkillRecord {
+  return {
+    id: 'skill-1',
+    ownerKind: 'group',
+    ownerGroupId: 'owner-group',
+    name: 'shared-skill',
+    description: 'Shared skill',
+    body: '# Shared',
+    currentRevisionId: 'revision-1',
+    currentRevisionNumber: 1,
+    autoLoad: true,
+    enabled: true,
+    shareMode: 'none',
+    shareGroupIds: [],
+    createdAt: now,
+    updatedAt: now,
+    ...input,
+  } as SkillRecord;
 }

@@ -10,6 +10,7 @@ import type {
   GroupRecord,
   GroupRole,
   SessionRecord,
+  SkillRecord,
 } from '../store/types.js';
 import { readSessionId } from './session.js';
 
@@ -96,6 +97,43 @@ export function canManageAutomation(auth: RequestAuthorization, automation: Auto
     !auth.bypass &&
     automation.createdByUserId === auth.user.id &&
     canCreateSessionInGroup(auth, automation.ownerGroupId)
+  );
+}
+
+export function canCreateSkillInGroup(auth: RequestAuthorization, groupId: string): boolean {
+  return canCreateSessionInGroup(auth, groupId);
+}
+
+export function canReadSkill(auth: RequestAuthorization, skill: SkillRecord): boolean {
+  if (auth.bypass || isSuperAdmin(auth)) return true;
+  if (skill.ownerKind === 'user') return skill.ownerUserId === auth.user.id;
+  if (skill.ownerGroupId && groupRole(auth, skill.ownerGroupId)) return true;
+  if (skill.shareMode === 'all_groups') return auth.memberships.length > 0;
+  return skill.shareMode === 'specific' && skill.shareGroupIds.some((groupId) => Boolean(groupRole(auth, groupId)));
+}
+
+export function canManageSkill(auth: RequestAuthorization, skill: SkillRecord): boolean {
+  if (auth.bypass || isSuperAdmin(auth)) return true;
+  if (skill.ownerKind === 'user') return skill.ownerUserId === auth.user.id;
+  if (skill.ownerGroupId && canManageGroup(auth, skill.ownerGroupId)) return true;
+  return (
+    skill.createdByUserId === auth.user.id &&
+    Boolean(skill.ownerGroupId && canCreateSkillInGroup(auth, skill.ownerGroupId))
+  );
+}
+
+export function canInvokeSkillInSession(
+  auth: RequestAuthorization,
+  skill: SkillRecord,
+  session: Pick<SessionRecord, 'ownerGroupId'>,
+  authorUserId: string | undefined = auth.bypass ? undefined : auth.user.id,
+): boolean {
+  if (!skill.enabled || skill.archivedAt || !canReadSkill(auth, skill)) return false;
+  if (skill.ownerKind === 'user') return Boolean(authorUserId && skill.ownerUserId === authorUserId);
+  return (
+    skill.ownerGroupId === session.ownerGroupId ||
+    skill.shareMode === 'all_groups' ||
+    (skill.shareMode === 'specific' && skill.shareGroupIds.includes(session.ownerGroupId))
   );
 }
 

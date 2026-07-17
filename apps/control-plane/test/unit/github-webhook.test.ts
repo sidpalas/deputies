@@ -8,6 +8,7 @@ import {
 import { GitHubWebhookService } from '../../src/integrations/github/webhook-service.js';
 import { GitHubCompletionCallbackSender } from '../../src/integrations/github/callback-sender.js';
 import { MemoryStore } from '../../src/store/memory.js';
+import { defaultGroupId } from '../../src/store/types.js';
 
 const secret = 'dev-github-webhook-secret';
 
@@ -24,7 +25,7 @@ describe('GitHub webhook integration', () => {
   it('creates sessions from GitHub issues and reuses issue threads for comments', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       allowedUsers: ['octocat'],
       allowedOrganizations: ['acme'],
     });
@@ -64,10 +65,88 @@ describe('GitHub webhook integration', () => {
     expect(messages[1]!.prompt).toContain('Please handle this.');
   });
 
+  it('strips a skill token before rendering the current GitHub message', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const skill = await services.skills.create({
+      name: 'review-code',
+      description: 'Review code',
+      body: 'Review carefully',
+      ownerGroupId: defaultGroupId,
+    });
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
+      skillsEnabled: true,
+    });
+
+    const result = await github.handle({
+      headers: { deliveryId: 'delivery-skill', event: 'issue_comment' },
+      payload: issueCommentPayload({ body: '/review-code inspect this' }),
+    });
+
+    expect(result.type).toBe('accepted');
+    if (result.type !== 'accepted') throw new Error('Expected accepted GitHub event');
+    expect(result.message.prompt).toContain('Current tagged GitHub message:\n---\n[octocat]: inspect this');
+    expect(result.message.prompt).not.toContain('/review-code');
+    expect(result.message.context).toMatchObject({
+      skills: ['review-code'],
+      skillRefs: [{ id: skill.id, name: 'review-code', revisionId: skill.currentRevisionId }],
+    });
+  });
+
+  it('uses the token-stripped issue body throughout an issue-open prompt', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    await services.skills.create({
+      name: 'review-code',
+      description: 'Review code',
+      body: 'Review carefully',
+      ownerGroupId: defaultGroupId,
+    });
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
+      skillsEnabled: true,
+    });
+
+    const result = await github.handle({
+      headers: { deliveryId: 'delivery-issue-open-skill', event: 'issues' },
+      payload: issuePayload({ action: 'opened', body: '/review-code inspect this issue' }),
+    });
+
+    expect(result.type).toBe('accepted');
+    if (result.type !== 'accepted') throw new Error('Expected accepted GitHub event');
+    expect(result.message.prompt).toContain('Description:\ninspect this issue');
+    expect(result.message.prompt).toContain('Current tagged GitHub message:\n---\n[octocat]: inspect this issue');
+    expect(result.message.prompt).not.toContain('/review-code');
+  });
+
+  it('uses the token-stripped PR body throughout a PR-open prompt', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    await services.skills.create({
+      name: 'review-code',
+      description: 'Review code',
+      body: 'Review carefully',
+      ownerGroupId: defaultGroupId,
+    });
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
+      skillsEnabled: true,
+    });
+
+    const result = await github.handle({
+      headers: { deliveryId: 'delivery-pr-open-skill', event: 'pull_request' },
+      payload: pullRequestPayload({ body: '/review-code inspect this PR' }),
+    });
+
+    expect(result.type).toBe('accepted');
+    if (result.type !== 'accepted') throw new Error('Expected accepted GitHub event');
+    expect(result.message.prompt).toContain('Description:\ninspect this PR');
+    expect(result.message.prompt).toContain('Current tagged GitHub message:\n---\n[octocat]: inspect this PR');
+    expect(result.message.prompt).not.toContain('/review-code');
+  });
+
   it('includes prior unprocessed GitHub issue comments as thread context', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       issueContextFetcher: {
         async listIssueComments() {
           return [
@@ -110,7 +189,7 @@ describe('GitHub webhook integration', () => {
     const store = new MemoryStore();
     const services = createServices(store);
     let fetches = 0;
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       issueContextFetcher: {
         async listIssueComments() {
           fetches += 1;
@@ -169,7 +248,7 @@ describe('GitHub webhook integration', () => {
           ? `${'p'.repeat(maxPromptTextCharacters + 20)}${longPriorTail}`
           : `prior-comment-${index + 1}`,
     }));
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       issueContextFetcher: {
         async listIssueComments() {
           return [
@@ -207,7 +286,7 @@ describe('GitHub webhook integration', () => {
     const store = new MemoryStore();
     const services = createServices(store);
     const longDiffTail = 'diff tail should be omitted';
-    const github = new GitHubWebhookService(store, services.sessions, services.messages);
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills);
 
     const accepted = await github.handle({
       headers: { deliveryId: 'delivery-1', event: 'pull_request_review_comment' },
@@ -228,7 +307,7 @@ describe('GitHub webhook integration', () => {
     const store = new MemoryStore();
     const services = createServices(store);
     const reactions: unknown[] = [];
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       reactionSender: {
         async addEyes(target) {
           reactions.push(target);
@@ -256,7 +335,7 @@ describe('GitHub webhook integration', () => {
   it('ignores GitHub webhooks from users or repository owners outside allowlists', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       allowedUsers: ['octocat'],
       allowedOrganizations: ['acme'],
     });
@@ -278,7 +357,7 @@ describe('GitHub webhook integration', () => {
   it('ignores GitHub webhooks from repositories outside the repository allowlist', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       allowedRepositories: ['acme/allowed', 'other/*'],
     });
 
@@ -304,7 +383,7 @@ describe('GitHub webhook integration', () => {
   it('dedupes GitHub webhook deliveries', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages);
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills);
 
     const first = await github.handle({
       headers: { deliveryId: 'delivery-1', event: 'issues' },
@@ -323,7 +402,7 @@ describe('GitHub webhook integration', () => {
     const store = new MemoryStore();
     const services = createServices(store);
     const notices: unknown[] = [];
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       archivedSessionNotifier: {
         async postNotice(input) {
           notices.push(input);
@@ -363,7 +442,7 @@ describe('GitHub webhook integration', () => {
     const store = new MemoryStore();
     const services = createServices(store);
     const notices: unknown[] = [];
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       triggerPhrases: ['deputies'],
       archivedSessionNotifier: {
         async postNotice(input) {
@@ -406,7 +485,7 @@ describe('GitHub webhook integration', () => {
   it('queues GitHub recovery comments that include additional instructions', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       triggerPhrases: ['deputies'],
     });
     const first = await github.handle({
@@ -430,7 +509,7 @@ describe('GitHub webhook integration', () => {
   it('queues archived GitHub instructions when users recover with the phrase', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       triggerPhrases: ['deputies'],
     });
     const first = await github.handle({
@@ -461,7 +540,7 @@ describe('GitHub webhook integration', () => {
   it('requires configured trigger phrases in GitHub event text', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       triggerPhrases: ['deputies'],
     });
 
@@ -492,7 +571,7 @@ describe('GitHub webhook integration', () => {
   it('requires trigger phrases in current GitHub comments rather than stale issue text', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       triggerPhrases: ['/deputies'],
     });
 
@@ -515,7 +594,7 @@ describe('GitHub webhook integration', () => {
   it('accepts slash, text, and team-style GitHub trigger phrases', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       triggerPhrases: ['/deputies', 'deputies:', 'acme/deputies'],
     });
 
@@ -540,7 +619,7 @@ describe('GitHub webhook integration', () => {
   it('does not match explicit GitHub trigger phrase substrings', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       triggerPhrases: ['@deputies', '/deputies'],
     });
 
@@ -565,7 +644,7 @@ describe('GitHub webhook integration', () => {
   it('accepts PR review comments and submitted PR reviews', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const github = new GitHubWebhookService(store, services.sessions, services.messages, {
+    const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       allowedUsers: ['octocat'],
       allowedOrganizations: ['acme'],
     });
@@ -811,6 +890,24 @@ function issueCommentPayload(input: { body?: string; commentId?: number; issueBo
       body: input.body ?? 'Please handle this.',
       html_url: `https://github.com/acme/widget/issues/42#issuecomment-${input.commentId ?? 99}`,
       user: { login: 'octocat' },
+    },
+  };
+}
+
+function pullRequestPayload(input: { body?: string } = {}) {
+  return {
+    action: 'opened',
+    repository: { owner: { login: 'acme' }, name: 'widget', full_name: 'acme/widget' },
+    sender: { login: 'octocat', type: 'User' },
+    pull_request: {
+      number: 42,
+      title: 'Improve app startup',
+      body: input.body ?? 'The startup path needs cleanup.',
+      html_url: 'https://github.com/acme/widget/pull/42',
+      user: { login: 'octocat' },
+      labels: [{ name: 'bug' }],
+      head: { ref: 'feature', sha: 'abc123' },
+      base: { ref: 'main' },
     },
   };
 }

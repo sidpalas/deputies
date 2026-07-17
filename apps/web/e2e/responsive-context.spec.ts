@@ -50,6 +50,7 @@ test('keeps the mobile sessions navigation dock reachable on short screens', asy
 
   await pageSwitcher.click();
   await expect(page.getByRole('menuitem', { name: /Setup/ })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: /Skills/ })).toBeVisible();
 });
 
 test('shows context as a sidebar on wide screens', async ({ page }) => {
@@ -97,8 +98,23 @@ async function mockApi(page: Page): Promise<void> {
       return;
     }
 
+    if (apiPath === '/environments') {
+      await route.fulfill({ json: { environments: [] } });
+      return;
+    }
+
+    if (apiPath === '/skills' || apiPath === `/sessions/${sessionId}/skills`) {
+      await route.fulfill({ json: { skills: [] } });
+      return;
+    }
+
     if (apiPath === '/sessions') {
       await route.fulfill({ json: { sessions: [session] } });
+      return;
+    }
+
+    if (apiPath === `/sessions/${sessionId}`) {
+      await route.fulfill({ json: { session } });
       return;
     }
 
@@ -160,6 +176,8 @@ function isApiPath(pathname: string): boolean {
     pathname === '/repositories' ||
     pathname === '/groups' ||
     pathname === '/automations' ||
+    pathname === '/environments' ||
+    pathname === '/skills' ||
     pathname === '/sessions' ||
     pathname.startsWith('/sessions/') ||
     pathname === '/events/stream' ||

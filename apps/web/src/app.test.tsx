@@ -108,6 +108,20 @@ type MockApiOptions = {
   sandboxProvider?: string;
   currentUser?: (typeof user & { memberships?: unknown[] }) | null;
   notices?: unknown[];
+  environments?: unknown[];
+  environmentRevisions?: Record<string, unknown[]>;
+  skills?: unknown[];
+  invocationSkills?: unknown[];
+  invocationCandidateOwnerGroupIds?: string[];
+  invocationCandidateStatus?: number;
+  skillListStatusByScope?: Partial<Record<'personal' | 'group' | 'shared', number>>;
+  onListSessionSkillsRequest?: (request: {
+    count: number;
+    sessionId: string;
+  }) => Response | Promise<Response> | undefined;
+  archivedSkillIds?: string[];
+  archivedSessionIds?: string[];
+  messageSubmitError?: { status: number; body: unknown };
   logins?: Array<{ username: string; password: string }>;
   abortedRequests?: string[];
 };
@@ -253,6 +267,442 @@ it('submits composer text on Enter and preserves Shift Enter for newlines', asyn
   await waitFor(() => expect(submittedPrompts).toEqual(['follow up']));
 });
 
+it('hides skills navigation and pickers when the skills API is disabled', async () => {
+  mockApi();
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: '/' } });
+  expect(screen.queryByRole('listbox', { name: 'Available skills' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Sessions' }));
+  expect(screen.queryByRole('menuitem', { name: /Skills/ })).not.toBeInTheDocument();
+});
+
+it('opens the skills admin panel and sidebar when the skills API is available', async () => {
+  mockApi({ skills: [] });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Skills/ }));
+  expect(await screen.findByRole('heading', { name: 'Agent skills' })).toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Search skills...')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'New skill' })).toBeInTheDocument();
+});
+
+it('loads an exact historical environment revision from the URL', async () => {
+  window.history.replaceState({}, '', '/?environment=environment-1&revision=environment-revision-1');
+  mockApi({
+    environments: [environmentFixture()],
+    repositories: [
+      { fullName: 'owner/current-repo', owner: 'owner', name: 'current-repo' },
+      { fullName: 'owner/historical-repo', owner: 'owner', name: 'historical-repo' },
+    ],
+    environmentRevisions: {
+      'environment-1': [
+        environmentRevisionFixture('environment-revision-2', 2, 'current-repo'),
+        environmentRevisionFixture('environment-revision-1', 1, 'historical-repo'),
+      ],
+    },
+  });
+
+  render(<App />);
+
+  expect(await screen.findByText(/Name, owner, and sharing reflect the current environment/)).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByLabelText('Repository 1')).toHaveTextContent('owner/historical-repo'));
+  expect(screen.getByLabelText('Name')).toHaveValue('Production');
+  expect(screen.getByLabelText('Name')).toBeDisabled();
+  expect(window.location.search).toBe('?environment=environment-1&revision=environment-revision-1');
+});
+
+it('guards revision changes from a dirty environment editor', async () => {
+  window.history.replaceState({}, '', '/?environment=environment-1');
+  mockApi({
+    environments: [environmentFixture()],
+    repositories: [
+      { fullName: 'owner/current-repo', owner: 'owner', name: 'current-repo' },
+      { fullName: 'owner/historical-repo', owner: 'owner', name: 'historical-repo' },
+    ],
+    environmentRevisions: {
+      'environment-1': [
+        environmentRevisionFixture('environment-revision-2', 2, 'current-repo'),
+        environmentRevisionFixture('environment-revision-1', 1, 'historical-repo'),
+      ],
+    },
+  });
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  render(<App />);
+
+  const name = await screen.findByLabelText('Name');
+  fireEvent.change(name, { target: { value: 'Unsaved environment' } });
+  await screen.findByText('Unsaved changes');
+  fireEvent.click(screen.getByLabelText('Revision'));
+  fireEvent.click(screen.getByRole('option', { name: /Revision 1.*Historical/ }));
+
+  expect(confirm).toHaveBeenCalledWith('Discard unsaved environment changes?');
+  expect(name).toHaveValue('Unsaved environment');
+  expect(window.location.search).toBe('?environment=environment-1');
+
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByLabelText('Revision'));
+  fireEvent.click(screen.getByRole('option', { name: /Revision 1.*Historical/ }));
+  expect(await screen.findByText(/Viewing repository configuration from revision 1/)).toBeInTheDocument();
+  expect(window.location.search).toBe('?environment=environment-1&revision=environment-revision-1');
+});
+
+it('keeps skills navigation available when one group skill list fails', async () => {
+  mockApi({ skills: [], skillListStatusByScope: { group: 403 } });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
+  expect(screen.getByRole('menuitem', { name: /Skills/ })).toBeInTheDocument();
+});
+
+it('confirms before leaving a skill with unsaved changes', async () => {
+  mockApi({
+    skills: [
+      {
+        id: 'skill-1',
+        name: 'review-change',
+        description: 'Review a change carefully.',
+        currentRevisionId: 'revision-2',
+        currentRevisionNumber: 2,
+        body: '# Review',
+        ownerKind: 'user',
+        autoLoad: true,
+        enabled: true,
+        shareMode: 'none',
+        source: 'personal',
+        canManage: true,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    ],
+  });
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Skills/ }));
+  fireEvent.click((await screen.findByText('review-change')).closest('button')!);
+  fireEvent.change(await screen.findByLabelText(/^Description/), { target: { value: 'Unsaved edit.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Skills' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Sessions/ }));
+
+  expect(confirm).toHaveBeenCalledWith('Discard unsaved skill changes?');
+  expect(screen.getByRole('heading', { name: 'Agent skills' })).toBeInTheDocument();
+
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Skills' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Sessions/ }));
+  expect(
+    await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...'),
+  ).toBeVisible();
+});
+
+it('protects dirty skill edits when archiving from the sidebar and allows restore after success', async () => {
+  const archivedSkillIds: string[] = [];
+  mockApi({
+    archivedSkillIds,
+    skills: [
+      {
+        id: 'skill-1',
+        name: 'review-change',
+        description: 'Review a change carefully.',
+        body: '# Review',
+        ownerKind: 'user',
+        autoLoad: true,
+        enabled: true,
+        shareMode: 'none',
+        source: 'personal',
+        canManage: true,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    ],
+  });
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Skills/ }));
+  fireEvent.click((await screen.findByText('review-change')).closest('button')!);
+  const description = await screen.findByLabelText(/^Description/);
+  fireEvent.change(description, { target: { value: 'Unsaved edit.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Archive review-change skill' }));
+
+  expect(confirm).toHaveBeenCalledWith('Discard unsaved changes and archive this skill?');
+  expect(archivedSkillIds).toEqual([]);
+  expect(description).toHaveValue('Unsaved edit.');
+
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Archive review-change skill' }));
+
+  await waitFor(() => expect(archivedSkillIds).toEqual(['skill-1']));
+  await waitFor(() => expect(screen.getByLabelText(/^Description/)).toHaveValue('Review a change carefully.'));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Restore skill' })).toBeEnabled());
+});
+
+it('converts an exact leading slash skill into message context and renders the sent chip', async () => {
+  const submittedMessageBodies: unknown[] = [];
+  mockApi({
+    submittedMessageBodies,
+    skills: [
+      {
+        id: 'skill-1',
+        name: 'review-change',
+        description: 'Review a change carefully.',
+        currentRevisionId: 'revision-2',
+        currentRevisionNumber: 2,
+        autoLoad: false,
+        enabled: true,
+        shareMode: 'none',
+        source: 'personal',
+        provenance: { kind: 'personal' },
+        canManage: true,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    ],
+  });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: '/review-change inspect this' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+
+  await waitFor(() =>
+    expect(submittedMessageBodies).toContainEqual({
+      prompt: 'inspect this',
+      model: 'anthropic/claude-sonnet',
+      context: {
+        skills: ['review-change'],
+        skillRefs: [{ id: 'skill-1', name: 'review-change', revisionId: 'revision-2' }],
+      },
+    }),
+  );
+  expect(await screen.findByLabelText('Invoked skills')).toHaveTextContent('review-change');
+  fireEvent.click(screen.getByRole('button', { name: 'Open invoked review-change skill revision' }));
+  expect(await screen.findByRole('heading', { name: 'Agent skills' })).toBeInTheDocument();
+  expect(new URLSearchParams(window.location.search).get('revision')).toBe('revision-2');
+});
+
+it('loads new-session invocation candidates from the owner-group endpoint instead of the admin catalog', async () => {
+  const requestedOwnerGroupIds: string[] = [];
+  mockApi({
+    invocationCandidateOwnerGroupIds: requestedOwnerGroupIds,
+    skills: [
+      {
+        id: 'admin-only',
+        name: 'admin-only',
+        description: 'Visible in management only.',
+        autoLoad: false,
+        enabled: true,
+        shareMode: 'none',
+        source: 'personal',
+        provenance: { kind: 'personal' },
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    ],
+    invocationSkills: [
+      {
+        id: 'candidate-only',
+        name: 'candidate-only',
+        description: 'Authorized for this new session.',
+        currentRevisionId: 'revision-1',
+        autoLoad: false,
+        enabled: true,
+        shareMode: 'none',
+        source: 'shared',
+        provenance: { kind: 'shared', ownerGroupId: group.id, ownerGroupName: group.name },
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  const composer = screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...');
+  fireEvent.change(composer, { target: { value: '/candidate' } });
+
+  expect(await screen.findByRole('option', { name: /candidate-only/i })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: /admin-only/i })).not.toBeInTheDocument();
+  expect(requestedOwnerGroupIds).toContain(group.id);
+});
+
+it('shows an unknown_skill response inline and restores the composer selection', async () => {
+  mockApi({
+    skills: [
+      {
+        id: 'skill-1',
+        name: 'review-change',
+        description: 'Review a change carefully.',
+        autoLoad: false,
+        enabled: true,
+        shareMode: 'none',
+        source: 'personal',
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    ],
+    messageSubmitError: {
+      status: 400,
+      body: { error: 'unknown_skill', message: 'Unknown or inaccessible skill: review-change' },
+    },
+  });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: '/rev' } });
+  fireEvent.click(screen.getByRole('option', { name: /review-change/i }));
+  fireEvent.change(composer, { target: { value: 'inspect this' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+
+  expect(await screen.findByText('Unknown or inaccessible skill: review-change')).toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...')).toHaveValue(
+    'inspect this',
+  );
+  expect(screen.getByRole('button', { name: 'Remove review-change skill' })).toBeInTheDocument();
+});
+
+it('does not classify other HTTP 400 responses as inline skill errors', async () => {
+  mockApi({
+    skills: [
+      {
+        id: 'skill-1',
+        name: 'review-change',
+        description: 'Review a change carefully.',
+        autoLoad: false,
+        enabled: true,
+        shareMode: 'none',
+        source: 'personal',
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    ],
+    messageSubmitError: {
+      status: 400,
+      body: { error: 'invalid_request', message: 'The request context is invalid' },
+    },
+  });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: '/rev' } });
+  fireEvent.click(screen.getByRole('option', { name: /review-change/i }));
+  fireEvent.change(composer, { target: { value: 'inspect this' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+
+  expect(await screen.findByText('The request context is invalid')).toHaveClass('border-b');
+  expect(screen.getByRole('button', { name: 'Remove review-change skill' })).toBeInTheDocument();
+});
+
+it('refreshes selected session skills once after a burst of skills_loaded events and ignores the stale response', async () => {
+  const staleResponse = deferred<Response>();
+  const latestResponse = deferred<Response>();
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  let sessionSkillsRequestCount = 0;
+  const managedSkill = {
+    id: 'skill-1',
+    name: 'review-change',
+    description: 'Review a change carefully.',
+    autoLoad: false,
+    enabled: true,
+    shareMode: 'none',
+    source: 'personal',
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+  const repoSkill = {
+    ...managedSkill,
+    id: 'repo:owner/repo:repo-review',
+    name: 'repo-review',
+    description: 'Review using repository guidance.',
+    source: 'repo',
+  };
+  mockApi({
+    skills: [managedSkill],
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+    onListSessionSkillsRequest: ({ count }) => {
+      sessionSkillsRequestCount = count;
+      if (count === 2) return staleResponse.promise;
+      if (count === 3) return latestResponse.promise;
+      return jsonResponse({ skills: [managedSkill] });
+    },
+  });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: '/' } });
+  expect(await screen.findByRole('option', { name: /review-change/i })).toBeInTheDocument();
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+
+  act(() => {
+    pushGlobalEvent?.({
+      id: 20,
+      sessionId: session.id,
+      sequence: 20,
+      type: 'skills_loaded',
+      messageId: 'message-0',
+      payload: { skills: [] },
+      createdAt: '2026-05-05T12:02:00.000Z',
+    });
+  });
+
+  await waitFor(() => expect(sessionSkillsRequestCount).toBe(2));
+  act(() => {
+    for (let index = 1; index < 3; index += 1) {
+      pushGlobalEvent?.({
+        id: 20 + index,
+        sessionId: session.id,
+        sequence: 20 + index,
+        type: 'skills_loaded',
+        messageId: `message-${index}`,
+        payload: { skills: [] },
+        createdAt: '2026-05-05T12:02:00.000Z',
+      });
+    }
+  });
+  await act(() => new Promise((resolve) => window.setTimeout(resolve, 150)));
+  expect(sessionSkillsRequestCount).toBe(2);
+  act(() => staleResponse.resolve(jsonResponse({ skills: [{ ...managedSkill, name: 'stale-review' }] })));
+  await waitFor(() => expect(sessionSkillsRequestCount).toBe(3));
+  expect(screen.queryByRole('option', { name: /stale-review/i })).not.toBeInTheDocument();
+
+  act(() => latestResponse.resolve(jsonResponse({ skills: [managedSkill, repoSkill] })));
+  expect(await screen.findByRole('option', { name: /repo-review/i })).toHaveTextContent('repo');
+  expect(sessionSkillsRequestCount).toBe(3);
+});
+
+it('shows no repository skills when the session skills response contains managed skills only', async () => {
+  mockApi({
+    skills: [
+      {
+        id: 'skill-1',
+        name: 'review-change',
+        description: 'Managed skill only.',
+        autoLoad: false,
+        enabled: true,
+        shareMode: 'none',
+        source: 'personal',
+        provenance: { kind: 'personal' },
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    ],
+  });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: '/' } });
+  const picker = screen.getByRole('listbox', { name: 'Available skills' });
+  expect(within(picker).getByRole('option', { name: /review-change/i })).toHaveTextContent('personal');
+  expect(within(picker).queryByText('repo')).not.toBeInTheDocument();
+});
+
 it('submits the selected model without inherited repo or branch overrides', async () => {
   const submittedMessageBodies: unknown[] = [];
   mockApi({
@@ -313,6 +763,29 @@ it('allows starting a session without repository options', async () => {
   await waitFor(() => expect(submittedMessageBodies).toHaveLength(1));
   expect(submittedMessageBodies[0]).toMatchObject({ prompt: 'start work' });
   expect(submittedMessageBodies[0]).not.toHaveProperty('repository');
+});
+
+it('archives a newly-created session when its initial message cannot be enqueued', async () => {
+  const archivedSessionIds: string[] = [];
+  mockApi({
+    archivedSessionIds,
+    messageSubmitError: {
+      status: 503,
+      body: { error: 'unavailable', message: 'Queue unavailable' },
+    },
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  const composer = screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...');
+  fireEvent.change(composer, { target: { value: 'start work' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+  await waitFor(() => expect(archivedSessionIds).toEqual(['00000000-0000-4000-8000-000000000102']));
+  expect(await screen.findByText('Queue unavailable')).toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...')).toHaveValue(
+    'start work',
+  );
 });
 
 it('clears previous session detail when creating a new session before detail refresh completes', async () => {
@@ -3192,6 +3665,8 @@ function mockApi(options: MockApiOptions = {}) {
   let messages = options.messages ?? [];
   let groupMembers = options.groupMembers ?? [];
   let sessionsRequestCount = 0;
+  let sessionSkillsRequestCount = 0;
+  let skills = options.skills;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
     const method = init?.method ?? 'GET';
@@ -3314,6 +3789,92 @@ function mockApi(options: MockApiOptions = {}) {
       return jsonResponse({ groups: options.groups ?? [group] });
     }
 
+    if (url.pathname === '/environments' && method === 'GET') {
+      return jsonResponse({ environments: options.environments ?? [] });
+    }
+
+    const environmentRevisionsMatch = url.pathname.match(/^\/environments\/([^/]+)\/revisions$/);
+    if (environmentRevisionsMatch && method === 'GET') {
+      return jsonResponse({ revisions: options.environmentRevisions?.[environmentRevisionsMatch[1]!] ?? [] });
+    }
+
+    if (url.pathname === '/skills' && method === 'GET') {
+      if (skills === undefined) return jsonResponse({ error: 'not_found', message: 'Not found' }, 404);
+      const scope = url.searchParams.get('scope') as 'personal' | 'group' | 'shared' | null;
+      const status = scope ? options.skillListStatusByScope?.[scope] : undefined;
+      if (status) return jsonResponse({ error: 'forbidden', message: 'Skill list unavailable' }, status);
+      return jsonResponse({ skills });
+    }
+
+    if (url.pathname === '/skills/invocation-candidates' && method === 'GET') {
+      options.invocationCandidateOwnerGroupIds?.push(url.searchParams.get('ownerGroupId') ?? '');
+      if (options.invocationCandidateStatus) {
+        return jsonResponse(
+          { error: 'forbidden', message: 'Invocation candidates unavailable' },
+          options.invocationCandidateStatus,
+        );
+      }
+      if (skills === undefined) return jsonResponse({ error: 'not_found', message: 'Not found' }, 404);
+      return jsonResponse({ skills: options.invocationSkills ?? skills });
+    }
+
+    const skillRevisionsMatch = url.pathname.match(/^\/skills\/([^/]+)\/revisions$/);
+    if (skillRevisionsMatch && method === 'GET') {
+      const skill = skills?.find(
+        (candidate) =>
+          typeof candidate === 'object' &&
+          candidate !== null &&
+          'id' in candidate &&
+          candidate.id === skillRevisionsMatch[1],
+      ) as Record<string, unknown> | undefined;
+      return jsonResponse({
+        revisions:
+          typeof skill?.currentRevisionId === 'string'
+            ? [
+                {
+                  id: skill.currentRevisionId,
+                  skillId: skill.id,
+                  revisionNumber: skill.currentRevisionNumber,
+                  name: skill.name,
+                  description: skill.description,
+                  body: skill.body ?? '',
+                  actorType: 'user',
+                  createdAt: skill.updatedAt,
+                },
+              ]
+            : [],
+      });
+    }
+
+    const sessionSkillsMatch = url.pathname.match(/^\/sessions\/([^/]+)\/skills$/);
+    if (sessionSkillsMatch && method === 'GET') {
+      if (skills === undefined) return jsonResponse({ error: 'not_found', message: 'Not found' }, 404);
+      sessionSkillsRequestCount += 1;
+      const customResponse = options.onListSessionSkillsRequest?.({
+        count: sessionSkillsRequestCount,
+        sessionId: sessionSkillsMatch[1]!,
+      });
+      if (customResponse) return customResponse;
+      return jsonResponse({ skills });
+    }
+
+    const archiveSkillMatch = url.pathname.match(/^\/skills\/([^/]+)\/archive$/);
+    if (archiveSkillMatch && method === 'POST' && skills) {
+      const skillId = archiveSkillMatch[1]!;
+      options.archivedSkillIds?.push(skillId);
+      skills = skills.map((candidate) =>
+        typeof candidate === 'object' && candidate !== null && 'id' in candidate && candidate.id === skillId
+          ? { ...candidate, archivedAt: session.updatedAt }
+          : candidate,
+      );
+      return jsonResponse({
+        skill: skills.find(
+          (candidate) =>
+            typeof candidate === 'object' && candidate !== null && 'id' in candidate && candidate.id === skillId,
+        ),
+      });
+    }
+
     if (url.pathname === '/groups' && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { name: string };
       options.createdGroups?.push(body);
@@ -3413,6 +3974,7 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === `/sessions/${currentSession.id}/archive` && method === 'POST') {
       if (options.hangArchive) return hangingResponse(init);
+      options.archivedSessionIds?.push(currentSession.id);
       currentSession = { ...currentSession, status: 'archived' };
       return jsonResponse({ session: currentSession });
     }
@@ -3453,6 +4015,9 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === `/sessions/${currentSession.id}/messages` && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { prompt: string };
+      if (options.messageSubmitError) {
+        return jsonResponse(options.messageSubmitError.body, options.messageSubmitError.status);
+      }
       options.submittedPrompts?.push(body.prompt);
       options.submittedMessageBodies?.push(body);
       const message = {
@@ -3461,6 +4026,7 @@ function mockApi(options: MockApiOptions = {}) {
         sequence: 1,
         status: 'pending',
         prompt: body.prompt,
+        ...('context' in body ? { context: body.context } : {}),
         createdAt: '2026-05-05T12:01:00.000Z',
       };
       messages = [...messages, message];
@@ -3691,6 +4257,43 @@ function callbackFixture(input: {
 
 function setVisibilityState(value: DocumentVisibilityState) {
   Object.defineProperty(document, 'visibilityState', { configurable: true, value });
+}
+
+function environmentFixture() {
+  return {
+    id: 'environment-1',
+    name: 'Production',
+    ownerGroupId: group.id,
+    ownerGroupName: group.name,
+    shareMode: 'private',
+    currentRevisionId: 'environment-revision-2',
+    currentRevisionNumber: 2,
+    sharedGroupIds: [],
+    repositories: [
+      {
+        id: 'repository-current',
+        provider: 'github',
+        owner: 'owner',
+        repo: 'current-repo',
+        primary: true,
+        position: 0,
+      },
+    ],
+    canManage: true,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+}
+
+function environmentRevisionFixture(id: string, revisionNumber: number, repo: string) {
+  return {
+    id,
+    environmentId: 'environment-1',
+    revisionNumber,
+    actorType: 'user',
+    createdAt: session.updatedAt,
+    repositories: [{ provider: 'github', owner: 'owner', repo, primary: true, position: 0 }],
+  };
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

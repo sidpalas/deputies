@@ -9,6 +9,7 @@ import { ArtifactService, ArtifactServiceError } from '../artifacts/service.js';
 import type { ArtifactObjectStorage } from '../artifacts/storage.js';
 import {
   canCreateSessionInGroup,
+  canInvokeSkillInSession,
   canManageGroup,
   canMoveSession,
   canReadSession,
@@ -38,6 +39,8 @@ import { sandboxRuntimeId } from '../sandbox/runtime.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
+import { SkillService } from '../skills/service.js';
+import { canonicalizeMessageSkillContext, SkillContextError } from '../skills/invocation.js';
 import { normalizeSessionTags } from '../sessions/tags.js';
 import { MemoryStore } from '../store/memory.js';
 import type {
@@ -65,6 +68,7 @@ import { ModelAvailabilityService } from './model-availability.js';
 import { registerModelRoutes } from './model-routes.js';
 import { registerRepositoryRoutes } from './repository-routes.js';
 import { registerSetupRoutes } from './setup-routes.js';
+import { registerSkillRoutes } from './skill-routes.js';
 import { routeTelemetryMiddleware } from './telemetry-middleware.js';
 import { registerTelemetryRoutes } from './telemetry-routes.js';
 import { registerUserRoutes } from './user-routes.js';
@@ -115,6 +119,7 @@ export type AppServices = {
   sessions: SessionService;
   messages: MessageService;
   automations: AutomationService;
+  skills: SkillService;
   artifacts: ArtifactService;
   externalResources: ExternalResourceService;
   genericWebhooks: GenericWebhookService;
@@ -146,6 +151,7 @@ export function createServices(
   const messages = new MessageService(store, events);
   const environments = new EnvironmentService(store);
   const automations = new AutomationService(store, sessions, messages, environments);
+  const skills = new SkillService(store);
   const services: AppServices = {
     store,
     events,
@@ -153,9 +159,10 @@ export function createServices(
     sessions,
     messages,
     automations,
+    skills,
     artifacts: new ArtifactService(store, events, options.artifactObjectStorage),
     externalResources: new ExternalResourceService(store, events),
-    genericWebhooks: new GenericWebhookService(store, sessions, messages, {
+    genericWebhooks: new GenericWebhookService(store, sessions, messages, skills, {
       unsafeAllowLocalHttpCallbacks: Boolean(options.unsafeAllowLocalHttpCallbacks),
     }),
     callbacks: new CallbackService(store, events),
@@ -217,6 +224,10 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('/sessions', apiAuthMiddleware(config, services.store));
   app.use('/automations/*', apiAuthMiddleware(config, services.store));
   app.use('/automations', apiAuthMiddleware(config, services.store));
+  if (config.skillsEnabled) {
+    app.use('/skills/*', apiAuthMiddleware(config, services.store));
+    app.use('/skills', apiAuthMiddleware(config, services.store));
+  }
   app.use('/environments/*', apiAuthMiddleware(config, services.store));
   app.use('/environments', apiAuthMiddleware(config, services.store));
   app.use('/repositories/*', apiAuthMiddleware(config, services.store));
@@ -385,6 +396,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     serializeSession: (session) => serializeSessionWithSandbox(config, services, session),
   });
   registerEnvironmentRoutes(app, config, services);
+  registerSkillRoutes(app, config, services);
   registerTelemetryRoutes(app, config);
 
   registerRepositoryRoutes(app, config, services);
@@ -589,8 +601,8 @@ export function createApp(config: AppConfig, services = createServices()) {
     const session = getAuthorizedSession(c, sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const prompt = optionalString(body.prompt);
-    if (!prompt) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: prompt');
+    if (typeof body.prompt !== 'string') return writeError(c, 400, 'invalid_request', 'Expected string field: prompt');
+    const prompt = optionalString(body.prompt) ?? '';
 
     try {
       const model = parseModelBody(body.model, config);
@@ -598,9 +610,27 @@ export function createApp(config: AppConfig, services = createServices()) {
       const unavailable = services.modelAvailability.unavailableFor(model || config.runnerModelDefault);
       if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
       const environmentId = optionalString(body.environmentId);
-      const context = environmentId
+      const baseContext = environmentId
         ? await environmentMessageContext(c, config, services, session, environmentId, body, model, reasoningLevel)
         : directRepositoryMessageContext(body, model, reasoningLevel);
+      const auth = await requireRequestAuthorization(config, services.store, c);
+      if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+      const authorUserId = auth.bypass ? undefined : auth.user.id;
+      const skillContext = await canonicalizeMessageSkillContext({
+        skills: services.skills,
+        events: services.store,
+        ownerGroupId: session.ownerGroupId,
+        sessionId: session.id,
+        ...(authorUserId ? { userId: authorUserId } : {}),
+        skillsEnabled: config.skillsEnabled,
+        repoSkillsEnabled: config.repoSkillsEnabled,
+        canUse: (skill) => canInvokeSkillInSession(auth, skill, session, authorUserId),
+        value: body.context,
+      });
+      if (!prompt && !skillContext?.skills.length) {
+        return writeError(c, 400, 'invalid_request', 'Expected prompt text or at least one invoked skill');
+      }
+      const context = { ...baseContext, ...skillContext };
       const message = await services.messages.enqueue({
         sessionId,
         prompt,
@@ -614,6 +644,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       }
       if (error instanceof MessageServiceError && error.code === 'conflict')
         return writeError(c, 409, 'conflict', error.message);
+      if (error instanceof SkillContextError) return writeError(c, 400, error.code, error.message);
       throw error;
     }
   });
@@ -629,18 +660,41 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.patch('/sessions/:sessionId/messages/:messageId', async (c) => {
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const prompt = optionalString(body.prompt);
-    if (!prompt) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: prompt');
+    if (typeof body.prompt !== 'string') return writeError(c, 400, 'invalid_request', 'Expected string field: prompt');
+    const prompt = optionalString(body.prompt) ?? '';
     try {
+      const session = getAuthorizedSession(c, c.req.param('sessionId'));
+      if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+      const auth = await requireRequestAuthorization(config, services.store, c);
+      if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
+      const existing = await services.store.getMessage({ sessionId: session.id, messageId: c.req.param('messageId') });
+      const skillContext = await canonicalizeMessageSkillContext({
+        skills: services.skills,
+        events: services.store,
+        ownerGroupId: session.ownerGroupId,
+        sessionId: session.id,
+        ...(existing?.authorUserId ? { userId: existing.authorUserId } : {}),
+        skillsEnabled: config.skillsEnabled,
+        repoSkillsEnabled: config.repoSkillsEnabled,
+        canUse: (skill) => canInvokeSkillInSession(auth, skill, session, existing?.authorUserId),
+        value: body.context,
+      });
+      const effectiveSkills = skillContext?.skills ?? existing?.context?.skills;
+      if (!prompt && (!Array.isArray(effectiveSkills) || !effectiveSkills.length)) {
+        return writeError(c, 400, 'invalid_request', 'Expected prompt text or at least one invoked skill');
+      }
+      const context = skillContext ? { ...(existing?.context ?? {}), ...skillContext } : undefined;
       const message = await services.messages.updatePending({
         sessionId: c.req.param('sessionId'),
         messageId: c.req.param('messageId'),
         prompt,
+        ...(context ? { context } : {}),
       });
       return c.json({ message });
     } catch (error) {
       if (error instanceof MessageServiceError && error.code === 'conflict')
         return writeError(c, 409, 'conflict', error.message);
+      if (error instanceof SkillContextError) return writeError(c, 400, error.code, error.message);
       throw error;
     }
   });
@@ -692,7 +746,11 @@ export function createApp(config: AppConfig, services = createServices()) {
     }
 
     const batch = await services.events.listBatch(sessionId, after ?? 0, limit);
-    return c.json({ events: batch.events, cursor: batch.cursor, hasMore: batch.hasMore });
+    return c.json({
+      events: batch.events,
+      cursor: batch.cursor,
+      hasMore: batch.hasMore,
+    });
   });
 
   app.get('/sessions/:sessionId/artifacts', async (c) => {

@@ -1,6 +1,7 @@
 import { createServices } from '../../src/app/server.js';
 import { markIntegrationDeliveryProcessed } from '../../src/integrations/shared-utils.js';
 import { MemoryStore } from '../../src/store/memory.js';
+import { defaultGroupId } from '../../src/store/types.js';
 
 describe('GenericWebhookService', () => {
   it('applies source prompt prefix and reuses external threads', async () => {
@@ -403,6 +404,7 @@ describe('GenericWebhookService', () => {
           repository: { provider: 'github', owner: 'spoofed', repo: 'repo' },
           callback: { type: 'github', owner: 'spoofed', repo: 'repo', issueNumber: 1 },
           webhook: { sourceName: 'Spoofed' },
+          skills: ['untrusted-skill'],
           fakeArtifact: { type: 'external_link', url: 'https://example.com/artifact' },
         },
       },
@@ -417,6 +419,53 @@ describe('GenericWebhookService', () => {
       fakeArtifact: { type: 'external_link', url: 'https://example.com/artifact' },
     });
     expect(message?.context).not.toMatchObject({ repository: { owner: 'spoofed' } });
+    expect(message?.context).not.toHaveProperty('skills');
+    expect(message?.context?.webhook).not.toMatchObject({ context: { skills: ['untrusted-skill'] } });
+  });
+
+  it('does not convert disabled or archived skill tokens into trusted webhook context', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const now = new Date();
+    await store.createWebhookSource({
+      id: '00000000-0000-4000-8000-000000000120',
+      key: 'foo',
+      name: 'Foo',
+      enabled: true,
+      bearerToken: 'secret',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const archived = await services.skills.create({
+      name: 'archived-webhook',
+      description: 'Archived',
+      body: '',
+      ownerGroupId: defaultGroupId,
+    });
+    await services.skills.archive(archived.id);
+    const disabled = await services.skills.create({
+      name: 'disabled-webhook',
+      description: 'Disabled',
+      body: '',
+      ownerGroupId: defaultGroupId,
+    });
+    await services.skills.update({ id: disabled.id, enabled: false });
+
+    for (const name of ['archived-webhook', 'disabled-webhook']) {
+      const result = await services.genericWebhooks.handle({
+        sourceKey: 'foo',
+        authorization: 'Bearer secret',
+        skillsEnabled: true,
+        payload: {
+          thread: { externalId: `thread-${name}` },
+          dedupeKey: `delivery-${name}`,
+          prompt: `/${name} keep this`,
+          context: { skills: [name] },
+        },
+      });
+      expect(result.message?.prompt).toBe(`/${name} keep this`);
+      expect(result.message?.context).not.toHaveProperty('skills');
+    }
   });
 
   it.each(['http://localhost/callback', 'http://[::ffff:127.0.0.1]/callback'])(

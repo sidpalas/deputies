@@ -272,6 +272,7 @@ The web entrypoint should proxy these paths to the control-plane API:
 /events*
 /groups*
 /repositories*
+/skills*
 /models*
 /setup*
 /telemetry*
@@ -357,6 +358,23 @@ RUNNER_MODEL_CHOICES=anthropic/claude-haiku-4-5,openai/gpt-5.5
 ```
 
 If unset, model choices are derived from Pi's catalog for providers with configured credentials.
+
+## Agent Skills
+
+Managed and repository skills are enabled by default:
+
+```sh
+SKILLS_ENABLED=true
+REPO_SKILLS_ENABLED=true
+```
+
+`SKILLS_ENABLED=false` is the master switch. API processes do not register skills routes, the web UI hides skills administration and composer invocation, and workers skip managed and repository skill resolution. `REPO_SKILLS_ENABLED=false` disables only scanning prepared repositories at `.agents/skills/`, `.claude/skills/`, and `.pi/skills/`; managed personal, group, and shared skills continue to work.
+
+In split-service deployments, configure both flags consistently on API and worker processes so the available UI/API matches runner behavior. Repository skills are repo-authored instructions: their names and descriptions enter the agent system prompt and their bodies can be read from the sandbox. Disable repository scanning when checked-out repositories should not contribute agent instructions. Individual loading failures are non-fatal and are reported through the run's `skills_loaded` event.
+
+Agent Skills requires `017_skills.sql`. Apply migrations before rolling revision-aware API and worker processes. The application creates revision 1 for every new managed skill and publishes a later revision only for a real name/description/body change.
+
+Managed auto-load resolves current at run start. Manual managed invocations are pinned by the API to current when a message is enqueued; persisted historical pins continue to resolve only while live ownership, sharing, enabled, archive, and owner-group authorization permits them. Repository refs remain repository-scoped and revisionless. `skills_loaded` is the canonical run audit record, including managed revision IDs/numbers and repository discovery; do not expect a duplicate resolved-skill list in run metadata.
 
 ## Repository Setup Scripts
 

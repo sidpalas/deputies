@@ -12,6 +12,7 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -169,7 +170,8 @@ async function requestOnce<T>(
     if (!response.ok) {
       const body = await response.json().catch(() => undefined);
       const message = isErrorBody(body) ? body.message : `Request failed with ${response.status}`;
-      throw new ApiError(response.status, message);
+      const code = isErrorBody(body) && typeof body.error === 'string' ? body.error : undefined;
+      throw new ApiError(response.status, message, code);
     }
 
     dispatchApiConnectionOk('request');
@@ -209,7 +211,7 @@ function parseSseData(frame: string): string | null {
   return dataLines.length ? dataLines.join('\n') : null;
 }
 
-function isErrorBody(value: unknown): value is { message: string } {
+function isErrorBody(value: unknown): value is { message: string; error?: unknown } {
   if (!value || typeof value !== 'object') return false;
   return 'message' in value && typeof (value as { message?: unknown }).message === 'string';
 }

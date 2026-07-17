@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { AnchorHTMLAttributes, MouseEvent, ReactNode, ToggleEvent } from 'react';
-import { ChevronDown, Download, ExternalLink, Play, RotateCcw, X } from 'lucide-react';
+import { ChevronDown, Download, ExternalLink, Play, RotateCcw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type {
@@ -25,7 +25,6 @@ import {
 import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
-import { Textarea } from '../ui/textarea.js';
 import { cn } from '../../lib/utils.js';
 import {
   buildAssistantFinalTimestamps,
@@ -40,6 +39,7 @@ import {
 import { JsonPayload } from './content/debug-code.js';
 import { Diagnostics } from './content/diagnostics-panel.js';
 import { HighlightedCode } from './content/highlighted-code.js';
+import { CancelRunButton, RetryMessagesButton, UserMessageCard } from './content/user-message-card.js';
 
 const mobileContextOpenStorageKey = 'deputies-mobile-context-open';
 const staticDemoServiceUnavailableReason = 'Service previews are unavailable in the static demo.';
@@ -92,6 +92,8 @@ export function ChatPanel(props: {
   onSaveEdit: () => void;
   onExtendSandbox: (port?: number) => void;
   onLoadArtifactPreview: (artifact: Artifact) => Promise<ArtifactPreview>;
+  openableManagedSkillIds?: ReadonlySet<string>;
+  onOpenSkill?: (skillId: string, revisionId: string) => void;
 }) {
   const assistantText = { ...buildAssistantText(props.events), ...props.activeProgress };
   const assistantFinalTimestamps = buildAssistantFinalTimestamps(props.events);
@@ -145,6 +147,8 @@ export function ChatPanel(props: {
                 onCancelRun={props.onCancelRun}
                 onEditMessage={props.onEditMessage}
                 onMessageDraftChange={props.onMessageDraftChange}
+                {...(props.openableManagedSkillIds ? { openableManagedSkillIds: props.openableManagedSkillIds } : {})}
+                {...(props.onOpenSkill ? { onOpenSkill: props.onOpenSkill } : {})}
                 onRetryFailedMessages={props.onRetryFailedMessages}
                 onSaveEdit={props.onSaveEdit}
               />
@@ -222,98 +226,6 @@ function InlineArtifacts(props: {
   );
 }
 
-function UserMessageCard(props: {
-  canWriteSession: boolean;
-  canRetryMessages: boolean;
-  editingMessageId: string;
-  message: Message;
-  messageDraft: string;
-  showMessageRetry: boolean;
-  showRunCancel: boolean;
-  runCancelling: boolean;
-  onCancelEdit: () => void;
-  onCancelQueuedMessage: (messageId: string) => void;
-  onCancelRun: () => void;
-  onEditMessage: (message: Message) => void;
-  onMessageDraftChange: (value: string) => void;
-  onRetryFailedMessages: (messageIds: string[]) => void;
-  onSaveEdit: () => void;
-}) {
-  const { message } = props;
-  return (
-    <Card className="border-primary/50 bg-primary/10 p-3" role="article" aria-label={`Message ${message.sequence}`}>
-      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex min-w-0 items-center gap-2 overflow-hidden text-xs font-medium text-muted-foreground">
-          <span className="min-w-0 truncate">
-            {messageLabel(message)}
-            {message.authorName ? ` from ${message.authorName}` : ''}
-          </span>
-          <InlineTimestamp value={message.createdAt} />
-          <Badge className={cn('shrink-0', statusTextClass(message.status))}>{messageStatusLabel(message)}</Badge>
-        </h3>
-        {props.canWriteSession && message.status === 'pending' && props.editingMessageId !== message.id ? (
-          <div className="flex gap-1">
-            <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onEditMessage(message)}>
-              Edit
-            </Button>
-            <Button
-              className="h-7 px-2"
-              variant="ghost"
-              size="sm"
-              onClick={() => props.onCancelQueuedMessage(message.id)}
-            >
-              Cancel
-            </Button>
-          </div>
-        ) : null}
-        {props.showMessageRetry ? (
-          <RetryMessagesButton
-            disabled={!props.canRetryMessages}
-            onRetry={() => props.onRetryFailedMessages([message.id])}
-          />
-        ) : null}
-        {props.canWriteSession && props.showRunCancel ? (
-          <CancelRunButton cancelling={props.runCancelling} onCancelRun={props.onCancelRun} />
-        ) : null}
-      </div>
-      {props.editingMessageId === message.id ? (
-        <div className="grid gap-2">
-          <Textarea
-            className="min-h-24"
-            value={props.messageDraft}
-            onChange={(event) => props.onMessageDraftChange(event.target.value)}
-            autoFocus
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" size="sm" onClick={props.onCancelEdit}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={props.onSaveEdit} disabled={!props.messageDraft.trim()}>
-              Save
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <PlainText text={message.prompt} />
-      )}
-    </Card>
-  );
-}
-
-function messageLabel(message: Message): string {
-  if (message.source === 'deputy') return `Deputy message ${message.sequence}`;
-  if (message.source === 'github_notice') return `GitHub notice ${message.sequence}`;
-  if (message.source === 'slack_notice') return `Slack notice ${message.sequence}`;
-  if (message.context?.transcriptOnly && message.source === 'github') return `GitHub comment ${message.sequence}`;
-  if (message.context?.transcriptOnly && message.source === 'slack') return `Slack message ${message.sequence}`;
-  return `Message ${message.sequence}`;
-}
-
-function messageStatusLabel(message: Message): string {
-  if (message.context?.transcriptOnly && message.status === 'cancelled') return 'not queued';
-  return message.status === 'pending' ? 'queued' : message.status;
-}
-
 function InlineTimestamp(props: { value: string | undefined }) {
   if (!props.value) return null;
   return (
@@ -321,10 +233,6 @@ function InlineTimestamp(props: { value: string | undefined }) {
       {formatDate(props.value)}
     </time>
   );
-}
-
-function PlainText(props: { text: string }) {
-  return <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{props.text}</p>;
 }
 
 const STREAMING_PROGRESS_MAX_CHARS = 20_000;
@@ -458,37 +366,6 @@ function MarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
     >
       {downloading ? 'Downloading...' : props.children}
     </a>
-  );
-}
-
-function CancelRunButton(props: { cancelling: boolean; onCancelRun: () => void }) {
-  return (
-    <Button
-      className="h-7 shrink-0 whitespace-nowrap px-2"
-      type="button"
-      variant="secondary"
-      size="sm"
-      onClick={props.onCancelRun}
-      disabled={props.cancelling}
-      aria-label={props.cancelling ? 'Cancelling...' : 'Cancel task'}
-    >
-      <X className="h-3.5 w-3.5 shrink-0" /> {props.cancelling ? 'Cancelling' : 'Cancel'}
-    </Button>
-  );
-}
-
-function RetryMessagesButton(props: { count?: number; disabled?: boolean; onRetry: () => void }) {
-  return (
-    <Button
-      className="h-7 px-2"
-      type="button"
-      variant="secondary"
-      size="sm"
-      onClick={props.onRetry}
-      disabled={props.disabled}
-    >
-      <RotateCcw className="h-3.5 w-3.5" /> {props.count && props.count > 1 ? `Retry ${props.count} failed` : 'Retry'}
-    </Button>
   );
 }
 

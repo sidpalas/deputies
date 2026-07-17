@@ -1,40 +1,25 @@
 import { useMemo, useState, type SyntheticEvent } from 'react';
-import { ChevronDown, CornerUpLeft, PanelLeftClose, Plus, X } from 'lucide-react';
-import type { Environment, Health } from '../../api.js';
+import { Archive, ChevronDown, CornerUpLeft, PanelLeftClose, Plus, RotateCcw, X } from 'lucide-react';
+import type { Environment } from '../../api.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
 import { formatDate } from './shared.js';
-import { SidebarFooter } from './session-sidebar.js';
-import type { ConnectionStatus, ThemePreference } from './types.js';
+import { SidebarFooter, type SidebarFooterProps } from './sidebar-footer.js';
 
 export function EnvironmentsSidebar(props: {
-  authRequired: boolean;
   canCallApi: boolean;
   canCreateEnvironments: boolean;
-  canViewGroups: boolean;
-  canViewAutomations: boolean;
-  canViewEnvironments: boolean;
-  canViewSetup: boolean;
-  connectionStatus: ConnectionStatus;
   environments: Environment[];
-  health: Health | null;
+  footerProps: SidebarFooterProps;
   loading: boolean;
-  navPage: 'sessions' | 'setup' | 'groups' | 'automations' | 'environments';
   selectedEnvironmentId: string;
-  themePreference: ThemePreference;
-  token: string;
+  onArchiveEnvironment: (environmentId: string) => void;
   onBackToSessions: () => void;
   onCollapse: () => void;
   onCreateEnvironment: () => void;
-  onOpenAutomations: () => void;
-  onOpenEnvironments: () => void;
-  onOpenGroups: () => void;
-  onOpenSessions: () => void;
-  onOpenSetup: () => void;
+  onRestoreEnvironment: (environmentId: string) => void;
   onSelectEnvironment: (environmentId: string) => void;
-  onSignOut: () => void;
-  onThemeChange: (value: ThemePreference) => void;
 }) {
   const [search, setSearch] = useState('');
   const [archivedOpenState, setArchivedOpenState] = useState(false);
@@ -128,6 +113,7 @@ export function EnvironmentsSidebar(props: {
               key={environment.id}
               environment={environment}
               selected={environment.id === props.selectedEnvironmentId}
+              onArchive={props.onArchiveEnvironment}
               onSelect={props.onSelectEnvironment}
             />
           ))}
@@ -151,6 +137,7 @@ export function EnvironmentsSidebar(props: {
                     key={environment.id}
                     environment={environment}
                     selected={environment.id === props.selectedEnvironmentId}
+                    onRestore={props.onRestoreEnvironment}
                     onSelect={props.onSelectEnvironment}
                   />
                 ))}
@@ -162,24 +149,7 @@ export function EnvironmentsSidebar(props: {
         ) : null}
       </div>
 
-      <SidebarFooter
-        authRequired={props.authRequired}
-        canViewGroups={props.canViewGroups}
-        canViewAutomations={props.canViewAutomations}
-        canViewEnvironments={props.canViewEnvironments}
-        canViewSetup={props.canViewSetup}
-        health={props.health}
-        navPage={props.navPage}
-        themePreference={props.themePreference}
-        token={props.token}
-        onOpenGroups={props.onOpenGroups}
-        onOpenAutomations={props.onOpenAutomations}
-        onOpenEnvironments={props.onOpenEnvironments}
-        onOpenSessions={props.onOpenSessions}
-        onOpenSetup={props.onOpenSetup}
-        onSignOut={props.onSignOut}
-        onThemeChange={props.onThemeChange}
-      />
+      <SidebarFooter {...props.footerProps} />
     </div>
   );
 }
@@ -187,29 +157,59 @@ export function EnvironmentsSidebar(props: {
 function EnvironmentSidebarButton(props: {
   environment: Environment;
   selected: boolean;
+  onArchive?: (environmentId: string) => void;
+  onRestore?: (environmentId: string) => void;
   onSelect: (environmentId: string) => void;
 }) {
   const repositoryCount = props.environment.repositories.length;
   return (
-    <button
-      type="button"
+    <div
       className={cn(
-        'block w-full min-w-0 overflow-hidden rounded-md border border-transparent p-2 text-left hover:bg-accent',
+        'group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md border border-transparent p-2 text-left hover:bg-accent',
         props.selected && 'border-primary bg-primary/15',
       )}
-      onClick={() => props.onSelect(props.environment.id)}
     >
-      <strong className="block w-full truncate text-sm font-medium text-foreground">{props.environment.name}</strong>
-      <span className="block w-full truncate text-xs text-muted-foreground">
-        {props.environment.ownerGroupName ?? 'Unknown group'} · {repositoryCount} repo
-        {repositoryCount === 1 ? '' : 's'}
-      </span>
-      <span className="block w-full truncate text-xs text-muted-foreground">
-        {props.environment.archivedAt
-          ? `Archived ${formatDate(props.environment.archivedAt)}`
-          : shareModeLabel(props.environment)}
-      </span>
-    </button>
+      <button
+        type="button"
+        className="block min-w-0 flex-1 overflow-hidden bg-transparent p-0 text-left"
+        onClick={() => props.onSelect(props.environment.id)}
+      >
+        <strong className="block w-full truncate text-sm font-medium text-foreground">{props.environment.name}</strong>
+        <span className="block w-full truncate text-xs text-muted-foreground">
+          {props.environment.ownerGroupName ?? 'Unknown group'} · {repositoryCount} repo
+          {repositoryCount === 1 ? '' : 's'}
+        </span>
+        <span className="block w-full truncate text-xs text-muted-foreground">
+          {props.environment.archivedAt
+            ? `Archived ${formatDate(props.environment.archivedAt)}`
+            : shareModeLabel(props.environment)}
+        </span>
+      </button>
+      {props.environment.canManage && !props.environment.archivedAt && props.onArchive ? (
+        <Button
+          className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+          variant="ghost"
+          size="sm"
+          onClick={() => props.onArchive?.(props.environment.id)}
+          aria-label={`Archive ${props.environment.name} environment`}
+          title="Archive environment"
+        >
+          <Archive className="h-3.5 w-3.5" />
+        </Button>
+      ) : null}
+      {props.environment.canManage && props.environment.archivedAt && props.onRestore ? (
+        <Button
+          className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+          variant="ghost"
+          size="sm"
+          onClick={() => props.onRestore?.(props.environment.id)}
+          aria-label={`Restore ${props.environment.name} environment`}
+          title="Restore environment"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
