@@ -23,6 +23,9 @@ environment_revisions
 environment_revision_repositories
 environment_group_shares
 environment_activity
+skills
+skill_revisions
+skill_group_shares
 automations
 automation_invocations
 auth_users
@@ -57,6 +60,9 @@ Current implemented tables:
 - `environment_revision_repositories`
 - `environment_group_shares`
 - `environment_activity`
+- `skills`
+- `skill_revisions`
+- `skill_group_shares`
 - `automations`
 - `automation_invocations`
 - `auth_users`
@@ -120,7 +126,7 @@ Provider accounts let `AUTH_PROVIDER=static` and `AUTH_PROVIDER=github` share th
 
 ## Access Groups
 
-Access groups own sessions and automations.
+Access groups own sessions, automations, and group skills. Users own personal skills.
 
 Current relevant columns:
 
@@ -142,6 +148,84 @@ Rules:
 - `member` lets group members and admins create new scheduled automations in the group.
 - `admin` limits new scheduled automation creation to group admins and super admins.
 - The setting controls creation only; existing automation management still follows automation ownership and creator-management rules.
+
+## Skills
+
+Skills are reusable, single-document agent instructions. `skills` is the live identity, ownership, lifecycle, sharing, and current-definition pointer; `skill_revisions` stores immutable name/description/body definitions. A skill is owned by exactly one user or one access group. Group skills can be shared with specific groups or all groups without transferring ownership or edit rights.
+
+```txt
+skills
+  id uuid primary key
+  owner_kind text not null check (owner_kind in ('user', 'group'))
+  owner_group_id uuid references groups(id) on delete restrict
+  owner_user_id uuid references auth_users(id) on delete restrict
+  name text not null
+  current_revision_id uuid not null
+  current_revision_number integer not null check (current_revision_number > 0)
+  auto_load boolean not null default true
+  enabled boolean not null default true
+  share_mode text not null default 'none' check (share_mode in ('none', 'specific', 'all_groups'))
+  created_by_user_id uuid references auth_users(id) on delete set null
+  archived_at timestamptz
+  created_at timestamptz not null
+  updated_at timestamptz not null
+  check ((owner_kind = 'group') = (owner_group_id is not null))
+  check ((owner_kind = 'user') = (owner_user_id is not null))
+  check (owner_kind = 'group' or share_mode = 'none')
+  foreign key (id, current_revision_id)
+    references skill_revisions(skill_id, id) on delete restrict
+    deferrable initially deferred
+
+skill_revisions
+  id uuid primary key
+  skill_id uuid not null references skills(id) on delete restrict
+  revision_number integer not null check (revision_number > 0)
+  name text not null
+  description text not null
+  body text not null
+  actor_type text not null check (actor_type in ('user', 'system'))
+  actor_user_id uuid references auth_users(id) on delete set null
+  created_at timestamptz not null
+  unique(skill_id, revision_number)
+  unique(skill_id, id)
+
+skill_group_shares
+  skill_id uuid not null references skills(id) on delete cascade
+  group_id uuid not null references groups(id) on delete cascade
+  created_at timestamptz not null
+  primary key(skill_id, group_id)
+```
+
+Rules:
+
+- `owner_kind` is `user` or `group`, with exactly one corresponding owner ID populated.
+- Creation publishes revision 1 and sets both current pointers in the same transaction.
+- Name, description, and body are authoritative in `skill_revisions`. `skills.name` is retained only as a transactionally maintained denormalized key for the owner-scope unique indexes; reads and execution join through `current_revision_id`.
+- A normalized name/description/body change inserts the next immutable revision and advances both current pointers. Unchanged saves and changes limited to live fields do not create a revision.
+- `expected_current_revision_id` is an API/store concurrency precondition for content publication, not a persisted column.
+- Personal skills always use `share_mode='none'`. Group skills use `none`, `specific`, or `all_groups`.
+- `specific` sharing is represented by `skill_group_shares`. Share rows are retained when another mode is selected so switching back restores the previous set.
+- Sharing grants read, auto-load, and manual-invocation access to members of target groups. It never grants edit rights.
+- Promotion changes a personal skill to group ownership in place, preserving its ID and creator attribution and resetting `share_mode` to `none`. V1 has no demotion or group-to-group move.
+- `enabled=false`, an archived skill, or an archived owner group prevents loading and invocation.
+- `auto_load=false` hides a skill from normal model discovery but does not prevent an authorized manual invocation.
+- Ownership, sharing, enabled/auto-load flags, and archive state are live and are never recovered from a historical revision. Persisted historical invocation pins must still pass those live checks.
+- Names are lowercase slug values and are case-insensitively unique within each user or group owner scope.
+- Complete revision history, including historical bodies, is manager-only at the API layer. Current content remains readable to users with normal skill read access.
+
+Indexes:
+
+```txt
+unique(owner_group_id, lower(name)) where owner_group_id is not null
+unique(owner_user_id, lower(name)) where owner_user_id is not null
+(share_mode) where share_mode <> 'none'
+(skill_id, revision_number desc) on skill_revisions
+(group_id) on skill_group_shares
+```
+
+Migration history:
+
+- `017_skills.sql` creates the final immutable-revision schema: live skill identities with current pointers and a name projection, `skill_revisions`, sharing rows and indexes, and the deferred composite current-revision foreign key.
 
 ## Environments And Revisions
 
@@ -305,6 +389,7 @@ Rules:
 - `sequence` is monotonically increasing per session.
 - Pending messages are processed in sequence order. The worker claims all currently pending messages for one session as an ordered batch.
 - Message context is the effective run context. It inherits durable session context and can override it with message-specific values such as a new repository.
+- `context.skills` is an optional list of manually invoked skill names for that message. `context.skillRefs` is an aligned list of `{ id, name, revisionId? }`. On append/edit, the server canonicalizes managed refs to the current revision and persists `revisionId`; clients cannot newly submit a historical revision. Repository refs use `repo:<owner>/<repo>:<name>` and never carry managed revision identity. Already-persisted historical managed pins remain executable subject to live authorization; name-only historical messages retain precedence-based current resolution. Both fields are message-scoped and do not become durable session context.
 - Duplicate external deliveries must not create duplicate messages.
 - Follow-ups sent during an active run remain pending and are handled by the next batch.
 - Pending messages can be edited or cancelled before the worker claims them.
@@ -441,6 +526,7 @@ Rules:
 - Leases must expire if a process crashes.
 - A retry should create a new run row, not overwrite historical run data.
 - A batch run stores the first claimed message in `message_id`; all claimed message IDs are retained in run metadata and completed/cancelled together.
+- Resolved skills are not copied into run metadata. `skills_loaded` is the canonical per-run resolution audit source, and `skill_invoked` is the canonical use record.
 
 ## Events
 
@@ -482,6 +568,8 @@ sandbox_stop_failed
 sandbox_destroyed
 sandbox_destroy_failed
 repository_ready
+skills_loaded
+skill_invoked
 agent_text_delta
 agent_response_final
 tool_started
@@ -506,6 +594,22 @@ Rules:
 - Consumers replay from `(session_id, sequence)`; sequences are monotonic but may have gaps after compactable deltas are removed.
 - Large payloads should be moved to object storage and referenced by URL/key.
 - Sensitive values must be redacted before event write.
+- Each run emits one `skills_loaded` event before its first prompt. It is the canonical audit source for advertised and request-local invoked skills, owning group ID/name, managed skill/revision ID and revision number, repository provenance, shadowed catalog candidates, and bounded diagnostics. Request-local entries carry `invoked: true` and `advertised: false`. Non-advertised repository discoveries are also retained so later session/manual and integration discovery can find them. The event is emitted even when no skills load or loading partially degrades.
+- A `skill_invoked` event records each explicitly selected skill and the first successful model read of each advertised auto-loaded `SKILL.md` per run. Its `trigger` is `user` or `model`; stable reference, exact sandbox path, source, and source provenance identify the resolved skill. Managed events include skill/revision ID and revision number; repository events use repository identity and no managed revision. Manually expanded, non-advertised skills emit only `user`; failed reads do not count as model invocation.
+
+`skills_loaded` payload:
+
+```txt
+skills: [{ name, source, repo?, ownerGroupId?, ownerGroupName?, skillId?, revisionId?, revisionNumber?, ref?, invoked?, advertised? }]
+shadowed: [{ name, source, repo?, ownerGroupId?, ownerGroupName?, skillId?, revisionId?, revisionNumber? }]
+diagnostics: string[]
+```
+
+`skill_invoked` payload:
+
+```txt
+{ name, source, trigger: 'user' | 'model', ref, filePath, repo?, ownerGroupId?, ownerGroupName?, skillId?, revisionId?, revisionNumber? }
+```
 
 Indexes:
 

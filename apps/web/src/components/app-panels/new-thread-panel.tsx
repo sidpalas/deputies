@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
 import { PanelLeftOpen } from 'lucide-react';
-import type { BranchOption, Environment, Group, ModelChoice, ReasoningLevel, RepositoryOption } from '../../api.js';
+import type {
+  BranchOption,
+  Environment,
+  Group,
+  ModelChoice,
+  ReasoningLevel,
+  RepositoryOption,
+  Skill,
+  SkillInvocationRef,
+} from '../../api.js';
+import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Textarea } from '../ui/textarea.js';
@@ -19,6 +28,8 @@ import {
 } from './option-picker.js';
 import { submitOnEnter } from './shared.js';
 import { defaultReasoningLevelLabel, REASONING_LEVEL_OPTIONS } from './reasoning-level.js';
+import { SkillInvocationField } from './skill-invocation-field.js';
+import { useSkillInvocationDraft } from './skill-invocation-draft.js';
 
 export function NewThreadPanel(props: {
   canCallApi: boolean;
@@ -45,6 +56,10 @@ export function NewThreadPanel(props: {
   modelUnavailableReason: string;
   reasoningLevel: ReasoningLevel | '';
   defaultReasoningLevel: ReasoningLevel | '';
+  skills: Skill[];
+  skillsEnabled: boolean;
+  skillsLoading?: boolean;
+  skillError?: string;
   showOpenSidebar: boolean;
   openSidebarLabel?: string;
   onOpenSidebar: () => void;
@@ -56,7 +71,7 @@ export function NewThreadPanel(props: {
   onBranchChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onReasoningLevelChange: (value: ReasoningLevel | '') => void;
-  onSubmit: (event: FormEvent) => void;
+  onSubmit: (input: { prompt: string; skills: string[]; skillRefs: SkillInvocationRef[] }) => Promise<boolean>;
 }) {
   const [branchControlsOpen, setBranchControlsOpen] = useState(false);
   const selectedEnvironment =
@@ -71,12 +86,30 @@ export function NewThreadPanel(props: {
     : props.repository
       ? `repository:${props.repository}`
       : '';
-  const hasBranchControls = Boolean(branchControlKey);
   const branchControlLabel = selectedEnvironment && selectedEnvironment.repositories.length > 1 ? 'Branches' : 'Branch';
+  const skillDraft = useSkillInvocationDraft({
+    available: props.skills,
+    enabled: props.skillsEnabled,
+    prompt: props.prompt,
+    onPromptChange: props.onPromptChange,
+  });
+  const skillPickerOpen = skillDraft.pickerOpen;
 
   useEffect(() => {
     setBranchControlsOpen(false);
   }, [branchControlKey]);
+
+  async function submit() {
+    const prepared = skillDraft.prepareSubmission();
+    if (!prepared.prompt.trim() && !prepared.skillRefs.length) return;
+    const sent = await props.onSubmit(prepared);
+    if (sent) skillDraft.clearSelectedSkills();
+  }
+
+  function handlePromptKeyDown(event: Parameters<typeof skillDraft.handlePromptKeyDown>[0]) {
+    if (skillDraft.handlePromptKeyDown(event)) return;
+    submitOnEnter(event);
+  }
 
   return (
     <section className="h-full min-h-0 overflow-y-auto px-4 py-6 md:px-8 xl:px-14">
@@ -109,7 +142,13 @@ export function NewThreadPanel(props: {
             </p>
           ) : null}
           <h2 className="mt-6 text-xl font-semibold">What needs doing?</h2>
-          <form className="mt-4 grid min-w-0 gap-3" onSubmit={props.onSubmit}>
+          <form
+            className="mt-4 grid min-w-0 gap-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submit();
+            }}
+          >
             {props.groups.length > 1 ? (
               <div className="min-w-0">
                 <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="new-thread-group">
@@ -126,7 +165,7 @@ export function NewThreadPanel(props: {
                 />
               </div>
             ) : null}
-            <div className="flex min-w-0 flex-wrap gap-2">
+            <div className="relative flex min-w-0 flex-wrap gap-2">
               <div className="min-w-0 flex-[1.4_1_18rem]">
                 <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="new-thread-codebase">
                   Codebase
@@ -146,22 +185,64 @@ export function NewThreadPanel(props: {
                   disabled={!props.canCallApi}
                 />
               </div>
-              {hasBranchControls ? (
-                <div className="shrink-0">
+              {props.repository ? (
+                <div className="min-w-0 flex-[0.8_1_10rem]">
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="new-thread-branch">
+                    Branch
+                  </label>
+                  <BranchPicker
+                    id="new-thread-branch"
+                    menuClassName="min-w-full"
+                    value={props.branch}
+                    branches={props.branchOptions}
+                    loading={props.branchOptionsLoading}
+                    error={props.branchOptionsError}
+                    onChange={props.onBranchChange}
+                    disabled={!props.canCallApi}
+                  />
+                </div>
+              ) : selectedEnvironment ? (
+                <div
+                  className="shrink-0"
+                  onBlur={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget)) setBranchControlsOpen(false);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setBranchControlsOpen(false);
+                  }}
+                >
                   <span className="mb-1 block text-xs font-medium opacity-0" aria-hidden="true">
                     {branchControlLabel}
                   </span>
                   <Button
-                    className="h-10 shrink-0 px-3"
+                    className="h-10 px-3"
                     type="button"
                     variant={branchControlsOpen ? 'default' : 'secondary'}
                     size="sm"
                     onClick={() => setBranchControlsOpen((open) => !open)}
                     disabled={!props.canCallApi}
                     aria-expanded={branchControlsOpen}
+                    aria-haspopup="dialog"
                   >
                     {branchControlLabel}
                   </Button>
+                  {branchControlsOpen ? (
+                    <div
+                      className="absolute right-0 top-full z-30 mt-1 w-[28rem] max-w-full rounded-md border border-border bg-card p-2 text-card-foreground shadow-xl"
+                      role="dialog"
+                      aria-label={`${branchControlLabel} for ${selectedEnvironment.name}`}
+                    >
+                      <EnvironmentBranchOverridesEditor
+                        compact
+                        environment={selectedEnvironment}
+                        value={props.environmentBranchOverrides}
+                        direction="down"
+                        disabled={!props.canCallApi || !props.environmentId}
+                        onLoadBranches={props.onEnvironmentRepositoryBranchesLoad}
+                        onChange={props.onEnvironmentBranchOverridesChange}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               <div className="min-w-0 flex-[0.7_1_9rem]">
@@ -194,48 +275,41 @@ export function NewThreadPanel(props: {
                 />
               </div>
             </div>
-            {branchControlsOpen && props.repository ? (
-              <div className="max-w-xs min-w-0">
-                <BranchPicker
-                  id="new-thread-branch"
-                  menuClassName="min-w-full"
-                  value={props.branch}
-                  branches={props.branchOptions}
-                  loading={props.branchOptionsLoading}
-                  error={props.branchOptionsError}
-                  onChange={props.onBranchChange}
-                  disabled={!props.canCallApi}
-                />
-              </div>
-            ) : null}
-            {branchControlsOpen && selectedEnvironment ? (
-              <EnvironmentBranchOverridesEditor
-                environment={selectedEnvironment}
-                value={props.environmentBranchOverrides}
-                disabled={!props.canCallApi || !props.environmentId}
-                onLoadBranches={props.onEnvironmentRepositoryBranchesLoad}
-                onChange={props.onEnvironmentBranchOverridesChange}
-              />
-            ) : null}
             {props.modelUnavailableReason ? (
               <p className="rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning-foreground dark:text-warning">
                 {props.modelUnavailableReason}
               </p>
             ) : null}
-            <Textarea
-              className="min-h-40 min-w-0"
-              value={props.prompt}
-              onChange={(event) => props.onPromptChange(event.target.value)}
-              onKeyDown={(event) => submitOnEnter(event)}
-              placeholder="Ask Deputies to investigate, change code, or answer a question..."
-              disabled={!props.canCallApi}
-              autoFocus
-            />
+            <div className="min-w-0 rounded-md border border-input bg-background/80 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
+              <SkillInvocationField
+                controller={skillDraft}
+                availableCount={props.skills.length}
+                enabled={props.skillsEnabled}
+                disabled={!props.canCallApi}
+                loading={props.skillsLoading}
+                error={props.skillError}
+              />
+              <Textarea
+                className={cn(
+                  skillPickerOpen ? 'min-h-12' : 'min-h-40',
+                  'min-w-0 border-0 bg-transparent focus:border-transparent focus:ring-0',
+                )}
+                value={props.prompt}
+                onChange={(event) => skillDraft.changePrompt(event.target.value)}
+                onKeyDown={handlePromptKeyDown}
+                placeholder="Ask Deputies to investigate, change code, or answer a question..."
+                disabled={!props.canCallApi}
+                autoFocus
+              />
+            </div>
             <Button
               className="justify-self-end"
               type="submit"
               disabled={
-                !props.canCallApi || props.loading || !props.prompt.trim() || Boolean(props.modelUnavailableReason)
+                !props.canCallApi ||
+                props.loading ||
+                (!props.prompt.trim() && !skillDraft.selectedSkills.length) ||
+                Boolean(props.modelUnavailableReason)
               }
             >
               Start session

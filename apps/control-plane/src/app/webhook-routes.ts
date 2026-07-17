@@ -24,6 +24,8 @@ export function registerWebhookRoutes(
         sourceKey: c.req.param('sourceKey'),
         authorization: c.req.header('authorization'),
         payload: body,
+        skillsEnabled: config.skillsEnabled,
+        repoSkillsEnabled: config.repoSkillsEnabled,
       });
       return c.json(result, 202);
     } catch (error) {
@@ -68,17 +70,22 @@ export function registerWebhookRoutes(
             allowedChannelIds: config.slackAllowedChannelIds,
             allowedUserIds: config.slackAllowedUserIds,
             ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
+            skillsEnabled: config.skillsEnabled,
+            repoSkillsEnabled: config.repoSkillsEnabled,
           }
         : {
             allowedTeamIds: config.slackAllowedTeamIds,
             allowedChannelIds: config.slackAllowedChannelIds,
             allowedUserIds: config.slackAllowedUserIds,
             ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
+            skillsEnabled: config.skillsEnabled,
+            repoSkillsEnabled: config.repoSkillsEnabled,
           };
       const result = await new SlackIntegrationService(
         services.store,
         services.sessions,
         services.messages,
+        services.skills,
         slackOptions,
       ).handle(payload);
       if (result.type === 'challenge') return c.json({ challenge: result.challenge });
@@ -113,18 +120,26 @@ export function registerWebhookRoutes(
     if (deliveryId) headers.deliveryId = deliveryId;
     if (event) headers.event = event;
 
-    const result = await new GitHubWebhookService(services.store, services.sessions, services.messages, {
-      allowedUsers: config.githubWebhookAllowedUsers,
-      allowedOrganizations: config.githubWebhookAllowedOrganizations,
-      allowedRepositories: config.githubAllowedRepositories,
-      triggerPhrases: config.githubWebhookTriggerPhrases,
-      ...(services.githubReactionSender ? { reactionSender: services.githubReactionSender } : {}),
-      ...(services.githubIssueContextFetcher ? { issueContextFetcher: services.githubIssueContextFetcher } : {}),
-      ...(services.githubArchivedSessionNotifier
-        ? { archivedSessionNotifier: services.githubArchivedSessionNotifier }
-        : {}),
-      ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
-    }).handle({ headers, payload });
+    const result = await new GitHubWebhookService(
+      services.store,
+      services.sessions,
+      services.messages,
+      services.skills,
+      {
+        allowedUsers: config.githubWebhookAllowedUsers,
+        allowedOrganizations: config.githubWebhookAllowedOrganizations,
+        allowedRepositories: config.githubAllowedRepositories,
+        triggerPhrases: config.githubWebhookTriggerPhrases,
+        skillsEnabled: config.skillsEnabled,
+        repoSkillsEnabled: config.repoSkillsEnabled,
+        ...(services.githubReactionSender ? { reactionSender: services.githubReactionSender } : {}),
+        ...(services.githubIssueContextFetcher ? { issueContextFetcher: services.githubIssueContextFetcher } : {}),
+        ...(services.githubArchivedSessionNotifier
+          ? { archivedSessionNotifier: services.githubArchivedSessionNotifier }
+          : {}),
+        ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
+      },
+    ).handle({ headers, payload });
     return c.json(
       { ok: true, type: result.type, ...('reason' in result ? { reason: result.reason } : {}) },
       result.type === 'accepted' ? 202 : 200,

@@ -27,6 +27,29 @@ In `API_AUTH_MODE=session`, the API enforces these rules server-side for session
 
 Group admins can add, remove, and change members in groups they administer. Super admins can manage all access groups, all group memberships, and other super admins.
 
+## Skill Access
+
+Every signed-in user can create and manage personal skills. Personal skills are readable only by their owner and super admins. Auto-load uses the session's `created_by_user_id`; manual invocation uses the author of the individual message, including when one run claims messages from multiple authors. Auto-load follows the current revision at run start. New manual managed invocations are authorized and pinned to current when the message is enqueued.
+
+This distinction keeps the session-level advertised catalog stable. If Alice creates a session, Alice's enabled auto-load personal skills remain advertised on later runs even when Bob sends a follow-up. Bob's personal skills are not auto-loaded into Alice's session, but Bob can explicitly invoke any of his enabled personal skills for his own message. That invocation is authorized and materialized for Bob's request only; it does not add the skill to the session-level advertised catalog. Alice cannot invoke Bob's personal skill, and Bob cannot invoke Alice's personal skill merely because its instructions may influence the shared transcript.
+
+Group skill capabilities follow the existing member, creator, and admin model:
+
+| Role          | Read and invoke group skills                                       | Create group skills      | Manage group skills                        |
+| ------------- | ------------------------------------------------------------------ | ------------------------ | ------------------------------------------ |
+| `viewer`      | Yes, for owned-group and shared-in skills                          | No                       | No                                         |
+| `member`      | Yes, for owned-group and shared-in skills                          | Yes, in an active group  | Skills they created                        |
+| `admin`       | Yes, for owned-group and shared-in skills                          | Yes, in an active group  | All skills owned by groups they administer |
+| `super_admin` | Yes, for all personal, group-owned, and organization-shared skills | Yes, in any active group | All skills                                 |
+
+Group skill sharing uses `owner group only`, `specific groups`, or `all groups`. The skill creator, an owner-group admin, or a super admin can change sharing. Members of a shared-into group receive read, auto-load, and manual-invocation access but never edit rights; management remains with the creator, owner-group admins, and super admins.
+
+Managed definition revisions do not snapshot access. Ownership, sharing, enabled state, archive state, and owner-group lifecycle stay live. A queued message may retain a historical revision pin after content changes, but execution still fails closed if the author/session can no longer use the skill. Clients cannot create a new invocation of an old revision.
+
+Normal readers can inspect the current skill definition. Complete revision history and historical bodies require management permission: personal owner, group-skill creator, owner-group admin, or super admin as applicable. The web UI links a sent historical invocation chip only for a user who currently has that inspection permission.
+
+A personal skill can be promoted into an active group when its owner can create skills there. Promotion keeps the same skill ID and creator-management rights, resets sharing to owner-group only, and stops personal loading. Promotion is one-way in v1: there is no demotion or group-to-group move.
+
 ## Session Access Policies
 
 Every session has these access fields:
@@ -134,12 +157,14 @@ Archiving a group:
 - Hides it from the active groups list.
 - Prevents new sessions from being created in that group.
 - Prevents new automations from being created in that group.
+- Prevents new group skills from being created in that group or personal skills from being promoted into it.
 - Prevents sessions from being moved into that group.
 - Suspends owned automation invocations without changing automation enabled state.
+- Stops skills owned by that group from loading or being invoked, including through cross-group shares, without changing each skill's enabled state.
 - Does not archive, delete, or move existing sessions.
 - Does not remove existing group memberships.
 
-Existing sessions owned by an archived group keep their access behavior. Unarchiving the group makes it available for new sessions, moves, and owned automation invocations again.
+Existing sessions owned by an archived group keep their access behavior. Unarchiving the group makes it available for new sessions, moves, owned automation invocations, and owned skills again.
 
 ## Names And Uniqueness
 

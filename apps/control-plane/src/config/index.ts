@@ -123,6 +123,8 @@ export type AppConfig = {
   mcpToolResultMaxChars: number;
   mcpResponseMaxBytes: number;
   deputyToolEnabled: boolean;
+  skillsEnabled: boolean;
+  repoSkillsEnabled: boolean;
   deputyMaxSpawnDepth: number;
   deputyMaxChildrenPerSession: number;
   deputyMaxSpawnsPerRun: number;
@@ -287,6 +289,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     mcpToolResultMaxChars: parsePositiveInteger(env.MCP_TOOL_RESULT_MAX_CHARS, 100_000, 'MCP_TOOL_RESULT_MAX_CHARS'),
     mcpResponseMaxBytes: parsePositiveInteger(env.MCP_RESPONSE_MAX_BYTES, 5 * 1024 * 1024, 'MCP_RESPONSE_MAX_BYTES'),
     deputyToolEnabled: parseBoolean(env.DEPUTY_TOOL_ENABLED, true, 'DEPUTY_TOOL_ENABLED'),
+    skillsEnabled: parseBoolean(env.SKILLS_ENABLED, true, 'SKILLS_ENABLED'),
+    repoSkillsEnabled: parseBoolean(env.REPO_SKILLS_ENABLED, true, 'REPO_SKILLS_ENABLED'),
     deputyMaxSpawnDepth: parsePositiveInteger(env.DEPUTY_MAX_SPAWN_DEPTH, 2, 'DEPUTY_MAX_SPAWN_DEPTH'),
     deputyMaxChildrenPerSession: parsePositiveInteger(
       env.DEPUTY_MAX_CHILDREN_PER_SESSION,

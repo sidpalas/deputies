@@ -38,6 +38,14 @@ external webhook
   -> callback dispatcher posts final completion callbacks
 ```
 
+### Skill discovery and invocation
+
+Slack, GitHub, and generic webhook ingress share leading-token skill discovery in the common normalization path. If the current external message starts with exact, case-sensitive `/skill-name`, the lookup considers enabled, non-archived owner-group and shared-in managed skills plus repository skills discovered for the session in its latest `skills_loaded` event. Personal skills are never eligible because external actors do not reliably map to a product user.
+
+Managed matches are server-pinned to the current revision when the integration message is enqueued. Repository matches persist a `repo:<owner>/<repo>:<name>` identity without a managed revision. Repository discovery includes skills that were scanned but not advertised to the model, so `disable-model-invocation` repository skills can still be called manually after a run discovers them. A repository skill cannot match before discovery. Non-matching tokens remain ordinary prompt text, and lookup failures preserve the original text rather than failing ingress.
+
+Integrations discard caller-supplied `context.skills` and `context.skillRefs`; only the server's own lookup may attach canonical skill context and source provenance. At run time, managed historical pins still require live ownership, sharing, enabled, archive, owner-group, and message-author authorization. `skills_loaded` is the canonical resolution/discovery audit source, while `skill_invoked` records actual use with managed revision identity when applicable.
+
 ## Cross-Integration Learnings
 
 Slack, GitHub, and the web UI now exercise the same product loop from different entry points. New integrations should follow these constraints instead of creating source-specific side channels:
@@ -83,6 +91,7 @@ MVP capabilities:
 - External thread reuse via request-provided `thread.externalId`.
 - Prompt ingestion via request-provided `prompt` plus optional source prompt prefix.
 - Context ingestion via request-provided `context`.
+- Leading `/skill-name` discovery through the shared integration path; untrusted skill refs in request context are ignored.
 - Optional HTTP completion callback via request-provided `callback: { "type": "http", "url": "..." }`.
 
 Future capabilities:

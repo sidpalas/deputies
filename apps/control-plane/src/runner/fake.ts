@@ -19,6 +19,15 @@ export class FakeRunner implements Runner {
       sessionId: input.sessionId,
       runId: input.runId,
       messageId: input.messageId,
+      type: 'skills_loaded',
+      payload: { skills: [], shadowed: [], diagnostics: [] },
+      createdAt: new Date(),
+    });
+
+    await input.emit({
+      sessionId: input.sessionId,
+      runId: input.runId,
+      messageId: input.messageId,
       type: 'agent_text_delta',
       payload: { text },
       createdAt: new Date(),

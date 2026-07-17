@@ -113,7 +113,12 @@ export class MessageService {
     return message;
   }
 
-  async updatePending(input: { sessionId: string; messageId: string; prompt: string }): Promise<MessageRecord> {
+  async updatePending(input: {
+    sessionId: string;
+    messageId: string;
+    prompt: string;
+    context?: Record<string, unknown>;
+  }): Promise<MessageRecord> {
     const message = await this.store.updatePendingMessage(input);
     if (!message) throw new MessageServiceError('conflict', 'Message is not pending or does not exist');
     await this.events.append({

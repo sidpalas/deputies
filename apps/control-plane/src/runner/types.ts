@@ -7,7 +7,10 @@ export type RunnerInput = {
   runId: string;
   messageId: string;
   ownerGroupId?: string;
+  createdByUserId?: string;
   prompt: string;
+  messages?: RunnerMessageInput[];
+  skillInvocations?: RunnerSkillInvocation[];
   model?: string;
   reasoningLevel?: ReasoningLevel;
   context: Record<string, unknown>;
@@ -16,6 +19,21 @@ export type RunnerInput = {
   emit: (event: NormalizedEvent) => Promise<void>;
   updateSessionContext?: (context: Record<string, unknown>) => Promise<Record<string, unknown>>;
   shouldPersist?: () => Promise<boolean>;
+};
+
+export type RunnerMessageInput = {
+  messageId?: string;
+  prompt: string;
+  authorUserId?: string;
+  context?: Record<string, unknown>;
+  skillInvocations?: RunnerSkillInvocation[];
+  sequence?: number;
+};
+
+export type RunnerSkillInvocation = {
+  name: string;
+  ref?: string;
+  revisionId?: string;
 };
 
 export type RunnerResult = {

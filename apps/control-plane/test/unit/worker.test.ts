@@ -8,9 +8,22 @@ import { runSandboxReaperOnce } from '../../src/sandbox/reaper.js';
 import { SandboxCleanupService } from '../../src/sandbox/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import { defaultGroupId, type MessageRecord, type SessionRecord } from '../../src/store/types.js';
-import { startWorkerLoop, WorkerService } from '../../src/worker/service.js';
+import { normalizeRunnerSkillInvocations, startWorkerLoop, WorkerService } from '../../src/worker/service.js';
 
 describe('WorkerService', () => {
+  it('normalizes persisted skill context at the runner boundary', () => {
+    expect(
+      normalizeRunnerSkillInvocations({
+        skills: ['review', 42, 'deploy'],
+        skillRefs: [
+          { id: 'skill-review', name: 'review', revisionId: 'revision-review' },
+          { id: 'ignored', name: 'ignored' },
+          { id: 'skill-deploy', name: 'other-name' },
+        ],
+      }),
+    ).toEqual([{ name: 'review', ref: 'skill-review', revisionId: 'revision-review' }, { name: 'deploy' }]);
+  });
+
   it('processes one pending message with the fake runner', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -40,6 +53,7 @@ describe('WorkerService', () => {
       'sandbox_starting',
       'sandbox_ready',
       'run_started',
+      'skills_loaded',
       'agent_text_delta',
       'run_completed',
       'agent_response_final',
@@ -468,18 +482,24 @@ describe('WorkerService', () => {
   it('runs a queued batch with the latest message context', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const session = await services.sessions.create({ title: 'Queued context' });
-    await services.messages.enqueue({
+    const session = await services.sessions.create({ title: 'Queued context', createdByUserId: 'user-1' });
+    const firstMessage = await services.messages.enqueue({
       sessionId: session.id,
       prompt: 'first',
-      context: { repository: { provider: 'github', owner: 'manaflow-ai', repo: 'old-repo' } },
+      authorUserId: 'user-1',
+      context: {
+        repository: { provider: 'github', owner: 'manaflow-ai', repo: 'old-repo' },
+        skills: ['first-skill'],
+      },
     });
-    await services.messages.enqueue({
+    const secondMessage = await services.messages.enqueue({
       sessionId: session.id,
       prompt: 'second',
+      authorUserId: 'user-1',
       context: {
         repository: { provider: 'github', owner: 'manaflow-ai', repo: 'new-repo' },
         reasoningLevel: 'max',
+        skills: ['second-skill'],
       },
     });
     const runner = new CaptureRunner();
@@ -499,8 +519,35 @@ describe('WorkerService', () => {
     expect(runner.inputs[0]?.context).toEqual({
       repository: { provider: 'github', owner: 'manaflow-ai', repo: 'new-repo' },
       reasoningLevel: 'max',
+      skills: ['second-skill'],
     });
     expect(runner.inputs[0]?.reasoningLevel).toBe('max');
+    expect(runner.inputs[0]?.createdByUserId).toBe('user-1');
+    expect(runner.inputs[0]?.messages).toEqual([
+      {
+        messageId: firstMessage.id,
+        prompt: 'first',
+        authorUserId: 'user-1',
+        sequence: 1,
+        context: {
+          repository: { provider: 'github', owner: 'manaflow-ai', repo: 'old-repo' },
+          skills: ['first-skill'],
+        },
+        skillInvocations: [{ name: 'first-skill' }],
+      },
+      {
+        messageId: secondMessage.id,
+        prompt: 'second',
+        authorUserId: 'user-1',
+        sequence: 2,
+        context: {
+          repository: { provider: 'github', owner: 'manaflow-ai', repo: 'new-repo' },
+          reasoningLevel: 'max',
+          skills: ['second-skill'],
+        },
+        skillInvocations: [{ name: 'second-skill' }],
+      },
+    ]);
   });
 
   it('lets runners update durable session context during a run', async () => {

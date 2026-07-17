@@ -1,45 +1,28 @@
 import { useMemo, useState, type SyntheticEvent } from 'react';
 import { Archive, ChevronDown, CornerUpLeft, PanelLeftClose, Plus, RotateCcw, X } from 'lucide-react';
-import type { Automation, Group, Health } from '../../api.js';
+import type { Automation, Group } from '../../api.js';
 import { archivedAutomationsOpenStorageKey } from '../../app-helpers.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
 import { formatDate } from './shared.js';
-import { SidebarFooter } from './session-sidebar.js';
-import type { ConnectionStatus, ThemePreference } from './types.js';
+import { SidebarFooter, type SidebarFooterProps } from './sidebar-footer.js';
 
 export function AutomationsSidebar(props: {
   archivedAutomationsOpen: boolean;
-  authRequired: boolean;
   automations: Automation[];
   canCallApi: boolean;
   canCreateAutomations: boolean;
-  canViewGroups: boolean;
-  canViewAutomations: boolean;
-  canViewEnvironments: boolean;
-  canViewSetup: boolean;
-  connectionStatus: ConnectionStatus;
+  footerProps: SidebarFooterProps;
   groups: Group[];
-  health: Health | null;
   loading: boolean;
-  navPage: 'sessions' | 'setup' | 'groups' | 'automations' | 'environments';
   selectedAutomationId: string;
-  themePreference: ThemePreference;
-  token: string;
   onArchiveAutomation: (automationId: string) => void;
   onArchivedAutomationsOpenChange: (open: boolean) => void;
   onBackToSessions: () => void;
   onCollapse: () => void;
   onCreateAutomation: () => void;
-  onOpenAutomations: () => void;
-  onOpenEnvironments: () => void;
-  onOpenGroups: () => void;
-  onOpenSessions: () => void;
-  onOpenSetup: () => void;
   onSelectAutomation: (automationId: string) => void;
-  onSignOut: () => void;
-  onThemeChange: (value: ThemePreference) => void;
   onUnarchiveAutomation: (automationId: string) => void;
 }) {
   const [search, setSearch] = useState('');
@@ -168,24 +151,7 @@ export function AutomationsSidebar(props: {
         ) : null}
       </div>
 
-      <SidebarFooter
-        authRequired={props.authRequired}
-        canViewGroups={props.canViewGroups}
-        canViewAutomations={props.canViewAutomations}
-        canViewEnvironments={props.canViewEnvironments}
-        canViewSetup={props.canViewSetup}
-        health={props.health}
-        navPage={props.navPage}
-        themePreference={props.themePreference}
-        token={props.token}
-        onOpenGroups={props.onOpenGroups}
-        onOpenAutomations={props.onOpenAutomations}
-        onOpenEnvironments={props.onOpenEnvironments}
-        onOpenSessions={props.onOpenSessions}
-        onOpenSetup={props.onOpenSetup}
-        onSignOut={props.onSignOut}
-        onThemeChange={props.onThemeChange}
-      />
+      <SidebarFooter {...props.footerProps} />
     </div>
   );
 }

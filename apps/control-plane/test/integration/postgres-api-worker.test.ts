@@ -52,6 +52,7 @@ describe.skipIf(!testDatabaseUrl)('Postgres API and worker integration', () => {
         'sandbox_starting',
         'sandbox_ready',
         'run_started',
+        'skills_loaded',
         'agent_text_delta',
         'run_completed',
         'agent_response_final',

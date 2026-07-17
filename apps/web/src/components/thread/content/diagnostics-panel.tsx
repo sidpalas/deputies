@@ -239,6 +239,11 @@ function toolActivityTitle(
 
 function standaloneActivityTitle(event: AgentEvent, provider: string | undefined, isFailure: boolean): string {
   if (event.type === 'message_started') return 'Message run started';
+  if (event.type === 'skills_loaded') return 'Skills loaded';
+  if (event.type === 'skill_invoked') {
+    const name = stringValue(event.payload.name) ?? 'skill';
+    return event.payload.trigger === 'model' ? `Model invoked ${name}` : `User invoked ${name}`;
+  }
   if (event.type === 'sandbox_starting') return `Starting ${provider ?? 'sandbox'} sandbox`;
   if (event.type === 'sandbox_ready') return `${provider ?? 'Sandbox'} sandbox ready`;
   if (event.type === 'run_completed') return 'Run completed';
@@ -257,10 +262,46 @@ function standaloneActivityDetail(event: AgentEvent): string | undefined {
     const batchSize = typeof event.payload.batchSize === 'number' ? event.payload.batchSize : undefined;
     return batchSize && batchSize > 1 ? `${batchSize} queued messages are running together.` : undefined;
   }
+  if (event.type === 'skills_loaded') return skillsLoadedDetail(event.payload);
+  if (event.type === 'skill_invoked') return skillInvokedDetail(event.payload);
   if (event.type === 'setup_script_finished') return setupScriptFinishedDetail(event.payload);
   if (event.type === 'run_completed') return runCompletedDetail(event.payload);
   if (event.type === 'sandbox_ready' && event.payload.created === true) return 'Sandbox was created for this run.';
   return previewValue(event.payload.message) ?? previewValue(event.payload.result);
+}
+
+function skillInvokedDetail(payload: Record<string, unknown>): string | undefined {
+  const source = stringValue(payload.ownerGroupName) ?? stringValue(payload.repo) ?? stringValue(payload.source);
+  const filePath = stringValue(payload.filePath);
+  const parts = [source ? `Source: ${source}` : '', filePath ? `Definition: ${filePath}` : ''].filter(Boolean);
+  return parts.length ? parts.join('\n') : undefined;
+}
+
+function skillsLoadedDetail(payload: Record<string, unknown>): string {
+  const skills = skillNames(payload.skills);
+  const shadowed = skillNames(payload.shadowed);
+  const diagnostics = Array.isArray(payload.diagnostics)
+    ? payload.diagnostics.filter((item): item is string => typeof item === 'string')
+    : [];
+  const parts = [skills.length ? `Loaded: ${skills.join(', ')}` : 'No skills loaded.'];
+  if (shadowed.length) parts.push(`Shadowed: ${shadowed.join(', ')}`);
+  parts.push(...diagnostics);
+  return parts.join('\n');
+}
+
+function skillNames(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const record = item as Record<string, unknown>;
+    const name = record.name;
+    if (typeof name !== 'string') return [];
+    const ownerGroupName = stringValue(record.ownerGroupName);
+    const repo = stringValue(record.repo);
+    const source = stringValue(record.source);
+    const provenance = ownerGroupName ?? repo ?? source;
+    return [`${name}${provenance ? ` (${provenance})` : ''}`];
+  });
 }
 
 function setupScriptFinishedDetail(payload: Record<string, unknown>): string | undefined {

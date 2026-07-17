@@ -2,7 +2,14 @@ import { timingSafeEqual } from 'node:crypto';
 
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
-import type { IntegrationStore, MessageRecord, SessionRecord, WebhookSourceRecord } from '../../store/types.js';
+import type {
+  IntegrationStore,
+  EventStore,
+  MessageRecord,
+  SessionRecord,
+  WebhookSourceRecord,
+} from '../../store/types.js';
+import type { SkillService } from '../../skills/service.js';
 import { parseHttpCallbackUrl } from '../../callbacks/service.js';
 import { parseStructuredGitHubRepository } from '../../repositories/extract.js';
 import {
@@ -18,6 +25,8 @@ export type HandleGenericWebhookInput = {
   sourceKey: string;
   authorization: string | undefined;
   payload: Record<string, unknown>;
+  skillsEnabled?: boolean;
+  repoSkillsEnabled?: boolean;
 };
 
 export type HandleGenericWebhookResult = {
@@ -29,9 +38,10 @@ export type HandleGenericWebhookResult = {
 
 export class GenericWebhookService {
   constructor(
-    private readonly store: IntegrationStore,
+    private readonly store: IntegrationStore & Pick<EventStore, 'getLatestEventByType'>,
     private readonly sessions: SessionService,
     private readonly messages: MessageService,
+    private readonly skills: Pick<SkillService, 'listInvocationCandidates'>,
     private readonly options: { unsafeAllowLocalHttpCallbacks?: boolean } = {},
   ) {}
 
@@ -56,20 +66,29 @@ export class GenericWebhookService {
       return { accepted: true, duplicate: true };
     }
 
-    const { session, message } = await enqueueIntegrationIngress(this.store, this.sessions, this.messages, {
-      source: source.key,
-      messageSource: `generic:${source.key}`,
-      sessionTags: ['webhook'],
-      thread: { source: source.key, externalId: parsed.thread.externalId, metadata: parsed.thread.metadata },
-      title: parsed.title ?? `Webhook: ${source.name}`,
-      prompt: renderPrompt(source, parsed.prompt),
-      dedupeKey: parsed.dedupeKey,
-      ...(parsed.actor ? { actor: parsed.actor } : {}),
-      ...(parsed.repository ? { repository: parsed.repository } : {}),
-      ...(parsed.callback ? { callback: parsed.callback } : {}),
-      sourceContext: { webhook: { sourceName: source.name, context: parsed.context } },
-      context: parsed.context,
-    });
+    const { session, message } = await enqueueIntegrationIngress(
+      this.store,
+      this.skills,
+      this.sessions,
+      this.messages,
+      {
+        source: source.key,
+        messageSource: `generic:${source.key}`,
+        sessionTags: ['webhook'],
+        thread: { source: source.key, externalId: parsed.thread.externalId, metadata: parsed.thread.metadata },
+        title: parsed.title ?? `Webhook: ${source.name}`,
+        currentMessageText: parsed.prompt,
+        renderPrompt: (currentMessageText) => renderPrompt(source, currentMessageText),
+        ...(input.skillsEnabled !== undefined ? { skillsEnabled: input.skillsEnabled } : {}),
+        ...(input.repoSkillsEnabled !== undefined ? { repoSkillsEnabled: input.repoSkillsEnabled } : {}),
+        dedupeKey: parsed.dedupeKey,
+        ...(parsed.actor ? { actor: parsed.actor } : {}),
+        ...(parsed.repository ? { repository: parsed.repository } : {}),
+        ...(parsed.callback ? { callback: parsed.callback } : {}),
+        sourceContext: { webhook: { sourceName: source.name, context: parsed.context } },
+        context: parsed.context,
+      },
+    );
 
     await markIntegrationDeliveryProcessed(this.store, {
       id: received.id,
@@ -123,7 +142,7 @@ function parseWebhookPayload(
   const actor = parseActor(payload.actor);
   const repository = parseRepository(payload.repository);
   const callback = parseCallback(payload.callback, options);
-  const context = isRecord(payload.context) ? payload.context : {};
+  const context = isRecord(payload.context) ? omitReservedSkillContext(payload.context) : {};
 
   const parsed: ParsedWebhookPayload = { thread, dedupeKey, prompt, context };
   if (title) parsed.title = title;
@@ -209,4 +228,9 @@ function httpUrl(value: unknown, field: string, options: { unsafeAllowLocalHttpC
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function omitReservedSkillContext(context: Record<string, unknown>): Record<string, unknown> {
+  const { skills: _skills, skillRefs: _skillRefs, ...safe } = context;
+  return safe;
 }

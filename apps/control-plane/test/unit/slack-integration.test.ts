@@ -7,6 +7,7 @@ import { SlackCompletionCallbackSender } from '../../src/integrations/slack/call
 import { SlackRunProgressNotifier } from '../../src/integrations/slack/progress-notifier.js';
 import { SlackIntegrationService } from '../../src/integrations/slack/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
+import { defaultGroupId } from '../../src/store/types.js';
 
 const signingSecret = 'dev-slack-signing-secret';
 const botUserId = 'UDEVDEPUTY';
@@ -307,7 +308,7 @@ describe('Slack integration', () => {
     const statuses: Array<{ channel: string; threadTs: string; status: string }> = [];
     const replies: Array<{ channel: string; threadTs: string; text: string; blocks?: unknown[] }> = [];
     const reactions: Array<{ channel: string; ts: string; name: string }> = [];
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       assistantThreadClient: {
         async setThreadStatus(input) {
           statuses.push(input);
@@ -412,10 +413,42 @@ describe('Slack integration', () => {
     ]);
   });
 
+  it('strips a skill token before rendering the current Slack message', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const skill = await services.skills.create({
+      name: 'review-code',
+      description: 'Review code',
+      body: 'Review carefully',
+      ownerGroupId: defaultGroupId,
+    });
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
+      skillsEnabled: true,
+    });
+
+    const result = await slack.handle(
+      slackEvent({
+        eventId: 'Ev-skill',
+        type: 'app_mention',
+        text: `<@${botUserId}> /review-code inspect this`,
+        ts: '1710000002.000100',
+      }),
+    );
+
+    expect(result.type).toBe('accepted');
+    if (result.type !== 'accepted') throw new Error('Expected accepted Slack event');
+    expect(result.message.prompt).toContain('Current tagged Slack message:\n---\n[user]: inspect this');
+    expect(result.message.prompt).not.toContain('/review-code');
+    expect(result.message.context).toMatchObject({
+      skills: ['review-code'],
+      skillRefs: [{ id: skill.id, name: 'review-code', revisionId: skill.currentRevisionId }],
+    });
+  });
+
   it('ignores Slack thread messages that are not mapped to an existing session', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills);
 
     const ignored = await slack.handle(
       slackEvent({
@@ -434,7 +467,7 @@ describe('Slack integration', () => {
   it('does not fail accepted Slack events when setting assistant thread status fails', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       assistantThreadClient: {
         async setThreadStatus() {
           return { ok: false, error: 'missing_scope' };
@@ -452,7 +485,7 @@ describe('Slack integration', () => {
   it('decodes Slack text entities before enqueueing prompts', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills);
 
     const accepted = await slack.handle(
       slackEvent({
@@ -472,7 +505,7 @@ describe('Slack integration', () => {
   it('includes prior unprocessed Slack thread messages as context on later mentions', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       threadClient: {
         async getThreadReplies() {
           return {
@@ -510,7 +543,7 @@ describe('Slack integration', () => {
   it('omits prior Slack thread section when no new prior messages are found', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       threadClient: {
         async getThreadReplies() {
           return {
@@ -543,7 +576,7 @@ describe('Slack integration', () => {
     const store = new MemoryStore();
     const services = createServices(store);
     const userInfoCalls: string[] = [];
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       threadClient: {
         async getThreadReplies() {
           return {
@@ -597,7 +630,7 @@ describe('Slack integration', () => {
   it('uses compact Slack channel context on follow-up messages', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       infoClient: {
         async getChannelInfo() {
           return { ok: true, channel: { id: 'C123', name: 'engineering' } };
@@ -633,7 +666,7 @@ describe('Slack integration', () => {
   it('omits Slack user names when lookup fails', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       threadClient: {
         async getThreadReplies() {
           return { ok: true, messages: [{ user: 'U111', text: 'background detail', ts: '1710000000.000100' }] };
@@ -671,7 +704,7 @@ describe('Slack integration', () => {
   it('explains when Slack thread context cannot be fetched', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       threadClient: {
         async getThreadReplies() {
           return { ok: false, error: 'missing_scope' };
@@ -698,7 +731,7 @@ describe('Slack integration', () => {
   it('explains when Slack thread context is not configured', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills);
 
     const accepted = await slack.handle(
       slackEvent({
@@ -719,7 +752,7 @@ describe('Slack integration', () => {
   it('omits Slack thread messages already processed as product messages', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       threadClient: {
         async getThreadReplies() {
           return {
@@ -765,7 +798,7 @@ describe('Slack integration', () => {
   it('omits Slack thread messages already included as fetched context', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       threadClient: {
         async getThreadReplies() {
           return {
@@ -824,7 +857,7 @@ describe('Slack integration', () => {
           : `prior-${index + 1}`,
       ts: `${1710000000 + index}.000100`,
     }));
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       threadClient: {
         async getThreadReplies() {
           return {
@@ -869,7 +902,7 @@ describe('Slack integration', () => {
   it('deduplicates Slack event deliveries and ignores bot messages', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills);
     const payload = slackEvent({
       eventId: 'Ev1',
       type: 'app_mention',
@@ -891,7 +924,7 @@ describe('Slack integration', () => {
   it('ignores Slack events outside configured allowlists', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       allowedTeamIds: ['TALLOWED'],
       allowedChannelIds: ['CALLOWED'],
       allowedUserIds: ['UALLOWED'],
@@ -954,7 +987,7 @@ describe('Slack integration', () => {
     const services = createServices(store);
     const statuses: Array<{ channel: string; threadTs: string; status: string }> = [];
     const replies: Array<{ channel: string; threadTs: string; text: string }> = [];
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       assistantThreadClient: {
         async setThreadStatus(input) {
           statuses.push(input);
@@ -1007,7 +1040,7 @@ describe('Slack integration', () => {
     const store = new MemoryStore();
     const services = createServices(store);
     const replies: Array<{ channel: string; threadTs: string; text: string }> = [];
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages, {
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       replyClient: {
         async postThreadReply(input) {
           replies.push(input);
@@ -1053,7 +1086,7 @@ describe('Slack integration', () => {
   it('queues Slack recovery messages that include additional instructions', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills);
     const first = await slack.handle(
       slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> do work`, ts: '1710000000.000100' }),
     );
@@ -1079,7 +1112,7 @@ describe('Slack integration', () => {
   it('queues archived Slack instructions when users recover with the phrase', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const slack = new SlackIntegrationService(store, services.sessions, services.messages);
+    const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills);
     const first = await slack.handle(
       slackEvent({ eventId: 'Ev1', type: 'app_mention', text: `<@${botUserId}> do work`, ts: '1710000000.000100' }),
     );

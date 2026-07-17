@@ -14,6 +14,7 @@ import {
   type CreateAgentSessionOptions,
   type SessionEntry,
   type SessionHeader,
+  type Skill,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
@@ -56,6 +57,9 @@ import { createPiEnvironmentToolDefinition } from './environment-tool.js';
 import { createSandboxPiToolDefinitions } from './sandbox-tools.js';
 import { createPiServiceToolDefinition } from './service-tool.js';
 import { createPiWebSearchToolDefinition } from './web-search-tool.js';
+import { preparePiSkills, unavailablePiSkills, type PiSkillsProvider } from './skills.js';
+import { SkillInvocationRuntime } from './skill-invocation-runtime.js';
+import { SerialEmitter } from './serial-emitter.js';
 import { connectMcpServer, type ConnectMcpServerOptions } from '../mcp/client.js';
 import { closeMcpConnections, logMcpUnavailable, mcpUnavailableNote } from '../mcp/runner.js';
 import type { McpConnection, McpRuntimeOptions } from '../mcp/types.js';
@@ -100,6 +104,7 @@ export type PiRunnerOptions = {
   webSearch?: WebSearchToolServices;
   mcp?: McpRuntimeOptions & { connect?: typeof connectMcpServer };
   deputy?: DeputyToolBaseServices;
+  skills?: PiSkillsProvider;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
 };
 
@@ -168,6 +173,15 @@ export class PiRunner implements Runner {
     }
     const activeRepositorySetup = repositorySetup?.[0] ?? null;
     const cwd = activeRepositorySetup?.plan.workspacePath ?? input.sandbox.workspacePath;
+    const preparedSkills = await preparePiSkills({
+      runnerInput: input,
+      ...(this.options.skills ? { provider: this.options.skills } : {}),
+      repositories: repositorySetup?.map((setup) => setup.plan) ?? [],
+    }).catch((error: unknown) => {
+      if (input.signal?.aborted) throw error;
+      console.warn('Skill loading degraded during run preparation; affected skills were skipped.');
+      return unavailablePiSkills(input, 'Skills could not be prepared for this run.');
+    });
     const { lease, modelRegistry, modelSelection, model, resourceLoader } = await (async () => {
       try {
         const lease = await this.getSessionLease(input.sessionId, cwd);
@@ -177,7 +191,12 @@ export class PiRunner implements Runner {
         const model = modelRegistry.find(modelSelection.provider, modelSelection.modelId);
         if (!model) throw new Error(`Pi model is not available: ${modelName}`);
 
-        const resourceLoader = createPiResourceLoader(cwd, this.agentDir, DEPUTIES_SYSTEM_PROMPT);
+        const resourceLoader = createPiResourceLoader(
+          cwd,
+          this.agentDir,
+          DEPUTIES_SYSTEM_PROMPT,
+          preparedSkills.skills,
+        );
         await resourceLoader.reload();
         return { lease, modelRegistry, modelSelection, model, resourceLoader };
       } catch (error) {
@@ -191,6 +210,21 @@ export class PiRunner implements Runner {
 
     const repositoryState = createRepositoryState(input.context, repositorySetup);
     const deputyRunState = { spawns: 0 };
+    const eventEmitter = new SerialEmitter(input.emit);
+    const enqueueEvent = (event: NormalizedEvent) => {
+      eventEmitter.enqueue(event);
+    };
+    const skillInvocationRuntime = new SkillInvocationRuntime(preparedSkills.modelInvocable, (skill) => {
+      enqueueEvent({
+        sessionId: input.sessionId,
+        runId: input.runId,
+        messageId: input.messageId,
+        type: 'skill_invoked',
+        payload: { ...skill, trigger: 'model' },
+        createdAt: new Date(),
+      });
+    });
+    const skillInvocationObserver = skillInvocationRuntime.createObserver(cwd);
     const runSubagent = (subagentInput: PiSubagentRunInput) =>
       runPiSubagent({
         input,
@@ -205,6 +239,8 @@ export class PiRunner implements Runner {
         parentCwd: cwd,
         subagentDepth: 0,
         mcpTools: mcpSetup?.tools ?? [],
+        skills: preparedSkills.skills,
+        skillInvocationRuntime,
         subagentInput,
       });
     const { customTools } = createPiToolSet(input, this.options, repositoryState, cwd, {
@@ -214,7 +250,6 @@ export class PiRunner implements Runner {
       mcpTools: mcpSetup?.tools ?? [],
     });
 
-    const pendingEvents: Array<Promise<void>> = [];
     let sawTextDelta = false;
     let responseText = '';
     let session: AgentSession | undefined;
@@ -229,7 +264,8 @@ export class PiRunner implements Runner {
         sawTextDelta = true;
         responseText += String(normalized.payload.text ?? '');
       }
-      pendingEvents.push(input.emit(normalized));
+      enqueueEvent(normalized);
+      skillInvocationObserver.observe(normalized);
     };
 
     const abortSession = () => {
@@ -262,6 +298,24 @@ export class PiRunner implements Runner {
         payload: { runner: 'pi' },
         createdAt: new Date(),
       });
+      await input.emit({
+        sessionId: input.sessionId,
+        runId: input.runId,
+        messageId: input.messageId,
+        type: 'skills_loaded',
+        payload: preparedSkills.event,
+        createdAt: new Date(),
+      });
+      for (const invocation of preparedSkills.userInvocations) {
+        await input.emit({
+          sessionId: input.sessionId,
+          runId: input.runId,
+          messageId: invocation.messageId,
+          type: 'skill_invoked',
+          payload: { ...invocation.skill, trigger: 'user' },
+          createdAt: new Date(),
+        });
+      }
 
       const setupResults = repositorySetup ? await completePiRepositorySetup(input, this.options, repositorySetup) : [];
       repositoryState.preparedRepositories = setupResults;
@@ -273,8 +327,13 @@ export class PiRunner implements Runner {
       );
 
       if (input.signal?.aborted) throw new Error('Operation aborted');
-      await session.prompt(withSetupNote(input.prompt, setupNote), { expandPromptTemplates: false });
-      await Promise.all(pendingEvents);
+      let promptError: unknown;
+      try {
+        await session.prompt(withSetupNote(preparedSkills.prompt, setupNote), { expandPromptTemplates: false });
+      } catch (error) {
+        promptError = error;
+      }
+      await eventEmitter.drain(promptError === undefined ? {} : { primaryError: promptError });
       if (input.signal?.aborted) throw new Error('Operation aborted');
 
       const assistantMessage = lastAssistantMessage(session.messages);
@@ -466,6 +525,8 @@ type RunPiSubagentInput = {
   parentCwd: string;
   subagentDepth: number;
   mcpTools: ToolDefinition[];
+  skills: Skill[];
+  skillInvocationRuntime: SkillInvocationRuntime;
   subagentInput: PiSubagentRunInput;
 };
 
@@ -483,6 +544,7 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
     cwd,
     params.agentDir,
     piSubagentSystemPrompt(DEPUTIES_SYSTEM_PROMPT, profile),
+    params.skills,
   );
   await resourceLoader.reload();
 
@@ -517,6 +579,12 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
     customTools,
   });
   const session = created.session;
+  const skillInvocationObserver = params.skillInvocationRuntime.createObserver(cwd);
+  const unsubscribe = session.subscribe((event) => {
+    const normalized = normalizePiEvent(event, params.input);
+    if (!normalized) return;
+    skillInvocationObserver.observe(normalized);
+  });
   const abortSession = () => {
     void session.abort();
   };
@@ -540,6 +608,7 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
     };
   } finally {
     params.subagentInput.signal?.removeEventListener('abort', abortSession);
+    unsubscribe();
     session.dispose();
   }
 }
@@ -599,7 +668,12 @@ function amazonBedrockInferenceProfileModel(id: string, base: Model<Api>) {
   };
 }
 
-function createPiResourceLoader(cwd: string, agentDir: string, systemPrompt: string): DefaultResourceLoader {
+function createPiResourceLoader(
+  cwd: string,
+  agentDir: string,
+  systemPrompt: string,
+  skills: Skill[],
+): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -609,6 +683,7 @@ function createPiResourceLoader(cwd: string, agentDir: string, systemPrompt: str
     noThemes: true,
     noContextFiles: true,
     systemPrompt,
+    skillsOverride: ({ diagnostics }) => ({ skills, diagnostics }),
   });
 }
 

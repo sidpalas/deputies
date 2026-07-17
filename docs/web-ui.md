@@ -16,7 +16,7 @@ mise run //apps/web:dev
 
 For quick UI experiments that do not need durable state, you can instead run the API with `APP_DATA_STORE=memory`.
 
-The web app uses same-origin API requests by default. In Vite dev mode, `apps/web/vite.config.ts` proxies `/health`, `/auth`, `/sessions`, `/events`, `/repositories`, `/models`, and `/webhooks` to the API at `VITE_API_PROXY_TARGET` or `http://localhost:3583`.
+The web app uses same-origin API requests by default. In Vite dev mode, `apps/web/vite.config.ts` proxies `/health`, `/auth`, `/sessions`, `/skills`, `/events`, `/repositories`, `/models`, and `/webhooks` to the API at `VITE_API_PROXY_TARGET` or `http://localhost:3583`.
 
 ```sh
 VITE_API_PROXY_TARGET=http://localhost:3583 mise run //apps/web:dev
@@ -163,12 +163,37 @@ The SSE client uses `fetch()` streaming instead of native `EventSource` because 
 - Request cancellation of an active run.
 - Archive and restore sessions. Archived sessions are read-only until restored.
 - Manage access groups, group members, group defaults, archived groups, and super admins when the signed-in user has sufficient access.
+- Manage environments and inspect immutable repository-configuration revisions.
+- Manage personal and group skills, including immutable definition revisions, promotion, sharing, enabled/auto-load settings, and archive/restore actions when the signed-in user has sufficient access.
+- Attach available skills to a message as structured invocation chips and inspect the skills loaded for each run.
 - Replay and stream session events internally, rendering assistant text in the transcript and non-text run/message events as collapsible diagnostics.
 - List session artifacts in the context panel.
 - Render run-created image and text artifacts inline with the relevant transcript group when they are safe to preview.
 - Open stored image artifacts through authenticated download URLs, skip automatic loading for large images, and lazy-load text previews from the artifact preview API.
 - Download stored artifacts and open external-link artifacts.
 - Show HTTP, Slack, and GitHub completion callback delivery status in the context panel and manually replay failed callbacks.
+
+## Environments
+
+Open `Environments` to manage reusable multi-repository codebases. Existing environments show a compact revision selector at the top of the editor. The selector is newest-first, marks the current and historical entries, and uses the bounded searchable picker for long histories. Selecting a historical revision changes only the displayed repository configuration: name, owner, sharing, and lifecycle remain visibly current. The whole editor becomes read-only and a warning describes that boundary until the current revision is selected again.
+
+Environment deep links use `?environment=<environment-id>&revision=<revision-id>`. The revision is part of application navigation state, so initial loads and browser Back/Forward restore it. Changing revisions or environments uses the same unsaved-change guard as other editor navigation, and selecting another environment clears the prior revision selection. An unavailable revision falls back visibly to the current repository configuration.
+
+## Skills
+
+Open `Skills` from the main navigation to manage reusable agent instructions. The sidebar separates `My skills`, skills owned by each accessible group, and `Shared with my groups`. Shared-in skills show their owning group and are read-only unless the user also has management rights in that owner group.
+
+The editor supports a slug name, one-line description, markdown body, enabled and auto-load toggles, and archive/restore actions. Creation publishes revision 1. Saving a real name/description/body change publishes the next immutable revision; an unchanged save or live setting/share/lifecycle change does not. Managers can inspect the complete read-only revision history and historical bodies from the compact, newest-first revision selector at the top of the editor. Selecting current returns to edit mode. Other readers see the current definition only and do not receive history access. Personal skills can be moved with `Move to access group`; the group picker includes only active groups where the user can create skills, and confirmation explains that the ownership move is one-way and stops personal loading. Managed group skills expose owner-group-only, specific-group, and all-groups sharing controls to their creator, owner-group admins, and super admins.
+
+The message composer loads skills available to the current session and current message author. Skill invocation is slash-only: type `/` at the beginning of an empty draft to filter by name and attach up to eight skills. There is no persistent composer Skills button. The top match is selected by default; Arrow Up/Down or Home/End changes the active option, and Enter attaches it without sending the slash text. Same-name candidates remain separate options and show source plus owning group or repository provenance. Each selection becomes a removable chip; sending stores readable names in `context.skills` and aligned identity hints in `context.skillRefs` rather than inserting invocation syntax into prompt text. The server authorizes and pins a managed selection to current at enqueue; a stale/historical client pin is rejected rather than replayed. Repository selections use repository identity and remain revisionless. An exact leading `/name` uses the existing precedence winner as a keyboard-first fallback. A sent managed-skill chip links to its exact historical revision only when it has a persisted revision ID and the current user can manage and inspect that skill. Repository, legacy revisionless, and inaccessible managed chips remain display-only.
+
+A message may contain text plus skills or skills alone. Skill-only messages render their chips with “No additional instructions”; the runner expands each request-local skill body into Pi's native skill representation before the model call. Multiple skills apply to the same request in chip order.
+
+Before a new thread has a session, the UI calls `GET /skills/invocation-candidates?ownerGroupId=...` to list managed personal, selected-group, and shared skills without a sandbox. For an existing session it calls `GET /sessions/:sessionId/skills`; repository skills become browseable only after a run records them in `skills_loaded`. That includes discovered non-advertised and shadowed repository skills, which remain eligible for manual invocation. Skill loading metadata, managed revision IDs/numbers, shadowing, diagnostics, explicit selections, and successful model skill reads appear inside the run's collapsed Activity section rather than as separate transcript rows. An inaccessible or stale selection surfaces `unknown_skill` inline instead of silently sending.
+
+Personal auto-load follows the session creator for the lifetime of the session. A later contributor sees and can manually invoke their own personal skills, but those request-local selections do not replace the creator's auto-loaded catalog or become available to other contributors.
+
+When `SKILLS_ENABLED=false`, the skills routes return `404` and the UI hides the skills administration and composer surfaces. `REPO_SKILLS_ENABLED=false` leaves managed skills and their UI available but removes repository-discovered skills.
 
 ## Artifacts
 

@@ -1,6 +1,7 @@
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
-import type { IntegrationStore, MessageRecord, MessageStore, SessionRecord } from '../../store/types.js';
+import type { EventStore, IntegrationStore, MessageRecord, MessageStore, SessionRecord } from '../../store/types.js';
+import type { SkillService } from '../../skills/service.js';
 import {
   archivedIgnoredTranscriptPrompt,
   archivedRecoveryTranscriptPrompt,
@@ -40,6 +41,8 @@ export type GitHubWebhookServiceOptions = {
   issueContextFetcher?: Pick<GitHubIssueContextFetcher, 'listIssueComments'>;
   archivedSessionNotifier?: Pick<GitHubArchivedSessionNotifier, 'postNotice' | 'postRecoveryAcknowledgement'>;
   webBaseUrl?: string;
+  skillsEnabled?: boolean;
+  repoSkillsEnabled?: boolean;
 };
 
 export type GitHubWebhookResult =
@@ -103,6 +106,7 @@ type GitHubThreadContext = {
 
 type GitHubPromptOptions = {
   includeFullThreadContext: boolean;
+  currentMessageText?: string;
 };
 
 type AcceptedGitHubEvent = {
@@ -133,9 +137,12 @@ type AcceptedGitHubEvent = {
 
 export class GitHubWebhookService {
   constructor(
-    private readonly store: IntegrationStore & MessageStore,
+    private readonly store: IntegrationStore &
+      Pick<MessageStore, 'getMessages'> &
+      Pick<EventStore, 'getLatestEventByType'>,
     private readonly sessions: SessionService,
     private readonly messages: MessageService,
+    private readonly skills: Pick<SkillService, 'listInvocationCandidates'>,
     private readonly options: GitHubWebhookServiceOptions = {},
   ) {}
 
@@ -210,13 +217,18 @@ export class GitHubWebhookService {
     const threadContext = await this.fetchThreadContext(session, accepted);
     const promptThreadContext = { ...threadContext, comments: boundPriorContext(threadContext.comments) };
 
-    const message = await enqueueIntegrationMessage(this.messages, session, {
+    const message = await enqueueIntegrationMessage(this.store, this.skills, this.messages, session, {
       source: 'github',
       thread: githubIntegrationThread(accepted),
       title: githubSessionTitle(accepted),
-      prompt: renderGitHubPrompt(accepted, promptThreadContext, {
-        includeFullThreadContext: existingMessageCount === 0,
-      }),
+      currentMessageText: currentGitHubMessageText(accepted),
+      renderPrompt: (currentMessageText) =>
+        renderGitHubPrompt(accepted, promptThreadContext, {
+          includeFullThreadContext: existingMessageCount === 0,
+          currentMessageText,
+        }),
+      ...(this.options.skillsEnabled !== undefined ? { skillsEnabled: this.options.skillsEnabled } : {}),
+      ...(this.options.repoSkillsEnabled !== undefined ? { repoSkillsEnabled: this.options.repoSkillsEnabled } : {}),
       dedupeKey: accepted.deliveryId,
       ...(accepted.actor ? { actor: { type: 'user' as const, externalId: accepted.actor } } : {}),
       repository: { provider: 'github', owner: accepted.owner, repo: accepted.repo },
@@ -379,15 +391,15 @@ export class GitHubWebhookService {
     event: AcceptedGitHubEvent,
     archivedMessages: MessageRecord[],
   ): Promise<MessageRecord> {
-    return enqueueIntegrationMessage(this.messages, session, {
+    return enqueueIntegrationMessage(this.store, this.skills, this.messages, session, {
       source: 'github',
       thread: githubIntegrationThread(event),
       title: githubSessionTitle(event),
-      prompt: archivedRecoveryWorkPrompt({
-        sourceLabel: 'GitHub',
-        archivedMessages,
-        recoveryText: currentGitHubMessageText(event),
-      }),
+      currentMessageText: currentGitHubMessageText(event),
+      renderPrompt: (currentMessageText) =>
+        archivedRecoveryWorkPrompt({ sourceLabel: 'GitHub', archivedMessages, recoveryText: currentMessageText }),
+      ...(this.options.skillsEnabled !== undefined ? { skillsEnabled: this.options.skillsEnabled } : {}),
+      ...(this.options.repoSkillsEnabled !== undefined ? { repoSkillsEnabled: this.options.repoSkillsEnabled } : {}),
       dedupeKey: event.deliveryId,
       ...(event.actor ? { actor: { type: 'user' as const, externalId: event.actor } } : {}),
       repository: { provider: 'github', owner: event.owner, repo: event.repo },
@@ -611,6 +623,7 @@ function renderGitHubPrompt(
   options: GitHubPromptOptions,
 ): string {
   const eventType = `${event.event}.${event.action}`;
+  const currentMessageText = options.currentMessageText ?? currentGitHubMessageText(event);
   const lines = ['GitHub webhook context:', '---'];
   if (options.includeFullThreadContext) {
     lines.push(
@@ -628,7 +641,8 @@ function renderGitHubPrompt(
       lines.push(`Branch: ${event.headRef ?? 'unknown'} -> ${event.baseRef ?? 'unknown'}`);
     if (event.headSha) lines.push(`Head SHA: ${event.headSha}`);
     if (event.labels.length) lines.push(`Labels: ${event.labels.join(', ')}`);
-    if (event.body) lines.push('', 'Description:', boundPromptText(event.body));
+    const description = isInitialGitHubBodyEvent(event) ? currentMessageText : event.body;
+    if (description && description !== '(no body)') lines.push('', 'Description:', boundPromptText(description));
   }
   lines.push('---', '');
 
@@ -649,14 +663,17 @@ function renderGitHubPrompt(
   }
 
   lines.push('Current tagged GitHub message:', '---');
-  if (event.commentBody) lines.push(`[${event.actor ?? 'github-user'}]: ${boundPromptText(event.commentBody)}`);
-  else if (event.reviewBody) lines.push(`[${event.actor ?? 'github-user'}]: ${boundPromptText(event.reviewBody)}`);
-  else if (event.body) lines.push(`[${event.actor ?? 'github-user'}]: ${boundPromptText(event.body)}`);
-  else lines.push(`[${event.actor ?? 'github-user'}]: (no body)`);
+  if (currentMessageText !== '(no body)') {
+    lines.push(`[${event.actor ?? 'github-user'}]: ${boundPromptText(currentMessageText)}`);
+  } else lines.push(`[${event.actor ?? 'github-user'}]: (no body)`);
   if (event.reviewState) lines.push(`Review state: ${event.reviewState}`);
   if (event.path) lines.push(`File: ${event.path}`);
   if (event.diffHunk) lines.push('', 'Diff context:', boundPromptText(event.diffHunk));
   return lines.join('\n');
+}
+
+function isInitialGitHubBodyEvent(event: AcceptedGitHubEvent): boolean {
+  return event.action === 'opened' && (event.event === 'issues' || event.event === 'pull_request');
 }
 
 function githubExternalThreadId(event: Pick<AcceptedGitHubEvent, 'owner' | 'repo' | 'number'>): string {

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, Archive, PanelLeftOpen, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
+import { AlertTriangle, Archive, PanelLeftOpen, Plus, RotateCcw, Save, Share2, Trash2 } from 'lucide-react';
 import {
   archiveEnvironment,
   createEnvironment,
+  listEnvironmentRevisions,
   unarchiveEnvironment,
   updateEnvironment,
   type Environment,
+  type EnvironmentRevision,
   type EnvironmentRepositoryInput,
   type EnvironmentShareMode,
   type Group,
@@ -15,6 +17,10 @@ import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Input } from '../ui/input.js';
 import { OptionPicker, RepositoryPicker, type OptionPickerOption } from './option-picker.js';
+import { RevisionSelector, useRevisionViewer } from './revision-selector.js';
+import { SharingGroupPicker } from './sharing-group-picker.js';
+import { UnsavedIndicator } from './shared.js';
+import { useEditorDirty } from './use-editor-dirty.js';
 
 const MAX_ENVIRONMENT_REPOSITORIES = 10;
 
@@ -36,11 +42,16 @@ type EnvironmentForm = {
 
 let repositoryKeyCounter = 0;
 
+function loadRevisions(environmentId: string, token: string) {
+  return listEnvironmentRevisions({ environmentId, token });
+}
+
 export function EnvironmentsPanel(props: {
   environments: Environment[];
   environmentsLoading: boolean;
   environmentsError: string;
   selectedEnvironmentId: string;
+  selectedRevisionId: string;
   canCallApi: boolean;
   groups: Group[];
   token: string;
@@ -49,35 +60,59 @@ export function EnvironmentsPanel(props: {
   repositoryOptionsError: string;
   showOpenSidebar: boolean;
   openSidebarLabel?: string;
-  onCreateEnvironment: () => void;
+  onCreateEnvironment: () => boolean;
+  onDirtyChange: (dirty: boolean) => void;
   onEnvironmentChanged: (environment: Environment) => void;
   onOpenSidebar: () => void;
+  onSelectRevision: (revisionId: string) => void;
   onError: (error: unknown) => void;
 }) {
   const [form, setForm] = useState<EnvironmentForm>(() => emptyForm(props.groups));
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
-  const [sharedGroupSearch, setSharedGroupSearch] = useState('');
   const selected = props.environments.find((environment) => environment.id === props.selectedEnvironmentId) ?? null;
+  const revisionViewer = useRevisionViewer({
+    resourceId: selected?.id ?? '',
+    currentRevisionId: selected?.currentRevisionId,
+    selectedRevisionId: props.selectedRevisionId,
+    token: props.token,
+    enabled: Boolean(selected),
+    loadRevisions,
+    onSelectRevision: props.onSelectRevision,
+    onError: props.onError,
+  });
+  const viewedRevision = revisionViewer.viewedRevision;
   const manageableGroups = useMemo(
     () => props.groups.filter((group) => !group.archivedAt && group.canManage),
     [props.groups],
   );
   const ownerGroup = props.groups.find((group) => group.id === form.ownerGroupId);
-  const activeSharingGroups = props.groups.filter((group) => !group.archivedAt);
-  const filteredSharingGroups = activeSharingGroups.filter((group) =>
-    group.name.toLowerCase().includes(sharedGroupSearch.trim().toLowerCase()),
-  );
-  const selectedSharingGroupCount = Number(Boolean(ownerGroup && !ownerGroup.archivedAt)) + form.sharedGroupIds.length;
   const canCreate = props.canCallApi && manageableGroups.length > 0;
-  const canEdit = props.canCallApi && (form.id ? Boolean(selected?.canManage) && !selected?.archivedAt : canCreate);
+  const canEdit =
+    props.canCallApi &&
+    !viewedRevision &&
+    (form.id ? Boolean(selected?.canManage) && !selected?.archivedAt : canCreate);
   const complete = validateForm(form) === '';
-  const saveDisabled = !canEdit || saving || !complete;
+  let displayedForm: EnvironmentForm;
+  if (!selected) displayedForm = emptyForm(props.groups);
+  else if (viewedRevision) displayedForm = formFromEnvironmentRevision(selected, viewedRevision);
+  else displayedForm = formFromEnvironment(selected);
+  const baselineForm = displayedForm;
+  const dirty = environmentFormChanged(form, baselineForm);
+  const saveDisabled = !canEdit || saving || !complete || !dirty;
+  useEditorDirty(dirty, props.onDirtyChange);
 
   useEffect(() => {
-    setForm(selected ? formFromEnvironment(selected) : emptyForm(props.groups));
+    setForm(displayedForm);
     setFormError('');
-  }, [props.selectedEnvironmentId, selected?.id, props.groups]);
+  }, [
+    props.selectedEnvironmentId,
+    selected?.id,
+    selected?.currentRevisionId,
+    selected?.updatedAt,
+    viewedRevision?.id,
+    props.groups,
+  ]);
 
   useEffect(() => {
     setForm((current) => {
@@ -87,7 +122,7 @@ export function EnvironmentsPanel(props: {
   }, [manageableGroups]);
 
   function startNewEnvironment() {
-    props.onCreateEnvironment();
+    if (!props.onCreateEnvironment()) return;
     setForm(emptyForm(props.groups));
     setFormError('');
   }
@@ -100,20 +135,11 @@ export function EnvironmentsPanel(props: {
     }));
   }
 
-  function updateShareMode(shareMode: string) {
+  function updateShareMode(shareMode: EnvironmentShareMode) {
     setForm((current) => ({
       ...current,
-      shareMode: shareMode as EnvironmentShareMode,
+      shareMode,
       sharedGroupIds: shareMode === 'selected_groups' ? current.sharedGroupIds : [],
-    }));
-  }
-
-  function toggleSharedGroup(groupId: string, checked: boolean) {
-    setForm((current) => ({
-      ...current,
-      sharedGroupIds: checked
-        ? [...new Set([...current.sharedGroupIds, groupId])]
-        : current.sharedGroupIds.filter((candidate) => candidate !== groupId),
     }));
   }
 
@@ -186,6 +212,7 @@ export function EnvironmentsPanel(props: {
 
   async function archiveSelectedEnvironment() {
     if (!selected?.canManage || selected.archivedAt) return;
+    if (dirty && !window.confirm('Discard unsaved changes and archive this environment?')) return;
     setSaving(true);
     setFormError('');
     try {
@@ -263,36 +290,41 @@ export function EnvironmentsPanel(props: {
           </Card>
         ) : (
           <Card className="min-w-0 p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold text-foreground">
-                  {form.id ? (selected?.archivedAt ? 'Archived environment' : 'Edit environment') : 'New environment'}
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  The primary repository sets the initial working directory. Other repositories are cloned beside it.
-                </p>
-              </div>
-              {selected?.archivedAt ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => void unarchiveSelectedEnvironment()}
-                  disabled={saving || !selected.canManage}
-                >
-                  <RotateCcw className="h-4 w-4" /> Restore
-                </Button>
-              ) : selected ? (
-                <Button
-                  type="button"
-                  className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10"
-                  variant="secondary"
-                  onClick={() => void archiveSelectedEnvironment()}
-                  disabled={saving || !selected.canManage}
-                >
-                  <Archive className="h-4 w-4" /> Archive
-                </Button>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
+              <h2 className="min-w-0 text-lg font-semibold text-foreground">
+                {form.id ? (selected?.archivedAt ? 'Archived environment' : 'Edit environment') : 'New environment'}
+              </h2>
+              {selected?.currentRevisionId && selected.currentRevisionNumber ? (
+                <div className="flex shrink-0 items-center gap-2">
+                  {!viewedRevision && dirty ? <UnsavedIndicator /> : null}
+                  <RevisionSelector
+                    currentRevisionId={selected.currentRevisionId}
+                    currentRevisionNumber={selected.currentRevisionNumber}
+                    selectedRevisionId={props.selectedRevisionId}
+                    revisions={revisionViewer.revisions}
+                    loading={revisionViewer.loading}
+                    error={revisionViewer.error}
+                    onSelectRevision={revisionViewer.selectRevision}
+                  />
+                </div>
+              ) : dirty ? (
+                <UnsavedIndicator />
               ) : null}
+              <p className="col-span-2 text-sm text-muted-foreground">
+                The primary repository sets the initial working directory. Other repositories are cloned beside it.
+              </p>
             </div>
+
+            {viewedRevision ? (
+              <p className="mt-4 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
+                Viewing repository configuration from revision {viewedRevision.revisionNumber}. Name, owner, and sharing
+                reflect the current environment; this view is read-only.
+              </p>
+            ) : revisionViewer.requestedRevisionMissing ? (
+              <p className="mt-4 rounded-md border border-border bg-muted/60 p-3 text-sm text-muted-foreground">
+                The requested revision is unavailable. Showing the current repository configuration.
+              </p>
+            ) : null}
 
             {selected?.archivedAt ? (
               <div className="mt-4 rounded-md border border-border bg-muted/60 p-3 text-sm text-muted-foreground">
@@ -330,77 +362,6 @@ export function EnvironmentsPanel(props: {
                 </Field>
               </div>
 
-              <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
-                <Field label="Sharing" htmlFor="environment-sharing">
-                  <OptionPicker
-                    id="environment-sharing"
-                    label="Sharing"
-                    value={form.shareMode}
-                    options={[
-                      { value: 'private', label: 'Owner group only' },
-                      { value: 'selected_groups', label: 'Selected groups' },
-                      { value: 'all_groups', label: 'All groups' },
-                    ]}
-                    emptyLabel="Owner group only"
-                    onChange={updateShareMode}
-                    disabled={!canEdit}
-                  />
-                </Field>
-                <div className="min-w-0">
-                  {form.shareMode === 'all_groups' ? (
-                    <div className="flex min-w-0 gap-2 rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning-foreground dark:text-warning">
-                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                      <p className="min-w-0">
-                        All current and future active groups can use this environment and its repositories. Management
-                        stays with {ownerGroup?.name ?? 'the owner group'}.
-                      </p>
-                    </div>
-                  ) : form.shareMode === 'selected_groups' ? (
-                    <div className="rounded-md border border-border bg-background/70 p-3">
-                      {activeSharingGroups.length ? (
-                        <>
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-sm text-muted-foreground">{selectedSharingGroupCount} selected</p>
-                          </div>
-                          <Input
-                            className="mt-3"
-                            value={sharedGroupSearch}
-                            onChange={(event) => setSharedGroupSearch(event.target.value)}
-                            placeholder="Search groups..."
-                          />
-                          {filteredSharingGroups.length ? (
-                            <div className="mt-3 grid max-h-56 gap-2 overflow-auto pr-1 sm:grid-cols-2">
-                              {filteredSharingGroups.map((group) => (
-                                <label key={group.id} className="flex items-center gap-2 text-sm text-foreground">
-                                  <input
-                                    type="checkbox"
-                                    checked={group.id === form.ownerGroupId || form.sharedGroupIds.includes(group.id)}
-                                    onChange={(event) => toggleSharedGroup(group.id, event.target.checked)}
-                                    disabled={!canEdit || group.id === form.ownerGroupId}
-                                  />
-                                  <span className="min-w-0 truncate">
-                                    {group.name}
-                                    {group.id === form.ownerGroupId ? ' (owner)' : ''}
-                                  </span>
-                                </label>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="mt-3 text-sm text-muted-foreground">No matching groups.</p>
-                          )}
-                        </>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">No active groups are available.</p>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="min-w-0 pt-6 text-sm text-muted-foreground">
-                      Only members of {ownerGroup?.name ?? 'the owner group'} can view and use this environment.
-                    </p>
-                  )}
-                </div>
-              </div>
-
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-foreground">Repositories</h3>
@@ -428,7 +389,7 @@ export function EnvironmentsPanel(props: {
                         menuClassName="min-w-full"
                         label={`Repository ${index + 1}`}
                         value={repository.repository}
-                        repositories={props.repositoryOptions}
+                        repositories={repositoryOptionsForValue(props.repositoryOptions, repository.repository)}
                         loading={props.repositoryOptionsLoading}
                         error={props.repositoryOptionsError}
                         onChange={(value) => updateRepository(repository.key, { repository: value, branch: '' })}
@@ -443,31 +404,82 @@ export function EnvironmentsPanel(props: {
                         aria-label={`Branch for repository ${index + 1}`}
                         disabled={!canEdit}
                       />
-                      <label className="flex h-10 min-w-0 items-center gap-2 whitespace-nowrap text-sm text-muted-foreground">
-                        <input
-                          type="radio"
-                          name="environment-primary-repository"
-                          aria-label={`Make repository ${index + 1} primary`}
-                          checked={repository.primary}
-                          onChange={() => selectPrimaryRepository(repository.key)}
-                          disabled={!canEdit}
-                        />
-                        Primary
-                      </label>
-                      <Button
-                        type="button"
-                        className="h-10 w-10 shrink-0 p-0"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => removeRepository(repository.key)}
-                        disabled={!canEdit || (form.repositories.length === 1 && index === 0)}
-                        aria-label={`Remove repository ${index + 1}`}
-                        title={`Remove repository ${index + 1}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="flex min-w-0 items-center justify-between gap-2 md:contents">
+                        <label className="flex h-10 min-w-0 items-center gap-2 whitespace-nowrap text-sm text-muted-foreground">
+                          <input
+                            type="radio"
+                            name="environment-primary-repository"
+                            aria-label={`Make repository ${index + 1} primary`}
+                            checked={repository.primary}
+                            onChange={() => selectPrimaryRepository(repository.key)}
+                            disabled={!canEdit}
+                          />
+                          Primary
+                        </label>
+                        <Button
+                          type="button"
+                          className="h-10 w-10 shrink-0 p-0"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeRepository(repository.key)}
+                          disabled={!canEdit || (form.repositories.length === 1 && index === 0)}
+                          aria-label={`Remove repository ${index + 1}`}
+                          title={`Remove repository ${index + 1}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                   ))}
+                </div>
+              </div>
+
+              <div className="rounded-md border border-border bg-muted/20 p-4">
+                <div className="flex items-center gap-2">
+                  <Share2 className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold text-foreground">Sharing</h3>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Sharing grants use and read access. Management stays with the owner group.
+                </p>
+                <div className="mt-4 grid min-w-0 gap-3 xl:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
+                  <fieldset className="grid self-start gap-2 text-sm" disabled={!canEdit}>
+                    <legend className="sr-only">Sharing</legend>
+                    {(['private', 'selected_groups', 'all_groups'] as const).map((mode) => (
+                      <label key={mode} className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="environment-share-mode"
+                          checked={form.shareMode === mode}
+                          onChange={() => updateShareMode(mode)}
+                        />
+                        {environmentShareModeLabel(mode)}
+                      </label>
+                    ))}
+                  </fieldset>
+                  <div className="min-w-0">
+                    {form.shareMode === 'all_groups' ? (
+                      <div className="flex min-w-0 gap-2 rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning-foreground dark:text-warning">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <p className="min-w-0">
+                          All current and future active groups can use this environment and its repositories. Management
+                          stays with {ownerGroup?.name ?? 'the owner group'}.
+                        </p>
+                      </div>
+                    ) : form.shareMode === 'selected_groups' ? (
+                      <SharingGroupPicker
+                        groups={props.groups}
+                        ownerGroupId={form.ownerGroupId}
+                        selectedGroupIds={form.sharedGroupIds}
+                        disabled={!canEdit}
+                        onSelectedGroupIdsChange={(sharedGroupIds) => setForm({ ...form, sharedGroupIds })}
+                      />
+                    ) : (
+                      <p className="flex min-h-10 min-w-0 items-center text-sm text-muted-foreground">
+                        Only members of {ownerGroup?.name ?? 'the owner group'} can view and use this environment.
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -478,6 +490,26 @@ export function EnvironmentsPanel(props: {
                 <Button type="submit" disabled={saveDisabled}>
                   <Save className="h-4 w-4" /> {form.id ? 'Save environment' : 'Create environment'}
                 </Button>
+                {selected?.archivedAt ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void unarchiveSelectedEnvironment()}
+                    disabled={saving || !selected.canManage || Boolean(viewedRevision)}
+                  >
+                    <RotateCcw className="h-4 w-4" /> Restore
+                  </Button>
+                ) : selected ? (
+                  <Button
+                    type="button"
+                    className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10"
+                    variant="secondary"
+                    onClick={() => void archiveSelectedEnvironment()}
+                    disabled={saving || !selected.canManage || Boolean(viewedRevision)}
+                  >
+                    <Archive className="h-4 w-4" /> Archive
+                  </Button>
+                ) : null}
                 {!canCreate && !form.id ? (
                   <p className="self-center text-sm text-muted-foreground">
                     Group admin access is required to create environments.
@@ -533,6 +565,32 @@ function formFromEnvironment(environment: Environment): EnvironmentForm {
   };
 }
 
+function formFromEnvironmentRevision(environment: Environment, revision: EnvironmentRevision): EnvironmentForm {
+  return {
+    ...formFromEnvironment(environment),
+    repositories: revision.repositories
+      .slice()
+      .sort((left, right) => left.position - right.position)
+      .map((repository, index) => ({
+        key: `${revision.id}-repository-${index}`,
+        repository: `${repository.owner}/${repository.repo}`,
+        branch: repository.branch ?? '',
+        primary: repository.primary,
+      })),
+  };
+}
+
+function environmentFormChanged(form: EnvironmentForm, baseline: EnvironmentForm): boolean {
+  return (
+    form.name !== baseline.name ||
+    form.ownerGroupId !== baseline.ownerGroupId ||
+    form.shareMode !== baseline.shareMode ||
+    [...form.sharedGroupIds].sort().join('\0') !== [...baseline.sharedGroupIds].sort().join('\0') ||
+    JSON.stringify(form.repositories.map(({ repository, branch, primary }) => ({ repository, branch, primary }))) !==
+      JSON.stringify(baseline.repositories.map(({ repository, branch, primary }) => ({ repository, branch, primary })))
+  );
+}
+
 function ownerGroupOptions(manageableGroups: Group[], ownerGroup: Group | undefined): OptionPickerOption[] {
   const options: OptionPickerOption[] = manageableGroups.map((group) => ({ value: group.id, label: group.name }));
   if (ownerGroup && !options.some((option) => option.value === ownerGroup.id)) {
@@ -544,6 +602,18 @@ function ownerGroupOptions(manageableGroups: Group[], ownerGroup: Group | undefi
     });
   }
   return options;
+}
+
+function repositoryOptionsForValue(options: RepositoryOption[], value: string): RepositoryOption[] {
+  if (!value || options.some((option) => option.fullName === value)) return options;
+  const [owner, name] = parseRepository(value);
+  return [{ fullName: value, owner, name }, ...options];
+}
+
+function environmentShareModeLabel(mode: EnvironmentShareMode): string {
+  if (mode === 'all_groups') return 'All groups';
+  if (mode === 'selected_groups') return 'Specific groups';
+  return 'Owner group only';
 }
 
 function validateForm(form: EnvironmentForm): string {

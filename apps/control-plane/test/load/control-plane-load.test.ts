@@ -19,6 +19,7 @@ import type {
   SandboxRef,
 } from '../../src/sandbox/types.js';
 import { SessionService } from '../../src/sessions/service.js';
+import { SkillService } from '../../src/skills/service.js';
 import { PostgresStore } from '../../src/store/postgres.js';
 import { WorkerService } from '../../src/worker/service.js';
 
@@ -239,6 +240,7 @@ describe.skipIf(!testDatabaseUrl)('control-plane load', () => {
       store,
       new SessionService(store, events),
       new MessageService(store, events),
+      new SkillService(store),
     );
     const startedAt = performance.now();
 

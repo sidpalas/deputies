@@ -76,6 +76,24 @@ export type NormalizedEventPayloadMap = {
     primary?: boolean;
     expiresAt: string;
   };
+  skills_loaded: {
+    skills: SkillLoadEventItem[];
+    shadowed: SkillLoadEventItem[];
+    diagnostics: string[];
+  };
+  skill_invoked: {
+    name: string;
+    source: 'personal' | 'group' | 'shared' | 'repo';
+    trigger: 'user' | 'model';
+    ref: string;
+    filePath: string;
+    repo?: string;
+    ownerGroupId?: string;
+    ownerGroupName?: string;
+    skillId?: string;
+    revisionId?: string;
+    revisionNumber?: number;
+  };
   setup_script_started: {
     path: string;
     workspacePath: string;
@@ -108,6 +126,20 @@ export type NormalizedEventPayloadMap = {
   callback_retry_scheduled: CallbackPayload & { error: string; nextAttemptAt?: string };
   callback_failed: CallbackPayload & { error: string; nextAttemptAt?: string };
   callback_replay_requested: CallbackPayload;
+};
+
+type SkillLoadEventItem = {
+  name: string;
+  source: 'personal' | 'group' | 'shared' | 'repo';
+  repo?: string;
+  ownerGroupId?: string;
+  ownerGroupName?: string;
+  skillId?: string;
+  revisionId?: string;
+  revisionNumber?: number;
+  ref?: string;
+  invoked?: true;
+  advertised?: false;
 };
 
 type SandboxLifecyclePayload = {
@@ -209,6 +241,8 @@ export type NormalizedEventType =
   | 'sandbox_stopped'
   | 'sandbox_stop_failed'
   | 'repository_ready'
+  | 'skills_loaded'
+  | 'skill_invoked'
   | 'setup_script_started'
   | 'setup_script_finished'
   | 'agent_text_delta'

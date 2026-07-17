@@ -147,6 +147,19 @@ export function blurFocusedTextControl(): void {
   if (activeElement instanceof HTMLTextAreaElement || activeElement instanceof HTMLInputElement) activeElement.blur();
 }
 
+export function UnsavedIndicator() {
+  return (
+    <span
+      className="inline-flex h-8 items-center justify-center whitespace-nowrap p-1 text-xs text-warning-foreground sm:rounded sm:border sm:border-warning/40 sm:bg-warning/10 sm:px-2 sm:py-0 dark:text-warning"
+      aria-live="polite"
+      title="Unsaved changes"
+    >
+      <span className="h-2 w-2 rounded-full bg-warning sm:hidden" aria-hidden="true" />
+      <span className="sr-only sm:not-sr-only">Unsaved changes</span>
+    </span>
+  );
+}
+
 export function formatDate(value: string): string {
   return dateFormatter.format(new Date(value));
 }

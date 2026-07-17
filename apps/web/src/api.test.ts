@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createAutomation, updateAutomation } from './api.js';
+import {
+  createAutomation,
+  enqueueMessage,
+  listEnvironmentRevisions,
+  listSkillInvocationCandidates,
+  listSkillRevisions,
+  setSkillShares,
+  updateAutomation,
+} from './api.js';
 
 describe('automation API requests', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -62,6 +70,108 @@ describe('automation API requests', () => {
       scheduleCron: '0 9 * * *',
       repository: 'acme/api',
       branch: 'main',
+    });
+  });
+});
+
+describe('environment API requests', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('lists immutable environment revisions', async () => {
+    const revisions = [{ id: 'revision-2', environmentId: 'environment-1', revisionNumber: 2, repositories: [] }];
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ revisions }), { status: 200 }));
+
+    await expect(listEnvironmentRevisions({ environmentId: 'environment-1', token: 'test-token' })).resolves.toEqual(
+      revisions,
+    );
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0]), window.location.href).pathname).toBe(
+      '/environments/environment-1/revisions',
+    );
+  });
+});
+
+describe('skill API requests', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('sends selected skills in per-message context', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ message: { id: 'message-1' } }), { status: 202 }));
+
+    await enqueueMessage({
+      sessionId: 'session-1',
+      prompt: 'Review this change',
+      skills: ['review-change', 'write-tests'],
+      skillRefs: [
+        { id: 'skill-review', name: 'review-change', revisionId: 'revision-review' },
+        { id: 'repo:acme/widgets:write-tests', name: 'write-tests' },
+      ],
+      token: 'test-token',
+    });
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(request.body as string)).toEqual({
+      prompt: 'Review this change',
+      context: {
+        skills: ['review-change', 'write-tests'],
+        skillRefs: [
+          { id: 'skill-review', name: 'review-change', revisionId: 'revision-review' },
+          { id: 'repo:acme/widgets:write-tests', name: 'write-tests' },
+        ],
+      },
+    });
+  });
+
+  it('lists revisions for a managed skill', async () => {
+    const revisions = [{ id: 'revision-2', skillId: 'skill-1', revisionNumber: 2 }];
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ revisions }), { status: 200 }));
+
+    await expect(listSkillRevisions({ skillId: 'skill-1', token: 'test-token' })).resolves.toEqual(revisions);
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0]), window.location.href).pathname).toBe(
+      '/skills/skill-1/revisions',
+    );
+  });
+
+  it('lists server-authorized invocation candidates for a session owner group', async () => {
+    const skills = [{ id: 'skill-1', name: 'review-change' }];
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ skills }), { status: 200 }));
+
+    await expect(listSkillInvocationCandidates({ ownerGroupId: 'group-1', token: 'test-token' })).resolves.toEqual(
+      skills,
+    );
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]), window.location.href);
+    expect(url.pathname).toBe('/skills/invocation-candidates');
+    expect(url.searchParams.get('ownerGroupId')).toBe('group-1');
+  });
+
+  it('only sends group ids for specific sharing', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(JSON.stringify({ skill: { id: 'skill-1' } }), { status: 200 }));
+
+    await setSkillShares({
+      skillId: 'skill-1',
+      shareMode: 'all_groups',
+      groupIds: ['ignored'],
+      token: 'test-token',
+    });
+    await setSkillShares({
+      skillId: 'skill-1',
+      shareMode: 'specific',
+      groupIds: ['group-1'],
+      token: 'test-token',
+    });
+
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({ shareMode: 'all_groups' });
+    expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toEqual({
+      shareMode: 'specific',
+      groupIds: ['group-1'],
     });
   });
 });

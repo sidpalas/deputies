@@ -7,11 +7,12 @@ import {
   type PiSessionData,
 } from '../../src/runner-pi/session-store.js';
 import { runSessionSearchIndexerOnce } from '../../src/search/indexer.js';
-import { defaultGroupId } from '../../src/store/types.js';
+import { defaultGroupId, type SkillRevisionWrite } from '../../src/store/types.js';
 import { PostgresStore } from '../../src/store/postgres.js';
 import { waitFor } from '../support/http.js';
 import { setupPostgresStoreSuite, testDatabaseUrl } from '../support/postgres-store-suite.js';
 import { defineSessionTagsStoreContract } from '../support/session-tags-store-contract.js';
+import { defineSkillsStoreContract } from '../support/skills-store-contract.js';
 
 describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   let pool: Pool;
@@ -25,6 +26,206 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   });
 
   defineSessionTagsStoreContract(() => store);
+  defineSkillsStoreContract(() => store);
+
+  it('rechecks persisted invocation authors against live Postgres membership and role state', async () => {
+    const services = createServices(store);
+    const now = new Date('2026-07-16T01:00:00.000Z');
+    const memberId = '00000000-0000-4000-8000-000000000141';
+    const adminId = '00000000-0000-4000-8000-000000000142';
+    for (const [userId, role] of [
+      [memberId, 'user'],
+      [adminId, 'super_admin'],
+    ] as const) {
+      await store.upsertAuthUserForAccount({
+        userId,
+        accountId: userId.replace(/1$/, '3').replace(/2$/, '4'),
+        provider: 'live-skill-access',
+        providerAccountId: userId,
+        username: userId,
+        role,
+        profile: {},
+        now,
+      });
+    }
+    await store.upsertGroupMember({
+      groupId: defaultGroupId,
+      userId: memberId,
+      role: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const skill = await services.skills.create({
+      name: 'postgres-live-access',
+      description: 'Verify live invocation access',
+      body: 'Run only for current members',
+      ownerGroupId: defaultGroupId,
+      autoLoad: false,
+    });
+    const request = (createdByUserId: string) => ({
+      ownerGroupId: defaultGroupId,
+      createdByUserId,
+      invokedNames: [],
+      invokedRevisions: [{ skillId: skill.id, revisionId: skill.currentRevisionId }],
+    });
+
+    await expect(services.skills.listForRun(request(memberId))).resolves.toHaveLength(1);
+    await store.deleteGroupMember({ groupId: defaultGroupId, userId: memberId });
+    await expect(services.skills.listForRun(request(memberId))).resolves.toEqual([]);
+
+    await expect(services.skills.listForRun(request(adminId))).resolves.toHaveLength(1);
+    await store.updateAuthUserRole({ userId: adminId, role: 'user', updatedAt: new Date(now.getTime() + 1) });
+    await expect(services.skills.listForRun(request(adminId))).resolves.toEqual([]);
+  });
+
+  it('serializes skill writes behind concurrent skill and group archival', async () => {
+    const now = new Date('2026-07-16T00:00:00.000Z');
+    const userId = '00000000-0000-4000-8000-000000000151';
+    await store.upsertAuthUserForAccount({
+      userId,
+      accountId: '00000000-0000-4000-8000-000000000152',
+      provider: 'skills-race',
+      providerAccountId: 'skills-race-user',
+      username: 'skills-race-user',
+      role: 'user',
+      profile: {},
+      now,
+    });
+
+    const groupIds = [
+      '00000000-0000-4000-8000-000000000161',
+      '00000000-0000-4000-8000-000000000162',
+      '00000000-0000-4000-8000-000000000163',
+      '00000000-0000-4000-8000-000000000164',
+    ];
+    for (const [index, id] of groupIds.entries()) {
+      await store.createGroup({
+        id,
+        name: `Skills race ${index}`,
+        defaultVisibility: 'group',
+        defaultWritePolicy: 'group_members',
+        automationCreateRequiredRole: 'member',
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    const createOutcome = await archiveGroupBeforeWrite(groupIds[0]!, () =>
+      store.createSkill({
+        id: '00000000-0000-4000-8000-000000000171',
+        ownerKind: 'group',
+        ownerGroupId: groupIds[0]!,
+        revision: skillRevision('00000000-0000-4000-8000-000000000171', 'racing-create', 'Create race', now),
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+    expect(createOutcome.error).toMatchObject({ code: 'archived_group' });
+
+    const personal = await store.createSkill({
+      id: '00000000-0000-4000-8000-000000000172',
+      ownerKind: 'user',
+      ownerUserId: userId,
+      revision: skillRevision('00000000-0000-4000-8000-000000000172', 'racing-promote', 'Promote race', now),
+      createdAt: now,
+      updatedAt: now,
+    });
+    const promoteOutcome = await archiveGroupBeforeWrite(groupIds[1]!, () =>
+      store.promoteSkill(personal.id, groupIds[1]!, new Date(now.getTime() + 1_000)),
+    );
+    expect(promoteOutcome.error).toMatchObject({ code: 'archived_group' });
+    await expect(store.getSkill(personal.id)).resolves.toMatchObject({ ownerKind: 'user', ownerUserId: userId });
+
+    const shared = await store.createSkill({
+      id: '00000000-0000-4000-8000-000000000173',
+      ownerKind: 'group',
+      ownerGroupId: groupIds[2]!,
+      revision: skillRevision('00000000-0000-4000-8000-000000000173', 'racing-share', 'Share race', now),
+      createdAt: now,
+      updatedAt: now,
+    });
+    const shareOutcome = await archiveGroupBeforeWrite(groupIds[3]!, () =>
+      store.setSkillShares(shared.id, 'specific', [groupIds[3]!], new Date(now.getTime() + 1_000)),
+    );
+    expect(shareOutcome.error).toMatchObject({ code: 'archived_group' });
+    await expect(store.getSkill(shared.id)).resolves.toMatchObject({ shareMode: 'none', shareGroupIds: [] });
+
+    await store.archiveSkill({ skillId: shared.id, archivedAt: new Date(now.getTime() + 2_000) });
+    const restoreOutcome = await archiveGroupBeforeWrite(groupIds[2]!, () =>
+      store.restoreSkill({ skillId: shared.id, updatedAt: new Date(now.getTime() + 3_000) }),
+    );
+    expect(restoreOutcome.error).toMatchObject({ code: 'archived_group' });
+    await expect(store.getSkill(shared.id)).resolves.toHaveProperty('archivedAt');
+
+    const blocker = await pool.connect();
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query('UPDATE skills SET archived_at = $2 WHERE id = $1', [
+        shared.id,
+        new Date(now.getTime() + 2_000),
+      ]);
+      let settled = false;
+      const updateOutcome = store
+        .updateSkill({
+          id: shared.id,
+          expectedCurrentRevisionId: shared.currentRevisionId,
+          revision: {
+            id: '00000000-0000-4000-8000-000000000174',
+            name: shared.name,
+            description: shared.description,
+            body: 'must not commit',
+            actorType: 'user',
+            actorUserId: userId,
+            createdAt: new Date(now.getTime() + 3_000),
+          },
+          updatedAt: new Date(now.getTime() + 3_000),
+        })
+        .then(
+          (value) => ({ value, error: undefined }),
+          (error: unknown) => ({ value: undefined, error }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(settled).toBe(false);
+      await blocker.query('COMMIT');
+      expect((await updateOutcome).error).toMatchObject({ code: 'skill_archived' });
+    } finally {
+      await blocker.query('ROLLBACK').catch(() => undefined);
+      blocker.release();
+    }
+
+    async function archiveGroupBeforeWrite<T>(
+      groupId: string,
+      write: () => Promise<T>,
+    ): Promise<{ value: T | undefined; error: unknown }> {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('UPDATE groups SET archived_at = $2 WHERE id = $1', [
+          groupId,
+          new Date(now.getTime() + 1_000),
+        ]);
+        let settled = false;
+        const outcome = write()
+          .then(
+            (value) => ({ value, error: undefined }),
+            (error: unknown) => ({ value: undefined, error }),
+          )
+          .finally(() => {
+            settled = true;
+          });
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        expect(settled).toBe(false);
+        await client.query('COMMIT');
+        return await outcome;
+      } finally {
+        await client.query('ROLLBACK').catch(() => undefined);
+        client.release();
+      }
+    }
+  });
 
   it('preserves session, message, and event behavior', async () => {
     const services = createServices(store);
@@ -533,6 +734,10 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       sessionId: session.id,
       messageId: message.id,
       prompt: 'newneedle prompt content',
+      context: { skills: ['review-code'] },
+    });
+    await expect(store.getMessage({ sessionId: session.id, messageId: message.id })).resolves.toMatchObject({
+      context: { skills: ['review-code'] },
     });
     await runSessionSearchIndexerOnce({ store, events: services.events });
 
@@ -1382,3 +1587,14 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     });
   });
 });
+
+function skillRevision(id: string, name: string, description: string, createdAt: Date): SkillRevisionWrite {
+  return {
+    id,
+    name,
+    description,
+    body: '',
+    actorType: 'system' as const,
+    createdAt,
+  };
+}

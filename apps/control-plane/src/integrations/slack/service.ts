@@ -1,6 +1,7 @@
 import type { MessageService } from '../../messages/service.js';
 import type { SessionService } from '../../sessions/service.js';
-import type { IntegrationStore, MessageRecord, MessageStore, SessionRecord } from '../../store/types.js';
+import type { EventStore, IntegrationStore, MessageRecord, MessageStore, SessionRecord } from '../../store/types.js';
+import type { SkillService } from '../../skills/service.js';
 import {
   archivedIgnoredTranscriptPrompt,
   archivedRecoveryTranscriptPrompt,
@@ -41,6 +42,8 @@ export type SlackIntegrationOptions = {
   allowedChannelIds?: string[];
   allowedUserIds?: string[];
   webBaseUrl?: string;
+  skillsEnabled?: boolean;
+  repoSkillsEnabled?: boolean;
 };
 
 export type HandleSlackEventResult =
@@ -52,9 +55,12 @@ export type HandleSlackEventResult =
 
 export class SlackIntegrationService {
   constructor(
-    private readonly store: IntegrationStore & MessageStore,
+    private readonly store: IntegrationStore &
+      Pick<MessageStore, 'getMessages'> &
+      Pick<EventStore, 'getLatestEventByType'>,
     private readonly sessions: SessionService,
     private readonly messages: MessageService,
+    private readonly skills: Pick<SkillService, 'listInvocationCandidates'>,
     private readonly options: SlackIntegrationOptions = {},
   ) {}
 
@@ -137,11 +143,17 @@ export class SlackIntegrationService {
     const promptMetadata = await this.fetchPromptMetadata(accepted, promptThreadContext.messages);
     const includeChannelContext = existingMessageCount === 0;
 
-    const message = await enqueueIntegrationMessage(this.messages, session, {
+    const message = await enqueueIntegrationMessage(this.store, this.skills, this.messages, session, {
       source: 'slack',
       thread: slackIntegrationThread(accepted),
       title: slackSessionTitle(accepted),
-      prompt: renderSlackPrompt(accepted, promptThreadContext, promptMetadata, { includeChannelContext }),
+      currentMessageText: accepted.text,
+      renderPrompt: (currentMessageText) =>
+        renderSlackPrompt({ ...accepted, text: currentMessageText }, promptThreadContext, promptMetadata, {
+          includeChannelContext,
+        }),
+      ...(this.options.skillsEnabled !== undefined ? { skillsEnabled: this.options.skillsEnabled } : {}),
+      ...(this.options.repoSkillsEnabled !== undefined ? { repoSkillsEnabled: this.options.repoSkillsEnabled } : {}),
       dedupeKey: accepted.eventId,
       actor: {
         type: 'user',
@@ -313,11 +325,15 @@ export class SlackIntegrationService {
     event: SlackAcceptedEvent,
     archivedMessages: MessageRecord[],
   ): Promise<MessageRecord> {
-    return enqueueIntegrationMessage(this.messages, session, {
+    return enqueueIntegrationMessage(this.store, this.skills, this.messages, session, {
       source: 'slack',
       thread: slackIntegrationThread(event),
       title: slackSessionTitle(event),
-      prompt: archivedRecoveryWorkPrompt({ sourceLabel: 'Slack', archivedMessages, recoveryText: event.text }),
+      currentMessageText: event.text,
+      renderPrompt: (currentMessageText) =>
+        archivedRecoveryWorkPrompt({ sourceLabel: 'Slack', archivedMessages, recoveryText: currentMessageText }),
+      ...(this.options.skillsEnabled !== undefined ? { skillsEnabled: this.options.skillsEnabled } : {}),
+      ...(this.options.repoSkillsEnabled !== undefined ? { repoSkillsEnabled: this.options.repoSkillsEnabled } : {}),
       dedupeKey: event.eventId,
       actor: { type: 'user', externalId: event.user },
       sourceContext: {

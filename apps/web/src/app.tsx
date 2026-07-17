@@ -11,6 +11,7 @@ import {
   Session,
   apiConnectionDelayedEvent,
   apiConnectionOkEvent,
+  archiveEnvironment,
   archiveGroup,
   archiveSession,
   cancelCurrentRun,
@@ -45,6 +46,7 @@ import {
   setSessionStarred,
   retryMessage,
   streamGlobalEvents,
+  unarchiveEnvironment,
   unarchiveSession,
   updateMessage,
   updateSession,
@@ -67,6 +69,8 @@ import {
 } from './api.js';
 import { useAccessGroupsAdmin } from './access-groups-admin.js';
 import { useAutomationsAdmin } from './automations-admin.js';
+import { useSkillsWorkspace } from './skills-workspace.js';
+import { resolveSidebarNavigation, type SidebarPanel } from './app-navigation.js';
 import { isInlineDisplayableArtifact } from './artifact-display.js';
 import {
   startSessionMilestoneInteraction,
@@ -122,6 +126,9 @@ import {
   loadInitialSidebarPanel,
   loadInitialSelectedAutomationId,
   loadInitialSelectedEnvironmentId,
+  loadInitialSelectedEnvironmentRevisionId,
+  loadInitialSelectedSkillId,
+  loadInitialSelectedSkillRevisionId,
   loadInitialSetupGuideOpen,
   loadInitialSelectedSessionId,
   loadStoredToken,
@@ -131,6 +138,7 @@ import {
   realtimeReconnectMaxDelayMs,
   selectedAutomationStorageKey,
   selectedEnvironmentStorageKey,
+  selectedSkillStorageKey,
   selectedSessionStorageKey,
   sessionFiltersStorageKey,
   setupGuideOpenStorageKey,
@@ -159,11 +167,14 @@ import {
   SessionAccessPanel,
   SessionAuthPanel,
   SetupGuidePanel,
+  SkillsPanel,
+  SkillsSidebar,
   GroupsPanel,
   GroupsSidebar,
   StartupLoadingPanel,
   ThreadHeader,
   ThreadSidebar,
+  type SidebarFooterProps,
 } from './components/app-panels.js';
 import {
   environmentRepositoryKey,
@@ -189,7 +200,6 @@ type AsyncState<T> = {
 
 type StateUpdate<T> = T | ((current: T) => T);
 
-type SidebarPanel = 'sessions' | 'groups' | 'automations' | 'environments';
 type GroupsPanelView = 'group' | 'super_admins' | 'new_group';
 
 type NavigationState = {
@@ -202,6 +212,9 @@ type NavigationState = {
   selectedGroupId: string;
   selectedAutomationId: string;
   selectedEnvironmentId: string;
+  selectedEnvironmentRevisionId: string;
+  selectedSkillId: string;
+  selectedSkillRevisionId: string;
 };
 
 const activeProgressBatchDelayMs = 100;
@@ -287,6 +300,9 @@ function loadInitialNavigationState(): NavigationState {
     selectedGroupId: loadInitialGroupsPanelSelectedGroupId(),
     selectedAutomationId: loadInitialSelectedAutomationId(),
     selectedEnvironmentId: loadInitialSelectedEnvironmentId(),
+    selectedEnvironmentRevisionId: loadInitialSelectedEnvironmentRevisionId(),
+    selectedSkillId: loadInitialSelectedSkillId(),
+    selectedSkillRevisionId: loadInitialSelectedSkillRevisionId(),
   };
 }
 
@@ -334,6 +350,10 @@ export function App() {
   const [navigation, setNavigation] = useState<NavigationState>(loadInitialNavigationState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const environmentEditorDirtyRef = useRef(false);
+  function setEnvironmentEditorDirty(dirty: boolean) {
+    environmentEditorDirtyRef.current = dirty;
+  }
   const [sessionDetail, setSessionDetail] = useState<SessionDetailState>(emptySessionDetail);
   const [repositoryOptionsState, setRepositoryOptionsState] = useState<AsyncState<RepositoryOption[]>>({
     data: [],
@@ -415,6 +435,7 @@ export function App() {
     selectedGroupId,
     selectedAutomationId,
     selectedEnvironmentId,
+    selectedEnvironmentRevisionId,
   } = navigation;
   const { messages, events, activeProgress, artifacts, services, externalResources, callbacks } = sessionDetail;
   const eventCursor = useRef(0);
@@ -480,6 +501,13 @@ export function App() {
   const automationCreatableGroups = sessionAuthRequired
     ? activeGroups.filter((group) => group.canCreateAutomations)
     : activeGroups;
+  const skillCreatableGroups = sessionAuthRequired
+    ? activeGroups.filter(
+        (group) =>
+          currentUser?.role === 'super_admin' || group.membershipRole === 'member' || group.membershipRole === 'admin',
+      )
+    : activeGroups;
+  const newThreadEffectiveGroupId = newThreadGroupId || creatableGroups[0]?.id || '';
   const manageableGroups = groups.filter((group) => group.canManage);
   const canManageAllGroups = canCallApi && (!sessionAuthRequired || currentUser?.role === 'super_admin');
   const canCreateThread =
@@ -552,6 +580,31 @@ export function App() {
     setError,
     setSelectedAutomationId,
   });
+  const skillsWorkspace = useSkillsWorkspace({
+    token,
+    groups,
+    canCallApi,
+    canCreateThread,
+    newThreadOwnerGroupId: newThreadEffectiveGroupId,
+    selectedSessionId,
+    navigation,
+    setNavigation,
+    setSidebarOpen,
+    setSidebarCollapsed,
+    onError: handleApiError,
+    canNavigate: (next) => {
+      const leavingDirtyEnvironment =
+        navigation.sidebarPanel === 'environments' &&
+        (next.sidebarPanel !== 'environments' ||
+          next.selectedEnvironmentId !== navigation.selectedEnvironmentId ||
+          next.selectedEnvironmentRevisionId !== navigation.selectedEnvironmentRevisionId);
+      if (!leavingDirtyEnvironment || !environmentEditorDirtyRef.current) return true;
+      if (!window.confirm('Discard unsaved environment changes?')) return false;
+      setEnvironmentEditorDirty(false);
+      return true;
+    },
+  });
+  const canViewSkills = skillsWorkspace.model.canView;
   const canManageGroups = canManageAllGroups || (canCallApi && manageableGroups.length > 0);
   const canViewGroups = canManageGroups || (canCallApi && sessionAuthRequired && groups.length > 0);
   const canViewEnvironments =
@@ -607,7 +660,6 @@ export function App() {
   const selectedSessionArchived = selectedSession?.status === 'archived';
   const selectedAutomationArchived = Boolean(selectedAutomation?.archivedAt);
   const activeEnvironmentOptions = environments.filter((environment) => !environment.archivedAt);
-  const newThreadEffectiveGroupId = newThreadGroupId || creatableGroups[0]?.id || '';
   const newThreadEnvironmentOptions = activeEnvironmentOptions.filter((environment) =>
     environmentAvailableToGroup(environment, newThreadEffectiveGroupId),
   );
@@ -1144,6 +1196,9 @@ export function App() {
                 globalEventCursor.current = Math.max(globalEventCursor.current, event.id);
 
               const activeSessionId = selectedSessionIdRef.current;
+              if (event.type === 'skills_loaded' && event.sessionId === activeSessionId) {
+                skillsWorkspace.actions.invalidateSessionCatalog();
+              }
               const activeSessionHasMessages = messagesRef.current.some(
                 (message) => message.sessionId === activeSessionId,
               );
@@ -1702,10 +1757,13 @@ export function App() {
     }
   }
 
-  async function handleCreateThread(event: FormEvent) {
-    event.preventDefault();
-    const firstPrompt = newThreadPrompt.trim();
-    if (createSessionInFlightRef.current || !canCreateThread || !firstPrompt) return;
+  async function handleCreateThread(input: {
+    prompt: string;
+    skills: string[];
+    skillRefs: Array<{ id: string; name: string }>;
+  }): Promise<boolean> {
+    const firstPrompt = input.prompt.trim();
+    if (createSessionInFlightRef.current || !canCreateThread || (!firstPrompt && !input.skills.length)) return false;
     createSessionInFlightRef.current = true;
     abortCreatedSessionBackfill();
     const firstEnvironmentId = newThreadEnvironmentId;
@@ -1727,10 +1785,12 @@ export function App() {
     setNewThreadBranch('');
     setLoading(true);
     setError('');
+    skillsWorkspace.actions.setNewThreadError('');
     const previousSelectedSessionId = selectedSessionIdRef.current;
+    let enqueueCleanupError: unknown;
     try {
       const session = await createSession({
-        title: titleFromPrompt(firstPrompt),
+        title: titleFromPrompt(firstPrompt || input.skills.join(', ')),
         token,
         ownerGroupId: newThreadGroupId,
       });
@@ -1741,24 +1801,37 @@ export function App() {
       selectedSessionIdRef.current = session.id;
       pendingCreatedSessionIdRef.current = session.id;
       eventCursor.current = 0;
-      const message = await enqueueMessage({
-        sessionId: session.id,
-        prompt: firstPrompt,
-        token,
-        ...(firstEnvironmentId
-          ? {
-              environmentId: firstEnvironmentId,
-              ...(firstEnvironmentBranchOverrides.length
-                ? { environmentBranchOverrides: firstEnvironmentBranchOverrides }
-                : {}),
-            }
-          : firstRepository
-            ? { repository: firstRepository }
-            : {}),
-        ...(newThreadModel ? { model: newThreadModel } : {}),
-        ...(newThreadReasoningLevel ? { reasoningLevel: newThreadReasoningLevel } : {}),
-        ...(!firstEnvironmentId && firstBranch ? { branch: firstBranch } : {}),
-      });
+      let message: Message;
+      try {
+        message = await enqueueMessage({
+          sessionId: session.id,
+          prompt: firstPrompt,
+          token,
+          ...(firstEnvironmentId
+            ? {
+                environmentId: firstEnvironmentId,
+                ...(firstEnvironmentBranchOverrides.length
+                  ? { environmentBranchOverrides: firstEnvironmentBranchOverrides }
+                  : {}),
+              }
+            : firstRepository
+              ? { repository: firstRepository }
+              : {}),
+          ...(newThreadModel ? { model: newThreadModel } : {}),
+          ...(newThreadReasoningLevel ? { reasoningLevel: newThreadReasoningLevel } : {}),
+          ...(!firstEnvironmentId && firstBranch ? { branch: firstBranch } : {}),
+          ...(input.skills.length ? { skills: input.skills, skillRefs: input.skillRefs } : {}),
+        });
+      } catch (err) {
+        if (userCanWriteSession(session)) {
+          try {
+            await archiveSession({ sessionId: session.id, token });
+          } catch (cleanupError) {
+            enqueueCleanupError = cleanupError;
+          }
+        }
+        throw err;
+      }
       const sessionContext = mergeDisplaySessionContext(
         session.context,
         message.context,
@@ -1799,6 +1872,7 @@ export function App() {
           if (createdSessionBackfillAbortRef.current === backfillAbort) createdSessionBackfillAbortRef.current = null;
         });
       updateNavigation({ isCreatingThread: false });
+      return true;
     } catch (err) {
       if (pendingCreatedSessionIdRef.current) {
         pendingCreatedSessionIdRef.current = '';
@@ -1809,25 +1883,39 @@ export function App() {
       setNewThreadEnvironmentBranchOverrides(previousEnvironmentBranchOverrides);
       setNewThreadRepository(firstRepository);
       setNewThreadBranch(firstBranch);
-      handleApiError(err);
+      if (err instanceof ApiError && err.code === 'unknown_skill' && input.skills.length)
+        skillsWorkspace.actions.setNewThreadError(errorMessage(err));
+      else if (enqueueCleanupError) {
+        if (err instanceof ApiError && err.status === 401) signOut();
+        if (enqueueCleanupError instanceof ApiError && enqueueCleanupError.status === 401) signOut();
+        setError(
+          `${errorMessage(err)} The empty session also could not be archived: ${errorMessage(enqueueCleanupError)}`,
+        );
+      } else handleApiError(err);
+      return false;
     } finally {
       setLoading(false);
       createSessionInFlightRef.current = false;
     }
   }
 
-  async function handleSendMessage(input: { prompt: string }): Promise<boolean> {
+  async function handleSendMessage(input: {
+    prompt: string;
+    skills: string[];
+    skillRefs: Array<{ id: string; name: string }>;
+  }): Promise<boolean> {
     const messagePrompt = input.prompt.trim();
     if (
       sendMessageInFlightRef.current ||
       !canWriteSelectedSession ||
       !selectedSessionId ||
       selectedSessionArchived ||
-      !messagePrompt
+      (!messagePrompt && !input.skills.length)
     )
       return false;
     sendMessageInFlightRef.current = true;
     setError('');
+    skillsWorkspace.actions.setSessionError('');
     try {
       const followUpEnvironment = followUpEnvironmentId
         ? (environments.find((environment) => environment.id === followUpEnvironmentId) ?? null)
@@ -1851,6 +1939,7 @@ export function App() {
         ...(selectedFollowUpModel ? { model: selectedFollowUpModel } : {}),
         ...(selectedFollowUpReasoningLevel ? { reasoningLevel: selectedFollowUpReasoningLevel } : {}),
         ...(!followUpEnvironmentId && followUpBranch ? { branch: followUpBranch } : {}),
+        ...(input.skills.length ? { skills: input.skills, skillRefs: input.skillRefs } : {}),
       });
       setSessionDetail((current) => ({ ...current, messages: [...current.messages, message] }));
       setSessions((current) =>
@@ -1875,7 +1964,9 @@ export function App() {
       await refreshSessionDetail(selectedSessionId, 'refresh');
       return true;
     } catch (err) {
-      handleApiError(err);
+      if (err instanceof ApiError && err.code === 'unknown_skill' && input.skills.length)
+        skillsWorkspace.actions.setSessionError(errorMessage(err));
+      else handleApiError(err);
       return false;
     } finally {
       sendMessageInFlightRef.current = false;
@@ -1884,6 +1975,7 @@ export function App() {
 
   function handleNewThreadGroupChange(value: string) {
     setNewThreadGroupId(value);
+    skillsWorkspace.actions.setNewThreadError('');
     setNewThreadEnvironmentId((current) => {
       if (!current) return current;
       const environment = environments.find((candidate) => candidate.id === current);
@@ -2040,7 +2132,10 @@ export function App() {
   }
 
   async function saveMessageEdit() {
-    if (!canWriteSelectedSession || !selectedSessionId || !editingMessageId || !messageDraft.trim()) return;
+    const editingMessage = messages.find((message) => message.id === editingMessageId);
+    const hasSkills = Array.isArray(editingMessage?.context?.skills) && editingMessage.context.skills.length > 0;
+    if (!canWriteSelectedSession || !selectedSessionId || !editingMessageId || (!messageDraft.trim() && !hasSkills))
+      return;
     setError('');
     try {
       const message = await updateMessage({
@@ -2160,6 +2255,7 @@ export function App() {
     sessionStorage.removeItem(groupsPanelSelectedGroupStorageKey);
     sessionStorage.removeItem(selectedAutomationStorageKey);
     sessionStorage.removeItem(selectedEnvironmentStorageKey);
+    sessionStorage.removeItem(selectedSkillStorageKey);
     sessionStorage.removeItem(archivedAutomationsOpenStorageKey);
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     setSessions([]);
@@ -2170,6 +2266,7 @@ export function App() {
     setSessionSearchResults([]);
     setSessionSearchNextCursor(null);
     resetAutomationsAdmin();
+    skillsWorkspace.actions.reset();
     setGroups([]);
     setEnvironmentsState({ data: [], loading: false, error: '' });
     resetAccessGroupsAdmin();
@@ -2179,6 +2276,9 @@ export function App() {
       selectedSessionId: '',
       selectedAutomationId: '',
       selectedEnvironmentId: '',
+      selectedEnvironmentRevisionId: '',
+      selectedSkillId: '',
+      selectedSkillRevisionId: '',
       sidebarPanel: 'sessions',
       isCreatingThread: false,
       setupGuideOpen: false,
@@ -2188,6 +2288,8 @@ export function App() {
     setNewThreadEnvironmentBranchOverrides({});
     setFollowUpEnvironmentId('');
     setFollowUpEnvironmentBranchOverrides({});
+    skillsWorkspace.actions.setNewThreadError('');
+    skillsWorkspace.actions.setSessionError('');
     clearSessionDetail();
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     setSetupStatus(null);
@@ -2219,6 +2321,8 @@ export function App() {
     setFollowUpBranch('');
     setFollowUpModel('');
     setFollowUpReasoningLevel('');
+    skillsWorkspace.actions.setNewThreadError('');
+    skillsWorkspace.actions.setSessionError('');
     clearSessionDetail();
     eventCursor.current = 0;
   }
@@ -2247,10 +2351,12 @@ export function App() {
     setFollowUpBranch('');
     setFollowUpModel('');
     setFollowUpReasoningLevel('');
+    skillsWorkspace.actions.setSessionError('');
     setSidebarOpen(false);
   }
 
   function openSetupGuide() {
+    if (!confirmDiscardEditorChanges()) return;
     sessionStorage.setItem(setupGuideOpenStorageKey, 'true');
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     updateNavigation({ setupGuideOpen: true, groupsPanelOpen: false });
@@ -2259,6 +2365,7 @@ export function App() {
 
   function openGroupsPanel() {
     if (!canViewGroups) return;
+    if (!confirmDiscardEditorChanges()) return;
     const desktop = isDesktopViewport();
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.setItem(groupsPanelOpenStorageKey, 'true');
@@ -2272,6 +2379,7 @@ export function App() {
 
   function openAutomationsPanel() {
     if (!canViewAutomations) return;
+    if (!confirmDiscardEditorChanges()) return;
     const desktop = isDesktopViewport();
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
@@ -2290,24 +2398,29 @@ export function App() {
 
   function openEnvironmentsPanel() {
     if (!canViewEnvironments) return;
+    if (sidebarPanel !== 'environments' && !confirmDiscardEditorChanges()) return;
     const desktop = isDesktopViewport();
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'environments');
-    if (selectedEnvironmentId) setEnvironmentSearchParam(selectedEnvironmentId);
-    else clearResourceSearchParams();
-    updateNavigation({
-      setupGuideOpen: false,
-      groupsPanelOpen: false,
-      sidebarPanel: 'environments',
-      isCreatingThread: false,
-    });
+    if (selectedEnvironmentId) {
+      if (!skillsWorkspace.actions.navigateToEnvironment(selectedEnvironmentId, selectedEnvironmentRevisionId)) return;
+    } else {
+      clearResourceSearchParams();
+      updateNavigation({
+        setupGuideOpen: false,
+        groupsPanelOpen: false,
+        sidebarPanel: 'environments',
+        isCreatingThread: false,
+      });
+    }
     setSidebarCollapsed(false);
     setSidebarOpen(!desktop);
   }
 
-  function startNewEnvironment() {
-    if (!canCreateEnvironments) return;
+  function startNewEnvironment(): boolean {
+    if (!canCreateEnvironments) return false;
+    if (!confirmDiscardEditorChanges()) return false;
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.removeItem(selectedEnvironmentStorageKey);
@@ -2319,8 +2432,10 @@ export function App() {
       sidebarPanel: 'environments',
       isCreatingThread: false,
       selectedEnvironmentId: '',
+      selectedEnvironmentRevisionId: '',
     });
     if (!isDesktopViewport()) setSidebarOpen(false);
+    return true;
   }
 
   function startNewAutomation() {
@@ -2375,29 +2490,33 @@ export function App() {
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'environments');
+    if (!skillsWorkspace.actions.navigateToEnvironment(environmentId)) return;
     sessionStorage.setItem(selectedEnvironmentStorageKey, environmentId);
-    setEnvironmentSearchParam(environmentId);
-    updateNavigation({
-      setupGuideOpen: false,
-      groupsPanelOpen: false,
-      sidebarPanel: 'environments',
-      isCreatingThread: false,
-      selectedEnvironmentId: environmentId,
-    });
     if (!isDesktopViewport()) setSidebarOpen(false);
   }
 
   function handleEnvironmentSaved(environment: Environment) {
+    setEnvironmentEditorDirty(false);
     handleEnvironmentChanged(environment);
     sessionStorage.setItem(selectedEnvironmentStorageKey, environment.id);
-    setEnvironmentSearchParam(environment.id);
-    updateNavigation({
-      setupGuideOpen: false,
-      groupsPanelOpen: false,
-      sidebarPanel: 'environments',
-      isCreatingThread: false,
-      selectedEnvironmentId: environment.id,
-    });
+    skillsWorkspace.actions.navigateToEnvironment(environment.id, '', true);
+  }
+
+  async function handleArchiveEnvironment(environmentId: string) {
+    if (environmentId === selectedEnvironmentId && !confirmDiscardEditorChanges()) return;
+    try {
+      handleEnvironmentChanged(await archiveEnvironment({ environmentId, token }));
+    } catch (error) {
+      handleApiError(error);
+    }
+  }
+
+  async function handleRestoreEnvironment(environmentId: string) {
+    try {
+      handleEnvironmentChanged(await unarchiveEnvironment({ environmentId, token }));
+    } catch (error) {
+      handleApiError(error);
+    }
   }
 
   function handleAutomationSessionCreated(session: Session) {
@@ -2406,6 +2525,7 @@ export function App() {
   }
 
   function showSessionsSidebar() {
+    if (!confirmDiscardEditorChanges()) return;
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'sessions');
@@ -2417,6 +2537,7 @@ export function App() {
   }
 
   function backToSessionsSidebar() {
+    if (!confirmDiscardEditorChanges()) return;
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'sessions');
@@ -2425,6 +2546,15 @@ export function App() {
     updateNavigation({ setupGuideOpen: false, groupsPanelOpen: false, sidebarPanel: 'sessions' });
     setSidebarCollapsed(false);
     setSidebarOpen(true);
+  }
+
+  function confirmDiscardEditorChanges(): boolean {
+    if (sidebarPanel === 'skills' && !skillsWorkspace.actions.confirmDiscard()) return false;
+    if (sidebarPanel === 'environments' && environmentEditorDirtyRef.current) {
+      if (!window.confirm('Discard unsaved environment changes?')) return false;
+      setEnvironmentEditorDirty(false);
+    }
+    return true;
   }
 
   function startNewGroup() {
@@ -2744,6 +2874,37 @@ export function App() {
     setError(errorMessage(err));
   }
 
+  const sidebarNavigation = resolveSidebarNavigation({
+    panel: sidebarPanel,
+    showingSetupGuide,
+    visible: {
+      groups: canViewGroups,
+      automations: canViewAutomations,
+      environments: canViewEnvironments,
+      skills: canViewSkills,
+    },
+  });
+  const footerProps: SidebarFooterProps = {
+    authRequired: bearerAuthRequired || sessionAuthRequired,
+    canViewGroups,
+    canViewAutomations,
+    canViewEnvironments,
+    canViewSkills,
+    canViewSetup,
+    health,
+    navPage: sidebarNavigation.navPage,
+    themePreference,
+    token,
+    onOpenGroups: openGroupsPanel,
+    onOpenAutomations: openAutomationsPanel,
+    onOpenEnvironments: openEnvironmentsPanel,
+    onOpenSkills: skillsWorkspace.actions.open,
+    onOpenSessions: showSessionsSidebar,
+    onOpenSetup: openSetupGuide,
+    onSignOut: signOut,
+    onThemeChange: setThemePreference,
+  };
+
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       {error ? (
@@ -2781,24 +2942,8 @@ export function App() {
                   variant="ghost"
                   size="icon"
                   onClick={expandSidebar}
-                  aria-label={
-                    sidebarPanel === 'groups'
-                      ? 'Expand access'
-                      : sidebarPanel === 'automations'
-                        ? 'Expand automations'
-                        : sidebarPanel === 'environments'
-                          ? 'Expand environments'
-                          : 'Expand sessions'
-                  }
-                  title={
-                    sidebarPanel === 'groups'
-                      ? 'Expand access'
-                      : sidebarPanel === 'automations'
-                        ? 'Expand automations'
-                        : sidebarPanel === 'environments'
-                          ? 'Expand environments'
-                          : 'Expand sessions'
-                  }
+                  aria-label={sidebarNavigation.expandLabel}
+                  title={sidebarNavigation.expandLabel}
                 >
                   <PanelLeftOpen className="h-4 w-4" />
                 </Button>
@@ -2812,127 +2957,82 @@ export function App() {
               >
                 {sidebarPanel === 'groups' && canViewGroups ? (
                   <GroupsSidebar
-                    authRequired={bearerAuthRequired || sessionAuthRequired}
                     canCreateGroups={canManageAllGroups}
-                    canViewGroups={canViewGroups}
-                    canViewAutomations={canViewAutomations}
-                    canViewEnvironments={canViewEnvironments}
-                    canViewSetup={canViewSetup}
-                    connectionStatus={connectionStatus}
                     currentUser={currentUser}
+                    footerProps={footerProps}
                     groups={groups}
-                    health={health}
                     selectedGroupId={selectedGroupId}
                     selectedView={groupsPanelView}
                     superAdminUsers={currentSuperAdminUsers}
-                    themePreference={themePreference}
-                    token={token}
-                    navPage={showingSetupGuide ? 'setup' : groupsPanelOpen ? 'groups' : 'sessions'}
                     onBackToSessions={backToSessionsSidebar}
                     onCollapse={collapseSidebar}
                     onArchiveGroup={fireAndForget(handleArchiveGroup)}
                     onCreateGroup={startNewGroup}
-                    onOpenAutomations={openAutomationsPanel}
-                    onOpenEnvironments={openEnvironmentsPanel}
-                    onOpenGroups={openGroupsPanel}
-                    onOpenSessions={showSessionsSidebar}
-                    onOpenSetup={openSetupGuide}
                     onSelectGroup={selectGroupPanel}
                     onSelectSuperAdmins={selectSuperAdminsPanel}
-                    onSignOut={signOut}
-                    onThemeChange={setThemePreference}
                   />
                 ) : sidebarPanel === 'automations' && canViewAutomations ? (
                   <AutomationsSidebar
                     archivedAutomationsOpen={archivedAutomationsOpen || selectedAutomationArchived}
-                    authRequired={bearerAuthRequired || sessionAuthRequired}
                     automations={automations}
                     canCallApi={canViewAutomations}
                     canCreateAutomations={canCreateAutomations}
-                    canViewGroups={canViewGroups}
-                    canViewAutomations={canViewAutomations}
-                    canViewEnvironments={canViewEnvironments}
-                    canViewSetup={canViewSetup}
-                    connectionStatus={connectionStatus}
+                    footerProps={footerProps}
                     groups={groups}
-                    health={health}
                     loading={automationsLoading}
-                    navPage={showingSetupGuide ? 'setup' : 'automations'}
                     selectedAutomationId={selectedAutomationId}
-                    themePreference={themePreference}
-                    token={token}
                     onBackToSessions={backToSessionsSidebar}
                     onArchiveAutomation={fireAndForget(handleArchiveAutomation)}
                     onArchivedAutomationsOpenChange={setArchivedAutomationsOpen}
                     onCollapse={collapseSidebar}
                     onCreateAutomation={startNewAutomation}
-                    onOpenAutomations={openAutomationsPanel}
-                    onOpenEnvironments={openEnvironmentsPanel}
-                    onOpenGroups={openGroupsPanel}
-                    onOpenSessions={showSessionsSidebar}
-                    onOpenSetup={openSetupGuide}
                     onSelectAutomation={selectAutomationPanel}
-                    onSignOut={signOut}
-                    onThemeChange={setThemePreference}
                     onUnarchiveAutomation={fireAndForget(handleUnarchiveAutomation)}
                   />
                 ) : sidebarPanel === 'environments' && canViewEnvironments ? (
                   <EnvironmentsSidebar
-                    authRequired={bearerAuthRequired || sessionAuthRequired}
                     canCallApi={canViewEnvironments}
                     canCreateEnvironments={canCreateEnvironments}
-                    canViewGroups={canViewGroups}
-                    canViewAutomations={canViewAutomations}
-                    canViewEnvironments={canViewEnvironments}
-                    canViewSetup={canViewSetup}
-                    connectionStatus={connectionStatus}
                     environments={environments}
-                    health={health}
+                    footerProps={footerProps}
                     loading={environmentsLoading}
-                    navPage={showingSetupGuide ? 'setup' : 'environments'}
                     selectedEnvironmentId={selectedEnvironmentId}
-                    themePreference={themePreference}
-                    token={token}
+                    onArchiveEnvironment={fireAndForget(handleArchiveEnvironment)}
                     onBackToSessions={backToSessionsSidebar}
                     onCollapse={collapseSidebar}
                     onCreateEnvironment={startNewEnvironment}
-                    onOpenAutomations={openAutomationsPanel}
-                    onOpenEnvironments={openEnvironmentsPanel}
-                    onOpenGroups={openGroupsPanel}
-                    onOpenSessions={showSessionsSidebar}
-                    onOpenSetup={openSetupGuide}
+                    onRestoreEnvironment={fireAndForget(handleRestoreEnvironment)}
                     onSelectEnvironment={selectEnvironmentPanel}
-                    onSignOut={signOut}
-                    onThemeChange={setThemePreference}
+                  />
+                ) : sidebarPanel === 'skills' && canViewSkills ? (
+                  <SkillsSidebar
+                    canCallApi={canCallApi}
+                    canCreateSkills={skillsWorkspace.model.canCreate}
+                    footerProps={footerProps}
+                    groups={groups}
+                    loading={skillsWorkspace.model.loading}
+                    skills={skillsWorkspace.model.skills}
+                    selectedSkillId={skillsWorkspace.model.selectedSkillId}
+                    onBackToSessions={backToSessionsSidebar}
+                    onArchiveSkill={fireAndForget(skillsWorkspace.actions.archiveFromSidebar)}
+                    onCollapse={collapseSidebar}
+                    onCreateSkill={skillsWorkspace.actions.create}
+                    onRestoreSkill={fireAndForget(skillsWorkspace.actions.restore)}
+                    onSelectSkill={skillsWorkspace.actions.select}
                   />
                 ) : (
                   <ThreadSidebar
                     archivedSessionsOpen={archivedSessionsOpen || Boolean(selectedSessionArchived)}
-                    authRequired={bearerAuthRequired || sessionAuthRequired}
                     canCallApi={canCallApi}
-                    canViewGroups={canViewGroups}
-                    canViewAutomations={canViewAutomations}
-                    canViewEnvironments={canViewEnvironments}
                     canStartNewThread={canCreateThread}
-                    canViewSetup={canViewSetup}
                     canWriteSession={userCanWriteSession}
-                    health={health}
-                    connectionStatus={connectionStatus}
                     archivedSessionsLoaded={archivedSessionsLoaded}
                     archivedSessionsLoading={archivedSessionsLoading}
                     hasMoreArchivedSessions={Boolean(archivedSessionsNextCursor)}
                     hasMoreSessions={Boolean(sessionsNextCursor)}
                     loading={loading}
                     loadingMoreSessions={sessionsLoadingMore}
-                    navPage={
-                      showingSetupGuide
-                        ? 'setup'
-                        : sidebarPanel === 'environments'
-                          ? 'environments'
-                          : sidebarPanel === 'automations'
-                            ? 'automations'
-                            : 'sessions'
-                    }
+                    footerProps={footerProps}
                     searchQuery={sessionSearchQuery}
                     searchResults={sessionSearchResults}
                     searchLoading={sessionSearchLoading || sessionSearchLoadingMore}
@@ -2942,7 +3042,6 @@ export function App() {
                     sessionFilterCount={activeSessionFilterCount}
                     sessionTagOptions={sessionTagOptions}
                     selectedSessionId={selectedSessionId}
-                    token={token}
                     onArchive={fireAndForget(archiveFromList)}
                     onArchivedSessionsOpenChange={handleArchivedSessionsOpenChange}
                     onCollapse={collapseSidebar}
@@ -2950,11 +3049,6 @@ export function App() {
                     onLoadMoreSearchResults={fireAndForget(loadMoreSessionSearchResults)}
                     onLoadMoreSessions={fireAndForget(loadMoreSessions)}
                     onNewThread={startNewThread}
-                    onOpenAutomations={openAutomationsPanel}
-                    onOpenEnvironments={openEnvironmentsPanel}
-                    onOpenGroups={openGroupsPanel}
-                    onOpenSessions={showSessionsSidebar}
-                    onOpenSetup={openSetupGuide}
                     onRefresh={fireAndForget(refreshSessions)}
                     onSelect={selectSession}
                     onSearchChange={setSessionSearchQuery}
@@ -2962,9 +3056,6 @@ export function App() {
                     onSessionFiltersClear={() => applySessionFilters(emptySessionFilters)}
                     onSessionListHoverChange={setSessionListHovered}
                     onSessionStarChange={fireAndForget(handleSetSessionStarred)}
-                    onSignOut={signOut}
-                    onThemeChange={setThemePreference}
-                    themePreference={themePreference}
                     onUnarchive={fireAndForget(unarchiveFromList)}
                   />
                 )}
@@ -3018,15 +3109,7 @@ export function App() {
                     setupStatus={setupStatus}
                     setupError={setupStatusError}
                     showOpenSidebar={!sidebarOpen}
-                    openSidebarLabel={
-                      sidebarPanel === 'groups' && canViewGroups
-                        ? 'Open access'
-                        : sidebarPanel === 'automations' && canViewAutomations
-                          ? 'Open automations'
-                          : sidebarPanel === 'environments' && canViewEnvironments
-                            ? 'Open environments'
-                            : 'Open sessions'
-                    }
+                    openSidebarLabel={sidebarNavigation.openLabel}
                     onOpenSidebar={expandSidebar}
                     onRefresh={fireAndForget(refreshSetupStatus)}
                     onStartNewThread={startNewThread}
@@ -3067,6 +3150,7 @@ export function App() {
                     environmentsLoading={environmentsLoading}
                     environmentsError={environmentsError}
                     selectedEnvironmentId={selectedEnvironmentId}
+                    selectedRevisionId={selectedEnvironmentRevisionId}
                     canCallApi={canViewEnvironments}
                     groups={groups}
                     token={token}
@@ -3076,8 +3160,32 @@ export function App() {
                     showOpenSidebar={!sidebarOpen}
                     openSidebarLabel="Open environments"
                     onCreateEnvironment={startNewEnvironment}
+                    onDirtyChange={setEnvironmentEditorDirty}
                     onEnvironmentChanged={handleEnvironmentSaved}
                     onOpenSidebar={expandSidebar}
+                    onSelectRevision={(revisionId) =>
+                      skillsWorkspace.actions.navigateToEnvironment(selectedEnvironmentId, revisionId)
+                    }
+                    onError={handleApiError}
+                  />
+                ) : sidebarPanel === 'skills' && canViewSkills ? (
+                  <SkillsPanel
+                    skill={skillsWorkspace.model.selectedSkill}
+                    selectedSkillId={skillsWorkspace.model.selectedSkillId}
+                    selectedRevisionId={skillsWorkspace.model.selectedRevisionId}
+                    loaded={skillsWorkspace.model.loaded}
+                    loading={skillsWorkspace.model.loading}
+                    token={token}
+                    groups={groups}
+                    creatableGroups={skillCreatableGroups}
+                    showOpenSidebar={!sidebarOpen}
+                    onOpenSidebar={expandSidebar}
+                    onSkillChanged={skillsWorkspace.actions.changed}
+                    onSkillSaved={skillsWorkspace.actions.saved}
+                    onArchiveSkill={fireAndForget(skillsWorkspace.actions.archive)}
+                    onDirtyChange={skillsWorkspace.actions.setEditorDirty}
+                    onRestoreSkill={fireAndForget(skillsWorkspace.actions.restore)}
+                    onSelectRevision={skillsWorkspace.actions.selectRevision}
                     onError={handleApiError}
                   />
                 ) : isCreatingThread || !selectedSession ? (
@@ -3106,16 +3214,12 @@ export function App() {
                     modelUnavailableReason={newThreadModelUnavailableReason}
                     reasoningLevel={newThreadReasoningLevel}
                     defaultReasoningLevel={defaultReasoningLevel}
+                    skills={skillsWorkspace.model.newSessionCatalog.skills}
+                    skillsEnabled={skillsWorkspace.model.newSessionCatalog.enabled}
+                    skillsLoading={skillsWorkspace.model.newSessionCatalog.loading}
+                    skillError={skillsWorkspace.model.newSessionCatalog.error}
                     showOpenSidebar={!sidebarOpen}
-                    openSidebarLabel={
-                      sidebarPanel === 'groups' && canViewGroups
-                        ? 'Open access'
-                        : sidebarPanel === 'automations' && canViewAutomations
-                          ? 'Open automations'
-                          : sidebarPanel === 'environments' && canViewEnvironments
-                            ? 'Open environments'
-                            : 'Open sessions'
-                    }
+                    openSidebarLabel={sidebarNavigation.openLabel}
                     onOpenSidebar={expandSidebar}
                     onGroupChange={handleNewThreadGroupChange}
                     onPromptChange={setNewThreadPrompt}
@@ -3125,7 +3229,7 @@ export function App() {
                     onBranchChange={setNewThreadBranch}
                     onModelChange={setNewThreadModel}
                     onReasoningLevelChange={setNewThreadReasoningLevel}
-                    onSubmit={fireAndForget(handleCreateThread)}
+                    onSubmit={handleCreateThread}
                   />
                 ) : (
                   <section className="flex h-full min-h-0 flex-col">
@@ -3133,15 +3237,7 @@ export function App() {
                       selectedSession={selectedSession}
                       canWriteSession={canWriteSelectedSession}
                       showOpenSidebar={!sidebarOpen}
-                      openSidebarLabel={
-                        sidebarPanel === 'groups' && canViewGroups
-                          ? 'Open access'
-                          : sidebarPanel === 'automations' && canViewAutomations
-                            ? 'Open automations'
-                            : sidebarPanel === 'environments' && canViewEnvironments
-                              ? 'Open environments'
-                              : 'Open sessions'
-                      }
+                      openSidebarLabel={sidebarNavigation.openLabel}
                       onArchive={fireAndForget(handleArchiveSession)}
                       onSessionStarChange={fireAndForget(handleSetSessionStarred)}
                       onOpenSidebar={expandSidebar}
@@ -3200,6 +3296,8 @@ export function App() {
                                   onCancelRun={fireAndForget(cancelRun)}
                                   onEditMessage={fireAndForget(startEditingMessage)}
                                   onMessageDraftChange={setMessageDraft}
+                                  openableManagedSkillIds={skillsWorkspace.model.openableManagedSkillIds}
+                                  onOpenSkill={skillsWorkspace.actions.select}
                                   onRetryFailedMessages={fireAndForget(retryFailedMessages)}
                                   onSaveEdit={fireAndForget(saveMessageEdit)}
                                   onExtendSandbox={fireAndForget(handleExtendSandbox)}
@@ -3258,6 +3356,10 @@ export function App() {
                             reasoningLevel={followUpReasoningLevel}
                             inheritedReasoningLevel={selectedSessionReasoningLevel}
                             defaultReasoningLevel={defaultReasoningLevel}
+                            skills={skillsWorkspace.model.sessionCatalog.skills}
+                            skillsEnabled={canViewSkills}
+                            skillsLoading={skillsWorkspace.model.sessionCatalog.loading}
+                            skillError={skillsWorkspace.model.sessionCatalog.error}
                             onCodebaseChange={handleFollowUpCodebaseChange}
                             onEnvironmentBranchOverridesChange={setFollowUpEnvironmentBranchOverrides}
                             onEnvironmentRepositoryBranchesLoad={loadEnvironmentRepositoryBranches}
@@ -3368,16 +3470,14 @@ function setAutomationSearchParam(automationId: string) {
   setResourceSearchParam('automation', automationId);
 }
 
-function setEnvironmentSearchParam(environmentId: string) {
-  setResourceSearchParam('environment', environmentId);
-}
-
-function setResourceSearchParam(param: 'session' | 'group' | 'automation' | 'environment', value: string) {
+function setResourceSearchParam(param: 'session' | 'group' | 'automation' | 'environment' | 'skill', value: string) {
   const url = new URL(window.location.href);
   url.searchParams.delete('session');
   url.searchParams.delete('group');
   url.searchParams.delete('automation');
   url.searchParams.delete('environment');
+  url.searchParams.delete('skill');
+  url.searchParams.delete('revision');
   url.searchParams.set(param, value);
   window.history.replaceState({}, '', url);
 }
@@ -3392,6 +3492,8 @@ function clearResourceSearchParams() {
   url.searchParams.delete('group');
   url.searchParams.delete('automation');
   url.searchParams.delete('environment');
+  url.searchParams.delete('skill');
+  url.searchParams.delete('revision');
   window.history.replaceState({}, '', url);
 }
 
@@ -3480,7 +3582,8 @@ function hasResourceSearchParam(): boolean {
     searchParams.has('session') ||
     searchParams.has('group') ||
     searchParams.has('automation') ||
-    searchParams.has('environment')
+    searchParams.has('environment') ||
+    searchParams.has('skill')
   );
 }
 

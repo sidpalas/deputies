@@ -3,7 +3,7 @@ import type { ArtifactService } from '../artifacts/service.js';
 import { CallbackDispatcher, CallbackService, type CompletionCallbackSender } from '../callbacks/service.js';
 import type { AppendEventInput, EventService } from '../events/service.js';
 import { MessageService } from '../messages/service.js';
-import type { Runner, RunnerResult } from '../runner/types.js';
+import type { Runner, RunnerResult, RunnerSkillInvocation } from '../runner/types.js';
 import { isReasoningLevel } from '../runner/reasoning.js';
 import { SandboxLifecycleService } from '../sandbox/service.js';
 import type { SandboxProvider } from '../sandbox/types.js';
@@ -263,7 +263,16 @@ export class WorkerService {
             runId: claimed.run.id,
             messageId: primary.id,
             ownerGroupId: session.ownerGroupId,
+            ...(session.createdByUserId ? { createdByUserId: session.createdByUserId } : {}),
             prompt: buildBatchPrompt(claimed.messages),
+            messages: claimed.messages.map((message) => ({
+              messageId: message.id,
+              prompt: message.prompt,
+              ...(message.authorUserId ? { authorUserId: message.authorUserId } : {}),
+              ...(message.context ? { context: message.context } : {}),
+              skillInvocations: normalizeRunnerSkillInvocations(message.context),
+              sequence: message.sequence,
+            })),
             ...(typeof runContext.model === 'string' ? { model: runContext.model } : {}),
             ...(isReasoningLevel(runContext.reasoningLevel) ? { reasoningLevel: runContext.reasoningLevel } : {}),
             context: runContext,
@@ -541,6 +550,20 @@ export class WorkerService {
   }
 }
 
+export function normalizeRunnerSkillInvocations(context: Record<string, unknown> | undefined): RunnerSkillInvocation[] {
+  if (!Array.isArray(context?.skills)) return [];
+  const refs = Array.isArray(context.skillRefs) ? context.skillRefs : [];
+  return context.skills.flatMap((value, index) => {
+    if (typeof value !== 'string') return [];
+    const candidate = refs[index];
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [{ name: value }];
+    const record = candidate as Record<string, unknown>;
+    const ref = typeof record.id === 'string' && record.name === value ? record.id : undefined;
+    const revisionId = ref && typeof record.revisionId === 'string' ? record.revisionId : undefined;
+    return [{ name: value, ...(ref ? { ref } : {}), ...(revisionId ? { revisionId } : {}) }];
+  });
+}
+
 function readDeputyNotificationContext(
   context: Record<string, unknown> | undefined,
 ): { parentSessionId: string } | null {
@@ -598,11 +621,7 @@ function buildBatchPrompt(messages: ClaimedMessageBatch['messages']): string {
 }
 
 function buildBatchContext(messages: ClaimedMessageBatch['messages']): Record<string, unknown> {
-  const context = messages.reduce<Record<string, unknown>>(
-    (merged, message) => ({ ...merged, ...(message.context ?? {}) }),
-    {},
-  );
-  return context;
+  return messages.reduce<Record<string, unknown>>((merged, message) => ({ ...merged, ...(message.context ?? {}) }), {});
 }
 
 export type WorkerLoopHandle = {
