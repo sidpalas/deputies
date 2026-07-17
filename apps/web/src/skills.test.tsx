@@ -584,6 +584,11 @@ it('keeps repository and legacy managed skill chips non-linking', () => {
   expect(screen.queryAllByRole('button')).toHaveLength(0);
   expect(screen.getByLabelText('Invoked skills')).toHaveTextContent('repo-review');
   expect(screen.getByLabelText('Invoked skills')).toHaveTextContent('legacy-review');
+  expect(
+    screen.getByTitle(
+      'Repository skill from acme/widgets. It is not clickable because repository skills do not have a managed skill page.',
+    ),
+  ).toHaveTextContent('repo-review');
 });
 
 it('opens an invoked historical revision and returns to the current definition', async () => {

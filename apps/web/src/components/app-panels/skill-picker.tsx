@@ -27,7 +27,7 @@ export function SkillPicker(props: {
         {props.selected.map((skill) => (
           <Badge
             key={skill.id}
-            className="max-w-[min(16rem,100%)] gap-1 border border-primary/30 bg-primary/10 text-foreground"
+            className="h-6 max-w-[min(16rem,100%)] gap-1 whitespace-nowrap border border-primary/30 bg-primary/10 text-foreground"
             title={`${skill.name}: ${skill.description}`}
           >
             <BookOpenCheck className="h-3 w-3 shrink-0" />

@@ -6,6 +6,7 @@ export type PersistedMessageSkillInvocation = {
   name: string;
   managedSkillId?: string;
   revisionId?: string;
+  repository?: string;
 };
 
 export function parsePersistedMessageSkillInvocations(
@@ -20,10 +21,18 @@ export function parsePersistedMessageSkillInvocations(
     const ref = refs[index];
     if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return [{ name: value }];
     const record = ref as Record<string, unknown>;
-    const managedSkillId =
-      typeof record.id === 'string' && record.name === value && !record.id.startsWith('repo:') ? record.id : undefined;
+    const id = typeof record.id === 'string' && record.name === value ? record.id : undefined;
+    const managedSkillId = id && !id.startsWith('repo:') ? id : undefined;
     const revisionId = managedSkillId && typeof record.revisionId === 'string' ? record.revisionId : undefined;
-    return [{ name: value, ...(managedSkillId ? { managedSkillId } : {}), ...(revisionId ? { revisionId } : {}) }];
+    const repository = id ? repositoryFromSkillRef(id, value) : undefined;
+    return [
+      {
+        name: value,
+        ...(managedSkillId ? { managedSkillId } : {}),
+        ...(revisionId ? { revisionId } : {}),
+        ...(repository ? { repository } : {}),
+      },
+    ];
   });
 }
 
@@ -36,7 +45,7 @@ export function MessageSkillChips(props: {
   if (!invocations.length) return null;
   return (
     <div className="flex flex-wrap gap-1.5" aria-label="Invoked skills">
-      {invocations.map(({ name, managedSkillId, revisionId }, index) => {
+      {invocations.map(({ name, managedSkillId, revisionId, repository }, index) => {
         const content = (
           <>
             <BookOpenCheck className="h-3 w-3 shrink-0" />
@@ -49,7 +58,7 @@ export function MessageSkillChips(props: {
           props.onOpenSkill ? (
           <button
             key={`${name}:${index}`}
-            className="inline-flex max-w-[min(16rem,100%)] items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs font-medium text-foreground hover:bg-primary/20"
+            className="inline-flex h-6 max-w-[min(16rem,100%)] items-center gap-1 whitespace-nowrap rounded-md border border-primary/30 bg-primary/10 px-2 text-xs font-medium text-foreground hover:bg-primary/20"
             type="button"
             title="Open invoked skill revision"
             aria-label={`Open invoked ${name} skill revision`}
@@ -60,8 +69,12 @@ export function MessageSkillChips(props: {
         ) : (
           <Badge
             key={`${name}:${index}`}
-            className="max-w-[min(16rem,100%)] gap-1 border border-primary/30 bg-primary/10 text-foreground"
-            title={name}
+            className="h-6 max-w-[min(16rem,100%)] gap-1 whitespace-nowrap border border-primary/30 bg-primary/10 text-foreground"
+            title={
+              repository
+                ? `Repository skill from ${repository}. It is not clickable because repository skills do not have a managed skill page.`
+                : name
+            }
           >
             {content}
           </Badge>
@@ -69,4 +82,10 @@ export function MessageSkillChips(props: {
       })}
     </div>
   );
+}
+
+function repositoryFromSkillRef(id: string, name: string): string | undefined {
+  const suffix = `:${name}`;
+  if (!id.startsWith('repo:') || !id.endsWith(suffix)) return undefined;
+  return id.slice('repo:'.length, -suffix.length) || undefined;
 }
