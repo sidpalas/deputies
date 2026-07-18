@@ -367,7 +367,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
 
 const realRepositoryShell: RepositoryShell = async (command, options = {}) => {
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-lc', command], {
+    const { stdout, stderr } = await execFileAsync('bash', ['-c', command], {
       cwd: options.cwd,
       encoding: 'utf8',
       env: { ...process.env, ...options.env },
