@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+cd "$repo_root"
+
+echo "Installing system dependencies..."
+export DEBIAN_FRONTEND=noninteractive
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  ca-certificates \
+  curl \
+  postgresql \
+  postgresql-contrib \
+  unzip
+
+if ! command -v mise >/dev/null 2>&1 || [[ $(mise --version) != *"2026.6.13"* ]]; then
+  echo "Installing mise 2026.6.13..."
+  curl -fsSL https://mise.run | MISE_VERSION=2026.6.13 sh
+fi
+export PATH="$HOME/.local/bin:$PATH"
+
+echo "Installing the repository toolchain..."
+mise trust "$repo_root/mise.toml"
+mise install
+mise --cd deploy/aws install
+
+echo "Installing workspace dependencies..."
+mise exec -- pnpm install --frozen-lockfile
+
+echo "Installing Playwright system dependencies and Chromium..."
+mise exec -- pnpm --dir apps/web exec playwright install-deps chromium
+mise exec -- bash .github/scripts/install-playwright-chromium.sh
+
+if [[ ! -f .env.local ]]; then
+  cp -- .env.example .env.local
+fi
+
+postgres_bin=$(pg_config --bindir)
+export PATH="$postgres_bin:$PATH"
+export DATABASE_URL=${DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:5432/deputies}
+export TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:5432/deputies_test}
+
+echo "Starting Postgres and applying migrations..."
+bash ./deploy/sandboxes/daytona/start-postgres.sh
+mise run //apps/control-plane:db:migrate
+
+echo "Orb setup complete."

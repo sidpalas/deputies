@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+cd "$repo_root"
+
+postgres_bin=$(pg_config --bindir)
+export PATH="$postgres_bin:$PATH"
+
+bash ./deploy/sandboxes/daytona/start-postgres.sh
