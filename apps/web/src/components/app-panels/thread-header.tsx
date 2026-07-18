@@ -179,7 +179,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
 
   return (
     <section className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
-      <div className="flex min-w-0 items-start gap-2">
+      <div className="col-span-2 flex min-w-0 items-start gap-2 sm:col-span-1">
         {props.showOpenSidebar ? (
           <Button
             className="self-center h-8 w-8 shrink-0 p-0 md:hidden"
@@ -236,7 +236,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           )}
         </div>
       </div>
-      <div className="grid min-h-9 shrink-0 grid-cols-[auto_auto] items-center justify-items-end gap-2 justify-self-end">
+      <div className="col-start-2 row-start-2 grid min-h-9 shrink-0 grid-cols-[auto_auto] items-center justify-items-end gap-2 justify-self-end sm:row-start-1">
         <Badge
           className={cn('col-start-1', statusTextClass(sessionDisplayStatus(props.selectedSession)))}
           title={sessionDisplayTooltip(props.selectedSession)}
@@ -319,7 +319,10 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           ) : null}
         </div>
       </div>
-      <div className="relative col-span-2 row-start-2 flex flex-wrap items-center gap-1.5" ref={tagEditorRef}>
+      <div
+        className="relative col-start-1 row-start-2 flex min-w-0 flex-wrap items-center gap-1.5 sm:col-span-2"
+        ref={tagEditorRef}
+      >
         {sessionTags.map((tag) => (
           <Badge key={tag} className="gap-1 border border-border bg-background text-foreground">
             {tag}
