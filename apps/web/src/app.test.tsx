@@ -2488,8 +2488,8 @@ it('logs in with session auth before loading sessions', async () => {
   mockApi({ authMode: 'session', currentUser: null, logins });
   render(<App />);
 
-  fireEvent.change(await screen.findByPlaceholderText('Username'), { target: { value: 'dev' } });
-  fireEvent.change(screen.getByPlaceholderText('Password'), { target: { value: 'password' } });
+  fireEvent.change(await screen.findByLabelText('Username'), { target: { value: 'dev' } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'password' } });
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
   await screen.findAllByText('Existing session');

@@ -22,18 +22,26 @@ export function BearerAuthPanel(props: {
         <form className="mt-6 grid gap-3" onSubmit={props.saveToken}>
           <div>
             <strong>API token required</strong>
-            <p className="text-sm text-muted-foreground">
+            <p id="bearer-token-help" className="text-sm text-muted-foreground">
               Enter the backend bearer token. It stays in this browser's local storage.
             </p>
           </div>
           <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-            <Input
-              type="password"
-              value={props.draftToken}
-              onChange={(event) => props.setDraftToken(event.target.value)}
-              placeholder="Bearer token"
-            />
-            <Button type="submit">Use token</Button>
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium text-foreground" htmlFor="bearer-token">
+                Bearer token
+              </label>
+              <Input
+                id="bearer-token"
+                type="password"
+                value={props.draftToken}
+                onChange={(event) => props.setDraftToken(event.target.value)}
+                aria-describedby="bearer-token-help"
+              />
+            </div>
+            <Button className="self-end" type="submit">
+              Use token
+            </Button>
           </div>
         </form>
       </Card>
@@ -82,19 +90,29 @@ export function SessionAuthPanel(props: {
               </p>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              <Input
-                value={props.username}
-                onChange={(event) => props.onUsernameChange(event.target.value)}
-                placeholder="Username"
-                autoComplete="username"
-              />
-              <Input
-                type="password"
-                value={props.password}
-                onChange={(event) => props.onPasswordChange(event.target.value)}
-                placeholder="Password"
-                autoComplete="current-password"
-              />
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium text-foreground" htmlFor="login-username">
+                  Username
+                </label>
+                <Input
+                  id="login-username"
+                  value={props.username}
+                  onChange={(event) => props.onUsernameChange(event.target.value)}
+                  autoComplete="username"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium text-foreground" htmlFor="login-password">
+                  Password
+                </label>
+                <Input
+                  id="login-password"
+                  type="password"
+                  value={props.password}
+                  onChange={(event) => props.onPasswordChange(event.target.value)}
+                  autoComplete="current-password"
+                />
+              </div>
             </div>
             <Button className="justify-self-end" type="submit" disabled={!props.username.trim() || !props.password}>
               Sign in
