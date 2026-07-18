@@ -1,6 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Archive, ChevronDown, Code2, GitCompare, PanelLeftOpen, Pencil, Plus, Star, Wrench, X } from 'lucide-react';
+import {
+  Archive,
+  ChevronDown,
+  Code2,
+  Ellipsis,
+  GitCompare,
+  PanelLeftOpen,
+  Pencil,
+  Plus,
+  Star,
+  Wrench,
+  X,
+} from 'lucide-react';
 import type { Session, SessionTagSummary, WorkspaceToolId } from '../../api.js';
 import { cn } from '../../lib/utils.js';
 import { Badge } from '../ui/badge.js';
@@ -37,9 +49,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   const [tagPopoverLeft, setTagPopoverLeft] = useState(0);
   const [savingTags, setSavingTags] = useState(false);
   const [titleDraft, setTitleDraft] = useState(props.selectedSession.title ?? '');
-  const [toolsOpen, setToolsOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
   const [openingWorkspaceTool, setOpeningWorkspaceTool] = useState<WorkspaceToolId | ''>('');
-  const toolsRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
   const tagEditorRef = useRef<HTMLDivElement>(null);
   const tagButtonRef = useRef<HTMLButtonElement>(null);
   const canOpenWorkspaceTools = props.canOpenWorkspaceTools ?? props.canWriteSession;
@@ -47,6 +59,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   const sessionTags = props.selectedSession.tags ?? [];
   const workspaceUnavailableReason =
     props.workspaceToolsUnavailableReason ?? workspaceToolUnavailableReason(props.selectedSession);
+  const displayStatus = sessionDisplayStatus(props.selectedSession);
   const tagQuery = normalizeTagDraft(tagDraft);
   const availableTagOptions = props.sessionTagOptions.filter((option) => !sessionTags.includes(option.tag));
   const filteredTagOptions = availableTagOptions
@@ -97,15 +110,15 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   }, [tagPopoverOpen]);
 
   useEffect(() => {
-    if (!toolsOpen) return;
+    if (!actionsOpen) return;
 
     function closeOnOutsideClick(event: MouseEvent) {
-      if (event.target instanceof Node && toolsRef.current?.contains(event.target)) return;
-      setToolsOpen(false);
+      if (event.target instanceof Node && actionsRef.current?.contains(event.target)) return;
+      setActionsOpen(false);
     }
 
     function closeOnEscape(event: globalThis.KeyboardEvent) {
-      if (event.key === 'Escape') setToolsOpen(false);
+      if (event.key === 'Escape') setActionsOpen(false);
     }
 
     document.addEventListener('mousedown', closeOnOutsideClick);
@@ -114,7 +127,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
       document.removeEventListener('mousedown', closeOnOutsideClick);
       document.removeEventListener('keydown', closeOnEscape);
     };
-  }, [toolsOpen]);
+  }, [actionsOpen]);
 
   function startEditingTitle() {
     if (!props.canWriteSession) return;
@@ -148,7 +161,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   }
 
   async function openWorkspaceTool(toolId: WorkspaceToolId) {
-    setToolsOpen(false);
+    setActionsOpen(false);
     if (!canOpenWorkspaceTools || workspaceToolsDisabled) return;
     setOpeningWorkspaceTool(toolId);
     try {
@@ -158,8 +171,13 @@ export function ThreadHeader(props: ThreadHeaderProps) {
     }
   }
 
+  function toggleStarSession() {
+    setActionsOpen(false);
+    props.onSessionStarChange(props.selectedSession.id, !props.selectedSession.starred);
+  }
+
   function archiveSession() {
-    setToolsOpen(false);
+    setActionsOpen(false);
     if (!props.canWriteSession) return;
     props.onArchive();
   }
@@ -179,7 +197,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
 
   return (
     <section className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
-      <div className="col-span-2 flex min-w-0 items-start gap-2 sm:col-span-1">
+      <div className="flex min-w-0 items-start gap-2">
         {props.showOpenSidebar ? (
           <Button
             className="self-center h-8 w-8 shrink-0 p-0 md:hidden"
@@ -236,45 +254,68 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           )}
         </div>
       </div>
-      <div className="col-start-2 row-start-2 grid min-h-9 shrink-0 grid-cols-[auto_auto] items-center justify-items-end gap-2 justify-self-end sm:row-start-1">
-        <Badge
-          className={cn('col-start-1', statusTextClass(sessionDisplayStatus(props.selectedSession)))}
+      <div className="col-start-2 row-start-1 flex min-h-9 shrink-0 items-center justify-end gap-2 justify-self-end">
+        <span
+          className={cn('inline-flex h-9 w-4 items-center justify-center sm:hidden', statusTextClass(displayStatus))}
+          role="img"
+          aria-label={`Session status: ${displayStatus}`}
           title={sessionDisplayTooltip(props.selectedSession)}
         >
-          {sessionDisplayStatus(props.selectedSession)}
+          <span className="h-2.5 w-2.5 rounded-full bg-current" aria-hidden="true" />
+        </span>
+        <Badge
+          className={cn('hidden sm:inline-flex', statusTextClass(displayStatus))}
+          title={sessionDisplayTooltip(props.selectedSession)}
+        >
+          {displayStatus}
         </Badge>
-        <div className="col-start-2 flex justify-end gap-2">
+        <Button
+          className="hidden h-9 gap-2 sm:inline-flex"
+          type="button"
+          variant="secondary"
+          onClick={() => props.onSessionStarChange(props.selectedSession.id, !props.selectedSession.starred)}
+          aria-pressed={props.selectedSession.starred === true}
+          title={props.selectedSession.starred ? 'Unstar session' : 'Star session'}
+        >
+          <Star className={cn('h-4 w-4', props.selectedSession.starred && 'fill-current text-warning')} />
+          <span>{props.selectedSession.starred ? 'Starred' : 'Star'}</span>
+        </Button>
+        <div className="relative" ref={actionsRef}>
           <Button
-            className="h-9 gap-2"
+            className="h-9 w-9 gap-2 p-0 sm:w-auto sm:px-3"
             type="button"
             variant="secondary"
-            onClick={() => props.onSessionStarChange(props.selectedSession.id, !props.selectedSession.starred)}
-            aria-pressed={props.selectedSession.starred === true}
-            title={props.selectedSession.starred ? 'Unstar session' : 'Star session'}
+            onClick={() => setActionsOpen((open) => !open)}
+            aria-expanded={actionsOpen}
+            aria-haspopup="menu"
+            aria-label="Session actions"
+            title="Session actions"
           >
-            <Star className={cn('h-4 w-4', props.selectedSession.starred && 'fill-current text-warning')} />
-            <span className="hidden sm:inline">{props.selectedSession.starred ? 'Starred' : 'Star'}</span>
+            <Ellipsis className="h-4 w-4 sm:hidden" />
+            <Wrench className="hidden h-4 w-4 sm:block" />
+            <span className="hidden sm:inline">Tools</span>
+            <ChevronDown className="hidden h-3.5 w-3.5 sm:block" />
           </Button>
-          {canOpenWorkspaceTools ? (
-            <div className="relative" ref={toolsRef}>
-              <Button
-                className="h-9 gap-2"
+          {actionsOpen ? (
+            <div
+              className="absolute right-0 top-11 z-30 w-56 rounded-md border border-border bg-card p-1 text-sm text-card-foreground shadow-lg"
+              role="menu"
+              aria-label="Session actions"
+            >
+              <button
                 type="button"
-                variant="secondary"
-                onClick={() => setToolsOpen((open) => !open)}
-                aria-expanded={toolsOpen}
-                aria-haspopup="menu"
-                title="Tools"
+                className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground sm:hidden"
+                role="menuitem"
+                onClick={toggleStarSession}
               >
-                <Wrench className="h-4 w-4" />
-                <span className="hidden sm:inline">Tools</span>
-                <ChevronDown className="h-3.5 w-3.5" />
-              </Button>
-              {toolsOpen ? (
-                <div
-                  className="absolute right-0 top-11 z-30 w-56 rounded-md border border-border bg-card p-1 text-sm text-card-foreground shadow-lg"
-                  role="menu"
-                >
+                <Star className={cn('h-4 w-4', props.selectedSession.starred && 'fill-current text-warning')} />
+                <span className="min-w-0 flex-1">
+                  {props.selectedSession.starred ? 'Unstar session' : 'Star session'}
+                </span>
+              </button>
+              {canOpenWorkspaceTools ? (
+                <>
+                  <div className="my-1 h-px bg-border sm:hidden" />
                   <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Workspace Tools</p>
                   {workspaceUnavailableReason ? (
                     <p className="px-2 py-2 text-muted-foreground">{workspaceUnavailableReason}</p>
@@ -298,31 +339,28 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                       </button>
                     ))
                   )}
-                  {props.selectedSession.status !== 'archived' ? (
-                    <>
-                      <div className="my-1 h-px bg-border" />
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={!props.canWriteSession}
-                        role="menuitem"
-                        onClick={archiveSession}
-                      >
-                        <Archive className="h-4 w-4" />
-                        <span className="min-w-0 flex-1">Archive session</span>
-                      </button>
-                    </>
-                  ) : null}
-                </div>
+                </>
+              ) : null}
+              {props.selectedSession.status !== 'archived' ? (
+                <>
+                  <div className={cn('my-1 h-px bg-border', !canOpenWorkspaceTools && 'sm:hidden')} />
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!props.canWriteSession}
+                    role="menuitem"
+                    onClick={archiveSession}
+                  >
+                    <Archive className="h-4 w-4" />
+                    <span className="min-w-0 flex-1">Archive session</span>
+                  </button>
+                </>
               ) : null}
             </div>
           ) : null}
         </div>
       </div>
-      <div
-        className="relative col-start-1 row-start-2 flex min-w-0 flex-wrap items-center gap-1.5 sm:col-span-2"
-        ref={tagEditorRef}
-      >
+      <div className="relative col-span-2 row-start-2 flex min-w-0 flex-wrap items-center gap-1.5" ref={tagEditorRef}>
         {sessionTags.map((tag) => (
           <Badge key={tag} className="gap-1 border border-border bg-background text-foreground">
             {tag}

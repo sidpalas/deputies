@@ -1189,7 +1189,7 @@ it('keeps sidebar session actions exposed on mobile', async () => {
   expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
 });
 
-it('groups header session actions in a tools menu', async () => {
+it('groups header session actions in a generic actions menu', async () => {
   mockApi();
   render(<App />);
 
@@ -1197,10 +1197,15 @@ it('groups header session actions in a tools menu', async () => {
   const header = heading.closest('section');
   expect(header).toBeInTheDocument();
 
-  fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Tools' }));
+  const headerQueries = within(header as HTMLElement);
+  expect(headerQueries.getByRole('img', { name: 'Session status: idle' })).toHaveClass('sm:hidden');
+  expect(headerQueries.getByText('idle')).toHaveClass('hidden', 'sm:inline-flex');
+  expect(headerQueries.getByTitle('Star session')).toHaveClass('hidden', 'sm:inline-flex');
+  fireEvent.click(headerQueries.getByRole('button', { name: 'Session actions' }));
 
-  expect(within(header as HTMLElement).getByText('Workspace Tools')).toBeInTheDocument();
-  expect(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' })).toBeInTheDocument();
+  expect(headerQueries.getByRole('menuitem', { name: 'Star session' })).toHaveClass('sm:hidden');
+  expect(headerQueries.getByText('Workspace Tools')).toBeInTheDocument();
+  expect(headerQueries.getByRole('menuitem', { name: 'Archive session' })).toBeInTheDocument();
 });
 
 it('reopens the sessions side panel when navigating back to sessions from the footer on desktop', async () => {
@@ -1708,7 +1713,7 @@ it('archives the selected session before waiting for the archive request', async
 
   const heading = await screen.findByRole('heading', { name: 'Existing session' });
   const header = heading.closest('section');
-  fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Tools' }));
+  fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Session actions' }));
   fireEvent.click(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' }));
 
   expect(screen.getByText('What needs doing?')).toBeInTheDocument();
