@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.19.1](https://github.com/sidpalas/deputies/compare/v0.19.0...v0.19.1) (2026-07-18)
+
+
+### Bug Fixes
+
+* compact session actions on narrow screens ([647adc4](https://github.com/sidpalas/deputies/commit/647adc4d861267d7eb3afb0dbf8ce0ba7b0304d1))
+* give session titles more room on narrow screens ([bfcace2](https://github.com/sidpalas/deputies/commit/bfcace2cc596ee180d71e59b69c6e45d200cfda6))
+* include sandbox bridge in Docker installs ([c3e81d4](https://github.com/sidpalas/deputies/commit/c3e81d44576fdddc62fbcb76c511077a31063992))
+
 ## [0.19.0](https://github.com/sidpalas/deputies/compare/v0.18.0...v0.19.0) (2026-07-17)
 
 
