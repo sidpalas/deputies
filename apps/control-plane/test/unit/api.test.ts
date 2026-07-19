@@ -1066,7 +1066,7 @@ describe('core API', () => {
     expect(sessionsResponse.status).toBe(200);
     const sessionsBody = await sessionsResponse.json();
     expectSessionsResponse(sessionsBody);
-    expect(sessionsBody.sessions).toMatchObject([{ id: session.id, title: 'Listed session' }]);
+    expect(sessionsBody.sessions).toMatchObject([{ id: session.id, title: 'Listed session', directChildCount: 0 }]);
 
     const messagesResponse = await fetch(`${baseUrl}/sessions/${session.id}/messages`);
     expect(messagesResponse.status).toBe(200);
@@ -1127,6 +1127,15 @@ describe('core API', () => {
       expectErrorResponse(body);
       expect(body).toMatchObject({ error: 'invalid_request' });
     }
+  });
+
+  it('rejects malformed parent session IDs when listing sessions', async () => {
+    const response = await fetch(`${baseUrl}/sessions?parentSessionId=not-a-uuid`);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: 'invalid_request',
+      message: 'Expected valid parentSessionId',
+    });
   });
 
   it('searches sessions by title and content', async () => {

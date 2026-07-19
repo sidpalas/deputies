@@ -137,6 +137,10 @@ export function StaticDemoApp() {
               hasMoreSessions={false}
               loading={false}
               loadingMoreSessions={false}
+              childSessionCursors={new Map()}
+              childSessionsLoading={new Set()}
+              revealedLineage={[]}
+              revealedLineageSearchQuery=""
               footerProps={footerProps}
               searchQuery={sessionSearchQuery}
               searchResults={searchResults}
@@ -156,9 +160,17 @@ export function StaticDemoApp() {
               onLoadMoreArchivedSessions={() => undefined}
               onLoadMoreSearchResults={() => undefined}
               onLoadMoreSessions={() => undefined}
+              onLoadChildSessions={() => undefined}
               onNewThread={() => undefined}
               onRefresh={() => undefined}
+              onClearLineageFilters={() => undefined}
+              onClearLineageSearch={() => undefined}
+              onDismissLineageReveal={() => undefined}
               onSearchChange={setSessionSearchQuery}
+              onShowInTree={(session) => {
+                setSessionSearchQuery('');
+                setSelectedSessionId(session.id);
+              }}
               onSessionFiltersChange={() => undefined}
               onSessionFiltersClear={() => undefined}
               onSessionListHoverChange={() => undefined}

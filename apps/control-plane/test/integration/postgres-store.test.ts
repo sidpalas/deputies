@@ -7,7 +7,7 @@ import {
   type PiSessionData,
 } from '../../src/runner-pi/session-store.js';
 import { runSessionSearchIndexerOnce } from '../../src/search/indexer.js';
-import { defaultGroupId, type SkillRevisionWrite } from '../../src/store/types.js';
+import { defaultGroupId, type SessionListOptions, type SkillRevisionWrite } from '../../src/store/types.js';
 import { PostgresStore } from '../../src/store/postgres.js';
 import { waitFor } from '../support/http.js';
 import { setupPostgresStoreSuite, testDatabaseUrl } from '../support/postgres-store-suite.js';
@@ -505,6 +505,59 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(listedIds).toContain(organizationVisible.id);
     expect(listedIds).toContain(ownGroupSession.id);
     expect(listedIds).not.toContain(hiddenSession.id);
+  });
+
+  it('counts and paginates only visible direct child sessions', async () => {
+    const services = createServices(store);
+    const now = new Date('2026-07-19T00:00:00.000Z');
+    const hiddenGroup = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000723',
+      name: 'Hidden child group',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const parent = await services.sessions.create({ title: 'Child-count parent' });
+    const visibleChild = await store.createSession({
+      id: '00000000-0000-4000-8000-000000000724',
+      status: 'created',
+      title: 'Visible direct child',
+      parentSessionId: parent.id,
+      spawnDepth: 1,
+      ownerGroupId: defaultGroupId,
+      visibility: 'organization',
+      writePolicy: 'group_members',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await store.createSession({
+      id: '00000000-0000-4000-8000-000000000725',
+      status: 'created',
+      title: 'Hidden direct child',
+      parentSessionId: parent.id,
+      spawnDepth: 1,
+      ownerGroupId: hiddenGroup.id,
+      visibility: 'group',
+      writePolicy: 'group_members',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const options: SessionListOptions = {
+      visibleTo: { groupIds: [defaultGroupId] },
+      archived: false,
+      limit: 50,
+    };
+    const parentPage = await store.listSessionsWithLatestSandbox('fake', options);
+    expect(parentPage.items.find(({ session }) => session.id === parent.id)?.directChildCount).toBe(1);
+
+    const childPage = await store.listSessionsWithLatestSandbox('fake', {
+      ...options,
+      parentSessionId: parent.id,
+    });
+    expect(childPage.items.map(({ session }) => session.id)).toEqual([visibleChild.id]);
   });
 
   it('paginates session lists with archived filtering', async () => {

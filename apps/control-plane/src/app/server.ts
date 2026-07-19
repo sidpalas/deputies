@@ -297,6 +297,10 @@ export function createApp(config: AppConfig, services = createServices()) {
     const cursor = decodeSessionListCursor(c.req.query('cursor'));
     const archived = parseOptionalBoolean(c.req.query('archived')) ?? false;
     const groupId = optionalString(c.req.query('groupId'));
+    const parentSessionId = optionalString(c.req.query('parentSessionId'));
+    if (parentSessionId && !isUuid(parentSessionId)) {
+      return writeError(c, 400, 'invalid_request', 'Expected valid parentSessionId');
+    }
     const filters = parseSessionListFilters(c, auth);
     if (groupId && !(await canFilterToGroup(auth, services.store, groupId))) {
       return writeError(c, 403, 'forbidden', 'Group access is required');
@@ -310,6 +314,7 @@ export function createApp(config: AppConfig, services = createServices()) {
         ...(visibleTo ? { visibleTo } : {}),
         archived,
         ...(groupId ? { groupId } : {}),
+        ...(parentSessionId ? { parentSessionId } : {}),
         ...filters,
         limit,
         ...(cursor ? { cursor } : {}),
@@ -327,12 +332,13 @@ export function createApp(config: AppConfig, services = createServices()) {
     // first-page refresh path upsert those live changes back into the sidebar.
     const visibleSessions = sessionsWithSandbox.items
       .filter(({ session }) => canReadSession(auth, session))
-      .map(({ session, sandbox }) =>
+      .map(({ session, sandbox, directChildCount }) =>
         serializeSessionView(
           session,
           sandbox,
           groupNames.get(session.ownerGroupId),
           starredSessionIds?.has(session.id),
+          directChildCount,
         ),
       );
     return c.json({
@@ -1452,12 +1458,14 @@ function serializeSessionView(
   sandbox: SandboxRecord | null,
   ownerGroupName: string | undefined,
   starred?: boolean,
+  directChildCount?: number,
 ) {
   const display = sessionDisplayStatus(session, sandbox);
   const serialized = {
     ...session,
     ...(ownerGroupName ? { ownerGroupName } : {}),
     ...(starred !== undefined ? { starred } : {}),
+    ...(directChildCount !== undefined ? { directChildCount } : {}),
     displayStatus: display.status,
     displayStatusTooltip: display.tooltip,
   };

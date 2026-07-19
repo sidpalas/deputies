@@ -78,6 +78,7 @@ type MockApiOptions = {
   sessionTags?: unknown[];
   sessionsNextCursor?: string | null;
   onListSessionsRequest?: (request: { count: number; url: URL }) => Response | Promise<Response> | undefined;
+  onGetSessionRequest?: (sessionId: string) => Response | Promise<Response> | undefined;
   onStarSessionRequest?: (request: { starred: boolean }) => Response | Promise<Response> | undefined;
   sessionDetailStatusById?: Record<string, number>;
   searchResults?: unknown[];
@@ -87,6 +88,7 @@ type MockApiOptions = {
     context?: Record<string, unknown>;
     displayStatus?: string;
     displayStatusTooltip?: string;
+    directChildCount?: number;
     ownerGroupName?: string;
     sandbox?: Record<string, unknown>;
   };
@@ -99,6 +101,7 @@ type MockApiOptions = {
   onListSessions?: (count: number) => void;
   globalStreamStatus?: number;
   hangArchive?: boolean;
+  archiveStatus?: number;
   hangMessagesForSessions?: string[];
   hangArtifacts?: boolean;
   hangSessions?: boolean;
@@ -1940,6 +1943,99 @@ it('opens search results that are outside the loaded sessions page', async () =>
   expect(await screen.findByRole('heading', { name: 'Search-only session' })).toBeInTheDocument();
 });
 
+it('reveals a filtered search result in its fetched ancestor tree and can return it to a detached row', async () => {
+  const parentSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000077',
+    title: 'Originating session',
+    status: 'archived',
+  };
+  const searchHit = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000088',
+    title: 'Deputy search result',
+    parentSessionId: parentSession.id,
+    spawnDepth: 1,
+    updatedAt: '2026-05-05T12:10:00.000Z',
+  };
+  mockApi({
+    sessions: [session, parentSession, searchHit],
+    searchResults: [{ session: searchHit, snippet: 'matched deputy prompt', matchKind: 'prompt', score: 1 }],
+    onListSessionsRequest: () => jsonResponse({ sessions: [session], nextCursor: null }),
+  });
+  render(<App />);
+
+  await screen.findByRole('heading', { name: 'Sessions' });
+  fireEvent.click(
+    screen
+      .getAllByRole('button', { name: 'Created' })
+      .find((button) => button.getAttribute('aria-pressed') === 'false')!,
+  );
+  fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'matched' } });
+
+  const sidebar = within((await screen.findByRole('heading', { name: 'Sessions' })).closest('aside')!);
+  fireEvent.click(screen.getByRole('button', { name: 'Open sessions' }));
+  const showInTree = await sidebar.findByRole('button', { name: 'Show in session tree' });
+  expect(sidebar.queryByText('Sub-session')).not.toBeInTheDocument();
+  fireEvent.click(showInTree);
+
+  expect(await sidebar.findByText('Showing selected session lineage')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Open sessions' })).not.toBeInTheDocument();
+  expect(sidebar.getByText('Ancestors are included even when they do not match your search.')).toBeInTheDocument();
+  expect(sidebar.getByRole('button', { name: 'Clear search' })).toBeInTheDocument();
+  expect(sidebar.getByRole('button', { name: 'Originating session' })).toBeInTheDocument();
+  expect(sidebar.getByRole('button', { name: 'Deputy search result' })).toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Search sessions...')).toHaveValue('');
+
+  fireEvent.click(sidebar.getByRole('button', { name: 'Hide lineage' }));
+  expect(sidebar.queryByText('Showing selected session lineage')).not.toBeInTheDocument();
+  expect(sidebar.queryByRole('button', { name: 'Originating session' })).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Search sessions...')).toHaveValue('matched');
+  expect(await sidebar.findByRole('button', { name: 'Show in session tree' })).toBeInTheDocument();
+
+  fireEvent.click(sidebar.getByRole('button', { name: 'Show in session tree' }));
+  expect(await sidebar.findByText('Showing selected session lineage')).toBeInTheDocument();
+  fireEvent.click(sidebar.getByRole('button', { name: 'Originating session' }));
+  expect(await screen.findByRole('heading', { name: 'Originating session' })).toBeInTheDocument();
+  fireEvent.click(sidebar.getByRole('button', { name: 'Clear filters' }));
+  expect(sidebar.queryByText('Showing selected session lineage')).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Search sessions...')).toHaveValue('matched');
+
+  fireEvent.click(await sidebar.findByRole('button', { name: 'Show in session tree' }));
+  expect(await sidebar.findByText('Showing selected session lineage')).toBeInTheDocument();
+  fireEvent.click(sidebar.getByRole('button', { name: 'Clear search' }));
+  expect(sidebar.queryByText('Showing selected session lineage')).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Search sessions...')).toHaveValue('');
+});
+
+it('does not reveal stale lineage after the user clears search', async () => {
+  const parentResponse = deferred<Response>();
+  const searchHit = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000088',
+    title: 'Deputy search result',
+    parentSessionId: '00000000-0000-4000-8000-000000000077',
+    spawnDepth: 1,
+  };
+  mockApi({
+    sessions: [session],
+    searchResults: [{ session: searchHit, snippet: 'matched deputy prompt', matchKind: 'prompt', score: 1 }],
+    onGetSessionRequest: (sessionId) => (sessionId === searchHit.parentSessionId ? parentResponse.promise : undefined),
+  });
+  render(<App />);
+
+  await screen.findByRole('heading', { name: 'Sessions' });
+  const search = screen.getByPlaceholderText('Search sessions...');
+  fireEvent.change(search, { target: { value: 'matched' } });
+  fireEvent.click(await screen.findByRole('button', { name: 'Show in session tree' }));
+  fireEvent.change(search, { target: { value: '' } });
+  parentResponse.resolve(jsonResponse({ session: { ...session, id: searchHit.parentSessionId } }));
+
+  await waitFor(() => expect(search).toHaveValue(''));
+  expect(screen.queryByText('Showing selected session lineage')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Existing session' })).toBeInTheDocument();
+});
+
 it('separates archived sidebar search results from active results', async () => {
   const activeHit = {
     ...session,
@@ -3628,6 +3724,144 @@ it('shows session lineage and labels deputy-authored messages', async () => {
   await waitFor(() => expect(sessionStorage.getItem('deputies-selected-session-id')).toBe(childSession.id));
 });
 
+it('shows a selected session parent in context when filters exclude it from the sidebar', async () => {
+  const childSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000302',
+    title: 'Child investigation',
+    parentSessionId: session.id,
+    spawnDepth: 1,
+  };
+  sessionStorage.setItem('deputies-selected-session-id', childSession.id);
+  sessionStorage.setItem(
+    'deputies-session-filters',
+    JSON.stringify({ tags: [], createdByMe: true, participatedByMe: false, starredByMe: false }),
+  );
+  mockApi({
+    sessions: [childSession],
+    onGetSessionRequest: (sessionId) => (sessionId === session.id ? jsonResponse({ session }) : undefined),
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: 'Child investigation' })).toBeInTheDocument();
+  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  fireEvent.click(await contextPanel.findByRole('button', { name: /Existing session/ }));
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  const sidebar = within(screen.getByRole('heading', { name: 'Sessions' }).closest('aside')!);
+  expect(sidebar.queryByRole('button', { name: 'Existing session' })).not.toBeInTheDocument();
+
+  const header = screen.getByRole('heading', { name: 'Existing session' }).closest('section');
+  fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Session actions' }));
+  fireEvent.click(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' }));
+
+  expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
+  expect(sidebar.queryByRole('button', { name: 'Existing session' })).not.toBeInTheDocument();
+});
+
+it('nests deputy sub-sessions under their originating session in the sidebar', async () => {
+  const childSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000302',
+    title: 'Investigate flaky tests',
+    parentSessionId: session.id,
+    spawnDepth: 1,
+    status: 'running',
+  };
+  mockApi({ sessions: [childSession, session], messagesBySession: { [childSession.id]: [] } });
+  render(<App />);
+
+  const sidebar = within((await screen.findByRole('heading', { name: 'Sessions' })).closest('aside')!);
+  const parent = sidebar.getByRole('button', { name: 'Existing session' });
+  const child = sidebar.getByRole('button', { name: 'Investigate flaky tests' });
+  expect(parent).not.toHaveClass('pl-6');
+  expect(child).not.toHaveClass('pl-6');
+  expect(child.closest('.ml-2')).toBeInTheDocument();
+});
+
+it('loads direct sub-sessions that were not included in the current session page', async () => {
+  const parentSession = { ...session, directChildCount: 2 };
+  const childSessions = [
+    {
+      ...session,
+      id: '00000000-0000-4000-8000-000000000302',
+      title: 'First unloaded child',
+      parentSessionId: session.id,
+      spawnDepth: 1,
+      directChildCount: 0,
+    },
+    {
+      ...session,
+      id: '00000000-0000-4000-8000-000000000303',
+      title: 'Second unloaded child',
+      parentSessionId: session.id,
+      spawnDepth: 1,
+      directChildCount: 0,
+    },
+  ];
+  mockApi({
+    onListSessionsRequest: ({ url }) =>
+      url.searchParams.get('parentSessionId') === session.id
+        ? jsonResponse({ sessions: childSessions, nextCursor: null })
+        : jsonResponse({ sessions: [parentSession], nextCursor: null }),
+  });
+  render(<App />);
+
+  const sidebar = within((await screen.findByRole('heading', { name: 'Sessions' })).closest('aside')!);
+  fireEvent.click(sidebar.getByRole('button', { name: 'Load 2 more sub-sessions' }));
+
+  const firstChild = await sidebar.findByRole('button', { name: 'First unloaded child' });
+  const secondChild = sidebar.getByRole('button', { name: 'Second unloaded child' });
+  expect(firstChild.closest('.ml-2')).toBeInTheDocument();
+  expect(secondChild.closest('.ml-2')).toBeInTheDocument();
+  expect(sidebar.queryByRole('button', { name: /Load .* sub-sessions/ })).not.toBeInTheDocument();
+});
+
+it('ignores a child page that resolves after the session list refreshes', async () => {
+  const childPage = deferred<Response>();
+  const parentSession = { ...session, directChildCount: 1 };
+  const childSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000302',
+    title: 'Stale unloaded child',
+    parentSessionId: session.id,
+    spawnDepth: 1,
+  };
+  mockApi({
+    onListSessionsRequest: ({ url }) =>
+      url.searchParams.get('parentSessionId') === session.id
+        ? childPage.promise
+        : jsonResponse({ sessions: [parentSession], nextCursor: null }),
+  });
+  render(<App />);
+
+  const sidebar = within((await screen.findByRole('heading', { name: 'Sessions' })).closest('aside')!);
+  fireEvent.click(sidebar.getByRole('button', { name: 'Load 1 more sub-session' }));
+  expect(await sidebar.findByRole('button', { name: 'Loading sub-sessions...' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(sidebar.getByRole('button', { name: 'Load 1 more sub-session' })).toBeEnabled());
+
+  await act(async () => {
+    childPage.resolve(jsonResponse({ sessions: [childSession], nextCursor: null }));
+    await childPage.promise;
+  });
+
+  expect(sidebar.queryByText('Stale unloaded child')).not.toBeInTheDocument();
+  expect(sidebar.getByRole('button', { name: 'Load 1 more sub-session' })).toBeInTheDocument();
+});
+
+it('restores the child count when archiving a parent fails', async () => {
+  mockApi({ sessionOverride: { directChildCount: 2 }, archiveStatus: 500 });
+  render(<App />);
+
+  const heading = await screen.findByRole('heading', { name: 'Existing session' });
+  const header = heading.closest('section');
+  fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Session actions' }));
+  fireEvent.click(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' }));
+
+  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Load 2 more sub-sessions' })).toBeInTheDocument();
+});
+
 it('shows callback delivery status and replays failed callbacks', async () => {
   const replays: string[] = [];
   mockApi({
@@ -3831,6 +4065,8 @@ function mockApi(options: MockApiOptions = {}) {
     const sessionDetailMatch = url.pathname.match(/^\/sessions\/([^/]+)$/);
     if (sessionDetailMatch && method === 'GET') {
       const sessionId = sessionDetailMatch[1]!;
+      const customResponse = options.onGetSessionRequest?.(sessionId);
+      if (customResponse) return customResponse;
       const status = options.sessionDetailStatusById?.[sessionId];
       if (status)
         return jsonResponse(
@@ -4147,6 +4383,9 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === `/sessions/${currentSession.id}/archive` && method === 'POST') {
       if (options.hangArchive) return hangingResponse(init);
+      if (options.archiveStatus) {
+        return jsonResponse({ error: 'archive_failed', message: 'Archive failed' }, options.archiveStatus);
+      }
       options.archivedSessionIds?.push(currentSession.id);
       currentSession = { ...currentSession, status: 'archived' };
       return jsonResponse({ session: currentSession });

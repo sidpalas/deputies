@@ -684,6 +684,7 @@ export type UpdateEnvironmentRecord = {
 export type SessionWithSandboxRecord = {
   session: SessionRecord;
   sandbox: SandboxRecord | null;
+  directChildCount?: number;
 };
 
 export type AgentSessionListScope = 'children' | 'group' | 'organization';
@@ -734,6 +735,7 @@ export type SessionListOptions = {
   visibleTo?: SessionVisibilityFilter;
   archived: boolean;
   groupId?: string;
+  parentSessionId?: string;
   tags?: string[];
   createdByUserId?: string;
   participantUserId?: string;

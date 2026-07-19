@@ -16,6 +16,7 @@ export function createPiDeputyToolDefinition(services: DeputyToolServices): Tool
     promptSnippet: 'Coordinate durable Deputies product sessions and child handoffs',
     promptGuidelines: [
       'Use deputies({ action: "spawn", prompt, title, repository, model, idempotencyKey, notifyOnComplete }) only when work should become a separate durable Deputies session visible to the user.',
+      'Spawned child sessions are automatically tagged "sub-deputy" so users can identify and filter them.',
       'For quick in-run delegation, use the Pi subagent tool instead of spawning a Deputies session.',
       'Do not busy-wait after spawning. Use get_session for explicit polling, end the turn when appropriate, or set notifyOnComplete so the child enqueues a parent follow-up when it completes.',
       'send_message and cancel are intentionally limited to direct child sessions you spawned from this session.',

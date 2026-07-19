@@ -335,11 +335,13 @@ export class MemoryStore implements AppStore {
   }
 
   async listSessionsWithLatestSandbox(provider: string, options: SessionListOptions): Promise<SessionWithSandboxPage> {
-    const sessions = [...this.sessions.values()]
+    const matchingSessions = [...this.sessions.values()]
       .filter((session) => canListSession(session, options.visibleTo))
       .filter((session) => (options.archived ? session.status === 'archived' : session.status !== 'archived'))
       .filter((session) => !options.groupId || session.ownerGroupId === options.groupId)
-      .filter((session) => sessionMatchesListFilters(session, options, this.messages, this.sessionStars))
+      .filter((session) => sessionMatchesListFilters(session, options, this.messages, this.sessionStars));
+    const sessions = matchingSessions
+      .filter((session) => !options.parentSessionId || session.parentSessionId === options.parentSessionId)
       .filter((session) => !options.cursor || isBeforeSessionCursor(session, options.cursor))
       .sort(compareSessionsNewestFirst);
     const page = sessions.slice(0, options.limit);
@@ -349,6 +351,7 @@ export class MemoryStore implements AppStore {
         page.map(async (session) => ({
           session,
           sandbox: await this.getLatestSandboxForSession(session.id, provider),
+          directChildCount: matchingSessions.filter((child) => child.parentSessionId === session.id).length,
         })),
       ),
       nextCursor:

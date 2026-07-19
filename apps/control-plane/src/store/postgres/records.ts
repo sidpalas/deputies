@@ -171,6 +171,7 @@ export type SandboxRow = QueryResultRow & {
 };
 
 export type SessionWithSandboxRow = SessionRow & {
+  direct_child_count?: string | number;
   sandbox_id: string | null;
   sandbox_provider: string | null;
   sandbox_provider_sandbox_id: string | null;
@@ -523,7 +524,7 @@ export function toSandbox(row: SandboxRow): SandboxRecord {
 }
 
 export function toSessionWithSandbox(row: SessionWithSandboxRow): SessionWithSandboxRecord {
-  return {
+  const record: SessionWithSandboxRecord = {
     session: toSession(row),
     sandbox: row.sandbox_id
       ? toSandbox({
@@ -542,6 +543,8 @@ export function toSessionWithSandbox(row: SessionWithSandboxRow): SessionWithSan
         })
       : null,
   };
+  if (row.direct_child_count !== undefined) record.directChildCount = Number(row.direct_child_count);
+  return record;
 }
 
 export function toArtifact(row: ArtifactRow): ArtifactRecord {

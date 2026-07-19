@@ -8,6 +8,51 @@ const baseTime = new Date('2026-07-08T00:00:00.000Z');
 const otherGroupId = '00000000-0000-4000-8000-000000000202';
 
 describe('session tags and filters', () => {
+  it('paginates direct children and counts children matching the list filters', async () => {
+    const store = new MemoryStore();
+    const parent = await store.createSession(
+      session({ id: '00000000-0000-4000-8000-000000000011', tags: ['infra'], lastActivityAt: at(1) }),
+    );
+    const firstChild = await store.createSession(
+      session({
+        id: '00000000-0000-4000-8000-000000000012',
+        parentSessionId: parent.id,
+        tags: ['infra'],
+        lastActivityAt: at(3),
+      }),
+    );
+    await store.createSession(
+      session({
+        id: '00000000-0000-4000-8000-000000000013',
+        parentSessionId: parent.id,
+        tags: ['other'],
+        lastActivityAt: at(2),
+      }),
+    );
+
+    const parentPage = await store.listSessionsWithLatestSandbox('fake', {
+      archived: false,
+      tags: ['infra'],
+      limit: 10,
+    });
+    expect(parentPage.items.find(({ session }) => session.id === parent.id)?.directChildCount).toBe(1);
+
+    const childPage = await store.listSessionsWithLatestSandbox('fake', {
+      archived: false,
+      parentSessionId: parent.id,
+      limit: 1,
+    });
+    expect(childPage.items.map(({ session }) => session.id)).toEqual([firstChild.id]);
+    expect(childPage.nextCursor).not.toBeNull();
+    const secondPage = await store.listSessionsWithLatestSandbox('fake', {
+      archived: false,
+      parentSessionId: parent.id,
+      limit: 1,
+      cursor: childPage.nextCursor!,
+    });
+    expect(secondPage.items.map(({ session }) => session.id)).toEqual(['00000000-0000-4000-8000-000000000013']);
+  });
+
   it('normalizes session tags deterministically', () => {
     expect(normalizeSessionTags([' Infra\n', 'infra', 'Needs\t  Work', '', 'alpha'])).toEqual([
       'alpha',

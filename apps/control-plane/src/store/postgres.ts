@@ -764,6 +764,18 @@ export class PostgresStore implements AppStore {
       where.push(`sessions.owner_group_id = $${values.length}::uuid`);
     }
     appendSessionFilterWhereClauses(options, values, where);
+    const childWhere = sessionVisibilityWhereClauses(options.visibleTo, values, 'child');
+    childWhere.push(options.archived ? `child.status = 'archived'` : `child.status <> 'archived'`);
+    if (options.groupId) {
+      values.push(options.groupId);
+      childWhere.push(`child.owner_group_id = $${values.length}::uuid`);
+    }
+    appendSessionFilterWhereClauses(options, values, childWhere, 'child');
+    childWhere.push(`child.parent_session_id = sessions.id`);
+    if (options.parentSessionId) {
+      values.push(options.parentSessionId);
+      where.push(`sessions.parent_session_id = $${values.length}::uuid`);
+    }
     if (options.cursor) {
       values.push(options.cursor.lastActivityAt, options.cursor.createdAt, options.cursor.id);
       const lastActivityAtIndex = values.length - 2;
@@ -778,6 +790,7 @@ export class PostgresStore implements AppStore {
 
     const result = await this.pool.query<SessionWithSandboxRow>(
       `SELECT ${joinedSessionSelectColumns},
+              (SELECT COUNT(*) FROM sessions child WHERE ${childWhere.join(' AND ')}) AS direct_child_count,
                latest_sandbox.id AS sandbox_id,
               latest_sandbox.provider AS sandbox_provider,
               latest_sandbox.provider_sandbox_id AS sandbox_provider_sandbox_id,
@@ -3408,10 +3421,14 @@ function compareStringAsc(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
-function sessionVisibilityWhereClauses(visibleTo: SessionVisibilityFilter | undefined, values: unknown[]): string[] {
+function sessionVisibilityWhereClauses(
+  visibleTo: SessionVisibilityFilter | undefined,
+  values: unknown[],
+  alias = 'sessions',
+): string[] {
   if (!visibleTo) return [];
   values.push(visibleTo.groupIds);
-  return [`(sessions.visibility = 'organization' OR sessions.owner_group_id = ANY($${values.length}::uuid[]))`];
+  return [`(${alias}.visibility = 'organization' OR ${alias}.owner_group_id = ANY($${values.length}::uuid[]))`];
 }
 
 function appendSessionFilterWhereClauses(
@@ -3423,25 +3440,26 @@ function appendSessionFilterWhereClauses(
   },
   values: unknown[],
   where: string[],
+  alias = 'sessions',
 ): void {
   if (options.tags?.length) {
     values.push(options.tags);
-    where.push(`sessions.tags @> $${values.length}::text[]`);
+    where.push(`${alias}.tags @> $${values.length}::text[]`);
   }
   if (options.createdByUserId) {
     values.push(options.createdByUserId);
-    where.push(`sessions.created_by_user_id = $${values.length}::uuid`);
+    where.push(`${alias}.created_by_user_id = $${values.length}::uuid`);
   }
   if (options.participantUserId) {
     values.push(options.participantUserId);
     where.push(
-      `EXISTS (SELECT 1 FROM messages WHERE messages.session_id = sessions.id AND messages.author_user_id = $${values.length}::uuid)`,
+      `EXISTS (SELECT 1 FROM messages WHERE messages.session_id = ${alias}.id AND messages.author_user_id = $${values.length}::uuid)`,
     );
   }
   if (options.starredByUserId) {
     values.push(options.starredByUserId);
     where.push(
-      `EXISTS (SELECT 1 FROM session_stars WHERE session_stars.session_id = sessions.id AND session_stars.user_id = $${values.length}::uuid)`,
+      `EXISTS (SELECT 1 FROM session_stars WHERE session_stars.session_id = ${alias}.id AND session_stars.user_id = $${values.length}::uuid)`,
     );
   }
 }

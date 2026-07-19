@@ -30,6 +30,7 @@ export type Session = {
   displayStatusTooltip?: string;
   parentSessionId?: string;
   spawnDepth: number;
+  directChildCount?: number;
   ownerGroupId: string;
   ownerGroupName?: string;
   visibility: SessionVisibility;
@@ -468,13 +469,20 @@ export async function logout(): Promise<void> {
 
 export async function listSessions(
   token: string,
-  options: { cursor?: string; limit?: number; archived?: boolean; groupId?: string } & SessionListFilters = {},
+  options: {
+    cursor?: string;
+    limit?: number;
+    archived?: boolean;
+    groupId?: string;
+    parentSessionId?: string;
+  } & SessionListFilters = {},
 ): Promise<SessionPage> {
   const query = new URLSearchParams();
   if (options.cursor) query.set('cursor', options.cursor);
   if (options.limit !== undefined) query.set('limit', String(options.limit));
   if (options.archived !== undefined) query.set('archived', String(options.archived));
   if (options.groupId) query.set('groupId', options.groupId);
+  if (options.parentSessionId) query.set('parentSessionId', options.parentSessionId);
   appendSessionFilterParams(query, options);
   const suffix = query.toString() ? `?${query.toString()}` : '';
   const body = await request<{ sessions: Session[]; nextCursor?: string | null }>(`/sessions${suffix}`, { token });

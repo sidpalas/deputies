@@ -4,6 +4,7 @@ import {
   Archive,
   ChevronDown,
   FilePlus2,
+  ListTree,
   MessageCircle,
   PanelLeftClose,
   Plus,
@@ -29,6 +30,11 @@ type SessionFilters = {
   starredByMe: boolean;
 };
 
+type SessionTreeNode = {
+  session: Session;
+  children: SessionTreeNode[];
+};
+
 export function ThreadSidebar(props: {
   archivedSessionsOpen: boolean;
   canCallApi: boolean;
@@ -40,6 +46,10 @@ export function ThreadSidebar(props: {
   hasMoreSessions: boolean;
   loading: boolean;
   loadingMoreSessions: boolean;
+  childSessionCursors: Map<string, string | null>;
+  childSessionsLoading: Set<string>;
+  revealedLineage: Session[];
+  revealedLineageSearchQuery: string;
   searchQuery: string;
   searchResults: SessionSearchResult[];
   searchLoading: boolean;
@@ -56,24 +66,36 @@ export function ThreadSidebar(props: {
   onLoadMoreArchivedSessions: () => void;
   onLoadMoreSearchResults: () => void;
   onLoadMoreSessions: () => void;
+  onLoadChildSessions: (session: Session) => void;
   onNewThread: () => void;
   onRefresh: () => void;
+  onClearLineageFilters: () => void;
+  onClearLineageSearch: () => void;
+  onDismissLineageReveal: () => void;
   onSearchChange: (query: string) => void;
   onSelect: (sessionId: string) => void;
+  onShowInTree: (session: Session) => void;
   onSessionFiltersChange: (filters: SessionFilters) => void;
   onSessionFiltersClear: () => void;
   onSessionListHoverChange: (hovered: boolean) => void;
   onSessionStarChange: (sessionId: string, starred: boolean) => void;
   onUnarchive: (sessionId: string) => void;
 }) {
+  const revealedIds = useMemo(
+    () => new Set(props.revealedLineage.map((session) => session.id)),
+    [props.revealedLineage],
+  );
   const activeSessions = useMemo(
-    () => props.sessions.filter((session) => session.status !== 'archived'),
-    [props.sessions],
+    () => props.sessions.filter((session) => session.status !== 'archived' && !revealedIds.has(session.id)),
+    [props.sessions, revealedIds],
   );
   const archivedSessions = useMemo(
-    () => props.sessions.filter((session) => session.status === 'archived'),
-    [props.sessions],
+    () => props.sessions.filter((session) => session.status === 'archived' && !revealedIds.has(session.id)),
+    [props.sessions, revealedIds],
   );
+  const revealedSessionTree = useMemo(() => buildSessionTree(props.revealedLineage), [props.revealedLineage]);
+  const activeSessionTree = useMemo(() => buildSessionTree(activeSessions), [activeSessions]);
+  const archivedSessionTree = useMemo(() => buildSessionTree(archivedSessions), [archivedSessions]);
   const searching = Boolean(props.searchQuery.trim());
   const archivedOpen = props.archivedSessionsOpen;
 
@@ -161,23 +183,65 @@ export function ThreadSidebar(props: {
             onArchive={props.onArchive}
             onLoadMore={props.onLoadMoreSearchResults}
             onSelect={props.onSelect}
+            onShowInTree={props.onShowInTree}
             onStarChange={props.onSessionStarChange}
             onUnarchive={props.onUnarchive}
           />
         ) : (
           <>
+            {props.revealedLineage.length ? (
+              <div className="mb-2">
+                <div className="rounded-md border border-primary/40 bg-primary/10 p-2 text-xs" role="status">
+                  <p className="font-medium text-foreground">Showing selected session lineage</p>
+                  <p className="mt-0.5 text-muted-foreground">
+                    {props.revealedLineageSearchQuery
+                      ? 'Ancestors are included even when they do not match your search.'
+                      : props.sessionFilterCount
+                        ? 'Some ancestors are outside your current filters.'
+                        : 'Ancestors outside the loaded session page are included.'}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {props.revealedLineageSearchQuery ? (
+                      <Button variant="secondary" size="sm" className="h-7 px-2" onClick={props.onClearLineageSearch}>
+                        Clear search
+                      </Button>
+                    ) : null}
+                    {props.sessionFilterCount ? (
+                      <Button variant="secondary" size="sm" className="h-7 px-2" onClick={props.onClearLineageFilters}>
+                        Clear filters
+                      </Button>
+                    ) : null}
+                    <Button variant="ghost" size="sm" className="h-7 px-2" onClick={props.onDismissLineageReveal}>
+                      Hide lineage
+                    </Button>
+                  </div>
+                </div>
+                <div className="mt-1 grid min-w-0 gap-1">
+                  <SessionTree
+                    nodes={revealedSessionTree}
+                    selectedSessionId={props.selectedSessionId}
+                    canWriteSession={props.canWriteSession}
+                    onSelect={props.onSelect}
+                    onShowInTree={props.onShowInTree}
+                    onStarChange={props.onSessionStarChange}
+                    showActions={false}
+                  />
+                </div>
+              </div>
+            ) : null}
             <div className="grid min-w-0 gap-1">
-              {activeSessions.map((session) => (
-                <SessionButton
-                  key={session.id}
-                  session={session}
-                  selected={session.id === props.selectedSessionId}
-                  canWriteSession={props.canWriteSession(session)}
-                  onArchive={props.onArchive}
-                  onSelect={props.onSelect}
-                  onStarChange={props.onSessionStarChange}
-                />
-              ))}
+              <SessionTree
+                nodes={activeSessionTree}
+                selectedSessionId={props.selectedSessionId}
+                canWriteSession={props.canWriteSession}
+                onArchive={props.onArchive}
+                onSelect={props.onSelect}
+                onShowInTree={props.onShowInTree}
+                onStarChange={props.onSessionStarChange}
+                childSessionCursors={props.childSessionCursors}
+                childSessionsLoading={props.childSessionsLoading}
+                onLoadChildSessions={props.onLoadChildSessions}
+              />
               {!activeSessions.length ? (
                 <p className="px-2 py-3 text-sm text-muted-foreground">
                   {props.sessionFilterCount ? 'No sessions match the current filters.' : 'No active sessions.'}
@@ -202,17 +266,18 @@ export function ThreadSidebar(props: {
               </summary>
               {archivedSessions.length ? (
                 <div className="mt-2 grid min-w-0 gap-1 opacity-80">
-                  {archivedSessions.map((session) => (
-                    <SessionButton
-                      key={session.id}
-                      session={session}
-                      selected={session.id === props.selectedSessionId}
-                      canWriteSession={props.canWriteSession(session)}
-                      onSelect={props.onSelect}
-                      onStarChange={props.onSessionStarChange}
-                      onUnarchive={props.onUnarchive}
-                    />
-                  ))}
+                  <SessionTree
+                    nodes={archivedSessionTree}
+                    selectedSessionId={props.selectedSessionId}
+                    canWriteSession={props.canWriteSession}
+                    onSelect={props.onSelect}
+                    onShowInTree={props.onShowInTree}
+                    onStarChange={props.onSessionStarChange}
+                    childSessionCursors={props.childSessionCursors}
+                    childSessionsLoading={props.childSessionsLoading}
+                    onLoadChildSessions={props.onLoadChildSessions}
+                    onUnarchive={props.onUnarchive}
+                  />
                   {props.hasMoreArchivedSessions ? (
                     <Button
                       className="mt-2 w-full"
@@ -239,6 +304,116 @@ export function ThreadSidebar(props: {
       <SidebarFooter {...props.footerProps} />
     </div>
   );
+}
+
+function SessionTree(props: {
+  nodes: SessionTreeNode[];
+  depth?: number;
+  selectedSessionId: string;
+  canWriteSession: (session: Session) => boolean;
+  onSelect: (sessionId: string) => void;
+  onShowInTree: (session: Session) => void;
+  onStarChange: (sessionId: string, starred: boolean) => void;
+  childSessionCursors?: Map<string, string | null>;
+  childSessionsLoading?: Set<string>;
+  onLoadChildSessions?: (session: Session) => void;
+  showActions?: boolean;
+  onArchive?: (sessionId: string) => void;
+  onUnarchive?: (sessionId: string) => void;
+}) {
+  return props.nodes.map((node) => (
+    <SessionTreeItem key={node.session.id} {...props} node={node} depth={props.depth ?? 0} />
+  ));
+}
+
+function SessionTreeItem(props: {
+  node: SessionTreeNode;
+  depth: number;
+  selectedSessionId: string;
+  canWriteSession: (session: Session) => boolean;
+  onSelect: (sessionId: string) => void;
+  onShowInTree: (session: Session) => void;
+  onStarChange: (sessionId: string, starred: boolean) => void;
+  childSessionCursors?: Map<string, string | null>;
+  childSessionsLoading?: Set<string>;
+  onLoadChildSessions?: (session: Session) => void;
+  showActions?: boolean;
+  onArchive?: (sessionId: string) => void;
+  onUnarchive?: (sessionId: string) => void;
+}) {
+  const { session, children } = props.node;
+  const unloadedChildCount = Math.max(0, (session.directChildCount ?? 0) - children.length);
+  const childCursorKnown = props.childSessionCursors?.has(session.id) ?? false;
+  const canLoadChildren =
+    unloadedChildCount > 0 && (!childCursorKnown || props.childSessionCursors?.get(session.id) !== null);
+
+  return (
+    <div className="min-w-0">
+      <SessionButton
+        session={session}
+        selected={session.id === props.selectedSessionId}
+        canWriteSession={props.canWriteSession(session)}
+        detachedSubSession={props.depth === 0 && Boolean(session.parentSessionId)}
+        onSelect={props.onSelect}
+        onShowInTree={props.onShowInTree}
+        onStarChange={props.onStarChange}
+        {...(props.showActions === undefined ? {} : { showActions: props.showActions })}
+        {...(props.onArchive ? { onArchive: props.onArchive } : {})}
+        {...(props.onUnarchive ? { onUnarchive: props.onUnarchive } : {})}
+      />
+      {children.length || canLoadChildren ? (
+        <div className="ml-2 border-l border-border/80 pl-2">
+          {children.length ? (
+            <SessionTree
+              nodes={children}
+              depth={props.depth + 1}
+              selectedSessionId={props.selectedSessionId}
+              canWriteSession={props.canWriteSession}
+              onSelect={props.onSelect}
+              onShowInTree={props.onShowInTree}
+              onStarChange={props.onStarChange}
+              {...(props.childSessionCursors ? { childSessionCursors: props.childSessionCursors } : {})}
+              {...(props.childSessionsLoading ? { childSessionsLoading: props.childSessionsLoading } : {})}
+              {...(props.onLoadChildSessions ? { onLoadChildSessions: props.onLoadChildSessions } : {})}
+              {...(props.showActions === undefined ? {} : { showActions: props.showActions })}
+              {...(props.onArchive ? { onArchive: props.onArchive } : {})}
+              {...(props.onUnarchive ? { onUnarchive: props.onUnarchive } : {})}
+            />
+          ) : null}
+          {canLoadChildren && props.onLoadChildSessions ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-full justify-start px-2 text-xs text-muted-foreground"
+              disabled={props.childSessionsLoading?.has(session.id)}
+              onClick={() => props.onLoadChildSessions?.(session)}
+            >
+              {props.childSessionsLoading?.has(session.id)
+                ? 'Loading sub-sessions...'
+                : `Load ${unloadedChildCount} more sub-session${unloadedChildCount === 1 ? '' : 's'}`}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
+  const nodesById = new Map(sessions.map((session) => [session.id, { session, children: [] as SessionTreeNode[] }]));
+  const roots: SessionTreeNode[] = [];
+
+  for (const session of sessions) {
+    const node = nodesById.get(session.id)!;
+    const parent = session.parentSessionId ? nodesById.get(session.parentSessionId) : undefined;
+    if (parent && parent.session.spawnDepth < session.spawnDepth) {
+      parent.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  return roots;
 }
 
 function SessionFilterControls(props: {
@@ -424,6 +599,7 @@ function SearchResultsList(props: {
   onArchive: (sessionId: string) => void;
   onLoadMore: () => void;
   onSelect: (sessionId: string) => void;
+  onShowInTree: (session: Session) => void;
   onStarChange: (sessionId: string, starred: boolean) => void;
   onUnarchive: (sessionId: string) => void;
 }) {
@@ -438,9 +614,11 @@ function SearchResultsList(props: {
         selected={result.session.id === props.selectedSessionId}
         canWriteSession={props.canWriteSession(result.session)}
         compact
+        detachedSubSession={Boolean(result.session.parentSessionId)}
         matchKind={result.matchKind}
         snippet={result.snippet}
         onSelect={props.onSelect}
+        onShowInTree={props.onShowInTree}
         onStarChange={props.onStarChange}
         {...(result.session.status === 'archived'
           ? { onUnarchive: props.onUnarchive }
@@ -487,7 +665,10 @@ function SessionButton(props: {
   compact?: boolean | undefined;
   matchKind?: SessionSearchResult['matchKind'];
   snippet?: string;
+  detachedSubSession?: boolean;
+  showActions?: boolean;
   onSelect: (sessionId: string) => void;
+  onShowInTree?: (session: Session) => void;
   onStarChange: (sessionId: string, starred: boolean) => void;
   onArchive?: (sessionId: string) => void;
   onUnarchive?: (sessionId: string) => void;
@@ -546,69 +727,89 @@ function SessionButton(props: {
         >
           <span
             className={cn(
-              'block w-full truncate text-xs leading-5 text-muted-foreground',
+              'flex w-full min-w-0 items-baseline text-xs leading-5 text-muted-foreground',
               props.compact && props.matchKind && 'mt-0.5 whitespace-normal leading-4',
             )}
             title={displayTooltip}
           >
-            <span className={statusTextClass(displayStatus)}>{displayStatus}</span> ·{' '}
-            {formatDate(props.session.lastActivityAt ?? props.session.updatedAt)}
+            <span className="min-w-0 truncate">
+              <span className={statusTextClass(displayStatus)}>{displayStatus}</span>
+            </span>
+            <span className="shrink-0 whitespace-nowrap">
+              {' '}
+              · {formatDate(props.session.lastActivityAt ?? props.session.updatedAt)}
+            </span>
             {props.matchKind ? (
               <>
                 {' '}
                 ·{' '}
-                <span className="rounded border border-border px-1 py-px text-[9px] uppercase tracking-wide text-muted-foreground">
+                <span className="shrink-0 rounded border border-border px-1 py-px text-[9px] uppercase tracking-wide text-muted-foreground">
                   {props.matchKind}
                 </span>
               </>
             ) : null}
-            {showSnippet && !showContextLine ? <> · {snippet}</> : null}
+            {showSnippet && !showContextLine ? <span className="min-w-0 truncate"> · {snippet}</span> : null}
           </span>
         </button>
-        <div className="flex h-6 shrink-0 items-center gap-1">
-          <Button
-            className={cn(
-              'h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-foreground md:shadow-none',
-              !props.session.starred &&
-                'md:pointer-events-none md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100',
-            )}
-            variant="ghost"
-            size="icon"
-            type="button"
-            onClick={toggleStar}
-            aria-label={props.session.starred ? 'Unstar session' : 'Star session'}
-            aria-pressed={props.session.starred === true}
-            title={props.session.starred ? 'Unstar session' : 'Star session'}
-          >
-            <Star className={cn('h-3.5 w-3.5', props.session.starred && 'fill-current text-warning')} />
-          </Button>
-          {canArchive ? (
+        {props.showActions !== false ? (
+          <div className="flex h-6 shrink-0 items-center gap-1">
+            {props.detachedSubSession && props.onShowInTree ? (
+              <Button
+                className="h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-foreground md:shadow-none"
+                variant="ghost"
+                size="icon"
+                type="button"
+                onClick={() => props.onShowInTree?.(props.session)}
+                aria-label="Show in session tree"
+                title="Show in session tree"
+              >
+                <ListTree className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
             <Button
-              className="h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-destructive md:pointer-events-none md:opacity-0 md:shadow-none md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
+              className={cn(
+                'h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-foreground md:shadow-none',
+                !props.session.starred &&
+                  'md:pointer-events-none md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100',
+              )}
               variant="ghost"
               size="icon"
               type="button"
-              onClick={archiveSession}
-              aria-label="Archive session"
-              title="Archive session"
+              onClick={toggleStar}
+              aria-label={props.session.starred ? 'Unstar session' : 'Star session'}
+              aria-pressed={props.session.starred === true}
+              title={props.session.starred ? 'Unstar session' : 'Star session'}
             >
-              <Archive className="h-3.5 w-3.5" />
+              <Star className={cn('h-3.5 w-3.5', props.session.starred && 'fill-current text-warning')} />
             </Button>
-          ) : null}
-          {canRestore ? (
-            <Button
-              className="h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-foreground md:pointer-events-none md:opacity-0 md:shadow-none md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
-              variant="ghost"
-              size="icon"
-              type="button"
-              onClick={restoreSession}
-              aria-label="Restore session"
-              title="Restore session"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </Button>
-          ) : null}
-        </div>
+            {canArchive ? (
+              <Button
+                className="h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-destructive md:pointer-events-none md:opacity-0 md:shadow-none md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
+                variant="ghost"
+                size="icon"
+                type="button"
+                onClick={archiveSession}
+                aria-label="Archive session"
+                title="Archive session"
+              >
+                <Archive className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
+            {canRestore ? (
+              <Button
+                className="h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-foreground md:pointer-events-none md:opacity-0 md:shadow-none md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
+                variant="ghost"
+                size="icon"
+                type="button"
+                onClick={restoreSession}
+                aria-label="Restore session"
+                title="Restore session"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <button
         className="block w-full min-w-0 overflow-hidden bg-transparent p-0 text-left"
