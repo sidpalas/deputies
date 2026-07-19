@@ -2087,12 +2087,13 @@ export function App() {
         }));
       }
     } finally {
-      if (sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return;
-      detailRefreshInFlightRef.current = null;
-      const queuedSessionId = detailRefreshQueuedSessionIdRef.current;
-      detailRefreshQueuedSessionIdRef.current = null;
-      if (queuedSessionId && queuedSessionId === selectedSessionIdRef.current) {
-        refreshSessionOutputs(queuedSessionId).catch(() => undefined);
+      if (sessionSummaryAuthorityEpochRef.current === authorityEpoch) {
+        detailRefreshInFlightRef.current = null;
+        const queuedSessionId = detailRefreshQueuedSessionIdRef.current;
+        detailRefreshQueuedSessionIdRef.current = null;
+        if (queuedSessionId && queuedSessionId === selectedSessionIdRef.current) {
+          refreshSessionOutputs(queuedSessionId).catch(() => undefined);
+        }
       }
     }
   }

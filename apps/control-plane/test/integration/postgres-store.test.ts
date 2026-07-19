@@ -165,7 +165,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
         shared.id,
         new Date(now.getTime() + 2_000),
       ]);
-      let settled = false;
       const updateOutcome = store
         .updateSkill({
           id: shared.id,
@@ -184,12 +183,10 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
         .then(
           (value) => ({ value, error: undefined }),
           (error: unknown) => ({ value: undefined, error }),
-        )
-        .finally(() => {
-          settled = true;
-        });
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      expect(settled).toBe(false);
+        );
+      await waitForBlockedQuery(
+        'SELECT owner_kind, owner_group_id, archived_at, current_revision_id, current_revision_number FROM skills',
+      );
       await blocker.query('COMMIT');
       expect((await updateOutcome).error).toMatchObject({ code: 'skill_archived' });
     } finally {
@@ -208,23 +205,31 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
           groupId,
           new Date(now.getTime() + 1_000),
         ]);
-        let settled = false;
-        const outcome = write()
-          .then(
-            (value) => ({ value, error: undefined }),
-            (error: unknown) => ({ value: undefined, error }),
-          )
-          .finally(() => {
-            settled = true;
-          });
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        expect(settled).toBe(false);
+        const outcome = write().then(
+          (value) => ({ value, error: undefined }),
+          (error: unknown) => ({ value: undefined, error }),
+        );
+        await waitForBlockedQuery('SELECT id, archived_at FROM groups');
         await client.query('COMMIT');
         return await outcome;
       } finally {
         await client.query('ROLLBACK').catch(() => undefined);
         client.release();
       }
+    }
+
+    async function waitForBlockedQuery(queryPrefix: string): Promise<void> {
+      await waitFor(async () => {
+        const result = await pool.query<{ count: string }>(
+          `SELECT count(*)
+           FROM pg_stat_activity
+           WHERE datname = current_database()
+             AND wait_event_type = 'Lock'
+             AND query LIKE $1`,
+          [`${queryPrefix}%`],
+        );
+        return Number(result.rows[0]?.count ?? 0) > 0;
+      });
     }
   });
 

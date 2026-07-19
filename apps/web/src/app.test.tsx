@@ -691,6 +691,7 @@ it('does not classify other HTTP 400 responses as inline skill errors', async ()
 });
 
 it('refreshes selected session skills once after a burst of skills_loaded events and ignores the stale response', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   const staleResponse = deferred<Response>();
   const latestResponse = deferred<Response>();
   let pushGlobalEvent: StreamEventPusher | undefined;
@@ -758,7 +759,7 @@ it('refreshes selected session skills once after a burst of skills_loaded events
       });
     }
   });
-  await act(() => new Promise((resolve) => window.setTimeout(resolve, 150)));
+  await act(() => vi.advanceTimersByTimeAsync(100));
   expect(sessionSkillsRequestCount).toBe(2);
   act(() => staleResponse.resolve(jsonResponse({ skills: [{ ...managedSkill, name: 'stale-review' }] })));
   await waitFor(() => expect(sessionSkillsRequestCount).toBe(3));
@@ -2322,6 +2323,7 @@ it('shows derived session display statuses', async () => {
 });
 
 it('coalesces rapid global session refresh events into one sessions request', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   const sessions = [session];
   let sessionsRequestCount = 0;
   let pushGlobalEvent: StreamEventPusher | undefined;
@@ -2345,8 +2347,9 @@ it('coalesces rapid global session refresh events into one sessions request', as
   pushGlobalEvent?.(eventFixture({ id: 3, sequence: 2, type: 'session_updated', payload: {} }));
   pushGlobalEvent?.(eventFixture({ id: 4, sequence: 3, type: 'message_completed', payload: {} }));
 
+  await act(() => vi.advanceTimersByTimeAsync(300));
   await waitFor(() => expect(sessionsRequestCount).toBe(2));
-  await new Promise((resolve) => window.setTimeout(resolve, 350));
+  await act(() => vi.advanceTimersByTimeAsync(350));
   expect(sessionsRequestCount).toBe(2);
   expect(await screen.findByText('Coalesced session')).toBeInTheDocument();
 });
@@ -3083,14 +3086,14 @@ it('surfaces realtime connection failures with a multiple-window hint', async ()
 });
 
 it('shows startup connection guidance before request timeout', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   mockApi({ hangSessions: true });
   render(<App />);
 
   expect(await screen.findByText('Loading Deputies')).toBeInTheDocument();
 
-  expect(
-    await screen.findByText(/Still waiting for the API to respond/, undefined, { timeout: 4_000 }),
-  ).toBeInTheDocument();
+  await act(() => vi.advanceTimersByTimeAsync(3_000));
+  expect(await screen.findByText(/Still waiting for the API to respond/)).toBeInTheDocument();
   expect(screen.getByText(/several windows/)).toBeInTheDocument();
 });
 
