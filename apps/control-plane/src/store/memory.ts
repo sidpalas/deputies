@@ -507,6 +507,18 @@ export class MemoryStore implements AppStore {
   async updateSessionTitleIfCurrent(
     input: SessionTitleUpdateInput,
   ): Promise<{ session: SessionRecord; event: EventRecord } | null> {
+    const run = this.runs.get(input.runId);
+    const validActiveRun =
+      run?.status === 'running' &&
+      run.leaseOwner === input.leaseOwner &&
+      Boolean(run.leaseExpiresAt && run.leaseExpiresAt > input.now);
+    if (
+      !run ||
+      run.sessionId !== input.id ||
+      (!validActiveRun && run.status !== 'completed' && run.status !== 'failed')
+    ) {
+      return null;
+    }
     const existing = this.sessions.get(input.id);
     if (!existing || existing.status === 'archived' || existing.title !== input.expectedTitle) return null;
     const session = { ...existing, title: input.title, updatedAt: input.updatedAt };

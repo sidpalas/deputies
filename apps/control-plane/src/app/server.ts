@@ -612,7 +612,16 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
     if (typeof body.prompt !== 'string') return writeError(c, 400, 'invalid_request', 'Expected string field: prompt');
+    if (body.generateTitle !== undefined && typeof body.generateTitle !== 'boolean') {
+      return writeError(c, 400, 'invalid_request', 'Expected boolean field: generateTitle');
+    }
     const prompt = optionalString(body.prompt) ?? '';
+    if (body.generateTitle === true && !prompt) {
+      return writeError(c, 400, 'invalid_request', 'Title generation requires a non-empty prompt');
+    }
+    if (body.generateTitle === true && session.status !== 'created') {
+      return writeError(c, 409, 'conflict', 'Title generation is only available for the first message');
+    }
 
     try {
       const model = parseModelBody(body.model, config);
@@ -640,7 +649,11 @@ export function createApp(config: AppConfig, services = createServices()) {
       if (!prompt && !skillContext?.skills.length) {
         return writeError(c, 400, 'invalid_request', 'Expected prompt text or at least one invoked skill');
       }
-      const context = { ...baseContext, ...skillContext };
+      const context = {
+        ...baseContext,
+        ...skillContext,
+        ...(body.generateTitle === true && session.title ? { titleGeneration: { fallbackTitle: session.title } } : {}),
+      };
       const message = await services.messages.enqueue({
         sessionId,
         prompt,

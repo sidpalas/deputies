@@ -255,7 +255,7 @@ export class WorkerService {
       const sessionContext =
         created || restarted ? await this.clearSessionServicesForRun(session, claimed) : (session.context ?? {});
       let runContext = { ...sessionContext, ...buildBatchContext(claimed.messages) };
-      this.generateInitialTitle(primary, runContext, signal);
+      this.generateInitialTitle(primary, claimed.run.id, runContext, signal);
       const result = await traceAsync(
         'worker.runner_run',
         { 'deputies.runner_type': this.options.runnerType, 'deputies.message_count': claimed.messages.length },
@@ -360,9 +360,14 @@ export class WorkerService {
     }
   }
 
-  private generateInitialTitle(message: MessageRecord, context: Record<string, unknown>, runSignal: AbortSignal): void {
+  private generateInitialTitle(
+    message: MessageRecord,
+    runId: string,
+    context: Record<string, unknown>,
+    runSignal: AbortSignal,
+  ): void {
     if (message.sequence !== 1 || !this.options.runner.generateTitle) return;
-    const fallbackTitle = readTitleGenerationFallback(context);
+    const fallbackTitle = readTitleGenerationFallback(message.context ?? {});
     if (!fallbackTitle) return;
     const model = typeof context.model === 'string' ? context.model : undefined;
     const generateTitle = this.options.runner.generateTitle.bind(this.options.runner);
@@ -372,11 +377,15 @@ export class WorkerService {
       const signal = AbortSignal.any([runSignal, AbortSignal.timeout(titleGenerationTimeoutMs)]);
       const title = await generateTitle({ prompt: message.prompt, ...(model ? { model } : {}), signal });
       if (signal.aborted) return;
+      const updatedAt = new Date();
       const updated = await this.options.store.updateSessionTitleIfCurrent({
         id: message.sessionId,
         expectedTitle: fallbackTitle,
         title,
-        updatedAt: new Date(),
+        updatedAt,
+        runId,
+        leaseOwner: this.options.leaseOwner,
+        now: updatedAt,
       });
       if (updated) this.options.events.publishExternal(updated.event);
     })().catch((error: unknown) => {

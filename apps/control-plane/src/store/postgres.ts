@@ -1205,9 +1205,20 @@ export class PostgresStore implements AppStore {
       const updated = await client.query<SessionRow>(
         `UPDATE sessions
          SET title = $3, updated_at = $4
-         WHERE id = $1 AND title = $2 AND status <> 'archived'
+         WHERE id = $1
+           AND title = $2
+           AND status <> 'archived'
+           AND EXISTS (
+             SELECT 1 FROM runs
+             WHERE id = $5
+               AND session_id = $1
+               AND (
+                 status IN ('completed', 'failed')
+                 OR (status = 'running' AND lease_owner = $6 AND lease_expires_at > $7)
+               )
+           )
          RETURNING ${sessionSelectColumns}`,
-        [input.id, input.expectedTitle, input.title, input.updatedAt],
+        [input.id, input.expectedTitle, input.title, input.updatedAt, input.runId, input.leaseOwner, input.now],
       );
       const row = updated.rows[0];
       if (!row) return null;

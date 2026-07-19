@@ -90,6 +90,21 @@ describe('deputies tool', () => {
     });
   });
 
+  it('does not mark an explicit child title for generation when it equals the prompt fallback', async () => {
+    const { services, store } = await createDeputyServices();
+    const result = await executeDeputyTool(services, {
+      action: 'spawn',
+      title: 'Investigate the cache miss',
+      prompt: 'Investigate the cache miss',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+
+    const child = await store.getSession((result.session as { id: string }).id);
+    expect(child?.title).toBe('Investigate the cache miss');
+    expect(child?.context?.titleGeneration).toBeUndefined();
+  });
+
   it('refuses depth, child-count, and per-run spawn guardrail violations as tool results', async () => {
     const deep = await createDeputyServices({ parent: { spawnDepth: 2 }, maxSpawnDepth: 2 });
     await expect(executeDeputyTool(deep.services, { action: 'spawn', prompt: 'too deep' })).resolves.toMatchObject({
@@ -398,6 +413,14 @@ describe('deputies tool', () => {
   it('archives and restores the acting session itself', async () => {
     const { services, store } = await createDeputyServices();
 
+    await expect(executeDeputyTool(services, { action: 'archive' })).resolves.toMatchObject({
+      ok: true,
+      session: { id: parentId, status: 'archived' },
+    });
+    await expect(executeDeputyTool(services, { action: 'restore' })).resolves.toMatchObject({
+      ok: true,
+      session: { id: parentId, status: 'idle', title: 'Parent' },
+    });
     await expect(executeDeputyTool(services, { action: 'archive', sessionId: parentId })).resolves.toMatchObject({
       ok: true,
       session: { id: parentId, status: 'archived' },

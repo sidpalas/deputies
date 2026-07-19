@@ -895,6 +895,75 @@ describe('core API', () => {
     expect(replayBody.hasMore).toBe(false);
   });
 
+  it('records title-generation provenance only when message creation requests it', async () => {
+    const generatedSessionResponse = await postJson(`${baseUrl}/sessions`, { title: 'Generated fallback' });
+    const explicitSessionResponse = await postJson(`${baseUrl}/sessions`, { title: 'Explicit title' });
+    const generatedSession = ((await generatedSessionResponse.json()) as { session: { id: string } }).session;
+    const explicitSession = ((await explicitSessionResponse.json()) as { session: { id: string } }).session;
+
+    const generatedMessage = await postJson(`${baseUrl}/sessions/${generatedSession.id}/messages`, {
+      prompt: 'Initial generated prompt',
+      generateTitle: true,
+    });
+    const explicitMessage = await postJson(`${baseUrl}/sessions/${explicitSession.id}/messages`, {
+      prompt: 'Explicit title',
+    });
+
+    const generatedMessageBody = (await generatedMessage.json()) as {
+      message: { id: string; context?: Record<string, unknown> };
+    };
+    const explicitMessageBody = (await explicitMessage.json()) as { message: { context?: Record<string, unknown> } };
+    expect(generatedMessageBody.message).toMatchObject({
+      context: { titleGeneration: { fallbackTitle: 'Generated fallback' } },
+    });
+    expect(explicitMessageBody.message).not.toHaveProperty('context');
+
+    const editedMessage = await patchJson(
+      `${baseUrl}/sessions/${generatedSession.id}/messages/${generatedMessageBody.message.id}`,
+      { prompt: 'Edited initial prompt' },
+    );
+    expect(await editedMessage.json()).toMatchObject({
+      message: {
+        prompt: 'Edited initial prompt',
+        context: { titleGeneration: { fallbackTitle: 'Generated fallback' } },
+      },
+    });
+  });
+
+  it('rejects title generation for an empty skill-only prompt', async () => {
+    const sessionResponse = await postJson(`${baseUrl}/sessions`, { title: 'review-change' });
+    const session = ((await sessionResponse.json()) as { session: { id: string } }).session;
+
+    const response = await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
+      prompt: '',
+      generateTitle: true,
+      context: { skills: ['review-change'] },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'invalid_request',
+      message: 'Title generation requires a non-empty prompt',
+    });
+  });
+
+  it('rejects title-generation provenance on follow-up messages', async () => {
+    const sessionResponse = await postJson(`${baseUrl}/sessions`, { title: 'Explicit title' });
+    const session = ((await sessionResponse.json()) as { session: { id: string } }).session;
+    await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'First prompt' });
+
+    const response = await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
+      prompt: 'Second prompt',
+      generateTitle: true,
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'conflict',
+      message: 'Title generation is only available for the first message',
+    });
+  });
+
   it('pages session event replay with cursor and limit', async () => {
     const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Paged event replay' });
     const { session } = (await createSession.json()) as { session: { id: string } };

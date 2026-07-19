@@ -2148,6 +2148,7 @@ export function App() {
           sessionId: session.id,
           prompt: firstPrompt,
           token,
+          ...(firstPrompt ? { generateTitle: true } : {}),
           ...(firstEnvironmentId
             ? {
                 environmentId: firstEnvironmentId,

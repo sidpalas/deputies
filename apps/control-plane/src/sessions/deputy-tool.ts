@@ -97,7 +97,8 @@ export const deputyToolParameters = {
     },
     sessionId: {
       type: 'string',
-      description: 'Target session ID. Lifecycle actions support this session or a direct child.',
+      description:
+        'Target session ID. Lifecycle actions support this session or a direct child; archive and restore default to the current session when omitted.',
     },
     scope: {
       type: 'string',
@@ -401,7 +402,7 @@ async function archiveSession(services: DeputyToolServices, params: Record<strin
   const target = await requireManagedSession(
     services,
     agentPrincipal(parent),
-    readString(params.sessionId, 'sessionId', 128),
+    readOptionalString(params.sessionId, 'sessionId', 128) ?? services.sessionId,
     'archive',
   );
   const session = await services.sessions.archive(target.id);
@@ -426,7 +427,7 @@ async function archiveSession(services: DeputyToolServices, params: Record<strin
 
 async function restoreSession(services: DeputyToolServices, params: Record<string, unknown>) {
   const parent = await requireActingSession(services);
-  const sessionId = readString(params.sessionId, 'sessionId', 128);
+  const sessionId = readOptionalString(params.sessionId, 'sessionId', 128) ?? services.sessionId;
   const target = await services.store.getSession(sessionId);
   if (!target || !agentCanManageSession(agentPrincipal(parent), target) || target.status !== 'archived') {
     throw new Error(`Can only restore this session or an archived direct child session: ${sessionId}`);

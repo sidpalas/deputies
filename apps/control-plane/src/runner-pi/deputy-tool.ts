@@ -20,7 +20,7 @@ export function createPiDeputyToolDefinition(services: DeputyToolServices): Tool
       'Spawned child sessions are automatically titled from their initial prompt unless spawn provides an explicit title, and tagged "sub-deputy" so users can identify and filter them.',
       'For quick in-run delegation, use the Pi subagent tool instead of spawning a Deputies session.',
       'Do not busy-wait after spawning. Use get_session for explicit polling, end the turn when appropriate, or set notifyOnComplete so the child enqueues a parent follow-up when it completes.',
-      'send_message and cancel are intentionally limited to direct child sessions. archive and restore can target this session itself or a direct child.',
+      'send_message and cancel are intentionally limited to direct child sessions. archive and restore can target this session itself or a direct child; omit sessionId to archive or restore the current session.',
       'Archived sessions are read-only until restored. Use deputies({ action: "restore", sessionId }) before sending an archived child more work.',
       'archive is idempotent; repeat it for an archived session when sandbox cleanup needs to be retried.',
       'Archiving the current session destroys its sandbox. Treat self-archive as the final sandbox-dependent action: the response may finish, but workspace tools will no longer work, and restoring the session does not restore the destroyed workspace.',

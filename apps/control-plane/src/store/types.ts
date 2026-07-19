@@ -805,6 +805,9 @@ export type SessionTitleUpdateInput = {
   expectedTitle: string;
   title: string;
   updatedAt: Date;
+  runId: string;
+  leaseOwner: string;
+  now: Date;
 };
 
 export type SessionContextUpdateInput = {

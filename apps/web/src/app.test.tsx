@@ -853,7 +853,7 @@ it('allows starting a session without repository options', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
 
   await waitFor(() => expect(submittedMessageBodies).toHaveLength(1));
-  expect(submittedMessageBodies[0]).toMatchObject({ prompt: 'start work' });
+  expect(submittedMessageBodies[0]).toMatchObject({ prompt: 'start work', generateTitle: true });
   expect(submittedMessageBodies[0]).not.toHaveProperty('repository');
 });
 

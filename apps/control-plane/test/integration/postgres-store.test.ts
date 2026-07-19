@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { createServices } from '../../src/app/server.js';
 import { normalizeAppendInput } from '../../src/events/service.js';
@@ -864,12 +865,26 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   it('atomically replaces only the current title fallback', async () => {
     const services = createServices(store);
     const session = await services.sessions.create({ title: 'Fallback title' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'Fallback title' });
+    const runId = randomUUID();
+    const leaseOwner = 'title-test-worker';
+    const now = new Date();
+    await store.claimNextPendingMessage({
+      runId,
+      runnerType: 'test',
+      leaseOwner,
+      leaseExpiresAt: new Date(now.getTime() + 60_000),
+      now,
+    });
 
     const generated = await store.updateSessionTitleIfCurrent({
       id: session.id,
       expectedTitle: 'Fallback title',
       title: 'Generated title',
-      updatedAt: new Date(),
+      updatedAt: now,
+      runId,
+      leaseOwner,
+      now,
     });
     expect(generated?.session.title).toBe('Generated title');
     await expect(
@@ -878,10 +893,14 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
         expectedTitle: 'Fallback title',
         title: 'Stale generated title',
         updatedAt: new Date(),
+        runId,
+        leaseOwner,
+        now: new Date(),
       }),
     ).resolves.toBeNull();
     expect((await store.getEvents(session.id)).map((event) => event.type)).toEqual([
       'session_created',
+      'message_created',
       'session_updated',
     ]);
   });

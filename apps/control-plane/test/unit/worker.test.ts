@@ -103,6 +103,114 @@ describe('WorkerService', () => {
     );
   });
 
+  it('does not generate a title without explicit title-generation provenance', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const fallbackTitle = 'Investigate title generation';
+    const session = await services.sessions.create({ title: fallbackTitle });
+    await services.messages.enqueue({ sessionId: session.id, prompt: fallbackTitle });
+    const runner = new TitleRunner();
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner,
+      runnerType: 'title',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+    expect(runner.titleInputs).toHaveLength(0);
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({ title: fallbackTitle });
+  });
+
+  it('does not use title-generation provenance from a later message in the same batch', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const explicitTitle = 'Explicit title';
+    const session = await services.sessions.create({ title: explicitTitle });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'First prompt' });
+    await services.messages.enqueue({
+      sessionId: session.id,
+      prompt: 'Second prompt',
+      context: { titleGeneration: { fallbackTitle: explicitTitle } },
+    });
+    const runner = new TitleRunner();
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner,
+      runnerType: 'title',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+    expect(runner.titleInputs).toHaveLength(0);
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({ title: explicitTitle });
+  });
+
+  it('preserves a manual title change while generated title work is pending', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const fallbackTitle = 'Investigate the cache miss';
+    const session = await services.sessions.create({ title: fallbackTitle });
+    await store.updateSessionContext({
+      id: session.id,
+      context: { titleGeneration: { fallbackTitle } },
+      updatedAt: new Date(),
+    });
+    await services.messages.enqueue({ sessionId: session.id, prompt: fallbackTitle });
+    const runner = new TitleRunner();
+    const titleUpdate = vi.spyOn(store, 'updateSessionTitleIfCurrent');
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner,
+      runnerType: 'title',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+    await services.sessions.update({ id: session.id, title: 'Manual title' });
+    runner.resolveTitle('Generated title');
+    await waitForAsync(async () => titleUpdate.mock.calls.length === 1);
+
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({ title: 'Manual title' });
+  });
+
+  it('rejects a generated title after the worker loses its run lease', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const fallbackTitle = 'Stale title generation';
+    const session = await services.sessions.create({ title: fallbackTitle });
+    await store.updateSessionContext({
+      id: session.id,
+      context: { titleGeneration: { fallbackTitle } },
+      updatedAt: new Date(),
+    });
+    await services.messages.enqueue({ sessionId: session.id, prompt: fallbackTitle });
+    const titleUpdate = vi.spyOn(store, 'updateSessionTitleIfCurrent');
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner: new StaleTitleRunner(store),
+      runnerType: 'stale-title',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+    await waitForAsync(async () => titleUpdate.mock.calls.length === 1);
+
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({ title: fallbackTitle, status: 'queued' });
+  });
+
   it('enqueues one-shot informational deputy completion notifications to the parent', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -1513,6 +1621,19 @@ class StaleContextUpdatingRunner implements Runner {
     await this.store.recoverStaleRuns({ now: new Date(Date.now() + 120_000), limit: 10 });
     await input.updateSessionContext?.({ repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' } });
     return { text: 'stale update ignored' };
+  }
+}
+
+class StaleTitleRunner implements Runner {
+  constructor(private readonly store: MemoryStore) {}
+
+  async run(): Promise<RunnerResult> {
+    await this.store.recoverStaleRuns({ now: new Date(Date.now() + 120_000), limit: 10 });
+    return { text: 'stale title ignored' };
+  }
+
+  async generateTitle(): Promise<string> {
+    return 'Generated after lease loss';
   }
 }
 

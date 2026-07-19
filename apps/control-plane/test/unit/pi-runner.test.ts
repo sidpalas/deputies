@@ -29,6 +29,7 @@ const piMock = vi.hoisted(() => ({
   openSessionError: undefined as Error | undefined,
   resourceLoaderOptions: [] as Array<{
     noSkills?: boolean;
+    systemPrompt?: string;
     skillsOverride?: (base: { skills: unknown[]; diagnostics: unknown[] }) => {
       skills: unknown[];
       diagnostics: unknown[];
@@ -238,6 +239,9 @@ describe('PiRunner', () => {
       }),
     );
     expect(piMock.createAgentSession.mock.calls[0]![0].tools).toBeUndefined();
+    expect(piMock.resourceLoaderOptions[0]?.systemPrompt).toContain(
+      'The current durable Deputies session ID is "session-1".',
+    );
     expect(events.map((event) => event.type)).toEqual([
       'run_started',
       'skills_loaded',
@@ -664,6 +668,7 @@ describe('PiRunner', () => {
     expect(piMock.resourceLoaderOptions).toHaveLength(5);
     for (const loaderOptions of piMock.resourceLoaderOptions) {
       expect(loaderOptions.noSkills).toBe(true);
+      expect(loaderOptions.systemPrompt).toContain('The current durable Deputies session ID is "session-1".');
       expect(loaderOptions.skillsOverride?.({ skills: [], diagnostics: [] }).skills).toEqual([]);
     }
     expect(
@@ -1210,6 +1215,9 @@ describe('PiRunner', () => {
 
     expect(result).toEqual({ text: 'continued', model: 'gpt-5.5' });
     expect(sessionStore.load).toHaveBeenCalledWith('session-1');
+    expect(piMock.resourceLoaderOptions[0]?.systemPrompt).toContain(
+      'The current durable Deputies session ID is "session-1".',
+    );
     expect(piMock.openSessionCalls).toHaveLength(1);
     expect(piMock.openSessionCalls[0]).toMatchObject({ agentDir: expect.any(String), cwd: '/workspace' });
     expect(

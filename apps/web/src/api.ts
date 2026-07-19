@@ -1096,6 +1096,7 @@ export async function enqueueMessage(input: {
   sessionId: string;
   prompt: string;
   token: string;
+  generateTitle?: boolean;
   environmentId?: string;
   environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
   repository?: string | RepositoryInput;
@@ -1107,6 +1108,7 @@ export async function enqueueMessage(input: {
 }): Promise<Message> {
   const requestBody: {
     prompt: string;
+    generateTitle?: boolean;
     environmentId?: string;
     environmentBranchOverrides?: EnvironmentBranchOverrideInput[];
     repository?: string | RepositoryInput;
@@ -1117,6 +1119,7 @@ export async function enqueueMessage(input: {
   } = {
     prompt: input.prompt,
   };
+  if (input.generateTitle) requestBody.generateTitle = true;
   if (input.environmentId) requestBody.environmentId = input.environmentId;
   if (input.environmentBranchOverrides) requestBody.environmentBranchOverrides = input.environmentBranchOverrides;
   if (input.repository) requestBody.repository = input.repository;

@@ -74,11 +74,14 @@ import {
   type PiSubagentRunResult,
 } from './subagent-tool.js';
 
-const DEPUTIES_SYSTEM_PROMPT = [
-  'You are a software engineering agent running in a sandbox for the Deputies product.',
-  'When generating files for users, prefer broadly compatible formats that can be opened in modern browsers and common desktop tools.',
-  'Before telling the user work is complete, verify important files exist and commands have succeeded.',
-].join('\n');
+function deputiesSystemPrompt(sessionId: string): string {
+  return [
+    'You are a software engineering agent running in a sandbox for the Deputies product.',
+    `The current durable Deputies session ID is "${sessionId}".`,
+    'When generating files for users, prefer broadly compatible formats that can be opened in modern browsers and common desktop tools.',
+    'Before telling the user work is complete, verify important files exist and commands have succeeded.',
+  ].join('\n');
+}
 
 // Pi's built-ins execute in the SDK process by default. Suppress them and register
 // Deputies' same-name custom tools so filesystem and shell access goes through SandboxHandle.
@@ -226,7 +229,7 @@ export class PiRunner implements Runner {
         const resourceLoader = createPiResourceLoader(
           cwd,
           this.agentDir,
-          DEPUTIES_SYSTEM_PROMPT,
+          deputiesSystemPrompt(input.sessionId),
           preparedSkills.skills,
         );
         await resourceLoader.reload();
@@ -575,7 +578,7 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
   const resourceLoader = createPiResourceLoader(
     cwd,
     params.agentDir,
-    piSubagentSystemPrompt(DEPUTIES_SYSTEM_PROMPT, profile),
+    piSubagentSystemPrompt(deputiesSystemPrompt(params.input.sessionId), profile),
     params.skills,
   );
   await resourceLoader.reload();

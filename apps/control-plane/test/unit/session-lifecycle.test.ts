@@ -1,4 +1,5 @@
 import { EventService } from '../../src/events/service.js';
+import { MessageService } from '../../src/messages/service.js';
 import {
   SessionService,
   SessionServiceError,
@@ -34,12 +35,30 @@ describe('session lifecycle transitions', () => {
       updatedAt: now,
       lastActivityAt: now,
     });
+    await store.createMessage({
+      id: 'message-title',
+      sessionId: 'session-title',
+      sequence: 1,
+      status: 'pending',
+      prompt: 'Fallback title',
+      createdAt: now,
+    });
+    await store.claimNextPendingMessage({
+      runId: 'run-title',
+      runnerType: 'test',
+      leaseOwner: 'test-worker',
+      leaseExpiresAt: new Date(now.getTime() + 60_000),
+      now,
+    });
 
     const updated = await store.updateSessionTitleIfCurrent({
       id: 'session-title',
       expectedTitle: 'Fallback title',
       title: 'Generated title',
       updatedAt: new Date(now.getTime() + 1),
+      runId: 'run-title',
+      leaseOwner: 'test-worker',
+      now: new Date(now.getTime() + 1),
     });
     expect(updated?.session.title).toBe('Generated title');
     await expect(
@@ -48,9 +67,47 @@ describe('session lifecycle transitions', () => {
         expectedTitle: 'Fallback title',
         title: 'Late generated title',
         updatedAt: new Date(now.getTime() + 2),
+        runId: 'run-title',
+        leaseOwner: 'test-worker',
+        now: new Date(now.getTime() + 2),
       }),
     ).resolves.toBeNull();
     await expect(store.getSession('session-title')).resolves.toMatchObject({ title: 'Generated title' });
+  });
+
+  it('rejects a generated title after run cancellation begins', async () => {
+    const store = new MemoryStore();
+    const events = new EventService(store);
+    const sessions = new SessionService(store, events);
+    const messages = new MessageService(store, events);
+    const now = new Date('2026-01-01T00:00:00.000Z');
+    const session = await sessions.create({ title: 'Fallback title' });
+    await messages.enqueue({ sessionId: session.id, prompt: 'Fallback title' });
+    await store.claimNextPendingMessage({
+      runId: 'run-cancelled-title',
+      runnerType: 'test',
+      leaseOwner: 'test-worker',
+      leaseExpiresAt: new Date(now.getTime() + 60_000),
+      now,
+    });
+    await store.requestRunCancellation({
+      sessionId: session.id,
+      requestedAt: new Date(now.getTime() + 1),
+      error: 'cancelled by test',
+    });
+
+    await expect(
+      store.updateSessionTitleIfCurrent({
+        id: session.id,
+        expectedTitle: 'Fallback title',
+        title: 'Late generated title',
+        updatedAt: new Date(now.getTime() + 2),
+        runId: 'run-cancelled-title',
+        leaseOwner: 'test-worker',
+        now: new Date(now.getTime() + 2),
+      }),
+    ).resolves.toBeNull();
+    await expect(store.getSession(session.id)).resolves.toMatchObject({ title: 'Fallback title' });
   });
 
   it('atomically orders cancellation before archive, preserves metadata on restore, and is idempotent', async () => {
