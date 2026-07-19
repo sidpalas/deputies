@@ -25,6 +25,7 @@ import { MemorySandboxFileSystem } from '../support/pi-skills.js';
 
 const piMock = vi.hoisted(() => ({
   createAgentSession: vi.fn(),
+  completeSimple: vi.fn(),
   openSessionCalls: [] as Array<{ sessionFile: string; agentDir: string; cwd: string; jsonl: string }>,
   openSessionError: undefined as Error | undefined,
   resourceLoaderOptions: [] as Array<{
@@ -66,14 +67,32 @@ vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
 
     registerProvider() {}
 
+    async getApiKeyAndHeaders() {
+      return { ok: true as const, apiKey: 'test-key' };
+    }
+
     find(provider: string, id: string) {
+      const reasoningContent = [
+        'reasoning-content-model',
+        'explicit-thinking-model',
+        'non-reasoning-content-model',
+      ].includes(id);
       return {
         id,
         name: id,
         provider,
-        api: 'openai-codex-responses',
+        api: reasoningContent ? 'openai-completions' : 'openai-codex-responses',
         baseUrl: 'https://example.test',
-        reasoning: id !== 'non-reasoning',
+        reasoning: id !== 'non-reasoning' && id !== 'non-reasoning-content-model',
+        ...(reasoningContent
+          ? {
+              compat: {
+                maxTokensField: 'max_tokens',
+                requiresReasoningContentOnAssistantMessages: true,
+                ...(id === 'explicit-thinking-model' ? { thinkingFormat: 'openrouter' } : {}),
+              },
+            }
+          : {}),
         ...(id === 'max-reasoning' ? { thinkingLevelMap: { max: 'max' } } : {}),
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -145,12 +164,97 @@ vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
   };
 });
 
+vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@earendil-works/pi-ai/compat')>()),
+  completeSimple: piMock.completeSimple,
+}));
+
 describe('PiRunner', () => {
   beforeEach(() => {
     piMock.createAgentSession.mockReset();
+    piMock.completeSimple.mockReset();
     piMock.openSessionCalls.length = 0;
     piMock.openSessionError = undefined;
     piMock.resourceLoaderOptions.length = 0;
+  });
+
+  it('applies DeepSeek compatibility to matching OpenCode title models', async () => {
+    piMock.completeSimple.mockResolvedValue({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Fix automatic titles' }],
+      stopReason: 'stop',
+    });
+
+    const title = await new PiRunner({
+      model: 'opencode/reasoning-content-model',
+      authBase64: Buffer.from('{}').toString('base64'),
+    }).generateTitle({ prompt: 'Please fix automatic title generation' });
+
+    expect(title).toBe('Fix automatic titles');
+    expect(piMock.completeSimple).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'opencode',
+        id: 'reasoning-content-model',
+        compat: expect.objectContaining({ maxTokensField: 'max_tokens', thinkingFormat: 'deepseek' }),
+      }),
+      expect.any(Object),
+      expect.objectContaining({ maxTokens: 512 }),
+    );
+    expect(piMock.completeSimple.mock.calls[0]![2]).not.toHaveProperty('reasoning');
+  });
+
+  it.each([
+    ['other provider', 'other/reasoning-content-model'],
+    ['non-reasoning model', 'opencode/non-reasoning-content-model'],
+    ['explicit thinking format', 'opencode/explicit-thinking-model'],
+    ['ordinary OpenCode model', 'opencode/ordinary-model'],
+  ])('preserves title compatibility for %s', async (_label, model) => {
+    piMock.completeSimple.mockResolvedValue({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Existing behavior' }],
+      stopReason: 'stop',
+    });
+
+    await new PiRunner({ model, authBase64: Buffer.from('{}').toString('base64') }).generateTitle({
+      prompt: 'Keep existing title behavior',
+    });
+
+    const [requestedModel, , options] = piMock.completeSimple.mock.calls[0]!;
+    expect(options).toMatchObject({ maxTokens: 64 });
+    if (model.includes('explicit-thinking-model')) {
+      expect(requestedModel.compat).toMatchObject({ thinkingFormat: 'openrouter' });
+    } else {
+      expect(requestedModel.compat).not.toMatchObject({ thinkingFormat: 'deepseek' });
+    }
+  });
+
+  it('does not inject title compatibility into normal agent runs', async () => {
+    piMock.createAgentSession.mockImplementation(async (options) => ({
+      session: {
+        sessionId: 'pi-session',
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' }],
+        prompt: vi.fn(),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe: () => () => {},
+      },
+      extensionsResult: {},
+    }));
+
+    await new PiRunner({
+      model: 'opencode/reasoning-content-model',
+      authBase64: Buffer.from('{}').toString('base64'),
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'hello',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async () => {},
+    });
+
+    expect(piMock.createAgentSession.mock.calls[0]![0].model.compat).not.toHaveProperty('thinkingFormat');
   });
 
   it('runs a Pi session and normalizes streamed text and tool events', async () => {

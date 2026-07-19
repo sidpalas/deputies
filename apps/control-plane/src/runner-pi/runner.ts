@@ -166,13 +166,25 @@ export class PiRunner implements Runner {
     if (!model) throw new Error(`Pi model is not available: ${modelName}`);
     const auth = await modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) throw new Error(auth.error);
+    const openAICompletionsCompat =
+      model.api === 'openai-completions' ? (model.compat as Model<'openai-completions'>['compat']) : undefined;
+    // Pi 0.80.6 omits DeepSeek's thinking format from OpenCode Zen models even
+    // though its catalog identifies their separate reasoning-content protocol.
+    const needsDeepSeekTitleCompat =
+      model.provider === 'opencode' &&
+      model.reasoning === true &&
+      openAICompletionsCompat?.requiresReasoningContentOnAssistantMessages === true &&
+      !openAICompletionsCompat.thinkingFormat;
+    const titleModel = needsDeepSeekTitleCompat
+      ? { ...model, compat: { ...openAICompletionsCompat, thinkingFormat: 'deepseek' as const } }
+      : model;
     const context: Context = {
       systemPrompt:
         'Create a brief, specific title for this software engineering session. Prefer 3-7 words and omit filler or unnecessary detail. Return only the title, with no quotes, markup, or explanation. Never exceed 64 characters.',
       messages: [{ role: 'user', content: input.prompt, timestamp: Date.now() }],
     };
-    const response = await completeSimple(model, context, {
-      maxTokens: 64,
+    const response = await completeSimple(titleModel, context, {
+      maxTokens: needsDeepSeekTitleCompat ? 512 : 64,
       ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
       ...(auth.headers ? { headers: auth.headers } : {}),
       ...(auth.env ? { env: auth.env } : {}),
