@@ -1743,12 +1743,10 @@ export function App() {
       });
       if (sessionsRefreshRequestRef.current !== requestId) return;
       setSessions((current) => mergeSessionsById(current, page.sessions));
-      if (sessionListHovered) {
-        setSessionOrderIds((current) => [
-          ...current,
-          ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
-        ]);
-      }
+      setSessionOrderIds((current) => [
+        ...current,
+        ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
+      ]);
       sessionsNextCursorRef.current = page.nextCursor;
       setSessionsNextCursor(page.nextCursor);
     } catch (err) {
@@ -1776,12 +1774,10 @@ export function App() {
       });
       if (childSessionRequestEpochRef.current !== requestEpoch) return;
       setSessions((current) => mergeSessionsById(current, page.sessions));
-      if (sessionListHovered) {
-        setSessionOrderIds((current) => [
-          ...current,
-          ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
-        ]);
-      }
+      setSessionOrderIds((current) => [
+        ...current,
+        ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
+      ]);
       setChildSessionCursors((current) => new Map(current).set(parent.id, page.nextCursor));
     } catch (err) {
       if (childSessionRequestEpochRef.current !== requestEpoch) return;
@@ -1819,12 +1815,10 @@ export function App() {
       });
       if (archivedSessionsRequestRef.current !== requestId) return;
       setSessions((current) => mergeSessionsById(current, page.sessions));
-      if (sessionListHovered) {
-        setSessionOrderIds((current) => [
-          ...current,
-          ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
-        ]);
-      }
+      setSessionOrderIds((current) => [
+        ...current,
+        ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
+      ]);
       setArchivedSessionsNextCursor(page.nextCursor);
       setArchivedSessionsLoaded(true);
     } catch (err) {

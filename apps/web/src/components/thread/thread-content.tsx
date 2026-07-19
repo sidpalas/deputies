@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import type { AnchorHTMLAttributes, MouseEvent, ReactNode, ToggleEvent } from 'react';
 import { ChevronDown, Download, ExternalLink, Play, RotateCcw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -95,10 +95,11 @@ export function ChatPanel(props: {
   openableManagedSkillIds?: ReadonlySet<string>;
   onOpenSkill?: (skillId: string, revisionId: string) => void;
 }) {
-  const assistantText = { ...buildAssistantText(props.events), ...props.activeProgress };
-  const assistantFinalTimestamps = buildAssistantFinalTimestamps(props.events);
-  const diagnostics = groupDiagnosticsByRun(props.events);
-  const groups = groupMessagesByRun(props.messages, props.events);
+  const historicalAssistantText = useMemo(() => buildAssistantText(props.events), [props.events]);
+  const assistantText = { ...historicalAssistantText, ...props.activeProgress };
+  const assistantFinalTimestamps = useMemo(() => buildAssistantFinalTimestamps(props.events), [props.events]);
+  const diagnostics = useMemo(() => groupDiagnosticsByRun(props.events), [props.events]);
+  const groups = useMemo(() => groupMessagesByRun(props.messages, props.events), [props.messages, props.events]);
 
   return (
     <section className="grid gap-3">
@@ -263,7 +264,7 @@ function markdownNodeText(children: ReactNode): string {
   return '';
 }
 
-function MarkdownText(props: { text: string }) {
+const MarkdownText = memo(function MarkdownText(props: { text: string }) {
   const highlightCode = true;
   return (
     <ReactMarkdown
@@ -331,7 +332,7 @@ function MarkdownText(props: { text: string }) {
       {props.text}
     </ReactMarkdown>
   );
-}
+});
 
 function MarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
   const { className, href, onClick, ...rest } = props;

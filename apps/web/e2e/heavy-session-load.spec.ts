@@ -331,6 +331,25 @@ async function mockApi(
       await route.fulfill({ json: { automations: [] } });
       return;
     }
+    if (method === 'GET' && path === '/environments') {
+      await route.fulfill({ json: { environments: [] } });
+      return;
+    }
+    if (method === 'GET' && path === '/sessions/tags') {
+      await route.fulfill({ json: { tags: [] } });
+      return;
+    }
+    if (method === 'GET' && path === '/skills' && url.search === '?scope=personal') {
+      await route.fulfill({ json: { skills: [] } });
+      return;
+    }
+    if (
+      method === 'GET' &&
+      (path === `/sessions/${lightSessionId}/skills` || path === `/sessions/${heavySessionId}/skills`)
+    ) {
+      await route.fulfill({ json: { skills: [] } });
+      return;
+    }
     if (method === 'GET' && path === '/events/stream') {
       await route.fulfill({ body: '', headers: { 'content-type': 'text/event-stream' } });
       return;

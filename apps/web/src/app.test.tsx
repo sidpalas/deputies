@@ -2144,6 +2144,41 @@ it('preserves load-more sessions when a refresh resolves later', async () => {
   expect(screen.queryByRole('button', { name: 'Load more sessions' })).not.toBeInTheDocument();
 });
 
+it('shows a loaded session when the sidebar becomes hovered before the page resolves', async () => {
+  const secondPage = deferred<Response>();
+  const secondPageSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000088',
+    title: 'Loaded while hovered',
+    createdAt: '2026-05-05T11:59:00.000Z',
+    updatedAt: '2026-05-05T11:59:00.000Z',
+  };
+  let secondPageRequested = false;
+  mockApi({
+    onListSessionsRequest: ({ count, url }) => {
+      if (count === 1) return jsonResponse({ sessions: [session], nextCursor: 'page-2' });
+      if (url.searchParams.get('cursor') === 'page-2') {
+        secondPageRequested = true;
+        return secondPage.promise;
+      }
+      return undefined;
+    },
+  });
+  render(<App />);
+
+  const loadMore = await screen.findByRole('button', { name: 'Load more sessions' });
+  fireEvent.click(loadMore);
+  await waitFor(() => expect(secondPageRequested).toBe(true));
+  fireEvent.pointerEnter(loadMore);
+
+  await act(async () => {
+    secondPage.resolve(jsonResponse({ sessions: [secondPageSession], nextCursor: null }));
+    await secondPage.promise;
+  });
+
+  expect(screen.getByRole('button', { name: /Loaded while hovered/ })).toBeInTheDocument();
+});
+
 it('preserves filtered load-more sessions when a refresh resolves later', async () => {
   const refreshPage = deferred<Response>();
   const firstPageSession = { ...session, starred: true, title: 'Filtered first page' };
@@ -3817,6 +3852,43 @@ it('loads direct sub-sessions that were not included in the current session page
   expect(firstChild.closest('.ml-2')).toBeInTheDocument();
   expect(secondChild.closest('.ml-2')).toBeInTheDocument();
   expect(sidebar.queryByRole('button', { name: /Load .* sub-sessions/ })).not.toBeInTheDocument();
+});
+
+it('shows loaded sub-sessions when the sidebar becomes hovered before the page resolves', async () => {
+  const childPage = deferred<Response>();
+  const parentSession = { ...session, directChildCount: 1 };
+  const childSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000304',
+    title: 'Child loaded while hovered',
+    parentSessionId: session.id,
+    spawnDepth: 1,
+    directChildCount: 0,
+  };
+  let childPageRequested = false;
+  mockApi({
+    onListSessionsRequest: ({ url }) => {
+      if (url.searchParams.get('parentSessionId') === session.id) {
+        childPageRequested = true;
+        return childPage.promise;
+      }
+      return jsonResponse({ sessions: [parentSession], nextCursor: null });
+    },
+  });
+  render(<App />);
+
+  const sidebar = within((await screen.findByRole('heading', { name: 'Sessions' })).closest('aside')!);
+  const loadChildren = sidebar.getByRole('button', { name: 'Load 1 more sub-session' });
+  fireEvent.click(loadChildren);
+  await waitFor(() => expect(childPageRequested).toBe(true));
+  fireEvent.pointerEnter(loadChildren);
+
+  await act(async () => {
+    childPage.resolve(jsonResponse({ sessions: [childSession], nextCursor: null }));
+    await childPage.promise;
+  });
+
+  expect(sidebar.getByRole('button', { name: 'Child loaded while hovered' })).toBeInTheDocument();
 });
 
 it('ignores a child page that resolves after the session list refreshes', async () => {
