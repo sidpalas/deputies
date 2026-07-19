@@ -97,7 +97,7 @@ vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 100_000,
-        maxTokens: 16_000,
+        maxTokens: id === 'small-reasoning-model' ? 1_024 : 16_000,
       };
     }
   }
@@ -178,7 +178,7 @@ describe('PiRunner', () => {
     piMock.resourceLoaderOptions.length = 0;
   });
 
-  it('applies DeepSeek compatibility to matching OpenCode title models', async () => {
+  it('uses a larger title budget for reasoning models without changing model compatibility', async () => {
     piMock.completeSimple.mockResolvedValue({
       role: 'assistant',
       content: [{ type: 'text', text: 'Fix automatic titles' }],
@@ -195,20 +195,68 @@ describe('PiRunner', () => {
       expect.objectContaining({
         provider: 'opencode',
         id: 'reasoning-content-model',
-        compat: expect.objectContaining({ maxTokensField: 'max_tokens', thinkingFormat: 'deepseek' }),
+        compat: expect.objectContaining({ maxTokensField: 'max_tokens' }),
       }),
       expect.any(Object),
-      expect.objectContaining({ maxTokens: 512 }),
+      expect.objectContaining({ maxTokens: 4_096 }),
     );
+    expect(piMock.completeSimple.mock.calls[0]![0].compat).not.toHaveProperty('thinkingFormat');
     expect(piMock.completeSimple.mock.calls[0]![2]).not.toHaveProperty('reasoning');
   });
 
+  it('diagnoses thinking-only title responses without logging their content or prompt', async () => {
+    piMock.completeSimple.mockResolvedValue({
+      role: 'assistant',
+      content: [{ type: 'thinking', thinking: 'sensitive internal reasoning' }],
+      stopReason: 'length',
+      usage: {
+        input: 20,
+        output: 512,
+        reasoning: 512,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 532,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+    const prompt = 'sensitive user prompt';
+
+    const result = new PiRunner({
+      model: 'opencode/reasoning-content-model',
+      authBase64: Buffer.from('{}').toString('base64'),
+    }).generateTitle({ prompt });
+
+    await expect(result).rejects.toThrow(
+      'Title generation returned no text (model=opencode/reasoning-content-model, stopReason=length, outputTokens=512, reasoningTokens=512, contentTypes=thinking, tokenBudget=4096)',
+    );
+    await expect(result).rejects.not.toThrow(prompt);
+    await expect(result).rejects.not.toThrow('sensitive internal reasoning');
+    expect(piMock.completeSimple).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a non-empty title when the provider reports a length stop', async () => {
+    piMock.completeSimple.mockResolvedValue({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Usable partial title' }],
+      stopReason: 'length',
+    });
+
+    await expect(
+      new PiRunner({
+        model: 'opencode/reasoning-content-model',
+        authBase64: Buffer.from('{}').toString('base64'),
+      }).generateTitle({ prompt: 'Title this session' }),
+    ).resolves.toBe('Usable partial title');
+    expect(piMock.completeSimple).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
-    ['other provider', 'other/reasoning-content-model'],
-    ['non-reasoning model', 'opencode/non-reasoning-content-model'],
-    ['explicit thinking format', 'opencode/explicit-thinking-model'],
-    ['ordinary OpenCode model', 'opencode/ordinary-model'],
-  ])('preserves title compatibility for %s', async (_label, model) => {
+    ['other reasoning provider', 'other/reasoning-content-model', 4_096],
+    ['non-reasoning model', 'opencode/non-reasoning-content-model', 64],
+    ['explicit thinking format', 'opencode/explicit-thinking-model', 4_096],
+    ['ordinary OpenCode reasoning model', 'opencode/ordinary-model', 4_096],
+    ['reasoning model with a lower output limit', 'opencode/small-reasoning-model', 1_024],
+  ])('uses a capability-based title budget for %s', async (_label, model, maxTokens) => {
     piMock.completeSimple.mockResolvedValue({
       role: 'assistant',
       content: [{ type: 'text', text: 'Existing behavior' }],
@@ -220,16 +268,16 @@ describe('PiRunner', () => {
     });
 
     const [requestedModel, , options] = piMock.completeSimple.mock.calls[0]!;
-    expect(options).toMatchObject({ maxTokens: 64 });
+    expect(options).toMatchObject({ maxTokens });
     if (model.includes('explicit-thinking-model')) {
       expect(requestedModel.compat).toMatchObject({ thinkingFormat: 'openrouter' });
     } else {
-      expect(requestedModel.compat).not.toMatchObject({ thinkingFormat: 'deepseek' });
+      expect(requestedModel.compat?.thinkingFormat).toBeUndefined();
     }
   });
 
   it('does not inject title compatibility into normal agent runs', async () => {
-    piMock.createAgentSession.mockImplementation(async (options) => ({
+    piMock.createAgentSession.mockImplementation(async (_options) => ({
       session: {
         sessionId: 'pi-session',
         messages: [{ role: 'assistant', content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' }],
@@ -254,7 +302,10 @@ describe('PiRunner', () => {
       emit: async () => {},
     });
 
-    expect(piMock.createAgentSession.mock.calls[0]![0].model.compat).not.toHaveProperty('thinkingFormat');
+    expect(piMock.createAgentSession.mock.calls[0]![0].model).toMatchObject({
+      id: 'reasoning-content-model',
+      compat: expect.not.objectContaining({ thinkingFormat: expect.anything() }),
+    });
   });
 
   it('runs a Pi session and normalizes streamed text and tool events', async () => {

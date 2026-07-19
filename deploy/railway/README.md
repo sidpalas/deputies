@@ -41,6 +41,8 @@ RUNNER=pi
 RUNNER_MODEL_DEFAULT=<provider/model>
 ```
 
+Title generation is enabled by default and uses the session model. Optionally set `TITLE_GENERATION_MODEL=<provider/model>` to override it or `TITLE_GENERATION_ENABLED=false` to keep prompt-derived titles without making a title-generation request.
+
 Then configure one of the supported model auth paths:
 
 ```sh

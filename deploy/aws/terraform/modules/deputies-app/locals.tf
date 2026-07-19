@@ -56,6 +56,7 @@ locals {
     SERVICE_TRUST_FORWARDED_HOSTS           = "false"
     RUNNER                                  = var.runner
     RUNNER_MODEL_DEFAULT                    = var.runner_model_default
+    TITLE_GENERATION_ENABLED                = tostring(var.title_generation_enabled)
     REPOSITORY_SETUP_SCRIPT_ENABLED         = "true"
     REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS = "600"
     SANDBOX_PROVIDER                        = var.sandbox_provider
@@ -72,6 +73,7 @@ locals {
   }
 
   control_plane_optional_environment = {
+    TITLE_GENERATION_MODEL                    = var.title_generation_model
     LAMBDA_MICROVM_IMAGE_VERSION              = var.lambda_microvm_image_version
     LAMBDA_MICROVM_EXECUTION_ROLE_ARN         = var.lambda_microvm_execution_role_arn
     LAMBDA_MICROVM_INGRESS_NETWORK_CONNECTORS = join(",", var.lambda_microvm_ingress_network_connectors)

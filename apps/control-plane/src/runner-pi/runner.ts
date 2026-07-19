@@ -166,25 +166,18 @@ export class PiRunner implements Runner {
     if (!model) throw new Error(`Pi model is not available: ${modelName}`);
     const auth = await modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) throw new Error(auth.error);
-    const openAICompletionsCompat =
-      model.api === 'openai-completions' ? (model.compat as Model<'openai-completions'>['compat']) : undefined;
-    // Pi 0.80.6 omits DeepSeek's thinking format from OpenCode Zen models even
-    // though its catalog identifies their separate reasoning-content protocol.
-    const needsDeepSeekTitleCompat =
-      model.provider === 'opencode' &&
-      model.reasoning === true &&
-      openAICompletionsCompat?.requiresReasoningContentOnAssistantMessages === true &&
-      !openAICompletionsCompat.thinkingFormat;
-    const titleModel = needsDeepSeekTitleCompat
-      ? { ...model, compat: { ...openAICompletionsCompat, thinkingFormat: 'deepseek' as const } }
-      : model;
+    // Reasoning and visible text share the output-token budget. A short budget
+    // can therefore produce only thinking even though the requested title is
+    // tiny. Keep ordinary models cheap, but let any reasoning-capable model
+    // finish its reasoning before enforcing the 64-character title limit.
+    const titleTokenBudget = Math.min(model.maxTokens, model.reasoning ? 4_096 : 64);
     const context: Context = {
       systemPrompt:
         'Create a brief, specific title for this software engineering session. Prefer 3-7 words and omit filler or unnecessary detail. Return only the title, with no quotes, markup, or explanation. Never exceed 64 characters.',
       messages: [{ role: 'user', content: input.prompt, timestamp: Date.now() }],
     };
-    const response = await completeSimple(titleModel, context, {
-      maxTokens: needsDeepSeekTitleCompat ? 512 : 64,
+    const response = await completeSimple(model, context, {
+      maxTokens: titleTokenBudget,
       ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
       ...(auth.headers ? { headers: auth.headers } : {}),
       ...(auth.env ? { env: auth.env } : {}),
@@ -194,7 +187,12 @@ export class PiRunner implements Runner {
       throw new Error(response.errorMessage ?? 'Title generation failed');
     }
     const title = sessionTitleFromGeneratedResponse(assistantMessageText(response));
-    if (!title) throw new Error('Title generation returned an empty title');
+    if (!title) {
+      const contentTypes = [...new Set(response.content.map((item) => item.type))].join(',') || 'none';
+      throw new Error(
+        `Title generation returned no text (model=${modelName}, stopReason=${response.stopReason}, outputTokens=${response.usage.output}, reasoningTokens=${response.usage.reasoning ?? 'unknown'}, contentTypes=${contentTypes}, tokenBudget=${titleTokenBudget})`,
+      );
+    }
     return title;
   }
 
@@ -948,7 +946,7 @@ type AssistantMessageLike = {
   content?: Array<{ type?: string; text?: string }>;
   model?: string;
   responseModel?: string;
-  usage?: RunnerResult['usage'];
+  usage?: NonNullable<RunnerResult['usage']> & { reasoning?: number };
   stopReason?: string;
   errorMessage?: string;
 };

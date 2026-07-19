@@ -110,6 +110,8 @@ export type AppConfig = {
   runnerModelDefault?: string;
   runnerModelChoices: string[];
   runnerReasoningLevelDefault?: ReasoningLevel;
+  titleGenerationEnabled: boolean;
+  titleGenerationModel?: string;
   openaiCodexAuthFile?: string;
   openaiCodexAuthBase64?: string;
   webSearchProvider: WebSearchProviderKind;
@@ -275,6 +277,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     unsafeAuthGithubAllowAll: parseBoolean(env.UNSAFE_AUTH_GITHUB_ALLOW_ALL, false, 'UNSAFE_AUTH_GITHUB_ALLOW_ALL'),
     runnerStateStore: parseEnum(env.RUNNER_STATE_STORE, ['postgres', 'memory'], 'postgres'),
     runnerModelChoices: parseStringList(env.RUNNER_MODEL_CHOICES),
+    titleGenerationEnabled: parseBoolean(env.TITLE_GENERATION_ENABLED, true, 'TITLE_GENERATION_ENABLED'),
     webSearchProvider: parseEnum(env.WEB_SEARCH_PROVIDER, ['disabled', 'auto', 'brave', 'duckduckgo'], 'auto'),
     webSearchMaxResults: Math.min(parsePositiveInteger(env.WEB_SEARCH_MAX_RESULTS, 10, 'WEB_SEARCH_MAX_RESULTS'), 20),
     webSearchContentMaxChars: parsePositiveInteger(
@@ -376,6 +379,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       REASONING_LEVELS[0],
     );
   }
+  if (env.TITLE_GENERATION_MODEL) config.titleGenerationModel = env.TITLE_GENERATION_MODEL;
   if (env.OPENAI_CODEX_AUTH_FILE) config.openaiCodexAuthFile = env.OPENAI_CODEX_AUTH_FILE;
   if (env.OPENAI_CODEX_AUTH_BASE64) config.openaiCodexAuthBase64 = env.OPENAI_CODEX_AUTH_BASE64;
   const webSearchBraveApiKey = env.WEB_SEARCH_BRAVE_API_KEY ?? env.BRAVE_API_KEY;

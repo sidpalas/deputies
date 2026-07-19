@@ -134,6 +134,15 @@ runner_model_default = "amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1
 
 The ECS task role supplies AWS credentials. The runner uses `BEDROCK_REGION` when set, then `AWS_REGION`, then `AWS_DEFAULT_REGION`. Claude on Bedrock often requires inference-profile IDs such as `us.anthropic.claude-haiku-4-5-20251001-v1:0`; direct base model IDs can fail with on-demand throughput errors. If Bedrock ships a useful inference-profile ID before the Pi catalog includes it, temporarily supplement the catalog in `apps/control-plane/src/runner/bedrock.ts`. Ensure Bedrock model/profile access is enabled in the selected region/account before relying on the deployment.
 
+Automatic title generation is enabled by default and uses each session's selected model. The reference stack exposes optional Terraform settings for a dedicated model or for disabling generation:
+
+```hcl
+title_generation_model   = "opencode/big-pickle"
+title_generation_enabled = true
+```
+
+Leave `title_generation_model` empty to use the session model. Set `title_generation_enabled = false` to keep prompt-derived titles without making title-generation requests. These settings are applied to both combined and split worker task definitions.
+
 ## Secrets Pattern
 
 The reference stack writes a single Secrets Manager JSON secret and injects selected keys as ECS task secrets.

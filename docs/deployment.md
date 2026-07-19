@@ -359,6 +359,15 @@ RUNNER_MODEL_CHOICES=anthropic/claude-haiku-4-5,openai/gpt-5.5
 
 If unset, model choices are derived from Pi's catalog for providers with configured credentials.
 
+Automatic title generation is enabled by default and uses the model selected for the session. To use a dedicated model or disable generated titles entirely:
+
+```sh
+TITLE_GENERATION_MODEL=opencode/big-pickle
+TITLE_GENERATION_ENABLED=false
+```
+
+Leave `TITLE_GENERATION_MODEL` unset to use the session model. When generation is disabled or fails, the initial prompt-derived title is preserved.
+
 ## Agent Skills
 
 Managed and repository skills are enabled by default:

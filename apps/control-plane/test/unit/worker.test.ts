@@ -103,6 +103,70 @@ describe('WorkerService', () => {
     );
   });
 
+  it('uses the configured title model instead of the session model', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const fallbackTitle = 'Investigate title model selection';
+    const session = await services.sessions.create({ title: fallbackTitle });
+    await store.updateSessionContext({
+      id: session.id,
+      context: {
+        model: 'provider/session-model',
+        titleGeneration: { fallbackTitle },
+      },
+      updatedAt: new Date(),
+    });
+    await services.messages.enqueue({ sessionId: session.id, prompt: fallbackTitle });
+    const runner = new TitleRunner();
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner,
+      runnerType: 'title',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+      titleGenerationModel: 'provider/title-model',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+    expect(runner.titleInputs).toEqual([
+      expect.objectContaining({
+        prompt: fallbackTitle,
+        model: 'provider/title-model',
+      }),
+    ]);
+  });
+
+  it('does not generate titles when title generation is disabled', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const fallbackTitle = 'Keep the prompt-derived title';
+    const session = await services.sessions.create({ title: fallbackTitle });
+    await store.updateSessionContext({
+      id: session.id,
+      context: { titleGeneration: { fallbackTitle } },
+      updatedAt: new Date(),
+    });
+    await services.messages.enqueue({ sessionId: session.id, prompt: fallbackTitle });
+    const runner = new TitleRunner();
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner,
+      runnerType: 'title',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+      titleGenerationEnabled: false,
+      titleGenerationModel: 'provider/title-model',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+    expect(runner.titleInputs).toHaveLength(0);
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({ title: fallbackTitle });
+  });
+
   it('does not generate a title without explicit title-generation provenance', async () => {
     const store = new MemoryStore();
     const services = createServices(store);

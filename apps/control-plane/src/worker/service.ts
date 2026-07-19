@@ -47,6 +47,8 @@ export type WorkerServiceOptions = {
   heartbeatIntervalMs?: number;
   cancellationPollIntervalMs?: number;
   staleRecoveryLimit?: number;
+  titleGenerationEnabled?: boolean;
+  titleGenerationModel?: string;
   callbackSenders?: CompletionCallbackSender[];
   progressNotifiers?: RunProgressNotifier[];
 };
@@ -366,10 +368,11 @@ export class WorkerService {
     context: Record<string, unknown>,
     runSignal: AbortSignal,
   ): void {
-    if (message.sequence !== 1 || !this.options.runner.generateTitle) return;
+    if (this.options.titleGenerationEnabled === false || message.sequence !== 1 || !this.options.runner.generateTitle)
+      return;
     const fallbackTitle = readTitleGenerationFallback(message.context ?? {});
     if (!fallbackTitle) return;
-    const model = typeof context.model === 'string' ? context.model : undefined;
+    const model = this.options.titleGenerationModel ?? (typeof context.model === 'string' ? context.model : undefined);
     const generateTitle = this.options.runner.generateTitle.bind(this.options.runner);
     void (async () => {
       const current = await this.options.store.getSession(message.sessionId);

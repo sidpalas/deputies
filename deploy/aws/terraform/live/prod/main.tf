@@ -93,12 +93,14 @@ module "app" {
   worker_task_memory   = var.worker_task_memory
   cpu_architecture     = var.cpu_architecture
 
-  api_auth_mode        = var.api_auth_mode
-  auth_provider        = var.auth_provider
-  auth_static_username = var.auth_static_username
-  runner               = var.runner
-  runner_model_default = var.runner_model_default
-  sandbox_provider     = var.sandbox_provider
+  api_auth_mode            = var.api_auth_mode
+  auth_provider            = var.auth_provider
+  auth_static_username     = var.auth_static_username
+  runner                   = var.runner
+  runner_model_default     = var.runner_model_default
+  title_generation_enabled = var.title_generation_enabled
+  title_generation_model   = var.title_generation_model
+  sandbox_provider         = var.sandbox_provider
 
   lambda_microvm_image_identifier           = local.lambda_microvm_image_identifier
   lambda_microvm_image_version              = var.lambda_microvm_image_version

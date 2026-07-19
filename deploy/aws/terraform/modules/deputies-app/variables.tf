@@ -158,6 +158,18 @@ variable "runner_model_default" {
   type        = string
 }
 
+variable "title_generation_enabled" {
+  description = "Whether workers generate a title from the first session prompt."
+  type        = bool
+  default     = true
+}
+
+variable "title_generation_model" {
+  description = "Optional model used for title generation. Empty uses the session model."
+  type        = string
+  default     = ""
+}
+
 variable "sandbox_provider" {
   description = "Sandbox provider."
   type        = string

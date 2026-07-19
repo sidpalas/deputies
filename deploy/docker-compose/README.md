@@ -67,6 +67,16 @@ Scale split workers:
 docker compose -f deploy/docker-compose/docker-compose.split.yml up -d --scale worker=4
 ```
 
+Automatic title generation is enabled by default and runs in the worker. Configure it in `.env.local`:
+
+```txt
+# Leave empty to use the model selected for each session.
+TITLE_GENERATION_MODEL=
+TITLE_GENERATION_ENABLED=true
+```
+
+Set `TITLE_GENERATION_MODEL=<provider/model>` to use a dedicated title model, or set `TITLE_GENERATION_ENABLED=false` to keep prompt-derived titles without making title-generation requests. The split stack passes both settings to the worker through its shared environment file.
+
 Services are available at:
 
 - Web: `http://localhost:5173`

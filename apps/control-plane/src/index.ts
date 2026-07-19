@@ -134,6 +134,8 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
       sandboxProvider,
       leaseOwner: `worker-${processInstanceId}-${index + 1}`,
       cancellationPollIntervalMs: config.runCancellationPollIntervalMs,
+      titleGenerationEnabled: config.titleGenerationEnabled,
+      ...(config.titleGenerationModel ? { titleGenerationModel: config.titleGenerationModel } : {}),
       callbackSenders,
       progressNotifiers,
     });

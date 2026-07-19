@@ -53,6 +53,22 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --set topology.mode=split
 ```
 
+Automatic title generation is enabled by default and uses each session's selected model. To use a dedicated model or disable model-generated titles:
+
+```sh
+helm upgrade deputies deploy/kubernetes/charts/deputies \
+  --namespace deputies \
+  --reuse-values \
+  --set config.titleGenerationModel=opencode/big-pickle
+
+helm upgrade deputies deploy/kubernetes/charts/deputies \
+  --namespace deputies \
+  --reuse-values \
+  --set-string config.titleGenerationEnabled=false
+```
+
+Leave `config.titleGenerationModel` empty to use the session model. Both combined and split worker deployments receive these settings.
+
 For real agent work in production, reference a Kubernetes Secret instead of putting secret values in Helm values:
 
 ```sh

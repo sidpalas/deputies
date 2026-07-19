@@ -107,6 +107,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ $root.Values.config.serviceTrustForwardedHosts | quote }}
 - name: RUNNER_MODEL_DEFAULT
   value: {{ $root.Values.config.runnerModelDefault | quote }}
+- name: TITLE_GENERATION_ENABLED
+  value: {{ $root.Values.config.titleGenerationEnabled | quote }}
+{{- if $root.Values.config.titleGenerationModel }}
+- name: TITLE_GENERATION_MODEL
+  value: {{ $root.Values.config.titleGenerationModel | quote }}
+{{- end }}
 - name: REPOSITORY_SETUP_SCRIPT_ENABLED
   value: {{ $root.Values.config.repositorySetupScriptEnabled | quote }}
 - name: REPOSITORY_SETUP_SCRIPT_TIMEOUT_SECONDS
