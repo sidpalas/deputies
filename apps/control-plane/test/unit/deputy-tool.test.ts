@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { EventService } from '../../src/events/service.js';
 import { MessageService } from '../../src/messages/service.js';
+import { createPiDeputyToolDefinition } from '../../src/runner-pi/deputy-tool.js';
 import { executeDeputyTool, type DeputyToolServices } from '../../src/sessions/deputy-tool.js';
+import { SessionService } from '../../src/sessions/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import { defaultGroupId, type SessionRecord } from '../../src/store/types.js';
 
@@ -35,6 +37,7 @@ describe('deputies tool', () => {
     const child = await store.getSession(session.id);
     expect(child).toMatchObject({
       id: session.id,
+      title: 'Child work',
       status: 'queued',
       parentSessionId: parentId,
       spawnDepth: 1,
@@ -68,6 +71,23 @@ describe('deputies tool', () => {
     expect(replay.idempotentReplay).toBe(true);
     await expect(store.listSessions()).resolves.toHaveLength(2);
     expect(services.runState.spawns).toBe(1);
+  });
+
+  it('creates untitled children immediately with a prompt fallback for background title generation', async () => {
+    const { services, store } = await createDeputyServices();
+    const result = await executeDeputyTool(services, {
+      action: 'spawn',
+      prompt: `  Investigate   the cache miss ${'x'.repeat(80)}  `,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+
+    const child = await store.getSession((result.session as { id: string }).id);
+    const fallbackTitle = `Investigate the cache miss ${'x'.repeat(34)}...`;
+    expect(child).toMatchObject({
+      title: fallbackTitle,
+      context: { titleGeneration: { fallbackTitle } },
+    });
   });
 
   it('refuses depth, child-count, and per-run spawn guardrail violations as tool results', async () => {
@@ -105,7 +125,8 @@ describe('deputies tool', () => {
     });
     await expect(executeDeputyTool(services, { action: 'wat' })).resolves.toEqual({
       ok: false,
-      error: 'deputies action must be one of: spawn, list_sessions, get_session, send_message, cancel',
+      error:
+        'deputies action must be one of: spawn, list_sessions, get_session, send_message, cancel, archive, restore',
     });
 
     services.shouldPersist = async () => false;
@@ -119,6 +140,45 @@ describe('deputies tool', () => {
     await expect(executeDeputyTool(services, { action: 'list_sessions' })).resolves.toMatchObject({
       ok: true,
       action: 'list_sessions',
+    });
+
+    for (const params of [
+      { action: 'archive', sessionId: parentId },
+      { action: 'restore', sessionId: parentId },
+    ]) {
+      await expect(executeDeputyTool(services, params)).resolves.toMatchObject({
+        ok: false,
+        action: params.action,
+        error: 'Cannot mutate Deputies sessions because the parent run is no longer active',
+      });
+    }
+    await expect(store.getSession(parentId)).resolves.toMatchObject({ status: 'idle', title: 'Parent' });
+    await expect(store.getEvents(parentId)).resolves.toHaveLength(1);
+  });
+
+  it('exposes the acting session ID and self-archive behavior in model-visible guidance', async () => {
+    const { services } = await createDeputyServices();
+    const tool = createPiDeputyToolDefinition(services);
+
+    expect(tool.promptGuidelines).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(`current acting Deputies session ID is "${parentId}"`),
+        expect.stringContaining('Treat self-archive as the final sandbox-dependent action'),
+      ]),
+    );
+  });
+
+  it('initializes a missing child title from its normalized initial prompt', async () => {
+    const { services } = await createDeputyServices();
+
+    const spawned = await executeDeputyTool(services, {
+      action: 'spawn',
+      prompt: '  Investigate   the\ncache miss.  ',
+    });
+
+    expect(spawned).toMatchObject({
+      ok: true,
+      session: { title: 'Investigate the cache miss.' },
     });
   });
 
@@ -265,6 +325,128 @@ describe('deputies tool', () => {
       error: `Can only cancel non-archived direct child sessions: ${parentId}`,
     });
   });
+
+  it('archives and restores direct child sessions', async () => {
+    const { services, store } = await createDeputyServices();
+    const spawned = await executeDeputyTool(services, { action: 'spawn', prompt: 'child' });
+    if (!spawned.ok) throw new Error(spawned.error);
+    const childId = (spawned.session as { id: string }).id;
+
+    await expect(executeDeputyTool(services, { action: 'archive', sessionId: childId })).resolves.toMatchObject({
+      ok: true,
+      session: { id: childId, status: 'archived' },
+    });
+
+    await expect(executeDeputyTool(services, { action: 'restore', sessionId: childId })).resolves.toMatchObject({
+      ok: true,
+      session: { id: childId, status: 'idle', title: 'child' },
+    });
+    await expect(store.getEvents(childId)).resolves.toMatchObject([
+      expect.objectContaining({ type: 'session_created' }),
+      expect.objectContaining({ type: 'message_created' }),
+      expect.objectContaining({ type: 'message_cancelled' }),
+      expect.objectContaining({ type: 'session_archived' }),
+      expect.objectContaining({ type: 'session_unarchived' }),
+    ]);
+  });
+
+  it('reports sandbox cleanup failures without misreporting the durable archive', async () => {
+    const partial = await createDeputyServices();
+    let cleanedSessionId: string | undefined;
+    partial.services.sandboxCleanup = {
+      async destroySessionSandboxes(sessionId) {
+        cleanedSessionId = sessionId;
+        return { destroyed: 1, stopped: 0, failed: 2 };
+      },
+    };
+    await expect(
+      executeDeputyTool(partial.services, { action: 'archive', sessionId: parentId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      session: { status: 'archived' },
+      sandboxCleanup: { destroyed: 1, stopped: 0, failed: 2 },
+      warning: 'Session archived, but 2 sandbox cleanup attempt(s) failed',
+    });
+    expect(cleanedSessionId).toBe(parentId);
+    await expect(
+      executeDeputyTool(partial.services, { action: 'archive', sessionId: parentId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      session: { status: 'archived' },
+      sandboxCleanup: { failed: 2 },
+    });
+    expect((await partial.store.getEvents(parentId)).filter((event) => event.type === 'session_archived')).toHaveLength(
+      1,
+    );
+
+    const thrown = await createDeputyServices();
+    thrown.services.sandboxCleanup = {
+      async destroySessionSandboxes() {
+        throw new Error('cleanup unavailable');
+      },
+    };
+    await expect(executeDeputyTool(thrown.services, { action: 'archive', sessionId: parentId })).resolves.toMatchObject(
+      {
+        ok: true,
+        session: { status: 'archived' },
+        sandboxCleanup: { error: 'cleanup unavailable' },
+        warning: 'Session archived, but sandbox cleanup could not be completed',
+      },
+    );
+  });
+
+  it('archives and restores the acting session itself', async () => {
+    const { services, store } = await createDeputyServices();
+
+    await expect(executeDeputyTool(services, { action: 'archive', sessionId: parentId })).resolves.toMatchObject({
+      ok: true,
+      session: { id: parentId, status: 'archived' },
+    });
+    await expect(executeDeputyTool(services, { action: 'restore', sessionId: parentId })).resolves.toMatchObject({
+      ok: true,
+      session: { id: parentId, status: 'idle', title: 'Parent' },
+    });
+    await expect(store.getEvents(parentId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'session_archived' }),
+        expect.objectContaining({ type: 'session_unarchived' }),
+      ]),
+    );
+  });
+
+  it('does not manage unrelated sessions or restore sessions in the wrong state', async () => {
+    const { services, store } = await createDeputyServices();
+    const unrelatedId = '00000000-0000-4000-8000-000000000205';
+    await store.createSession(sessionRecord({ id: unrelatedId, title: 'Unrelated' }));
+
+    await expect(executeDeputyTool(services, { action: 'archive', sessionId: unrelatedId })).resolves.toMatchObject({
+      ok: false,
+      error: `Can only archive this session or a direct child session: ${unrelatedId}`,
+    });
+    await expect(executeDeputyTool(services, { action: 'restore', sessionId: unrelatedId })).resolves.toMatchObject({
+      ok: false,
+      error: `Can only restore this session or an archived direct child session: ${unrelatedId}`,
+    });
+  });
+
+  it('does not archive or restore grandchildren', async () => {
+    const { services, store } = await createDeputyServices();
+    const spawned = await executeDeputyTool(services, { action: 'spawn', prompt: 'child' });
+    if (!spawned.ok) throw new Error(spawned.error);
+    const childId = (spawned.session as { id: string }).id;
+    const grandchildId = '00000000-0000-4000-8000-000000000206';
+    await store.createSession(sessionRecord({ id: grandchildId, title: 'Grandchild', parentSessionId: childId }));
+
+    await expect(executeDeputyTool(services, { action: 'archive', sessionId: grandchildId })).resolves.toMatchObject({
+      ok: false,
+    });
+    await store.updateSession({ ...(await store.getSession(grandchildId))!, status: 'archived' });
+    await expect(executeDeputyTool(services, { action: 'restore', sessionId: grandchildId })).resolves.toMatchObject({
+      ok: false,
+    });
+    await expect(store.getSession(grandchildId)).resolves.toMatchObject({ title: 'Grandchild', status: 'archived' });
+    await expect(store.getEvents(grandchildId)).resolves.toHaveLength(0);
+  });
 });
 
 function sessionIds(result: Awaited<ReturnType<typeof executeDeputyTool>>): string[] {
@@ -309,6 +491,7 @@ async function createDeputyServices(
   const store = new MemoryStore();
   const events = new EventService(store);
   const messages = new MessageService(store, events);
+  const sessions = new SessionService(store, events);
   const parent: SessionRecord = {
     id: parentId,
     status: 'idle',
@@ -343,6 +526,7 @@ async function createDeputyServices(
     store,
     events,
     messages,
+    sessions,
     webBaseUrl: 'https://deputies.test',
     maxSpawnDepth: options.maxSpawnDepth ?? 2,
     maxChildrenPerSession: options.maxChildrenPerSession ?? 5,

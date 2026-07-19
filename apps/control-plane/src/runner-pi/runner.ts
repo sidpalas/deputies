@@ -23,7 +23,7 @@ import type { EnvironmentService } from '../environments/service.js';
 import { validateEnvironmentContext } from '../environments/tool.js';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
-import { getModels, type Api, type Model } from '@earendil-works/pi-ai/compat';
+import { completeSimple, getModels, type Api, type Context, type Model } from '@earendil-works/pi-ai/compat';
 import type { RepositoryAccessProvider } from '../repositories/setup.js';
 import {
   checkoutRepositoryPreparation,
@@ -42,7 +42,7 @@ import {
 } from '../runner/bedrock.js';
 import { type RepositoryToolServices, type RepositoryToolState } from '../repositories/tool.js';
 import { sandboxRepositoryShell } from '../repositories/shell.js';
-import type { Runner, RunnerInput, RunnerResult } from '../runner/types.js';
+import type { GenerateTitleInput, Runner, RunnerInput, RunnerResult } from '../runner/types.js';
 import { REASONING_LEVELS, type ReasoningLevel } from '../runner/reasoning.js';
 import type { SandboxKeepaliveService } from '../sandbox/service.js';
 import { startSandboxService } from '../sandbox/service-process.js';
@@ -65,6 +65,7 @@ import { closeMcpConnections, logMcpUnavailable, mcpUnavailableNote } from '../m
 import type { McpConnection, McpRuntimeOptions } from '../mcp/types.js';
 import type { WebSearchToolServices } from '../web-search/tool.js';
 import type { DeputyToolBaseServices } from '../sessions/deputy-tool.js';
+import { sessionTitleFromGeneratedResponse } from '../sessions/service.js';
 import {
   createPiSubagentToolDefinition,
   piSubagentSystemPrompt,
@@ -149,6 +150,37 @@ export class PiRunner implements Runner {
     const store = this.options.sessionStore;
     if (store?.withLock) return store.withLock(input.sessionId, () => this.runUnlocked(input));
     return this.runUnlocked(input);
+  }
+
+  async generateTitle(input: GenerateTitleInput): Promise<string> {
+    const modelName = input.model ?? this.options.model;
+    const unavailableReason = this.options.modelUnavailableReason?.(modelName);
+    if (unavailableReason) throw new Error(unavailableReason);
+    const modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.agentDir, 'models.json'));
+    registerAmazonBedrockInferenceProfiles(modelRegistry, modelName);
+    const modelSelection = parseModelSelection(modelName);
+    const model = modelRegistry.find(modelSelection.provider, modelSelection.modelId);
+    if (!model) throw new Error(`Pi model is not available: ${modelName}`);
+    const auth = await modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok) throw new Error(auth.error);
+    const context: Context = {
+      systemPrompt:
+        'Create a brief, specific title for this software engineering session. Prefer 3-7 words and omit filler or unnecessary detail. Return only the title, with no quotes, markup, or explanation. Never exceed 64 characters.',
+      messages: [{ role: 'user', content: input.prompt, timestamp: Date.now() }],
+    };
+    const response = await completeSimple(model, context, {
+      maxTokens: 64,
+      ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
+      ...(auth.headers ? { headers: auth.headers } : {}),
+      ...(auth.env ? { env: auth.env } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+    if (response.stopReason === 'error' || response.stopReason === 'aborted') {
+      throw new Error(response.errorMessage ?? 'Title generation failed');
+    }
+    const title = sessionTitleFromGeneratedResponse(assistantMessageText(response));
+    if (!title) throw new Error('Title generation returned an empty title');
+    return title;
   }
 
   private async runUnlocked(input: RunnerInput): Promise<RunnerResult> {

@@ -43,6 +43,12 @@ export type RunnerResult = {
   artifacts?: RunnerArtifact[];
 };
 
+export type GenerateTitleInput = {
+  prompt: string;
+  model?: string;
+  signal?: AbortSignal;
+};
+
 export type RunnerArtifact = {
   type: string;
   title?: string;
@@ -56,4 +62,5 @@ export type RunnerArtifact = {
 
 export interface Runner {
   run(input: RunnerInput): Promise<RunnerResult>;
+  generateTitle?(input: GenerateTitleInput): Promise<string>;
 }

@@ -21,6 +21,7 @@ import type {
 import { traceAsync } from '../telemetry/index.js';
 
 type WorkerStore = RunStore & SessionStore & MessageStore & SandboxStore & CallbackStore;
+const titleGenerationTimeoutMs = 30_000;
 
 type DeputyNotificationOutcome =
   | { status: 'completed' }
@@ -254,6 +255,7 @@ export class WorkerService {
       const sessionContext =
         created || restarted ? await this.clearSessionServicesForRun(session, claimed) : (session.context ?? {});
       let runContext = { ...sessionContext, ...buildBatchContext(claimed.messages) };
+      this.generateInitialTitle(primary, runContext, signal);
       const result = await traceAsync(
         'worker.runner_run',
         { 'deputies.runner_type': this.options.runnerType, 'deputies.message_count': claimed.messages.length },
@@ -283,15 +285,14 @@ export class WorkerService {
               const session = await this.options.store.getSession(primary.sessionId);
               if (!session) throw new Error(`Session not found: ${primary.sessionId}`);
               if (signal.aborted || !(await this.isRunOwnedByThisWorker(claimed.run.id))) return runContext;
+              const updatedAt = new Date();
               const updated = await this.options.store.updateSessionForRun({
-                record: {
-                  ...session,
-                  context: { ...(session.context ?? {}), ...context },
-                  updatedAt: new Date(),
-                },
+                id: session.id,
+                context: { ...(session.context ?? {}), ...context },
+                updatedAt,
                 runId: claimed.run.id,
                 leaseOwner: this.options.leaseOwner,
-                now: new Date(),
+                now: updatedAt,
               });
               if (!updated) return runContext;
               runContext = updated.context ?? {};
@@ -359,6 +360,30 @@ export class WorkerService {
     }
   }
 
+  private generateInitialTitle(message: MessageRecord, context: Record<string, unknown>, runSignal: AbortSignal): void {
+    if (message.sequence !== 1 || !this.options.runner.generateTitle) return;
+    const fallbackTitle = readTitleGenerationFallback(context);
+    if (!fallbackTitle) return;
+    const model = typeof context.model === 'string' ? context.model : undefined;
+    const generateTitle = this.options.runner.generateTitle.bind(this.options.runner);
+    void (async () => {
+      const current = await this.options.store.getSession(message.sessionId);
+      if (!current || current.title !== fallbackTitle || runSignal.aborted) return;
+      const signal = AbortSignal.any([runSignal, AbortSignal.timeout(titleGenerationTimeoutMs)]);
+      const title = await generateTitle({ prompt: message.prompt, ...(model ? { model } : {}), signal });
+      if (signal.aborted) return;
+      const updated = await this.options.store.updateSessionTitleIfCurrent({
+        id: message.sessionId,
+        expectedTitle: fallbackTitle,
+        title,
+        updatedAt: new Date(),
+      });
+      if (updated) this.options.events.publishExternal(updated.event);
+    })().catch((error: unknown) => {
+      console.warn(`Session title generation failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
   private async clearSessionServicesForRun(
     session: SessionRecord,
     claimed: ClaimedMessageBatch,
@@ -366,15 +391,14 @@ export class WorkerService {
     const context = session.context ?? {};
     if (!Array.isArray(context.services) || context.services.length === 0) return context;
     if (!(await this.isRunOwnedByThisWorker(claimed.run.id))) return context;
+    const updatedAt = new Date();
     const updated = await this.options.store.updateSessionForRun({
-      record: {
-        ...session,
-        context: { ...context, services: [] },
-        updatedAt: new Date(),
-      },
+      id: session.id,
+      context: { ...context, services: [] },
+      updatedAt,
       runId: claimed.run.id,
       leaseOwner: this.options.leaseOwner,
-      now: new Date(),
+      now: updatedAt,
     });
     if (!updated) return context;
     await this.appendOwnedRunEvent({
@@ -455,7 +479,9 @@ export class WorkerService {
     };
     const updated = useRunGuard
       ? await this.options.store.updateSessionForRun({
-          record,
+          id: record.id,
+          context: record.context,
+          updatedAt: now,
           runId,
           leaseOwner: this.options.leaseOwner,
           now,
@@ -622,6 +648,13 @@ function buildBatchPrompt(messages: ClaimedMessageBatch['messages']): string {
 
 function buildBatchContext(messages: ClaimedMessageBatch['messages']): Record<string, unknown> {
   return messages.reduce<Record<string, unknown>>((merged, message) => ({ ...merged, ...(message.context ?? {}) }), {});
+}
+
+function readTitleGenerationFallback(context: Record<string, unknown>): string | undefined {
+  const titleGeneration = context.titleGeneration;
+  if (!titleGeneration || typeof titleGeneration !== 'object' || Array.isArray(titleGeneration)) return undefined;
+  const fallbackTitle = (titleGeneration as Record<string, unknown>).fallbackTitle;
+  return typeof fallbackTitle === 'string' && fallbackTitle ? fallbackTitle : undefined;
 }
 
 export type WorkerLoopHandle = {

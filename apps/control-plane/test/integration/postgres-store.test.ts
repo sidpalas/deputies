@@ -861,6 +861,58 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     await expect(store.getSession(session.id)).resolves.toMatchObject({ visibility: 'group' });
   });
 
+  it('atomically replaces only the current title fallback', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Fallback title' });
+
+    const generated = await store.updateSessionTitleIfCurrent({
+      id: session.id,
+      expectedTitle: 'Fallback title',
+      title: 'Generated title',
+      updatedAt: new Date(),
+    });
+    expect(generated?.session.title).toBe('Generated title');
+    await expect(
+      store.updateSessionTitleIfCurrent({
+        id: session.id,
+        expectedTitle: 'Fallback title',
+        title: 'Stale generated title',
+        updatedAt: new Date(),
+      }),
+    ).resolves.toBeNull();
+    expect((await store.getEvents(session.id)).map((event) => event.type)).toEqual([
+      'session_created',
+      'session_updated',
+    ]);
+  });
+
+  it('commits idempotent archive and targeted restore transitions with their events', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Lifecycle transition', visibility: 'group' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'pending work' });
+
+    await services.sessions.archive(session.id);
+    await services.sessions.archive(session.id);
+    await services.sessions.update({ id: session.id, title: 'Changed while archived', visibility: 'organization' });
+    const restored = await services.sessions.unarchive(session.id);
+    await services.sessions.unarchive(session.id);
+
+    expect(restored).toMatchObject({
+      status: 'idle',
+      title: 'Changed while archived',
+      visibility: 'organization',
+    });
+    expect((await store.getEvents(session.id)).map((event) => event.type)).toEqual([
+      'session_created',
+      'message_created',
+      'message_cancelled',
+      'session_archived',
+      'session_updated',
+      'session_unarchived',
+    ]);
+    await expect(store.getMessages(session.id)).resolves.toMatchObject([{ status: 'cancelled' }]);
+  });
+
   it('creates a child session with its first message atomically and enforces child caps', async () => {
     const services = createServices(store);
     const parent = await services.sessions.create({ title: 'Parent session', visibility: 'group' });

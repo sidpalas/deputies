@@ -469,6 +469,7 @@ export function createApp(config: AppConfig, services = createServices()) {
     try {
       const updated = await services.sessions.update({
         id: session.id,
+        requireNonArchived: true,
         ...(title ? { title } : {}),
         ...(tags !== undefined ? { tags } : {}),
       });
@@ -484,6 +485,9 @@ export function createApp(config: AppConfig, services = createServices()) {
     } catch (error) {
       if (error instanceof SessionServiceError && error.code === 'not_found') {
         return writeError(c, 404, 'not_found', 'Session not found');
+      }
+      if (error instanceof SessionServiceError && error.code === 'archived') {
+        return writeError(c, 409, 'conflict', 'Archived sessions are read-only');
       }
       throw error;
     }

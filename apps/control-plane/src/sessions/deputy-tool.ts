@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   agentCanCancelSession,
+  agentCanManageSession,
   agentCanReadSession,
   agentCanSpawnInGroup,
   agentCanWriteSession,
@@ -9,6 +10,8 @@ import {
 import { normalizeAppendInput, type EventService } from '../events/service.js';
 import type { MessageService } from '../messages/service.js';
 import type { RepositoryAccessProvider } from '../repositories/setup.js';
+import type { SandboxCleanupResult } from '../sandbox/service.js';
+import { sessionTitleFromPrompt, type SessionService } from './service.js';
 import type {
   AppStore,
   EventRecord,
@@ -34,6 +37,8 @@ export type DeputyToolBaseServices = {
   >;
   events: Pick<EventService, 'publishExternal'>;
   messages: Pick<MessageService, 'enqueue' | 'cancelActiveRun'>;
+  sessions: Pick<SessionService, 'archive' | 'unarchive'>;
+  sandboxCleanup?: { destroySessionSandboxes(sessionId: string): Promise<SandboxCleanupResult> };
   github?: RepositoryAccessProvider;
   webBaseUrl?: string;
   maxSpawnDepth: number;
@@ -46,6 +51,8 @@ export type DeputyToolServices = DeputyToolBaseServices & {
   runId: string;
   messageId: string;
   runState: { spawns: number };
+  // This is an entry gate shared by all Deputies mutations, not a transactional
+  // lease guard for the target session store operation.
   shouldPersist?: () => Promise<boolean>;
 };
 
@@ -53,7 +60,7 @@ export type DeputyToolResult =
   | ({ ok: true; action: DeputyAction } & Record<string, unknown>)
   | { ok: false; action?: DeputyAction; error: string };
 
-type DeputyAction = 'spawn' | 'list_sessions' | 'get_session' | 'send_message' | 'cancel';
+type DeputyAction = 'spawn' | 'list_sessions' | 'get_session' | 'send_message' | 'cancel' | 'archive' | 'restore';
 type ListScope = 'children' | 'group' | 'organization';
 
 const maxTitleLength = 255;
@@ -66,7 +73,7 @@ const defaultTranscriptLimit = 10;
 const maxResponseTextLength = 8_000;
 
 export const deputyToolDescription =
-  'Coordinate durable Deputies sessions. Spawn child sessions, list or inspect readable sessions, send follow-up prompts to direct children, and cancel active child runs. Use this for long-running, separately auditable product sessions, not for quick in-run subtasks.';
+  'Coordinate durable Deputies sessions. Spawn child sessions, list or inspect readable sessions, manage direct children by sending follow-up prompts or cancelling runs, and archive or restore this session or its direct children. Use this for long-running, separately auditable product sessions, not for quick in-run subtasks.';
 
 export const deputyToolParameters = {
   type: 'object',
@@ -75,7 +82,7 @@ export const deputyToolParameters = {
   properties: {
     action: {
       type: 'string',
-      enum: ['spawn', 'list_sessions', 'get_session', 'send_message', 'cancel'],
+      enum: ['spawn', 'list_sessions', 'get_session', 'send_message', 'cancel', 'archive', 'restore'],
       description: 'Deputies control action to perform.',
     },
     prompt: {
@@ -86,11 +93,11 @@ export const deputyToolParameters = {
     title: {
       type: 'string',
       maxLength: maxTitleLength,
-      description: 'Optional title for a spawned child session.',
+      description: 'Optional explicit title for spawn. Defaults to a title derived from the initial prompt.',
     },
     sessionId: {
       type: 'string',
-      description: 'Target session ID for get_session, send_message, or cancel.',
+      description: 'Target session ID. Lifecycle actions support this session or a direct child.',
     },
     scope: {
       type: 'string',
@@ -167,6 +174,10 @@ export async function executeDeputyTool(services: DeputyToolServices, params: un
         return { ok: true, action, ...(await sendMessage(services, input)) };
       case 'cancel':
         return { ok: true, action, ...(await cancelChildRun(services, input)) };
+      case 'archive':
+        return { ok: true, action, ...(await archiveSession(services, input)) };
+      case 'restore':
+        return { ok: true, action, ...(await restoreSession(services, input)) };
     }
   } catch (error) {
     return { ok: false, ...(action ? { action } : {}), error: errorMessage(error) };
@@ -181,7 +192,7 @@ function readParams(value: unknown): Record<string, unknown> {
 }
 
 function isMutatingAction(action: DeputyAction): boolean {
-  return action === 'spawn' || action === 'send_message' || action === 'cancel';
+  return action !== 'list_sessions' && action !== 'get_session';
 }
 
 async function spawnSession(services: DeputyToolServices, params: Record<string, unknown>) {
@@ -193,7 +204,8 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
   }
 
   const prompt = readString(params.prompt, 'prompt', maxPromptLength);
-  const title = readOptionalString(params.title, 'title', maxTitleLength);
+  const explicitTitle = readOptionalString(params.title, 'title', maxTitleLength);
+  const title = explicitTitle ?? sessionTitleFromPrompt(prompt);
   const idempotencyKey = readOptionalString(params.idempotencyKey, 'idempotencyKey', maxIdempotencyKeyLength);
   const sessionId = idempotencyKey ? deterministicUuid('deputy-session', parent.id, idempotencyKey) : randomUUID();
   const messageId = idempotencyKey ? deterministicUuid('deputy-message', parent.id, idempotencyKey) : randomUUID();
@@ -203,6 +215,7 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
   }
 
   const context = await childContext(services, params, parent);
+  if (!explicitTitle) context.titleGeneration = { fallbackTitle: title };
   const parentMessage = await services.store.getMessage({ sessionId: parent.id, messageId: services.messageId });
   const now = new Date();
   const child: SessionRecord = {
@@ -220,7 +233,7 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
     tags: ['sub-deputy'],
     ...(Object.keys(context).length ? { context } : {}),
   };
-  if (title) child.title = title;
+  child.title = title;
   const authorName = deputyAuthorName(parent);
   const created = await services.store.createSessionWithFirstMessage({
     session: child,
@@ -383,6 +396,45 @@ async function cancelChildRun(services: DeputyToolServices, params: Record<strin
   return { session: serializeSessionSummary(child), cancelledMessageIds: messages.map((message) => message.id) };
 }
 
+async function archiveSession(services: DeputyToolServices, params: Record<string, unknown>) {
+  const parent = await requireActingSession(services);
+  const target = await requireManagedSession(
+    services,
+    agentPrincipal(parent),
+    readString(params.sessionId, 'sessionId', 128),
+    'archive',
+  );
+  const session = await services.sessions.archive(target.id);
+  if (!services.sandboxCleanup) return { session: serializeSessionSummary(session) };
+  try {
+    const sandboxCleanup = await services.sandboxCleanup.destroySessionSandboxes(session.id);
+    return {
+      session: serializeSessionSummary(session),
+      sandboxCleanup,
+      ...(sandboxCleanup.failed
+        ? { warning: `Session archived, but ${sandboxCleanup.failed} sandbox cleanup attempt(s) failed` }
+        : {}),
+    };
+  } catch (error) {
+    return {
+      session: serializeSessionSummary(session),
+      sandboxCleanup: { error: errorMessage(error) },
+      warning: 'Session archived, but sandbox cleanup could not be completed',
+    };
+  }
+}
+
+async function restoreSession(services: DeputyToolServices, params: Record<string, unknown>) {
+  const parent = await requireActingSession(services);
+  const sessionId = readString(params.sessionId, 'sessionId', 128);
+  const target = await services.store.getSession(sessionId);
+  if (!target || !agentCanManageSession(agentPrincipal(parent), target) || target.status !== 'archived') {
+    throw new Error(`Can only restore this session or an archived direct child session: ${sessionId}`);
+  }
+  const session = await services.sessions.unarchive(target.id);
+  return { session: serializeSessionSummary(session) };
+}
+
 async function requireActingSession(services: DeputyToolServices): Promise<SessionRecord> {
   const session = await services.store.getSession(services.sessionId);
   if (!session) throw new Error(`Acting session not found: ${services.sessionId}`);
@@ -403,10 +455,24 @@ async function requireWritableChild(
   services: DeputyToolServices,
   agent: AgentPrincipal,
   sessionId: string,
+  operation = 'send messages to',
 ): Promise<SessionRecord> {
   const session = await services.store.getSession(sessionId);
   if (!session || !agentCanWriteSession(agent, session)) {
-    throw new Error(`Can only send messages to non-archived direct child sessions: ${sessionId}`);
+    throw new Error(`Can only ${operation} non-archived direct child sessions: ${sessionId}`);
+  }
+  return session;
+}
+
+async function requireManagedSession(
+  services: DeputyToolServices,
+  agent: AgentPrincipal,
+  sessionId: string,
+  operation: string,
+): Promise<SessionRecord> {
+  const session = await services.store.getSession(sessionId);
+  if (!session || !agentCanManageSession(agent, session)) {
+    throw new Error(`Can only ${operation} this session or a direct child session: ${sessionId}`);
   }
   return session;
 }
@@ -542,11 +608,15 @@ function readAction(value: unknown): DeputyAction {
     value === 'list_sessions' ||
     value === 'get_session' ||
     value === 'send_message' ||
-    value === 'cancel'
+    value === 'cancel' ||
+    value === 'archive' ||
+    value === 'restore'
   ) {
     return value;
   }
-  throw new Error('deputies action must be one of: spawn, list_sessions, get_session, send_message, cancel');
+  throw new Error(
+    'deputies action must be one of: spawn, list_sessions, get_session, send_message, cancel, archive, restore',
+  );
 }
 
 function readScope(value: unknown): ListScope {

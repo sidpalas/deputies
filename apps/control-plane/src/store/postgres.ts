@@ -53,6 +53,7 @@ import type {
   SessionSearchMatchKind,
   SessionSearchOptions,
   SessionSearchPage,
+  SessionTitleUpdateInput,
   SessionTranscriptOptions,
   SessionTranscriptPage,
   SessionTagSummary,
@@ -1142,7 +1143,7 @@ export class PostgresStore implements AppStore {
              owner_group_id = CASE WHEN $7 THEN $8::uuid ELSE owner_group_id END,
              visibility = CASE WHEN $9 THEN $10::text ELSE visibility END,
              write_policy = CASE WHEN $11 THEN $12::text ELSE write_policy END
-         WHERE id = $1
+         WHERE id = $1 AND (NOT $13 OR status <> 'archived')
          RETURNING ${sessionSelectColumns}`,
         [
           input.id,
@@ -1157,9 +1158,13 @@ export class PostgresStore implements AppStore {
           input.visibility ?? null,
           input.writePolicy !== undefined,
           input.writePolicy ?? null,
+          input.requireNonArchived ?? false,
         ],
       );
       const sessionRow = updated.rows[0];
+      if (!sessionRow && input.requireNonArchived) {
+        throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+      }
       if (!sessionRow) throw new Error(`Session does not exist: ${input.id}`);
       const session = toSession(sessionRow);
 
@@ -1193,12 +1198,50 @@ export class PostgresStore implements AppStore {
     });
   }
 
+  async updateSessionTitleIfCurrent(
+    input: SessionTitleUpdateInput,
+  ): Promise<{ session: SessionRecord; event: EventRecord } | null> {
+    return this.transaction(async (client) => {
+      const updated = await client.query<SessionRow>(
+        `UPDATE sessions
+         SET title = $3, updated_at = $4
+         WHERE id = $1 AND title = $2 AND status <> 'archived'
+         RETURNING ${sessionSelectColumns}`,
+        [input.id, input.expectedTitle, input.title, input.updatedAt],
+      );
+      const row = updated.rows[0];
+      if (!row) return null;
+      const session = toSession(row);
+      const event = await insertLifecycleEvent(client, {
+        sessionId: session.id,
+        type: 'session_updated',
+        payload: {
+          title: session.title ?? null,
+          ownerGroupId: session.ownerGroupId,
+          visibility: session.visibility,
+          writePolicy: session.writePolicy,
+        },
+        createdAt: input.updatedAt,
+      });
+      return { session, event };
+    });
+  }
+
   async archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
     session: SessionRecord;
     cancelledMessages: MessageRecord[];
+    events: EventRecord[];
   }> {
     return this.transaction(async (client) => {
-      await client.query('SELECT id FROM sessions WHERE id = $1 FOR UPDATE', [input.sessionId]);
+      const locked = await client.query<SessionRow>(
+        `SELECT ${sessionSelectColumns} FROM sessions WHERE id = $1 FOR UPDATE`,
+        [input.sessionId],
+      );
+      const existingRow = locked.rows[0];
+      if (!existingRow) throw new Error(`Session does not exist: ${input.sessionId}`);
+      if (existingRow.status === 'archived') {
+        return { session: toSession(existingRow), cancelledMessages: [], events: [] };
+      }
 
       const cancelled = await client.query<MessageRow>(
         `UPDATE messages
@@ -1218,61 +1261,90 @@ export class PostgresStore implements AppStore {
 
       const row = result.rows[0];
       if (!row) throw new Error(`Session does not exist: ${input.sessionId}`);
+      const cancelledMessages = cancelled.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence);
+      const events: EventRecord[] = [];
+      for (const message of cancelledMessages) {
+        events.push(
+          await insertLifecycleEvent(client, {
+            sessionId: input.sessionId,
+            messageId: message.id,
+            type: 'message_cancelled',
+            payload: { sequence: message.sequence, reason: 'session_archived' },
+            createdAt: input.archivedAt,
+          }),
+        );
+      }
+      events.push(
+        await insertLifecycleEvent(client, {
+          sessionId: input.sessionId,
+          type: 'session_archived',
+          payload: {},
+          createdAt: input.archivedAt,
+        }),
+      );
       return {
         session: toSession(row),
-        cancelledMessages: cancelled.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence),
+        cancelledMessages,
+        events,
       };
     });
   }
 
+  async unarchiveSession(input: { sessionId: string; unarchivedAt: Date }): Promise<{
+    session: SessionRecord;
+    events: EventRecord[];
+  }> {
+    return this.transaction(async (client) => {
+      const locked = await client.query<SessionRow>(
+        `SELECT ${sessionSelectColumns} FROM sessions WHERE id = $1 FOR UPDATE`,
+        [input.sessionId],
+      );
+      const existingRow = locked.rows[0];
+      if (!existingRow) throw new Error(`Session does not exist: ${input.sessionId}`);
+      if (existingRow.status !== 'archived') return { session: toSession(existingRow), events: [] };
+
+      const updated = await client.query<SessionRow>(
+        `UPDATE sessions
+         SET status = 'idle', updated_at = $2, last_activity_at = $2
+         WHERE id = $1 AND status = 'archived'
+         RETURNING ${sessionSelectColumns}`,
+        [input.sessionId, input.unarchivedAt],
+      );
+      const row = updated.rows[0];
+      if (!row) throw new Error(`Session does not exist: ${input.sessionId}`);
+      const event = await insertLifecycleEvent(client, {
+        sessionId: input.sessionId,
+        type: 'session_unarchived',
+        payload: {},
+        createdAt: input.unarchivedAt,
+      });
+      return { session: toSession(row), events: [event] };
+    });
+  }
+
   async updateSessionForRun(input: {
-    record: SessionRecord;
+    id: string;
+    context: Record<string, unknown>;
+    updatedAt: Date;
     runId: string;
     leaseOwner: string;
     now: Date;
   }): Promise<SessionRecord | null> {
     const result = await this.pool.query<SessionRow>(
       `UPDATE sessions
-       SET status = $2,
-           title = $3,
-            context = $4,
-            created_at = $5,
-            updated_at = $6,
-              last_activity_at = $7,
-              parent_session_id = $11,
-              spawn_depth = $12,
-              owner_group_id = $13,
-              visibility = $14,
-              write_policy = $15,
-              created_by_user_id = $16
+       SET context = $2,
+           updated_at = $3
          WHERE id = $1
            AND EXISTS (
              SELECT 1 FROM runs
-             WHERE id = $8
+             WHERE id = $4
                 AND session_id = $1
-                AND lease_owner = $9
+                AND lease_owner = $5
                 AND status IN ('running', 'cancelling')
-                AND lease_expires_at > $10
+                AND lease_expires_at > $6
            )
        RETURNING ${sessionSelectColumns}`,
-      [
-        input.record.id,
-        input.record.status,
-        input.record.title ?? null,
-        input.record.context ?? null,
-        input.record.createdAt,
-        input.record.updatedAt,
-        input.record.lastActivityAt,
-        input.runId,
-        input.leaseOwner,
-        input.now,
-        input.record.parentSessionId ?? null,
-        input.record.spawnDepth,
-        input.record.ownerGroupId,
-        input.record.visibility,
-        input.record.writePolicy,
-        input.record.createdByUserId ?? null,
-      ],
+      [input.id, input.context ?? null, input.updatedAt, input.runId, input.leaseOwner, input.now],
     );
 
     return result.rows[0] ? toSession(result.rows[0]) : null;
@@ -3488,6 +3560,36 @@ function uniqueSessionSearchDocs(docs: SessionSearchDocInput[]): SessionSearchDo
 
 function cleanSearchDocContent(value: string): string {
   return value.replaceAll('\u0000', '').slice(0, maxSearchDocContentChars);
+}
+
+async function insertLifecycleEvent(client: PoolClient, event: NormalizedEvent): Promise<EventRecord> {
+  const inserted = await client.query<EventRow>(
+    `WITH next_sequence AS (
+       INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
+       VALUES ($1, 'events', 2)
+       ON CONFLICT (session_id, kind)
+       DO UPDATE SET next_sequence = session_sequence_counters.next_sequence + 1
+       RETURNING next_sequence - 1 AS sequence
+     ), inserted AS (
+       INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
+       SELECT $1, $2, $3, sequence, $4, $5, $6
+       FROM next_sequence
+       RETURNING id, session_id, run_id, message_id, sequence, type, payload, created_at
+     )
+     SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at,
+            pg_notify($7, json_build_object('id', id)::text)
+     FROM inserted`,
+    [
+      event.sessionId,
+      event.runId ?? null,
+      event.messageId ?? null,
+      event.type,
+      event.payload,
+      event.createdAt,
+      eventNotificationChannel,
+    ],
+  );
+  return toEvent(inserted.rows[0]!);
 }
 
 async function assertAutomationEnvironmentAvailableWithClient(

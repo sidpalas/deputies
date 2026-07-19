@@ -53,6 +53,7 @@ import type {
   SessionSearchOptions,
   SessionSearchPage,
   SessionTagSummary,
+  SessionTitleUpdateInput,
   SessionWithSandboxPage,
   SessionVisibilityFilter,
   SessionMessageSummary,
@@ -430,6 +431,10 @@ export class MemoryStore implements AppStore {
   }
 
   async updateSession(record: SessionRecord): Promise<SessionRecord> {
+    return this.updateSessionSync(record);
+  }
+
+  private updateSessionSync(record: SessionRecord): SessionRecord {
     if (!this.sessions.has(record.id)) {
       throw new Error(`Session does not exist: ${record.id}`);
     }
@@ -463,8 +468,8 @@ export class MemoryStore implements AppStore {
       else delete next.context;
     }
     if (options?.preserveTags) next.tags = current?.tags ?? record.tags;
-    const session = await this.updateSession(next);
-    return { session, event: await this.appendEventWithNextSequence(event) };
+    const session = this.updateSessionSync(next);
+    return { session, event: this.appendEventWithNextSequenceSync(event) };
   }
 
   async updateSessionMetadataWithEvent(
@@ -472,6 +477,9 @@ export class MemoryStore implements AppStore {
   ): Promise<{ session: SessionRecord; event: EventRecord }> {
     const existing = this.sessions.get(input.id);
     if (!existing) throw new Error(`Session does not exist: ${input.id}`);
+    if (input.requireNonArchived && existing.status === 'archived') {
+      throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    }
 
     const session: SessionRecord = { ...existing, updatedAt: input.updatedAt };
     if (input.title !== undefined) session.title = input.title;
@@ -481,7 +489,7 @@ export class MemoryStore implements AppStore {
     if (input.writePolicy !== undefined) session.writePolicy = input.writePolicy;
     this.sessions.set(input.id, session);
 
-    const event = await this.appendEventWithNextSequence({
+    const event = this.appendEventWithNextSequenceSync({
       sessionId: session.id,
       type: 'session_updated',
       payload: {
@@ -496,12 +504,35 @@ export class MemoryStore implements AppStore {
     return { session, event };
   }
 
+  async updateSessionTitleIfCurrent(
+    input: SessionTitleUpdateInput,
+  ): Promise<{ session: SessionRecord; event: EventRecord } | null> {
+    const existing = this.sessions.get(input.id);
+    if (!existing || existing.status === 'archived' || existing.title !== input.expectedTitle) return null;
+    const session = { ...existing, title: input.title, updatedAt: input.updatedAt };
+    this.sessions.set(input.id, session);
+    const event = this.appendEventWithNextSequenceSync({
+      sessionId: session.id,
+      type: 'session_updated',
+      payload: {
+        title: session.title,
+        ownerGroupId: session.ownerGroupId,
+        visibility: session.visibility,
+        writePolicy: session.writePolicy,
+      },
+      createdAt: input.updatedAt,
+    });
+    return { session, event };
+  }
+
   async archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
     session: SessionRecord;
     cancelledMessages: MessageRecord[];
+    events: EventRecord[];
   }> {
     const existing = this.sessions.get(input.sessionId);
     if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
+    if (existing.status === 'archived') return { session: existing, cancelledMessages: [], events: [] };
 
     const sessionMessages = this.messages.get(input.sessionId) ?? [];
     const cancelledMessages: MessageRecord[] = [];
@@ -519,11 +550,56 @@ export class MemoryStore implements AppStore {
       lastActivityAt: input.archivedAt,
     };
     this.sessions.set(input.sessionId, session);
-    return { session, cancelledMessages };
+    const events: EventRecord[] = [];
+    for (const message of cancelledMessages) {
+      events.push(
+        this.appendEventWithNextSequenceSync({
+          sessionId: session.id,
+          messageId: message.id,
+          type: 'message_cancelled',
+          payload: { sequence: message.sequence, reason: 'session_archived' },
+          createdAt: input.archivedAt,
+        }),
+      );
+    }
+    events.push(
+      this.appendEventWithNextSequenceSync({
+        sessionId: session.id,
+        type: 'session_archived',
+        payload: {},
+        createdAt: input.archivedAt,
+      }),
+    );
+    return { session, cancelledMessages, events };
+  }
+
+  async unarchiveSession(input: { sessionId: string; unarchivedAt: Date }): Promise<{
+    session: SessionRecord;
+    events: EventRecord[];
+  }> {
+    const existing = this.sessions.get(input.sessionId);
+    if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
+    if (existing.status !== 'archived') return { session: existing, events: [] };
+    const session: SessionRecord = {
+      ...existing,
+      status: 'idle',
+      updatedAt: input.unarchivedAt,
+      lastActivityAt: input.unarchivedAt,
+    };
+    this.sessions.set(input.sessionId, session);
+    const event = this.appendEventWithNextSequenceSync({
+      sessionId: session.id,
+      type: 'session_unarchived',
+      payload: {},
+      createdAt: input.unarchivedAt,
+    });
+    return { session, events: [event] };
   }
 
   async updateSessionForRun(input: {
-    record: SessionRecord;
+    id: string;
+    context: Record<string, unknown>;
+    updatedAt: Date;
     runId: string;
     leaseOwner: string;
     now: Date;
@@ -531,7 +607,7 @@ export class MemoryStore implements AppStore {
     const run = this.runs.get(input.runId);
     if (
       !run ||
-      run.sessionId !== input.record.id ||
+      run.sessionId !== input.id ||
       (run.status !== 'running' && run.status !== 'cancelling') ||
       run.leaseOwner !== input.leaseOwner ||
       !run.leaseExpiresAt ||
@@ -539,7 +615,11 @@ export class MemoryStore implements AppStore {
     ) {
       return null;
     }
-    return this.updateSession(input.record);
+    const existing = this.sessions.get(input.id);
+    if (!existing) throw new Error(`Session does not exist: ${input.id}`);
+    const updated = { ...existing, context: input.context, updatedAt: input.updatedAt };
+    this.sessions.set(input.id, updated);
+    return updated;
   }
 
   async pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord> {
@@ -1529,11 +1609,19 @@ export class MemoryStore implements AppStore {
   }
 
   async nextEventSequence(sessionId: string): Promise<number> {
+    return this.nextEventSequenceSync(sessionId);
+  }
+
+  private nextEventSequenceSync(sessionId: string): number {
     const maxSequence = Math.max(0, ...(this.events.get(sessionId) ?? []).map((event) => event.sequence));
     return maxSequence + 1;
   }
 
   async appendEvent(event: NormalizedEvent & { sequence: number }): Promise<EventRecord> {
+    return this.appendEventSync(event);
+  }
+
+  private appendEventSync(event: NormalizedEvent & { sequence: number }): EventRecord {
     const record = { ...event, id: this.nextEventId++ };
     const sessionEvents = this.events.get(event.sessionId) ?? [];
     sessionEvents.push(record);
@@ -1542,7 +1630,11 @@ export class MemoryStore implements AppStore {
   }
 
   async appendEventWithNextSequence(event: NormalizedEvent): Promise<EventRecord> {
-    return this.appendEvent({ ...event, sequence: await this.nextEventSequence(event.sessionId) });
+    return this.appendEventWithNextSequenceSync(event);
+  }
+
+  private appendEventWithNextSequenceSync(event: NormalizedEvent): EventRecord {
+    return this.appendEventSync({ ...event, sequence: this.nextEventSequenceSync(event.sessionId) });
   }
 
   async appendEventWithNextSequenceForRun(

@@ -99,6 +99,7 @@ export class StoreConflictError extends Error {
       | 'skill_name_exists'
       | 'skill_update_conflict'
       | 'skill_archived'
+      | 'session_archived'
       | 'archived_group',
     message: string,
     readonly details: Record<string, unknown> = {},
@@ -791,11 +792,19 @@ export type SessionSearchDocInput = {
 export type SessionMetadataUpdateInput = {
   id: string;
   updatedAt: Date;
+  requireNonArchived?: boolean;
   title?: string;
   tags?: string[];
   ownerGroupId?: string;
   visibility?: SessionVisibility;
   writePolicy?: SessionWritePolicy;
+};
+
+export type SessionTitleUpdateInput = {
+  id: string;
+  expectedTitle: string;
+  title: string;
+  updatedAt: Date;
 };
 
 export type SessionContextUpdateInput = {
@@ -842,12 +851,22 @@ export interface SessionStore {
   updateSessionMetadataWithEvent(
     input: SessionMetadataUpdateInput,
   ): Promise<{ session: SessionRecord; event: EventRecord }>;
+  updateSessionTitleIfCurrent(
+    input: SessionTitleUpdateInput,
+  ): Promise<{ session: SessionRecord; event: EventRecord } | null>;
   archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
     session: SessionRecord;
     cancelledMessages: MessageRecord[];
+    events: EventRecord[];
+  }>;
+  unarchiveSession(input: { sessionId: string; unarchivedAt: Date }): Promise<{
+    session: SessionRecord;
+    events: EventRecord[];
   }>;
   updateSessionForRun(input: {
-    record: SessionRecord;
+    id: string;
+    context: Record<string, unknown>;
+    updatedAt: Date;
     runId: string;
     leaseOwner: string;
     now: Date;

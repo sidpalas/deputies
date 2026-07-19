@@ -3,7 +3,7 @@ import { createServices } from '../../src/app/server.js';
 import type { PutArtifactObjectInput, StoredArtifactObject } from '../../src/artifacts/storage.js';
 import { FakeRunner } from '../../src/runner/fake.js';
 import { FakeSandboxProvider } from '../../src/sandbox/fake.js';
-import type { Runner, RunnerInput, RunnerResult } from '../../src/runner/types.js';
+import type { GenerateTitleInput, Runner, RunnerInput, RunnerResult } from '../../src/runner/types.js';
 import { runSandboxReaperOnce } from '../../src/sandbox/reaper.js';
 import { SandboxCleanupService } from '../../src/sandbox/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
@@ -59,6 +59,48 @@ describe('WorkerService', () => {
       'agent_response_final',
       'message_completed',
     ]);
+  });
+
+  it('generates an initial title asynchronously with the session model', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const fallbackTitle = 'Investigate the cache miss in production';
+    const session = await services.sessions.create({ title: fallbackTitle });
+    await store.updateSessionContext({
+      id: session.id,
+      context: {
+        model: 'provider/selected-model',
+        titleGeneration: { fallbackTitle },
+      },
+      updatedAt: new Date(),
+    });
+    await services.messages.enqueue({ sessionId: session.id, prompt: fallbackTitle });
+    const runner = new TitleRunner();
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner,
+      runnerType: 'title',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+    expect(runner.titleInputs).toEqual([
+      expect.objectContaining({
+        prompt: fallbackTitle,
+        model: 'provider/selected-model',
+        signal: expect.any(AbortSignal),
+      }),
+    ]);
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({ title: fallbackTitle });
+
+    runner.resolveTitle('Production Cache Miss');
+    await waitForAsync(async () => (await services.sessions.get(session.id))?.title === 'Production Cache Miss');
+    expect((await services.events.list(session.id)).filter((event) => event.type === 'session_updated')).toHaveLength(
+      1,
+    );
   });
 
   it('enqueues one-shot informational deputy completion notifications to the parent', async () => {
@@ -580,6 +622,38 @@ describe('WorkerService', () => {
     });
     const events = await services.events.list(session.id);
     expect(events.map((event) => event.type)).toContain('session_updated');
+  });
+
+  it('preserves a concurrent title edit when a runner updates session context', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Fallback title' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'choose repo' });
+    const runner: Runner = {
+      async run(input) {
+        await services.sessions.update({ id: session.id, title: 'Manual title' });
+        await input.updateSessionContext?.({ repository: { provider: 'github', owner: 'deputies', repo: 'app' } });
+        return { text: 'updated' };
+      },
+    };
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner,
+      runnerType: 'context-updating',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+
+    await expect(services.sessions.get(session.id)).resolves.toMatchObject({
+      title: 'Manual title',
+      context: { repository: { provider: 'github', owner: 'deputies', repo: 'app' } },
+    });
+    const updates = (await services.events.list(session.id)).filter((event) => event.type === 'session_updated');
+    expect(updates.at(-1)?.payload).toMatchObject({ title: 'Manual title' });
   });
 
   it('ignores session context updates after the worker loses its lease', async () => {
@@ -1319,6 +1393,28 @@ class TextRunner implements Runner {
   }
 }
 
+class TitleRunner extends TextRunner {
+  readonly titleInputs: GenerateTitleInput[] = [];
+  private readonly titlePromise: Promise<string>;
+  private resolve!: (title: string) => void;
+
+  constructor() {
+    super('done');
+    this.titlePromise = new Promise((resolve) => {
+      this.resolve = resolve;
+    });
+  }
+
+  generateTitle(input: GenerateTitleInput): Promise<string> {
+    this.titleInputs.push(input);
+    return this.titlePromise;
+  }
+
+  resolveTitle(title: string): void {
+    this.resolve(title);
+  }
+}
+
 class ArtifactRunner implements Runner {
   async run(): Promise<RunnerResult> {
     return {
@@ -1525,4 +1621,13 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error('Timed out waiting for condition');
+}
+
+async function waitForAsync(predicate: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error('Timed out waiting for async condition');
 }

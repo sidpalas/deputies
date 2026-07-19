@@ -456,6 +456,8 @@ function createDeputyToolServices(): DeputyToolBaseServices | undefined {
     store: services.store,
     events: services.events,
     messages: services.messages,
+    sessions: services.sessions,
+    ...(services.sandboxCleanup ? { sandboxCleanup: services.sandboxCleanup } : {}),
     ...(githubRepositoryAccess ? { github: githubRepositoryAccess } : {}),
     ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
     maxSpawnDepth: config.deputyMaxSpawnDepth,

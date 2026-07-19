@@ -15,6 +15,10 @@ export function agentCanSpawnInGroup(agent: AgentPrincipal, groupId: string): bo
   return groupId === agent.ownerGroupId;
 }
 
+export function agentCanManageSession(agent: AgentPrincipal, session: SessionRecord): boolean {
+  return session.id === agent.sessionId || session.parentSessionId === agent.sessionId;
+}
+
 export function agentCanWriteSession(agent: AgentPrincipal, session: SessionRecord): boolean {
   return session.parentSessionId === agent.sessionId && session.status !== 'archived';
 }

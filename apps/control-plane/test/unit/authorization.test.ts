@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  agentCanReadSession,
   agentCanCancelSession,
+  agentCanManageSession,
+  agentCanReadSession,
   agentCanSpawnInGroup,
   agentCanWriteSession,
   type AgentPrincipal,
@@ -188,6 +189,13 @@ describe('agent authorization rules', () => {
     expect(agentCanWriteSession(agent, session({ parentSessionId: agent.sessionId }))).toBe(true);
     expect(agentCanWriteSession(agent, session({ parentSessionId: 'other-parent' }))).toBe(false);
     expect(agentCanWriteSession(agent, session({ parentSessionId: agent.sessionId, status: 'archived' }))).toBe(false);
+  });
+
+  it('manages itself and direct children regardless of archive status', () => {
+    expect(agentCanManageSession(agent, session({ id: agent.sessionId }))).toBe(true);
+    expect(agentCanManageSession(agent, session({ parentSessionId: agent.sessionId }))).toBe(true);
+    expect(agentCanManageSession(agent, session({ parentSessionId: agent.sessionId, status: 'archived' }))).toBe(true);
+    expect(agentCanManageSession(agent, session({ parentSessionId: 'other-parent' }))).toBe(false);
   });
 
   it('cancels only non-archived direct children', () => {
