@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.20.0](https://github.com/sidpalas/deputies/compare/v0.19.1...v0.20.0) (2026-07-19)
+
+
+### Features
+
+* expand deputy session lifecycle controls ([c796770](https://github.com/sidpalas/deputies/commit/c7967701392fd2625b83a6765aa144220f0bb86f))
+* show nested deputy sessions in sidebar ([e72895a](https://github.com/sidpalas/deputies/commit/e72895adfcb7e4495d19a487d92cccf3abb28b19))
+
+
+### Bug Fixes
+
+* add persistent authentication field labels ([98e8514](https://github.com/sidpalas/deputies/commit/98e8514b6cc045d0d4be071e890567e59ae96579))
+* make session lifecycle context reliable ([80c47e7](https://github.com/sidpalas/deputies/commit/80c47e79af58be38656d7c8007febbbfefaf162b))
+
+
+### Chores
+
+* prepare fresh Amp orbs ([ea861cb](https://github.com/sidpalas/deputies/commit/ea861cb871bac014777607ddaab1bba9999b38e0))
+
+
+### Tests
+
+* avoid login shell in setup script test ([afcdb87](https://github.com/sidpalas/deputies/commit/afcdb87c6b56fd07dc94daa1f4ab8485903b649c))
+* stabilize timing-sensitive coverage ([eaa8c95](https://github.com/sidpalas/deputies/commit/eaa8c95cccc6eb40c8f87261739f17fa399324c2))
+
 ## [0.19.1](https://github.com/sidpalas/deputies/compare/v0.19.0...v0.19.1) (2026-07-18)
 
 
