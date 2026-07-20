@@ -9,6 +9,8 @@ apps/www/generated/
 coverage/
 playwright-report/
 test-results/
+.amp/in/
+.amp/out/
 .env
 .env.*
 !.env.example
