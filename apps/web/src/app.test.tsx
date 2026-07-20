@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { App } from './app.js';
 import { listEvents, type ReasoningLevel } from './api.js';
 import { request } from './api-request.js';
@@ -50,6 +51,7 @@ type StreamEventPusher = (event: unknown) => void;
 type MockApiOptions = {
   submittedPrompts?: string[];
   submittedMessageBodies?: unknown[];
+  requests?: string[];
   accessUpdates?: unknown[];
   repositories?: unknown[];
   branches?: unknown[];
@@ -123,6 +125,7 @@ type MockApiOptions = {
     count: number;
     sessionId: string;
   }) => Response | Promise<Response> | undefined;
+  onListServicesRequest?: (count: number) => Response | Promise<Response> | undefined;
   archivedSkillIds?: string[];
   onSnippetMutationRequest?: (request: { path: string; method: string; body: unknown }) => Response | Promise<Response>;
   archivedSessionIds?: string[];
@@ -2322,6 +2325,7 @@ it('refreshes sessions when a queued message starts processing', async () => {
   let pushGlobalEvent: StreamEventPusher | undefined;
   mockApi({
     sessions,
+    onGetSessionRequest: () => jsonResponse({ session: sessions[0] }),
     onGlobalStreamOpen: (push) => {
       pushGlobalEvent = push;
     },
@@ -2357,6 +2361,7 @@ it('shows derived session display statuses', async () => {
   mockApi({
     sessions,
     sessionOverride: sandboxSession,
+    onGetSessionRequest: () => jsonResponse({ session: sessions[0] }),
     onGlobalStreamOpen: (push) => {
       pushGlobalEvent = push;
     },
@@ -2417,6 +2422,114 @@ it('coalesces rapid global session refresh events into one sessions request', as
   await act(() => vi.advanceTimersByTimeAsync(350));
   expect(sessionsRequestCount).toBe(2);
   expect(await screen.findByText('Coalesced session')).toBeInTheDocument();
+});
+
+it('reconciles messages and summary without refreshing the list for a selected-session lifecycle event', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: string[] = [];
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    requests,
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+  await screen.findByText('No messages yet.');
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}/callbacks`));
+  requests.length = 0;
+  pushGlobalEvent?.(eventFixture({ id: 2, sequence: 1, type: 'message_completed', payload: { sequence: 1 } }));
+  await act(() => vi.advanceTimersByTimeAsync(350));
+
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}/messages`));
+  expect(detailResourceRequests(requests)).toEqual([`GET /sessions/${session.id}/messages`]);
+  expect(requests).toContain(`GET /sessions/${session.id}`);
+  expect(requests.some((request) => request.startsWith('GET /sessions?'))).toBe(false);
+});
+
+it('coalesces callback event bursts without refreshing sibling resources', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: string[] = [];
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    requests,
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+  await screen.findByText('No messages yet.');
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}/callbacks`));
+  requests.length = 0;
+  for (let sequence = 1; sequence <= 5; sequence += 1) {
+    pushGlobalEvent?.(eventFixture({ id: sequence + 1, sequence, type: 'callback_retry_scheduled', payload: {} }));
+  }
+  await act(() => vi.advanceTimersByTimeAsync(125));
+
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}/callbacks`));
+  expect(detailResourceRequests(requests)).toEqual([`GET /sessions/${session.id}/callbacks`]);
+});
+
+it('does not read detail resources when a sandbox stops', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: string[] = [];
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    requests,
+    services: [{ port: 3000, url: 'https://service.example.com' }],
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+  await screen.findByText('No messages yet.');
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}/services`));
+  requests.length = 0;
+  pushGlobalEvent?.(eventFixture({ id: 2, sequence: 1, type: 'sandbox_stopped', payload: {} }));
+  await act(() => vi.advanceTimersByTimeAsync(150));
+
+  expect(detailResourceRequests(requests)).toEqual([]);
+});
+
+it('does not let a stale services response repopulate services after sandbox stop', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const staleServices = deferred<Response>();
+  let servicesRequestCount = 0;
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    services: [{ port: 3000, url: 'https://service.example.com' }],
+    onListServicesRequest: (count) => {
+      servicesRequestCount = count;
+      return count === 1 ? undefined : staleServices.promise;
+    },
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findAllByText(':3000')).not.toHaveLength(0);
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+  pushGlobalEvent?.(eventFixture({ id: 2, sequence: 1, type: 'sandbox_keepalive_extended', payload: {} }));
+  await act(() => vi.advanceTimersByTimeAsync(125));
+  await waitFor(() => expect(servicesRequestCount).toBe(2));
+
+  pushGlobalEvent?.(eventFixture({ id: 3, sequence: 2, type: 'sandbox_stopped', payload: {} }));
+  await waitFor(() => expect(screen.queryAllByText(':3000')).toHaveLength(0));
+  staleServices.resolve(jsonResponse({ services: [{ port: 3000, url: 'https://stale.example.com' }] }));
+  await act(async () => Promise.resolve());
+
+  expect(screen.queryAllByText(':3000')).toHaveLength(0);
 });
 
 it('shows and calls cancel task on the active message', async () => {
@@ -4101,10 +4214,12 @@ function mockApi(options: MockApiOptions = {}) {
   let groupMembers = options.groupMembers ?? [];
   let sessionsRequestCount = 0;
   let sessionSkillsRequestCount = 0;
+  let servicesRequestCount = 0;
   let skills = options.skills;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
     const method = init?.method ?? 'GET';
+    options.requests?.push(`${method} ${url.pathname}${url.search}`);
 
     if (url.pathname === '/health') {
       return jsonResponse({
@@ -4605,6 +4720,9 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname.match(/^\/sessions\/[^/]+\/services$/)) {
+      servicesRequestCount += 1;
+      const customResponse = options.onListServicesRequest?.(servicesRequestCount);
+      if (customResponse) return customResponse;
       return jsonResponse({ services: options.services ?? [] });
     }
 
@@ -4859,4 +4977,12 @@ function deferred<T>() {
     reject = promiseReject;
   });
   return { promise, resolve, reject };
+}
+
+function detailResourceRequests(requests: string[]): string[] {
+  return requests.filter((request) =>
+    ['/messages', '/artifacts', '/services', '/external-resources', '/callbacks'].some((suffix) =>
+      request.startsWith(`GET /sessions/${session.id}${suffix}`),
+    ),
+  );
 }

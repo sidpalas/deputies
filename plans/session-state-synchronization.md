@@ -1,6 +1,6 @@
 # Plan: Unify web session state synchronization and eliminate broad refresh fanout
 
-Status: proposed (2026-07-20)
+Status: in progress (2026-07-20)
 Scope: `apps/web` (session state ownership, realtime reconciliation, mutation handling, recovery, and request instrumentation); targeted `apps/control-plane` contract tests only if existing event guarantees are not already covered
 
 ## 1. Problem and current state

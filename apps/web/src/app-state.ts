@@ -157,28 +157,6 @@ function formatActiveProgressText(progress: ActiveProgress): string {
   return `Showing latest deputy progress; ${progress.omitted.toLocaleString()} earlier characters hidden while the run is active.\n\n…${progress.text}`;
 }
 
-export function shouldRefreshSessionDetail(eventType: string): boolean {
-  return new Set([
-    'message_created',
-    'message_started',
-    'message_completed',
-    'message_failed',
-    'message_cancelled',
-    'sandbox_ready',
-    'sandbox_stopped',
-    'sandbox_destroyed',
-    'session_updated',
-    'run_cancel_requested',
-    'run_cancelled',
-    'artifact_created',
-    'external_resource_created',
-    'callback_sent',
-    'callback_retry_scheduled',
-    'callback_failed',
-    'callback_replay_requested',
-  ]).has(eventType);
-}
-
 export function shouldRefreshSessions(eventType: string): boolean {
   return new Set([
     'session_created',
