@@ -1190,7 +1190,8 @@ it('keeps sidebar session actions exposed on mobile', async () => {
   expect(archiveButton).toHaveClass('md:opacity-0');
 
   fireEvent.click(archiveButton);
-  expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
+  expect(await screen.findByText('This session is archived.')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
 });
 
 it('groups header session actions in a generic actions menu', async () => {
@@ -1711,7 +1712,7 @@ it('persists the mobile context panel after refresh', async () => {
   expect(restoredSummary?.closest('details')).toHaveAttribute('open');
 });
 
-it('archives the selected session before waiting for the archive request', async () => {
+it('archives the selected session in place before waiting for the archive request', async () => {
   mockApi({ hangArchive: true });
   render(<App />);
 
@@ -1720,9 +1721,10 @@ it('archives the selected session before waiting for the archive request', async
   fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Session actions' }));
   fireEvent.click(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' }));
 
-  expect(screen.getByText('What needs doing?')).toBeInTheDocument();
-  expect(sessionStorage.getItem('deputies-selected-session-id')).toBeNull();
-  expect(sessionStorage.getItem('deputies-new-session-selected')).toBe('true');
+  expect(screen.getByText('This session is archived.')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  expect(sessionStorage.getItem('deputies-selected-session-id')).toBe(session.id);
+  expect(sessionStorage.getItem('deputies-new-session-selected')).toBeNull();
 });
 
 it('refreshes sessions when the global event stream reports an external session', async () => {
@@ -3792,7 +3794,8 @@ it('shows a selected session parent in context when filters exclude it from the 
   fireEvent.click(within(header as HTMLElement).getByRole('button', { name: 'Session actions' }));
   fireEvent.click(within(header as HTMLElement).getByRole('menuitem', { name: 'Archive session' }));
 
-  expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
+  expect(await screen.findByText('This session is archived.')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
   expect(sidebar.queryByRole('button', { name: 'Existing session' })).not.toBeInTheDocument();
 });
 
@@ -3986,7 +3989,7 @@ it('preserves selected archived session and archived section after refresh', asy
   expect(screen.getByText('Archived').closest('details')).toHaveAttribute('open');
 });
 
-it('keeps the new-session page selected after archiving and refreshing', async () => {
+it('keeps the archived session selected after archiving and refreshing', async () => {
   mockApi();
   const first = render(<App />);
 
@@ -3994,15 +3997,16 @@ it('keeps the new-session page selected after archiving and refreshing', async (
   if (!sessionRow) throw new Error('Expected session row');
   fireEvent.click(within(sessionRow).getByRole('button', { name: 'Archive session' }));
 
-  expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
-  expect(sessionStorage.getItem('deputies-selected-session-id')).toBeNull();
-  expect(sessionStorage.getItem('deputies-new-session-selected')).toBe('true');
+  expect(await screen.findByText('This session is archived.')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  expect(sessionStorage.getItem('deputies-selected-session-id')).toBe(session.id);
+  expect(sessionStorage.getItem('deputies-new-session-selected')).toBeNull();
 
   first.unmount();
   render(<App />);
 
-  expect(await screen.findByText('What needs doing?')).toBeInTheDocument();
-  expect(screen.queryByText('This session is archived.')).not.toBeInTheDocument();
+  expect(await screen.findByText('This session is archived.')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
 });
 
 it('opens a session link over the persisted new-session page', async () => {

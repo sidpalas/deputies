@@ -3199,16 +3199,6 @@ export function App() {
 
   function applyArchivedSession(session: Session, options: { supplementalOnly?: boolean } = {}) {
     applySessionStatusUpdate(session, options);
-    if (selectedSessionIdRef.current === session.id) {
-      sessionSelectionVersionRef.current += 1;
-      selectedSessionIdRef.current = '';
-      sessionStorage.removeItem(selectedSessionStorageKey);
-      clearSessionSearchParam();
-      sessionStorage.setItem(newSessionSelectedStorageKey, 'true');
-      updateNavigation({ selectedSessionId: '', isCreatingThread: true });
-      clearSessionDetail();
-      eventCursor.current = 0;
-    }
   }
 
   async function archiveFromList(sessionId: string) {
