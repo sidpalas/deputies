@@ -124,6 +124,37 @@ it('opens the picker from a slash at position zero and supports chip removal', (
   expect(screen.queryByText('review-change')).not.toBeInTheDocument();
 });
 
+it('positions the mobile picker from the complete visual viewport rectangle', () => {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'visualViewport');
+  const viewport = new EventTarget();
+  Object.assign(viewport, { height: 420, offsetLeft: 18, offsetTop: 24, width: 350 });
+  Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport });
+
+  try {
+    render(
+      <SkillPicker
+        availableCount={1}
+        selected={[]}
+        options={[skill]}
+        open
+        onRemoveSkill={() => undefined}
+        onSelectSkill={() => undefined}
+      />,
+    );
+
+    const overlay = screen.getByRole('listbox', { name: 'Available skills' }).parentElement;
+    expect(overlay).toHaveStyle({
+      '--composer-picker-viewport-height': '420px',
+      '--composer-picker-viewport-left': '18px',
+      '--composer-picker-viewport-top': '24px',
+      '--composer-picker-viewport-width': '350px',
+    });
+  } finally {
+    if (originalDescriptor) Object.defineProperty(window, 'visualViewport', originalDescriptor);
+    else Reflect.deleteProperty(window, 'visualViewport');
+  }
+});
+
 it('selects the first slash match on Enter without sending the message', () => {
   const onSubmit = vi.fn(async () => true);
   render(<MessageComposer {...messageComposerProps(onSubmit)} />);

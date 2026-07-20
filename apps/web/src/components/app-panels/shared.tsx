@@ -1,4 +1,5 @@
-import type { KeyboardEvent, ReactNode } from 'react';
+import { useEffect, useState } from 'react';
+import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
 import { Archive, RotateCcw } from 'lucide-react';
 import type { Session, SetupStatusState } from '../../api.js';
 import { cn } from '../../lib/utils.js';
@@ -16,11 +17,47 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
 });
 
 export function ComposerPickerOverlay(props: { children: ReactNode }) {
+  const [visualViewport, setVisualViewport] = useState(readVisualViewport);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const update = () => setVisualViewport(readVisualViewport());
+    update();
+    viewport?.addEventListener('resize', update);
+    viewport?.addEventListener('scroll', update);
+    window.addEventListener('resize', update);
+    return () => {
+      viewport?.removeEventListener('resize', update);
+      viewport?.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+    };
+  }, []);
+
+  const viewportStyle = {
+    '--composer-picker-viewport-height': `${visualViewport.height}px`,
+    '--composer-picker-viewport-left': `${visualViewport.left}px`,
+    '--composer-picker-viewport-top': `${visualViewport.top}px`,
+    '--composer-picker-viewport-width': `${visualViewport.width}px`,
+  } as CSSProperties;
+
   return (
-    <div className="absolute bottom-full left-0 right-0 z-50 rounded-t-md border border-border bg-card p-2 text-card-foreground shadow-2xl shadow-black/50 ring-1 ring-foreground/20">
+    <div
+      className="composer-picker-overlay absolute bottom-full left-0 right-0 z-50 rounded-t-md border border-border bg-card p-2 text-card-foreground shadow-2xl shadow-black/50 ring-1 ring-foreground/20"
+      style={viewportStyle}
+    >
       {props.children}
     </div>
   );
+}
+
+function readVisualViewport(): { height: number; left: number; top: number; width: number } {
+  if (typeof window === 'undefined') return { height: 0, left: 0, top: 0, width: 0 };
+  return {
+    height: window.visualViewport?.height ?? window.innerHeight,
+    left: window.visualViewport?.offsetLeft ?? 0,
+    top: window.visualViewport?.offsetTop ?? 0,
+    width: window.visualViewport?.width ?? window.innerWidth,
+  };
 }
 
 export function SidebarArchiveRestoreAction(props: {

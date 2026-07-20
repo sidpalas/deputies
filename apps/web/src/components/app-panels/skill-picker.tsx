@@ -52,7 +52,7 @@ export function SkillPicker(props: {
         <ComposerPickerOverlay>
           <p className="flex h-8 items-center px-2 text-xs text-muted-foreground">Type a skill name after /</p>
           <div
-            className="mt-1 max-h-[clamp(8rem,35dvh,16rem)] overflow-auto"
+            className="composer-picker-results mt-1 max-h-[clamp(8rem,35dvh,16rem)] overflow-auto"
             role="listbox"
             aria-label="Available skills"
           >
@@ -87,7 +87,7 @@ export function SkillPicker(props: {
               </p>
             ) : null}
           </div>
-          <p className="border-t border-border px-2 pt-2 text-[11px] text-muted-foreground">
+          <p className="composer-picker-secondary-hint border-t border-border px-2 pt-2 text-[11px] text-muted-foreground">
             Up to {MAX_INVOKED_SKILLS} skills per message.
           </p>
         </ComposerPickerOverlay>

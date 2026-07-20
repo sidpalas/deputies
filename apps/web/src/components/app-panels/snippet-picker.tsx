@@ -107,7 +107,7 @@ export function SnippetPicker(props: { controller: ReturnType<typeof useSnippetP
       <ComposerPickerOverlay>
         <p className="flex h-8 items-center px-2 text-xs text-muted-foreground">Type a snippet name after //</p>
         <div
-          className="mt-1 max-h-[clamp(8rem,35dvh,16rem)] overflow-auto"
+          className="composer-picker-results mt-1 max-h-[clamp(8rem,35dvh,16rem)] overflow-auto"
           role="listbox"
           aria-label="Personal snippets"
         >

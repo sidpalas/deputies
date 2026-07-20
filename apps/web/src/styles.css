@@ -126,6 +126,31 @@ textarea {
   font: inherit;
 }
 
+@media (max-width: 767px) {
+  .composer-picker-overlay {
+    position: fixed;
+    top: calc(var(--composer-picker-viewport-top, 0px) + 0.5rem);
+    right: auto;
+    bottom: auto;
+    left: calc(var(--composer-picker-viewport-left, 0px) + 0.5rem);
+    display: flex;
+    width: calc(var(--composer-picker-viewport-width, 100vw) - 1rem);
+    max-height: min(20rem, calc(var(--composer-picker-viewport-height, 100dvh) * 0.45));
+    flex-direction: column;
+    border-radius: 0.5rem;
+  }
+
+  .composer-picker-results {
+    min-height: 0;
+    max-height: none;
+    flex: 1 1 auto;
+  }
+
+  .composer-picker-secondary-hint {
+    display: none;
+  }
+}
+
 .highlighted-code pre {
   margin: 0;
   padding: 0.85rem;
