@@ -231,6 +231,7 @@ export class WorkerService {
       type: 'sandbox_starting',
       payload: { provider: this.options.sandboxProvider.name },
     });
+    this.generateInitialTitle(claimed.messages, claimed.run.id, signal);
     const lifecycle = new SandboxLifecycleService(this.options.store, this.options.sandboxProvider);
     const { sandbox, record, created, restarted } = await traceAsync(
       'worker.ensure_sandbox',
@@ -257,7 +258,6 @@ export class WorkerService {
       const sessionContext =
         created || restarted ? await this.clearSessionServicesForRun(session, claimed) : (session.context ?? {});
       let runContext = { ...sessionContext, ...buildBatchContext(claimed.messages) };
-      this.generateInitialTitle(primary, claimed.run.id, runContext, signal);
       const result = await traceAsync(
         'worker.runner_run',
         { 'deputies.runner_type': this.options.runnerType, 'deputies.message_count': claimed.messages.length },
@@ -362,21 +362,19 @@ export class WorkerService {
     }
   }
 
-  private generateInitialTitle(
-    message: MessageRecord,
-    runId: string,
-    context: Record<string, unknown>,
-    runSignal: AbortSignal,
-  ): void {
+  private generateInitialTitle(messages: ClaimedMessageBatch['messages'], runId: string, runSignal: AbortSignal): void {
+    const message = messages[0]!;
     if (this.options.titleGenerationEnabled === false || message.sequence !== 1 || !this.options.runner.generateTitle)
       return;
     const fallbackTitle = readTitleGenerationFallback(message.context ?? {});
     if (!fallbackTitle) return;
-    const model = this.options.titleGenerationModel ?? (typeof context.model === 'string' ? context.model : undefined);
     const generateTitle = this.options.runner.generateTitle.bind(this.options.runner);
     void (async () => {
       const current = await this.options.store.getSession(message.sessionId);
       if (!current || current.title !== fallbackTitle || runSignal.aborted) return;
+      const context = { ...(current.context ?? {}), ...buildBatchContext(messages) };
+      const model =
+        this.options.titleGenerationModel ?? (typeof context.model === 'string' ? context.model : undefined);
       const signal = AbortSignal.any([runSignal, AbortSignal.timeout(titleGenerationTimeoutMs)]);
       const title = await generateTitle({ prompt: message.prompt, ...(model ? { model } : {}), signal });
       if (signal.aborted) return;

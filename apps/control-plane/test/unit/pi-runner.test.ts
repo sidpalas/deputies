@@ -94,6 +94,7 @@ vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
             }
           : {}),
         ...(id === 'max-reasoning' ? { thinkingLevelMap: { max: 'max' } } : {}),
+        ...(id === 'no-minimal-reasoning-model' ? { thinkingLevelMap: { minimal: null } } : {}),
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 100_000,
@@ -178,7 +179,7 @@ describe('PiRunner', () => {
     piMock.resourceLoaderOptions.length = 0;
   });
 
-  it('uses a larger title budget for reasoning models without changing model compatibility', async () => {
+  it('uses minimal reasoning and a larger title budget without changing model compatibility', async () => {
     piMock.completeSimple.mockResolvedValue({
       role: 'assistant',
       content: [{ type: 'text', text: 'Fix automatic titles' }],
@@ -198,10 +199,9 @@ describe('PiRunner', () => {
         compat: expect.objectContaining({ maxTokensField: 'max_tokens' }),
       }),
       expect.any(Object),
-      expect.objectContaining({ maxTokens: 4_096 }),
+      expect.objectContaining({ maxTokens: 4_096, reasoning: 'minimal' }),
     );
     expect(piMock.completeSimple.mock.calls[0]![0].compat).not.toHaveProperty('thinkingFormat');
-    expect(piMock.completeSimple.mock.calls[0]![2]).not.toHaveProperty('reasoning');
   });
 
   it('diagnoses thinking-only title responses without logging their content or prompt', async () => {
@@ -251,12 +251,13 @@ describe('PiRunner', () => {
   });
 
   it.each([
-    ['other reasoning provider', 'other/reasoning-content-model', 4_096],
-    ['non-reasoning model', 'opencode/non-reasoning-content-model', 64],
-    ['explicit thinking format', 'opencode/explicit-thinking-model', 4_096],
-    ['ordinary OpenCode reasoning model', 'opencode/ordinary-model', 4_096],
-    ['reasoning model with a lower output limit', 'opencode/small-reasoning-model', 1_024],
-  ])('uses a capability-based title budget for %s', async (_label, model, maxTokens) => {
+    ['other reasoning provider', 'other/reasoning-content-model', 4_096, 'minimal'],
+    ['non-reasoning model', 'opencode/non-reasoning-content-model', 64, undefined],
+    ['explicit thinking format', 'opencode/explicit-thinking-model', 4_096, 'minimal'],
+    ['ordinary OpenCode reasoning model', 'opencode/ordinary-model', 4_096, 'minimal'],
+    ['reasoning model without minimal support', 'opencode/no-minimal-reasoning-model', 4_096, 'low'],
+    ['reasoning model with a lower output limit', 'opencode/small-reasoning-model', 1_024, 'minimal'],
+  ])('uses capability-based title settings for %s', async (_label, model, maxTokens, reasoning) => {
     piMock.completeSimple.mockResolvedValue({
       role: 'assistant',
       content: [{ type: 'text', text: 'Existing behavior' }],
@@ -269,6 +270,8 @@ describe('PiRunner', () => {
 
     const [requestedModel, , options] = piMock.completeSimple.mock.calls[0]!;
     expect(options).toMatchObject({ maxTokens });
+    if (reasoning) expect(options).toMatchObject({ reasoning });
+    else expect(options).not.toHaveProperty('reasoning');
     if (model.includes('explicit-thinking-model')) {
       expect(requestedModel.compat).toMatchObject({ thinkingFormat: 'openrouter' });
     } else {

@@ -103,6 +103,42 @@ describe('WorkerService', () => {
     );
   });
 
+  it('starts initial title generation while sandbox creation is pending', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const fallbackTitle = 'Start title generation before the sandbox';
+    const session = await services.sessions.create({ title: fallbackTitle });
+    await store.updateSessionContext({
+      id: session.id,
+      context: {
+        model: 'provider/selected-model',
+        titleGeneration: { fallbackTitle },
+      },
+      updatedAt: new Date(),
+    });
+    await services.messages.enqueue({ sessionId: session.id, prompt: fallbackTitle });
+    const runner = new TitleRunner();
+    const sandboxProvider = new BlockingCreateSandboxProvider();
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner,
+      runnerType: 'title',
+      sandboxProvider,
+      leaseOwner: 'test-worker',
+    });
+
+    const processing = worker.processNext();
+    await waitFor(() => runner.titleInputs.length === 1);
+    expect(sandboxProvider.isCreatePending()).toBe(true);
+    expect(runner.titleInputs[0]).toMatchObject({ model: 'provider/selected-model' });
+
+    runner.resolveTitle('Early title generation');
+    sandboxProvider.releaseCreate();
+    await expect(processing).resolves.toBe(true);
+  });
+
   it('uses the configured title model instead of the session model', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -1689,15 +1725,52 @@ class StaleContextUpdatingRunner implements Runner {
 }
 
 class StaleTitleRunner implements Runner {
-  constructor(private readonly store: MemoryStore) {}
+  private readonly leaseLost: Promise<void>;
+  private markLeaseLost!: () => void;
+
+  constructor(private readonly store: MemoryStore) {
+    this.leaseLost = new Promise((resolve) => {
+      this.markLeaseLost = resolve;
+    });
+  }
 
   async run(): Promise<RunnerResult> {
     await this.store.recoverStaleRuns({ now: new Date(Date.now() + 120_000), limit: 10 });
+    this.markLeaseLost();
     return { text: 'stale title ignored' };
   }
 
   async generateTitle(): Promise<string> {
+    await this.leaseLost;
     return 'Generated after lease loss';
+  }
+}
+
+class BlockingCreateSandboxProvider extends FakeSandboxProvider {
+  private readonly createGate: Promise<void>;
+  private release!: () => void;
+  private pending = false;
+
+  constructor() {
+    super();
+    this.createGate = new Promise((resolve) => {
+      this.release = resolve;
+    });
+  }
+
+  override async create(input: Parameters<FakeSandboxProvider['create']>[0]) {
+    this.pending = true;
+    await this.createGate;
+    this.pending = false;
+    return super.create(input);
+  }
+
+  isCreatePending(): boolean {
+    return this.pending;
+  }
+
+  releaseCreate(): void {
+    this.release();
   }
 }
 
