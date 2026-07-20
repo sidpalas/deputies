@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Bot,
   BookOpenCheck,
+  TextQuote,
   Check,
   ChevronsUpDown,
   KeyRound,
@@ -20,7 +21,7 @@ import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import type { ThemePreference } from './types.js';
 
-export type NavigationPage = 'sessions' | 'setup' | 'groups' | 'automations' | 'environments' | 'skills';
+export type NavigationPage = 'sessions' | 'setup' | 'groups' | 'automations' | 'environments' | 'skills' | 'snippets';
 
 const navigationPages: Array<{
   id: NavigationPage;
@@ -31,6 +32,7 @@ const navigationPages: Array<{
   { id: 'sessions', label: 'Sessions', description: 'Run and review agent work', icon: MessagesSquare },
   { id: 'automations', label: 'Automations', description: 'Schedule recurring work', icon: Bot },
   { id: 'skills', label: 'Skills', description: 'Manage reusable agent instructions', icon: BookOpenCheck },
+  { id: 'snippets', label: 'Snippets', description: 'Manage personal prompt snippets', icon: TextQuote },
   { id: 'groups', label: 'Access', description: 'Manage groups and permissions', icon: UsersRound },
   { id: 'environments', label: 'Environments', description: 'Configure execution environments', icon: Layers3 },
   { id: 'setup', label: 'Setup', description: 'Review deployment configuration', icon: Settings2 },
@@ -48,6 +50,7 @@ export type SidebarFooterProps = {
   canViewAutomations: boolean;
   canViewEnvironments: boolean;
   canViewSkills: boolean;
+  canViewSnippets?: boolean;
   canViewSetup: boolean;
   health: Health | null;
   navPage: NavigationPage;
@@ -57,6 +60,7 @@ export type SidebarFooterProps = {
   onOpenAutomations: () => void;
   onOpenEnvironments: () => void;
   onOpenSkills: () => void;
+  onOpenSnippets?: () => void;
   onOpenSessions: () => void;
   onOpenSetup: () => void;
   onSignOut: () => void;
@@ -75,6 +79,7 @@ export function SidebarFooter(props: SidebarFooterProps) {
     if (page.id === 'groups') return props.canViewGroups;
     if (page.id === 'automations') return props.canViewAutomations;
     if (page.id === 'skills') return props.canViewSkills;
+    if (page.id === 'snippets') return props.canViewSnippets;
     if (page.id === 'environments') return props.canViewEnvironments;
     if (page.id === 'setup') return props.canViewSetup;
     return true;
@@ -106,6 +111,7 @@ export function SidebarFooter(props: SidebarFooterProps) {
     sessions: props.onOpenSessions,
     automations: props.onOpenAutomations,
     skills: props.onOpenSkills,
+    snippets: props.onOpenSnippets ?? (() => {}),
     groups: props.onOpenGroups,
     environments: props.onOpenEnvironments,
     setup: props.onOpenSetup,

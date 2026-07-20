@@ -4,6 +4,7 @@ import type { Skill } from '../../api.js';
 import { cn } from '../../lib/utils.js';
 import { Badge } from '../ui/badge.js';
 import { MAX_INVOKED_SKILLS } from './skill-invocation-draft.js';
+import { ComposerPickerOverlay } from './shared.js';
 
 export function SkillPicker(props: {
   availableCount: number;
@@ -22,33 +23,39 @@ export function SkillPicker(props: {
   const activeIndex = Math.min(props.activeIndex ?? 0, Math.max(0, props.options.length - 1));
 
   return (
-    <div className="min-w-0 px-3 pt-3">
-      <div className="flex flex-wrap items-center gap-1.5">
-        {props.selected.map((skill) => (
-          <Badge
-            key={skill.id}
-            className="h-6 max-w-[min(16rem,100%)] gap-1 whitespace-nowrap border border-primary/30 bg-primary/10 text-foreground"
-            title={`${skill.name}: ${skill.description}`}
-          >
-            <BookOpenCheck className="h-3 w-3 shrink-0" />
-            <span className="min-w-0 truncate">{skill.name}</span>
-            <span className="shrink-0 text-[10px] font-normal text-muted-foreground">{skillProvenance(skill)}</span>
-            <button
-              type="button"
-              className="shrink-0 text-muted-foreground hover:text-foreground"
-              onClick={() => props.onRemoveSkill(skill.id)}
-              aria-label={`Remove ${skill.name} skill`}
-              disabled={props.disabled}
+    <div className="relative min-w-0">
+      {props.selected.length ? (
+        <div className="flex flex-wrap items-center gap-1.5 px-3 pt-3">
+          {props.selected.map((skill) => (
+            <Badge
+              key={skill.id}
+              className="h-6 max-w-[min(16rem,100%)] gap-1 whitespace-nowrap border border-primary/30 bg-primary/10 text-foreground"
+              title={`${skill.name}: ${skill.description}`}
             >
-              <X className="h-3 w-3" />
-            </button>
-          </Badge>
-        ))}
-      </div>
+              <BookOpenCheck className="h-3 w-3 shrink-0" />
+              <span className="min-w-0 truncate">{skill.name}</span>
+              <span className="shrink-0 text-[10px] font-normal text-muted-foreground">{skillProvenance(skill)}</span>
+              <button
+                type="button"
+                className="shrink-0 text-muted-foreground hover:text-foreground"
+                onClick={() => props.onRemoveSkill(skill.id)}
+                aria-label={`Remove ${skill.name} skill`}
+                disabled={props.disabled}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      ) : null}
       {props.open ? (
-        <div className="z-50 mt-1 w-full rounded-md border border-border bg-card p-2 text-card-foreground shadow-xl">
+        <ComposerPickerOverlay>
           <p className="flex h-8 items-center px-2 text-xs text-muted-foreground">Type a skill name after /</p>
-          <div className="mt-1 h-[clamp(8rem,35dvh,16rem)] overflow-auto" role="listbox" aria-label="Available skills">
+          <div
+            className="mt-1 max-h-[clamp(8rem,35dvh,16rem)] overflow-auto"
+            role="listbox"
+            aria-label="Available skills"
+          >
             {props.options.map((skill, index) => (
               <button
                 ref={index === activeIndex ? props.activeOptionRef : undefined}
@@ -61,6 +68,7 @@ export function SkillPicker(props: {
                 role="option"
                 aria-selected={index === activeIndex}
                 onMouseEnter={() => props.onActiveIndexChange?.(index)}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => props.onSelectSkill(skill)}
               >
                 <span className="flex items-center justify-between gap-2">
@@ -82,9 +90,9 @@ export function SkillPicker(props: {
           <p className="border-t border-border px-2 pt-2 text-[11px] text-muted-foreground">
             Up to {MAX_INVOKED_SKILLS} skills per message.
           </p>
-        </div>
+        </ComposerPickerOverlay>
       ) : null}
-      {props.error ? <p className="mt-1 text-xs text-destructive">{props.error}</p> : null}
+      {props.error ? <p className="mx-3 mt-1 text-xs text-destructive">{props.error}</p> : null}
     </div>
   );
 }

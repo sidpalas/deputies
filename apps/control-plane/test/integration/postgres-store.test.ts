@@ -13,6 +13,7 @@ import { PostgresStore } from '../../src/store/postgres.js';
 import { waitFor } from '../support/http.js';
 import { setupPostgresStoreSuite, testDatabaseUrl } from '../support/postgres-store-suite.js';
 import { defineSessionTagsStoreContract } from '../support/session-tags-store-contract.js';
+import { defineSnippetsStoreContract } from '../support/snippets-store-contract.js';
 import { defineSkillsStoreContract } from '../support/skills-store-contract.js';
 
 describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
@@ -27,6 +28,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   });
 
   defineSessionTagsStoreContract(() => store);
+  defineSnippetsStoreContract(() => store);
   defineSkillsStoreContract(() => store);
 
   it('rechecks persisted invocation authors against live Postgres membership and role state', async () => {

@@ -45,7 +45,14 @@ export function loadStoredToken(): string {
 
 export function loadInitialSelectedSessionId(): string {
   const query = new URLSearchParams(window.location.search);
-  if (query.get('group') || query.get('automation') || query.get('environment') || query.get('skill')) return '';
+  if (
+    query.get('group') ||
+    query.get('automation') ||
+    query.get('environment') ||
+    query.get('skill') ||
+    query.get('snippet')
+  )
+    return '';
   return query.get('session') ?? sessionStorage.getItem(selectedSessionStorageKey) ?? '';
 }
 
@@ -56,6 +63,7 @@ export function loadInitialIsCreatingThread(): boolean {
     !new URLSearchParams(window.location.search).get('automation') &&
     !new URLSearchParams(window.location.search).get('environment') &&
     !new URLSearchParams(window.location.search).get('skill') &&
+    !new URLSearchParams(window.location.search).get('snippet') &&
     sessionStorage.getItem(newSessionSelectedStorageKey) === 'true'
   );
 }
@@ -67,7 +75,8 @@ export function loadInitialSetupGuideOpen(): boolean {
     query.get('group') ||
     query.get('automation') ||
     query.get('environment') ||
-    query.get('skill')
+    query.get('skill') ||
+    query.get('snippet')
   )
     return false;
   return sessionStorage.getItem(setupGuideOpenStorageKey) === 'true';
@@ -75,17 +84,31 @@ export function loadInitialSetupGuideOpen(): boolean {
 
 export function loadInitialGroupsPanelOpen(): boolean {
   const query = new URLSearchParams(window.location.search);
-  if (query.get('session') || query.get('automation') || query.get('environment') || query.get('skill')) return false;
+  if (
+    query.get('session') ||
+    query.get('automation') ||
+    query.get('environment') ||
+    query.get('skill') ||
+    query.get('snippet')
+  )
+    return false;
   if (query.get('group')) return true;
   return sessionStorage.getItem(groupsPanelOpenStorageKey) === 'true';
 }
 
-export function loadInitialSidebarPanel(): 'sessions' | 'groups' | 'automations' | 'environments' | 'skills' {
+export function loadInitialSidebarPanel():
+  | 'sessions'
+  | 'groups'
+  | 'automations'
+  | 'environments'
+  | 'skills'
+  | 'snippets' {
   const query = new URLSearchParams(window.location.search);
   if (query.get('session')) return 'sessions';
   if (query.get('automation')) return 'automations';
   if (query.get('environment')) return 'environments';
   if (query.get('skill')) return 'skills';
+  if (query.get('snippet')) return 'snippets';
   if (query.get('group')) return 'groups';
   const stored = sessionStorage.getItem(sidebarPanelStorageKey);
   if (
@@ -93,6 +116,7 @@ export function loadInitialSidebarPanel(): 'sessions' | 'groups' | 'automations'
     stored === 'groups' ||
     stored === 'automations' ||
     stored === 'environments' ||
+    stored === 'snippets' ||
     stored === 'skills'
   ) {
     return stored;

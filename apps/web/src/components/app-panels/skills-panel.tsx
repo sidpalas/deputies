@@ -15,7 +15,7 @@ import { Input } from '../ui/input.js';
 import { Textarea } from '../ui/textarea.js';
 import { SharingGroupPicker } from './sharing-group-picker.js';
 import { RevisionSelector, useRevisionViewer } from './revision-selector.js';
-import { UnsavedIndicator } from './shared.js';
+import { slugNameValidationError, UnsavedIndicator } from './shared.js';
 import { useEditorDirty } from './use-editor-dirty.js';
 
 type SkillForm = {
@@ -461,10 +461,7 @@ function Field(props: { label: string; htmlFor: string; hint?: string; children:
 }
 
 export function skillNameValidationError(name: string): string {
-  if (!name) return '';
-  if (name.length > 64) return 'Name must be 64 characters or fewer.';
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) return 'Use lowercase letters, numbers, and single hyphens only.';
-  return '';
+  return slugNameValidationError(name);
 }
 
 function emptySkillForm(): SkillForm {

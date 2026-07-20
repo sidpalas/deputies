@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import type { KeyboardEvent, RefObject } from 'react';
 import type { Skill, SkillInvocationRef } from '../../api.js';
 
 export const MAX_INVOKED_SKILLS = 8;
@@ -10,9 +10,25 @@ export type SkillInvocationSubmission = {
   skillRefs: SkillInvocationRef[];
 };
 
+export type SkillInvocationQuery = { start: number; end: number; query: string };
+
+const partialSlugPattern = /^[a-z0-9]*(?:-[a-z0-9]*)*$/i;
+
+export function skillInvocationQueryAtCaret(prompt: string, selectionStart: number): SkillInvocationQuery | null {
+  const caret = Math.max(0, Math.min(selectionStart, prompt.length));
+  const match = /(^|\s)\/(?!\/)([a-z0-9]*(?:-[a-z0-9]*)*)$/i.exec(prompt.slice(0, caret));
+  if (!match) return null;
+  const start = match.index + match[1]!.length;
+  let end = caret;
+  while (end < prompt.length && /[a-z0-9-]/i.test(prompt[end]!)) end += 1;
+  const fullQuery = prompt.slice(start + 1, end);
+  if (!partialSlugPattern.test(fullQuery) || prompt[end] === '/') return null;
+  return { start, end, query: match[2]! };
+}
+
 export function prepareSkillSubmission(prompt: string, selected: Skill[], available: Skill[]) {
   const reconciled = reconcileSelectedSkills(selected, available);
-  const match = /^\/([^\s]+)(?:\s+|$)/.exec(prompt);
+  const match = /^\/(?!\/)([^\s]+)(?:\s+|$)/.exec(prompt);
   if (!match?.[1] || reconciled.length >= MAX_INVOKED_SKILLS) return { prompt, skills: reconciled };
   const skill = available.find(
     (candidate) => !candidate.archivedAt && candidate.enabled && candidate.name === match[1],
@@ -65,10 +81,15 @@ export function prepareSkillInvocationSubmission(
   };
 }
 
-export function matchingSkills(available: Skill[], selected: Skill[], prompt: string): Skill[] {
-  const slash = /^\/([^\s]*)$/.exec(prompt);
-  if (!slash) return [];
-  const query = slash[1]!.trim().toLowerCase();
+export function matchingSkills(
+  available: Skill[],
+  selected: Skill[],
+  prompt: string,
+  selectionStart = prompt.length,
+): Skill[] {
+  const match = skillInvocationQueryAtCaret(prompt, selectionStart);
+  if (!match) return [];
+  const query = match.query.toLowerCase();
   const selectedIds = new Set(selected.map((skill) => skill.id));
   return available
     .filter((skill) => !skill.archivedAt && skill.enabled && !selectedIds.has(skill.id))
@@ -83,12 +104,18 @@ export function useSkillInvocationDraft(input: {
   enabled: boolean;
   prompt: string;
   onPromptChange: (prompt: string) => void;
+  selectionStart?: number;
+  textareaRef?: RefObject<HTMLTextAreaElement | null>;
+  onSelectionStartChange?: (selectionStart: number) => void;
 }) {
   const [selectedSkills, setSelectedSkills] = useState<Skill[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const activeOptionRef = useRef<HTMLButtonElement>(null);
-  const pickerOpen = input.enabled && /^\/[^\s]*$/.test(input.prompt);
-  const options = matchingSkills(input.available, selectedSkills, input.prompt);
+  const selectionStart = input.selectionStart ?? input.prompt.length;
+  const query = skillInvocationQueryAtCaret(input.prompt, selectionStart);
+  const pickerOpen = input.enabled && Boolean(query);
+  const options = query ? matchingSkills(input.available, selectedSkills, input.prompt, selectionStart) : [];
+  const pendingSelectionRef = useRef<number | null>(null);
 
   useEffect(() => {
     setSelectedSkills((current) => {
@@ -99,9 +126,17 @@ export function useSkillInvocationDraft(input: {
     });
   }, [input.available, input.enabled]);
 
+  useEffect(() => setActiveIndex(0), [input.prompt, selectionStart]);
+  useEffect(() => activeOptionRef.current?.scrollIntoView?.({ block: 'nearest' }), [activeIndex]);
+
   useEffect(() => {
-    activeOptionRef.current?.scrollIntoView?.({ block: 'nearest' });
-  }, [activeIndex, input.prompt]);
+    const pendingSelection = pendingSelectionRef.current;
+    if (pendingSelection === null) return;
+    pendingSelectionRef.current = null;
+    input.textareaRef?.current?.focus();
+    input.textareaRef?.current?.setSelectionRange(pendingSelection, pendingSelection);
+    input.onSelectionStartChange?.(pendingSelection);
+  }, [input.prompt, input.textareaRef, input.onSelectionStartChange]);
 
   function changePrompt(prompt: string) {
     input.onPromptChange(prompt);
@@ -111,8 +146,11 @@ export function useSkillInvocationDraft(input: {
   function selectSkill(skill: Skill) {
     if (selectedSkills.length >= MAX_INVOKED_SKILLS || selectedSkills.some((candidate) => candidate.id === skill.id))
       return;
+    const currentQuery = skillInvocationQueryAtCaret(input.prompt, selectionStart);
+    if (!currentQuery) return;
     setSelectedSkills([...selectedSkills, skill]);
-    input.onPromptChange('');
+    pendingSelectionRef.current = currentQuery.start;
+    input.onPromptChange(`${input.prompt.slice(0, currentQuery.start)}${input.prompt.slice(currentQuery.end)}`);
     setActiveIndex(0);
   }
 

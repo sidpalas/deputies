@@ -8,6 +8,7 @@ import type {
   ReasoningLevel,
   RepositoryOption,
   Skill,
+  Snippet,
   SkillInvocationRef,
 } from '../../api.js';
 import { cn } from '../../lib/utils.js';
@@ -31,6 +32,7 @@ import { blurFocusedTextControl, formatModelLabel, submitOnEnter } from './share
 import { defaultReasoningLevelLabel, reasoningLevelLabel, REASONING_LEVEL_OPTIONS } from './reasoning-level.js';
 import { SkillInvocationField } from './skill-invocation-field.js';
 import { useSkillInvocationDraft } from './skill-invocation-draft.js';
+import { SnippetPicker, useSnippetPicker } from './snippet-picker.js';
 
 export function MessageComposer(props: {
   archived: boolean;
@@ -62,6 +64,8 @@ export function MessageComposer(props: {
   defaultReasoningLevel: ReasoningLevel | '';
   skills: Skill[];
   skillsEnabled: boolean;
+  snippets?: Snippet[];
+  snippetsEnabled?: boolean;
   skillsLoading?: boolean;
   skillError?: string;
   onCodebaseChange: (value: string) => void;
@@ -93,11 +97,20 @@ export function MessageComposer(props: {
       ? `repository:${branchRepository}`
       : '';
   const branchControlLabel = selectedEnvironment && selectedEnvironment.repositories.length > 1 ? 'Branches' : 'Branch';
+  const snippetDraft = useSnippetPicker({
+    snippets: props.snippets ?? [],
+    enabled: Boolean(props.snippetsEnabled),
+    prompt,
+    onPromptChange: setPrompt,
+  });
   const skillDraft = useSkillInvocationDraft({
     available: props.skills,
     enabled: props.skillsEnabled,
     prompt,
     onPromptChange: setPrompt,
+    selectionStart: snippetDraft.selectionStart,
+    textareaRef: snippetDraft.textareaRef,
+    onSelectionStartChange: snippetDraft.setSelectionStart,
   });
 
   const canSubmit =
@@ -105,7 +118,6 @@ export function MessageComposer(props: {
     !props.readOnly &&
     Boolean(prompt.trim() || skillDraft.selectedSkills.length) &&
     !props.modelUnavailableReason;
-  const skillPickerOpen = skillDraft.pickerOpen;
 
   useEffect(() => {
     setBranchControlsOpen(false);
@@ -135,6 +147,7 @@ export function MessageComposer(props: {
   }
 
   function handlePromptKeyDown(event: Parameters<typeof skillDraft.handlePromptKeyDown>[0]) {
+    if (snippetDraft.keyDown(event)) return;
     if (skillDraft.handlePromptKeyDown(event)) return;
     submitOnEnter(event);
   }
@@ -185,14 +198,17 @@ export function MessageComposer(props: {
           loading={props.skillsLoading}
           error={props.skillError}
         />
+        <SnippetPicker controller={snippetDraft} />
         <Textarea
+          ref={snippetDraft.textareaRef}
           key={promptResetKey}
-          className={cn(
-            props.compactInput || skillPickerOpen ? 'min-h-12' : 'min-h-28',
-            'border-0 bg-transparent focus:ring-0',
-          )}
+          className={cn(props.compactInput ? 'min-h-12' : 'min-h-28', 'border-0 bg-transparent focus:ring-0')}
           value={prompt}
-          onChange={(event) => skillDraft.changePrompt(event.target.value)}
+          onChange={(event) => {
+            snippetDraft.setSelectionStart(event.target.selectionStart);
+            skillDraft.changePrompt(event.target.value);
+          }}
+          onSelect={(event) => snippetDraft.setSelectionStart(event.currentTarget.selectionStart)}
           onKeyDown={handlePromptKeyDown}
           placeholder={
             props.archived

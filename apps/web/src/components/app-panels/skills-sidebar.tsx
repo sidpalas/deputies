@@ -1,20 +1,10 @@
 import { useMemo, useState, type SyntheticEvent } from 'react';
-import {
-  Archive,
-  ChevronDown,
-  CircleOff,
-  CornerUpLeft,
-  MousePointerClick,
-  PanelLeftClose,
-  Plus,
-  RotateCcw,
-  X,
-  Zap,
-} from 'lucide-react';
+import { ChevronDown, CircleOff, CornerUpLeft, MousePointerClick, PanelLeftClose, Plus, X, Zap } from 'lucide-react';
 import type { Group, Skill } from '../../api.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
+import { SidebarArchiveRestoreAction } from './shared.js';
 import { SidebarFooter, type SidebarFooterProps } from './sidebar-footer.js';
 
 export function SkillsSidebar(props: {
@@ -210,28 +200,22 @@ function SkillSection(props: {
                 </span>
               </button>
               {canArchive ? (
-                <Button
+                <SidebarArchiveRestoreAction
+                  archived={false}
+                  resourceLabel={`${skill.name} skill`}
+                  resourceType="skill"
                   className="absolute right-2 top-0.5 h-8 w-8 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-                  variant="ghost"
-                  size="sm"
                   onClick={() => props.onArchiveSkill?.(skill.id)}
-                  aria-label={`Archive ${skill.name} skill`}
-                  title="Archive skill"
-                >
-                  <Archive className="h-3.5 w-3.5" />
-                </Button>
+                />
               ) : null}
               {canRestore ? (
-                <Button
+                <SidebarArchiveRestoreAction
+                  archived
+                  resourceLabel={`${skill.name} skill`}
+                  resourceType="skill"
                   className="absolute right-2 top-0.5 h-8 w-8 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-                  variant="ghost"
-                  size="sm"
                   onClick={() => props.onRestoreSkill?.(skill.id)}
-                  aria-label={`Restore ${skill.name} skill`}
-                  title="Restore skill"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                </Button>
+                />
               ) : null}
             </div>
           );

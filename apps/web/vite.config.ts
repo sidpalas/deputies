@@ -62,6 +62,7 @@ export default defineConfig({
       '/models': apiProxy,
       '/setup': apiProxy,
       '/skills': apiProxy,
+      '/snippets': apiProxy,
       '/telemetry': apiProxy,
       '/users': apiProxy,
       '/webhooks': apiProxy,

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 
-export type SidebarPanel = 'sessions' | 'groups' | 'automations' | 'environments' | 'skills';
+export type SidebarPanel = 'sessions' | 'groups' | 'automations' | 'environments' | 'skills' | 'snippets';
 
 const sidebarPanelLabels: Record<SidebarPanel, string> = {
   sessions: 'sessions',
@@ -8,6 +8,7 @@ const sidebarPanelLabels: Record<SidebarPanel, string> = {
   automations: 'automations',
   environments: 'environments',
   skills: 'skills',
+  snippets: 'snippets',
 };
 
 const navigationStateKey = 'deputiesNavigation';
@@ -20,7 +21,7 @@ type HistoryEntry<T> = {
 };
 
 export type RevisionResource = {
-  type: 'environment' | 'skill';
+  type: 'environment' | 'skill' | 'snippet';
   id: string;
   revisionId?: string;
 };
@@ -154,10 +155,10 @@ function historyIndex(state: unknown): number {
 
 function resourceUrl(resource: RevisionResource): URL {
   const url = new URL(window.location.href);
-  for (const param of ['session', 'group', 'automation', 'environment', 'skill', 'revision']) {
+  for (const param of ['session', 'group', 'automation', 'environment', 'skill', 'snippet', 'revision']) {
     url.searchParams.delete(param);
   }
-  url.searchParams.set(resource.type, resource.id);
+  if (resource.id) url.searchParams.set(resource.type, resource.id);
   if (resource.revisionId) url.searchParams.set('revision', resource.revisionId);
   return url;
 }

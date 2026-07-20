@@ -198,6 +198,16 @@ export type RepositoryOption = {
 export type EnvironmentShareMode = 'private' | 'selected_groups' | 'all_groups';
 
 export type SkillShareMode = 'none' | 'specific' | 'all_groups';
+
+export type Snippet = {
+  id: string;
+  ownerUserId: string;
+  name: string;
+  body: string;
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
 export type SkillSource = 'personal' | 'group' | 'shared' | 'repo';
 
 export type SkillProvenance =
@@ -691,6 +701,54 @@ export async function listSkills(input: {
   if (input.groupId) query.set('groupId', input.groupId);
   const body = await request<{ skills: Skill[] }>(`/skills?${query.toString()}`, { token: input.token });
   return body.skills;
+}
+
+export async function listSnippets(input: { token: string }): Promise<Snippet[]> {
+  return (await request<{ snippets: Snippet[] }>('/snippets', { token: input.token })).snippets;
+}
+export async function createSnippet(input: { token: string; name: string; body: string }): Promise<Snippet> {
+  return (
+    await request<{ snippet: Snippet }>('/snippets', {
+      method: 'POST',
+      token: input.token,
+      body: { name: input.name, body: input.body },
+    })
+  ).snippet;
+}
+export async function updateSnippet(input: {
+  token: string;
+  snippetId: string;
+  name?: string;
+  body?: string;
+}): Promise<Snippet> {
+  return (
+    await request<{ snippet: Snippet }>(`/snippets/${input.snippetId}`, {
+      method: 'PATCH',
+      token: input.token,
+      body: {
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.body !== undefined ? { body: input.body } : {}),
+      },
+    })
+  ).snippet;
+}
+export async function archiveSnippet(input: { token: string; snippetId: string }): Promise<Snippet> {
+  return (
+    await request<{ snippet: Snippet }>(`/snippets/${input.snippetId}/archive`, {
+      method: 'POST',
+      token: input.token,
+      body: {},
+    })
+  ).snippet;
+}
+export async function restoreSnippet(input: { token: string; snippetId: string }): Promise<Snippet> {
+  return (
+    await request<{ snippet: Snippet }>(`/snippets/${input.snippetId}/restore`, {
+      method: 'POST',
+      token: input.token,
+      body: {},
+    })
+  ).snippet;
 }
 
 export async function listSessionSkills(input: { sessionId: string; token: string }): Promise<Skill[]> {

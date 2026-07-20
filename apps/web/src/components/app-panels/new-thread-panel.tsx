@@ -8,9 +8,9 @@ import type {
   ReasoningLevel,
   RepositoryOption,
   Skill,
+  Snippet,
   SkillInvocationRef,
 } from '../../api.js';
-import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Textarea } from '../ui/textarea.js';
@@ -30,6 +30,7 @@ import { submitOnEnter } from './shared.js';
 import { defaultReasoningLevelLabel, REASONING_LEVEL_OPTIONS } from './reasoning-level.js';
 import { SkillInvocationField } from './skill-invocation-field.js';
 import { useSkillInvocationDraft } from './skill-invocation-draft.js';
+import { SnippetPicker, useSnippetPicker } from './snippet-picker.js';
 
 export function NewThreadPanel(props: {
   canCallApi: boolean;
@@ -58,6 +59,8 @@ export function NewThreadPanel(props: {
   defaultReasoningLevel: ReasoningLevel | '';
   skills: Skill[];
   skillsEnabled: boolean;
+  snippets?: Snippet[];
+  snippetsEnabled?: boolean;
   skillsLoading?: boolean;
   skillError?: string;
   showOpenSidebar: boolean;
@@ -87,13 +90,21 @@ export function NewThreadPanel(props: {
       ? `repository:${props.repository}`
       : '';
   const branchControlLabel = selectedEnvironment && selectedEnvironment.repositories.length > 1 ? 'Branches' : 'Branch';
+  const snippetDraft = useSnippetPicker({
+    snippets: props.snippets ?? [],
+    enabled: Boolean(props.snippetsEnabled),
+    prompt: props.prompt,
+    onPromptChange: props.onPromptChange,
+  });
   const skillDraft = useSkillInvocationDraft({
     available: props.skills,
     enabled: props.skillsEnabled,
     prompt: props.prompt,
     onPromptChange: props.onPromptChange,
+    selectionStart: snippetDraft.selectionStart,
+    textareaRef: snippetDraft.textareaRef,
+    onSelectionStartChange: snippetDraft.setSelectionStart,
   });
-  const skillPickerOpen = skillDraft.pickerOpen;
 
   useEffect(() => {
     setBranchControlsOpen(false);
@@ -107,6 +118,7 @@ export function NewThreadPanel(props: {
   }
 
   function handlePromptKeyDown(event: Parameters<typeof skillDraft.handlePromptKeyDown>[0]) {
+    if (snippetDraft.keyDown(event)) return;
     if (skillDraft.handlePromptKeyDown(event)) return;
     submitOnEnter(event);
   }
@@ -289,13 +301,16 @@ export function NewThreadPanel(props: {
                 loading={props.skillsLoading}
                 error={props.skillError}
               />
+              <SnippetPicker controller={snippetDraft} />
               <Textarea
-                className={cn(
-                  skillPickerOpen ? 'min-h-12' : 'min-h-40',
-                  'min-w-0 border-0 bg-transparent focus:border-transparent focus:ring-0',
-                )}
+                ref={snippetDraft.textareaRef}
+                className="min-h-40 min-w-0 border-0 bg-transparent focus:border-transparent focus:ring-0"
                 value={props.prompt}
-                onChange={(event) => skillDraft.changePrompt(event.target.value)}
+                onChange={(event) => {
+                  snippetDraft.setSelectionStart(event.target.selectionStart);
+                  skillDraft.changePrompt(event.target.value);
+                }}
+                onSelect={(event) => snippetDraft.setSelectionStart(event.currentTarget.selectionStart)}
                 onKeyDown={handlePromptKeyDown}
                 placeholder="Ask Deputies to investigate, change code, or answer a question..."
                 disabled={!props.canCallApi}

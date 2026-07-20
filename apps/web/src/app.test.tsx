@@ -114,6 +114,7 @@ type MockApiOptions = {
   environments?: unknown[];
   environmentRevisions?: Record<string, unknown[]>;
   skills?: unknown[];
+  snippets?: unknown[];
   invocationSkills?: unknown[];
   invocationCandidateOwnerGroupIds?: string[];
   invocationCandidateStatus?: number;
@@ -123,6 +124,7 @@ type MockApiOptions = {
     sessionId: string;
   }) => Response | Promise<Response> | undefined;
   archivedSkillIds?: string[];
+  onSnippetMutationRequest?: (request: { path: string; method: string; body: unknown }) => Response | Promise<Response>;
   archivedSessionIds?: string[];
   messageSubmitError?: { status: number; body: unknown };
   logins?: Array<{ username: string; password: string }>;
@@ -1004,6 +1006,32 @@ it('aborts newly-created session backfill when signing out', async () => {
   fireEvent.click(screen.getAllByRole('button', { name: 'Sign out' })[0]!);
 
   await waitFor(() => expect(abortedRequests).toContain(`GET /sessions/${newSessionId}/messages`));
+  expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+});
+
+it('confirms before signing out with dirty snippet changes', async () => {
+  const snippet = {
+    id: '00000000-0000-4000-8000-000000000401',
+    ownerUserId: user.id,
+    name: 'review',
+    body: 'Review this',
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+  sessionStorage.setItem('deputies-sidebar-panel', 'snippets');
+  window.history.replaceState({}, '', `/?snippet=${snippet.id}`);
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+  mockApi({ authMode: 'session', currentUser: user, snippets: [snippet] });
+  render(<App />);
+
+  fireEvent.change(await screen.findByLabelText('Body'), { target: { value: 'Unsaved review' } });
+  fireEvent.click(screen.getAllByRole('button', { name: 'Sign out' })[0]!);
+
+  expect(confirm).toHaveBeenCalledWith('Discard unsaved snippet changes?');
+  expect(screen.getByLabelText('Body')).toHaveValue('Unsaved review');
+  expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getAllByRole('button', { name: 'Sign out' })[0]!);
   expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument();
 });
 
@@ -4200,6 +4228,17 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === '/environments' && method === 'GET') {
       return jsonResponse({ environments: options.environments ?? [] });
+    }
+
+    if (url.pathname === '/snippets' && method === 'GET') {
+      if (options.snippets === undefined) return jsonResponse({ error: 'not_found', message: 'Not found' }, 404);
+      return jsonResponse({ snippets: options.snippets });
+    }
+
+    if (/^\/snippets(?:\/[^/]+)?(?:\/(?:archive|restore))?$/.test(url.pathname) && method !== 'GET') {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      const custom = options.onSnippetMutationRequest?.({ path: url.pathname, method, body });
+      if (custom) return custom;
     }
 
     const updateEnvironmentMatch = url.pathname.match(/^\/environments\/([^/]+)$/);

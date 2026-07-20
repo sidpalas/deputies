@@ -99,6 +99,7 @@ export class StoreConflictError extends Error {
       | 'skill_name_exists'
       | 'skill_update_conflict'
       | 'skill_archived'
+      | 'snippet_name_exists'
       | 'session_archived'
       | 'archived_group',
     message: string,
@@ -163,6 +164,20 @@ export type MessageRecord = {
   source?: string;
   context?: Record<string, unknown>;
 };
+
+export type SnippetRecord = {
+  id: string;
+  ownerUserId: string;
+  name: string;
+  body: string;
+  archivedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type CreateSnippetRecord = SnippetRecord;
+export type UpdateSnippetRecord = Pick<SnippetRecord, 'id' | 'ownerUserId' | 'updatedAt'> &
+  Partial<Pick<SnippetRecord, 'name' | 'body'>>;
 
 export type RunRecord = {
   id: string;
@@ -1068,6 +1083,15 @@ export interface SkillStore {
   }): Promise<SkillRunCandidate[]>;
 }
 
+export interface SnippetStore {
+  createSnippet(record: CreateSnippetRecord): Promise<SnippetRecord>;
+  getSnippetForUser(id: string, ownerUserId: string): Promise<SnippetRecord | null>;
+  listSnippetsForUser(ownerUserId: string): Promise<SnippetRecord[]>;
+  updateSnippet(record: UpdateSnippetRecord): Promise<SnippetRecord | null>;
+  archiveSnippet(id: string, ownerUserId: string, archivedAt: Date): Promise<SnippetRecord | null>;
+  restoreSnippet(id: string, ownerUserId: string, updatedAt: Date): Promise<SnippetRecord | null>;
+}
+
 export interface EventStore {
   nextEventSequence(sessionId: string): Promise<number>;
   appendEvent(event: NormalizedEvent & { sequence: number }): Promise<EventRecord>;
@@ -1159,6 +1183,7 @@ export interface AppStore
     AutomationStore,
     EnvironmentStore,
     SkillStore,
+    SnippetStore,
     EventStore,
     AuthStore,
     GroupStore,

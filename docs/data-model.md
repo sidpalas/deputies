@@ -26,6 +26,7 @@ environment_activity
 skills
 skill_revisions
 skill_group_shares
+snippets
 automations
 automation_invocations
 auth_users
@@ -63,6 +64,7 @@ Current implemented tables:
 - `skills`
 - `skill_revisions`
 - `skill_group_shares`
+- `snippets`
 - `automations`
 - `automation_invocations`
 - `auth_users`
@@ -126,7 +128,7 @@ Provider accounts let `AUTH_PROVIDER=static` and `AUTH_PROVIDER=github` share th
 
 ## Access Groups
 
-Access groups own sessions, automations, and group skills. Users own personal skills.
+Access groups own sessions, automations, and group skills. Users own personal skills and prompt snippets.
 
 Current relevant columns:
 
@@ -226,6 +228,23 @@ unique(owner_user_id, lower(name)) where owner_user_id is not null
 Migration history:
 
 - `017_skills.sql` creates the final immutable-revision schema: live skill identities with current pointers and a name projection, `skill_revisions`, sharing rows and indexes, and the deferred composite current-revision foreign key.
+
+## Prompt Snippets
+
+Prompt snippets are personal text shortcuts. Selecting one expands its body into editable composer text; messages retain only that rendered text and never reference a snippet identity.
+
+```txt
+snippets
+  id uuid primary key
+  owner_user_id uuid not null references auth_users(id) on delete cascade
+  name text not null
+  body text not null
+  archived_at timestamptz
+  created_at timestamptz not null
+  updated_at timestamptz not null
+```
+
+Names are lowercase slugs and unique among each user's active snippets. Archiving frees a name for reuse; restoring the older snippet fails if another active snippet has claimed that name. Snippets have no revisions, sharing records, or message back-references. Migration `018_snippets.sql` creates the table and active-owner/name index.
 
 ## Environments And Revisions
 
@@ -389,7 +408,8 @@ Rules:
 - `sequence` is monotonically increasing per session.
 - Pending messages are processed in sequence order. The worker claims all currently pending messages for one session as an ordered batch.
 - Message context is the effective run context. It inherits durable session context and can override it with message-specific values such as a new repository.
-- `context.skills` is an optional list of manually invoked skill names for that message. `context.skillRefs` is an aligned list of `{ id, name, revisionId? }`. On append/edit, the server canonicalizes managed refs to the current revision and persists `revisionId`; clients cannot newly submit a historical revision. Repository refs use `repo:<owner>/<repo>:<name>` and never carry managed revision identity. Already-persisted historical managed pins remain executable subject to live authorization; name-only historical messages retain precedence-based current resolution. Both fields are message-scoped and do not become durable session context.
+- `context.skills` is an optional list of manually invoked skill names for that message. `context.skillRefs` is an aligned `SkillInvocationRef[]` list of `{ id, name, revisionId? }` and is the source-independent invocation contract for web, Slack, GitHub, automations, generic webhooks, and future integrations. On append/edit, the server canonicalizes managed refs to the current revision and persists `revisionId`; clients cannot newly submit a historical revision. Repository refs use `repo:<owner>/<repo>:<name>` and never carry managed revision identity. Already-persisted historical managed pins remain executable subject to live authorization; name-only historical messages retain precedence-based current resolution. Both fields are message-scoped and do not become durable session context.
+- Prompt snippet identity is never persisted in message context. The web composer expands a personal `//name` token into ordinary editable prompt text before submission, with no ID, name, provenance, or back-reference. Integration and automation ingress treats `//name` as ordinary text and does not access personal snippet storage.
 - Duplicate external deliveries must not create duplicate messages.
 - Follow-ups sent during an active run remain pending and are handled by the next batch.
 - Pending messages can be edited or cancelled before the worker claims them.

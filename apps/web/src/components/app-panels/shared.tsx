@@ -1,5 +1,8 @@
 import type { KeyboardEvent, ReactNode } from 'react';
+import { Archive, RotateCcw } from 'lucide-react';
 import type { Session, SetupStatusState } from '../../api.js';
+import { cn } from '../../lib/utils.js';
+import { Button } from '../ui/button.js';
 import type { ConnectionStatus } from './types.js';
 
 const connectionLimitHint =
@@ -11,6 +14,47 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: 'short',
   day: 'numeric',
 });
+
+export function ComposerPickerOverlay(props: { children: ReactNode }) {
+  return (
+    <div className="absolute bottom-full left-0 right-0 z-50 rounded-t-md border border-border bg-card p-2 text-card-foreground shadow-2xl shadow-black/50 ring-1 ring-foreground/20">
+      {props.children}
+    </div>
+  );
+}
+
+export function SidebarArchiveRestoreAction(props: {
+  archived: boolean;
+  resourceLabel: string;
+  resourceType: string;
+  onClick: () => void;
+  className?: string;
+  disabled?: boolean;
+}) {
+  const action = props.archived ? 'Restore' : 'Archive';
+  const Icon = props.archived ? RotateCcw : Archive;
+  return (
+    <Button
+      className={cn(!props.archived && 'hover:text-destructive', props.className)}
+      variant="ghost"
+      size="sm"
+      type="button"
+      disabled={props.disabled}
+      onClick={props.onClick}
+      aria-label={`${action} ${props.resourceLabel}`}
+      title={`${action} ${props.resourceType}`}
+    >
+      <Icon className="h-3.5 w-3.5" />
+    </Button>
+  );
+}
+
+export function slugNameValidationError(name: string): string {
+  if (!name) return '';
+  if (name.length > 64) return 'Name must be 64 characters or fewer.';
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) return 'Use lowercase letters, numbers, and single hyphens only.';
+  return '';
+}
 
 const statusTextClasses: Record<string, string> = {
   active: 'text-info',

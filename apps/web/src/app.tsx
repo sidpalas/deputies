@@ -14,9 +14,11 @@ import {
   archiveEnvironment,
   archiveGroup,
   archiveSession,
+  archiveSnippet,
   cancelCurrentRun,
   cancelMessage,
   createSession,
+  createSnippet,
   enqueueMessage,
   extendSandbox,
   getCurrentUser,
@@ -37,10 +39,12 @@ import {
   listRepositoryOptions,
   listServices,
   listSessions,
+  listSnippets,
   logout,
   openWorkspaceTool,
   pauseQueue,
   replayCallback,
+  restoreSnippet,
   resumeQueue,
   searchSessions,
   setSessionStarred,
@@ -52,6 +56,7 @@ import {
   updateSession,
   updateSessionAccess,
   updateSessionTags,
+  updateSnippet,
   type Automation,
   type Environment,
   type EnvironmentBranchOverrideInput,
@@ -65,8 +70,10 @@ import {
   type SessionSearchResult,
   type SessionTagSummary,
   type SetupStatus,
+  type Snippet,
   type WorkspaceToolId,
 } from './api.js';
+import { isSnippetMutationAuthoritative, isSnippetMutationCurrent } from './app-state.js';
 import { useAccessGroupsAdmin } from './access-groups-admin.js';
 import { useAutomationsAdmin } from './automations-admin.js';
 import { useSkillsWorkspace } from './skills-workspace.js';
@@ -169,6 +176,8 @@ import {
   SetupGuidePanel,
   SkillsPanel,
   SkillsSidebar,
+  SnippetsPanel,
+  SnippetsSidebar,
   GroupsPanel,
   GroupsSidebar,
   StartupLoadingPanel,
@@ -215,6 +224,7 @@ type NavigationState = {
   selectedEnvironmentRevisionId: string;
   selectedSkillId: string;
   selectedSkillRevisionId: string;
+  selectedSnippetId: string;
 };
 
 const activeProgressBatchDelayMs = 100;
@@ -303,6 +313,7 @@ function loadInitialNavigationState(): NavigationState {
     selectedEnvironmentRevisionId: loadInitialSelectedEnvironmentRevisionId(),
     selectedSkillId: loadInitialSelectedSkillId(),
     selectedSkillRevisionId: loadInitialSelectedSkillRevisionId(),
+    selectedSnippetId: new URLSearchParams(window.location.search).get('snippet') ?? '',
   };
 }
 
@@ -346,10 +357,26 @@ export function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState(loadStoredToken);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [snippets, setSnippets] = useState<Snippet[]>([]);
+  const [snippetsLoading, setSnippetsLoading] = useState(false);
+  const snippetRefreshVersionRef = useRef(0);
+  const [snippetMutationPending, setSnippetMutationPending] = useState(false);
+  const snippetMutationVersionRef = useRef(0);
+  const snippetDirtyRef = useRef(false);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [navigation, setNavigation] = useState<NavigationState>(loadInitialNavigationState);
+  const snippetAuthority = currentUser ? `${currentUser.id}\u0000${token}` : '';
+  const snippetAuthorityRef = useRef(snippetAuthority);
+  snippetAuthorityRef.current = snippetAuthority;
   const navigationRef = useRef(navigation);
   navigationRef.current = navigation;
+  const snippetEditorKey = `${navigation.sidebarPanel}\u0000${navigation.selectedSnippetId}`;
+  const snippetEditorKeyRef = useRef(snippetEditorKey);
+  const snippetEditorEpochRef = useRef(0);
+  if (snippetEditorKeyRef.current !== snippetEditorKey) {
+    snippetEditorKeyRef.current = snippetEditorKey;
+    snippetEditorEpochRef.current += 1;
+  }
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const environmentEditorDirtyRef = useRef(false);
@@ -625,6 +652,13 @@ export function App() {
       if (leavingDirtyEnvironment && environmentEditorDirtyRef.current) {
         if (!window.confirm('Discard unsaved environment changes?')) return false;
         setEnvironmentEditorDirty(false);
+      }
+      const leavingDirtySnippet =
+        navigation.sidebarPanel === 'snippets' &&
+        (next.sidebarPanel !== 'snippets' || next.selectedSnippetId !== navigation.selectedSnippetId);
+      if (leavingDirtySnippet && snippetDirtyRef.current) {
+        if (!window.confirm('Discard unsaved snippet changes?')) return false;
+        snippetDirtyRef.current = false;
       }
       return true;
     },
@@ -945,6 +979,33 @@ export function App() {
   useEffect(() => {
     resetAuthBoundSessionState();
   }, [canCallApi, token]);
+
+  async function refreshSnippets(clear = false) {
+    const authority = snippetAuthority;
+    const version = ++snippetRefreshVersionRef.current;
+    if (clear) setSnippets([]);
+    if (!canCallApi || !currentUser) {
+      setSnippetsLoading(false);
+      return;
+    }
+    setSnippetsLoading(true);
+    try {
+      const items = await listSnippets({ token });
+      if (snippetAuthorityRef.current === authority && snippetRefreshVersionRef.current === version) setSnippets(items);
+    } catch (error) {
+      if (snippetAuthorityRef.current === authority && snippetRefreshVersionRef.current === version)
+        handleApiError(error);
+    } finally {
+      if (snippetAuthorityRef.current === authority && snippetRefreshVersionRef.current === version)
+        setSnippetsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    snippetMutationVersionRef.current += 1;
+    setSnippetMutationPending(false);
+    void refreshSnippets(true);
+  }, [canCallApi, currentUser?.id, token, snippetAuthority]);
 
   useEffect(() => {
     sessionFiltersRef.current = sessionFilters;
@@ -2649,6 +2710,11 @@ export function App() {
       setLoginPassword('');
     }
     localStorage.removeItem(tokenStorageKey);
+    snippetMutationVersionRef.current += 1;
+    setSnippetMutationPending(false);
+    setSnippetsLoading(false);
+    setSnippets([]);
+    snippetDirtyRef.current = false;
     setToken('');
     setDraftToken('');
     sessionStorage.removeItem(selectedSessionStorageKey);
@@ -2687,6 +2753,7 @@ export function App() {
       selectedEnvironmentRevisionId: '',
       selectedSkillId: '',
       selectedSkillRevisionId: '',
+      selectedSnippetId: '',
       sidebarPanel: 'sessions',
       isCreatingThread: false,
       setupGuideOpen: false,
@@ -2975,6 +3042,10 @@ export function App() {
 
   function confirmDiscardEditorChanges(): boolean {
     if (sidebarPanel === 'skills' && !skillsWorkspace.actions.confirmDiscard()) return false;
+    if (sidebarPanel === 'snippets' && snippetDirtyRef.current) {
+      if (!window.confirm('Discard unsaved snippet changes?')) return false;
+      snippetDirtyRef.current = false;
+    }
     if (sidebarPanel === 'environments' && environmentEditorDirtyRef.current) {
       if (!window.confirm('Discard unsaved environment changes?')) return false;
       setEnvironmentEditorDirty(false);
@@ -3432,6 +3503,117 @@ export function App() {
     setError(errorMessage(err));
   }
 
+  const canViewSnippets = Boolean(canCallApi && currentUser);
+  const { selectedSnippetId } = navigation;
+  const selectedSnippet = snippets.find((item) => item.id === selectedSnippetId) ?? null;
+  function selectSnippet(id: string) {
+    if (!skillsWorkspace.actions.navigateToSnippet(id)) return;
+    sessionStorage.setItem(sidebarPanelStorageKey, 'snippets');
+    if (!isDesktopViewport()) setSidebarOpen(false);
+  }
+  function openSnippets() {
+    if (!canViewSnippets) return;
+    selectSnippet(selectedSnippetId);
+    setSidebarCollapsed(false);
+    void refreshSnippets();
+  }
+  function snippetChanged(snippet: Snippet) {
+    if (!currentUser || snippet.ownerUserId !== currentUser.id || snippetAuthorityRef.current !== snippetAuthority)
+      return;
+    mergeSnippetIntoCache(snippet);
+    snippetDirtyRef.current = false;
+    if (selectedSnippetId !== snippet.id) {
+      sessionStorage.setItem(sidebarPanelStorageKey, 'snippets');
+      skillsWorkspace.actions.navigateToSnippet(snippet.id, true);
+    }
+  }
+  function mergeSnippetIntoCache(snippet: Snippet) {
+    snippetRefreshVersionRef.current += 1;
+    setSnippetsLoading(false);
+    setSnippets((items) => [snippet, ...items.filter((item) => item.id !== snippet.id)]);
+  }
+  async function saveSnippet(input: { snippetId?: string; name?: string; body?: string }): Promise<Snippet | null> {
+    if (snippetMutationPending) return null;
+    const authority = snippetAuthority;
+    const version = ++snippetMutationVersionRef.current;
+    const origin = {
+      authority,
+      version,
+      editorEpoch: snippetEditorEpochRef.current,
+      panel: navigation.sidebarPanel,
+      selectedSnippetId,
+    };
+    setSnippetMutationPending(true);
+    try {
+      const snippet = input.snippetId
+        ? await updateSnippet({
+            token,
+            snippetId: input.snippetId,
+            ...(input.name !== undefined ? { name: input.name } : {}),
+            ...(input.body !== undefined ? { body: input.body } : {}),
+          })
+        : await createSnippet({ token, name: input.name ?? '', body: input.body ?? '' });
+      const current = navigationRef.current;
+      const currentContext = {
+        authority: snippetAuthorityRef.current,
+        version: snippetMutationVersionRef.current,
+        editorEpoch: snippetEditorEpochRef.current,
+        panel: current.sidebarPanel,
+        selectedSnippetId: current.selectedSnippetId,
+      };
+      if (isSnippetMutationAuthoritative(origin, currentContext)) mergeSnippetIntoCache(snippet);
+      return isSnippetMutationCurrent(origin, currentContext) ? snippet : null;
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.status === 401 &&
+        snippetAuthorityRef.current === authority &&
+        snippetMutationVersionRef.current === version
+      ) {
+        handleApiError(error);
+        return null;
+      }
+      throw error;
+    } finally {
+      if (snippetMutationVersionRef.current === version) setSnippetMutationPending(false);
+    }
+  }
+  async function mutateSnippet(id: string, restore: boolean) {
+    if (snippetMutationPending) return;
+    if (!restore && id === selectedSnippetId && snippetDirtyRef.current) {
+      if (!window.confirm('Discard unsaved snippet changes?')) return;
+      snippetDirtyRef.current = false;
+    }
+    const authority = snippetAuthority;
+    const version = ++snippetMutationVersionRef.current;
+    const origin = {
+      authority,
+      version,
+      editorEpoch: snippetEditorEpochRef.current,
+      panel: navigation.sidebarPanel,
+      selectedSnippetId,
+    };
+    setSnippetMutationPending(true);
+    try {
+      const snippet = await (restore ? restoreSnippet : archiveSnippet)({ token, snippetId: id });
+      const current = navigationRef.current;
+      const currentContext = {
+        authority: snippetAuthorityRef.current,
+        version: snippetMutationVersionRef.current,
+        editorEpoch: snippetEditorEpochRef.current,
+        panel: current.sidebarPanel,
+        selectedSnippetId: current.selectedSnippetId,
+      };
+      if (isSnippetMutationAuthoritative(origin, currentContext)) mergeSnippetIntoCache(snippet);
+      if (isSnippetMutationCurrent(origin, currentContext)) snippetDirtyRef.current = false;
+    } catch (error) {
+      if (snippetAuthorityRef.current === authority && snippetMutationVersionRef.current === version)
+        handleApiError(error);
+    } finally {
+      if (snippetMutationVersionRef.current === version) setSnippetMutationPending(false);
+    }
+  }
+
   const sidebarNavigation = resolveSidebarNavigation({
     panel: sidebarPanel,
     showingSetupGuide,
@@ -3440,6 +3622,7 @@ export function App() {
       automations: canViewAutomations,
       environments: canViewEnvironments,
       skills: canViewSkills,
+      snippets: canViewSnippets,
     },
   });
   const footerProps: SidebarFooterProps = {
@@ -3448,6 +3631,7 @@ export function App() {
     canViewAutomations,
     canViewEnvironments,
     canViewSkills,
+    canViewSnippets,
     canViewSetup,
     health,
     navPage: sidebarNavigation.navPage,
@@ -3457,9 +3641,12 @@ export function App() {
     onOpenAutomations: openAutomationsPanel,
     onOpenEnvironments: openEnvironmentsPanel,
     onOpenSkills: skillsWorkspace.actions.open,
+    onOpenSnippets: openSnippets,
     onOpenSessions: showSessionsSidebar,
     onOpenSetup: openSetupGuide,
-    onSignOut: signOut,
+    onSignOut: () => {
+      if (confirmDiscardEditorChanges()) signOut();
+    },
     onThemeChange: setThemePreference,
   };
 
@@ -3577,6 +3764,20 @@ export function App() {
                     onCreateSkill={skillsWorkspace.actions.create}
                     onRestoreSkill={fireAndForget(skillsWorkspace.actions.restore)}
                     onSelectSkill={skillsWorkspace.actions.select}
+                  />
+                ) : sidebarPanel === 'snippets' && canViewSnippets ? (
+                  <SnippetsSidebar
+                    snippets={snippets}
+                    selectedId={selectedSnippetId}
+                    loading={snippetsLoading}
+                    mutationPending={snippetMutationPending}
+                    footerProps={footerProps}
+                    onSelect={selectSnippet}
+                    onCreate={() => selectSnippet('')}
+                    onBack={backToSessionsSidebar}
+                    onCollapse={collapseSidebar}
+                    onArchive={(id) => void mutateSnippet(id, false)}
+                    onRestore={(id) => void mutateSnippet(id, true)}
                   />
                 ) : (
                   <ThreadSidebar
@@ -3755,6 +3956,25 @@ export function App() {
                     onSelectRevision={skillsWorkspace.actions.selectRevision}
                     onError={handleApiError}
                   />
+                ) : sidebarPanel === 'snippets' && canViewSnippets ? (
+                  <SnippetsPanel
+                    snippet={selectedSnippet}
+                    selectedId={selectedSnippetId}
+                    loading={snippetsLoading}
+                    mutationPending={snippetMutationPending}
+                    showOpenSidebar={!sidebarOpen}
+                    onOpenSidebar={expandSidebar}
+                    onSave={saveSnippet}
+                    onChanged={snippetChanged}
+                    onArchive={(id) => void mutateSnippet(id, false)}
+                    onRestore={(id) => void mutateSnippet(id, true)}
+                    onDirtyChange={(dirty) => {
+                      snippetDirtyRef.current = dirty;
+                    }}
+                    onError={(error) => {
+                      if (snippetAuthorityRef.current === snippetAuthority) handleApiError(error);
+                    }}
+                  />
                 ) : isCreatingThread || !selectedSession ? (
                   <NewThreadPanel
                     canCallApi={canCreateThread}
@@ -3783,6 +4003,8 @@ export function App() {
                     defaultReasoningLevel={defaultReasoningLevel}
                     skills={skillsWorkspace.model.newSessionCatalog.skills}
                     skillsEnabled={skillsWorkspace.model.newSessionCatalog.enabled}
+                    snippets={snippets}
+                    snippetsEnabled={Boolean(currentUser)}
                     skillsLoading={skillsWorkspace.model.newSessionCatalog.loading}
                     skillError={skillsWorkspace.model.newSessionCatalog.error}
                     showOpenSidebar={!sidebarOpen}
@@ -3925,6 +4147,8 @@ export function App() {
                             defaultReasoningLevel={defaultReasoningLevel}
                             skills={skillsWorkspace.model.sessionCatalog.skills}
                             skillsEnabled={canViewSkills}
+                            snippets={snippets}
+                            snippetsEnabled={Boolean(currentUser)}
                             skillsLoading={skillsWorkspace.model.sessionCatalog.loading}
                             skillError={skillsWorkspace.model.sessionCatalog.error}
                             onCodebaseChange={handleFollowUpCodebaseChange}
@@ -4056,6 +4280,7 @@ function setResourceSearchParam(param: 'session' | 'group' | 'automation' | 'env
   url.searchParams.delete('automation');
   url.searchParams.delete('environment');
   url.searchParams.delete('skill');
+  url.searchParams.delete('snippet');
   url.searchParams.delete('revision');
   url.searchParams.set(param, value);
   window.history.replaceState({}, '', url);
@@ -4072,6 +4297,7 @@ function clearResourceSearchParams() {
   url.searchParams.delete('automation');
   url.searchParams.delete('environment');
   url.searchParams.delete('skill');
+  url.searchParams.delete('snippet');
   url.searchParams.delete('revision');
   window.history.replaceState({}, '', url);
 }
@@ -4162,6 +4388,7 @@ function hasResourceSearchParam(): boolean {
     searchParams.has('group') ||
     searchParams.has('automation') ||
     searchParams.has('environment') ||
+    searchParams.has('snippet') ||
     searchParams.has('skill')
   );
 }

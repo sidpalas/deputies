@@ -22,6 +22,7 @@ export type SkillWorkspaceNavigation = {
   selectedEnvironmentRevisionId: string;
   selectedSkillId: string;
   selectedSkillRevisionId: string;
+  selectedSnippetId: string;
 };
 
 export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
@@ -158,6 +159,18 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
     );
   }
 
+  function navigateToSnippet(snippetId: string, replace = false): boolean {
+    const nextNavigation = {
+      ...input.navigation,
+      setupGuideOpen: false,
+      groupsPanelOpen: false,
+      sidebarPanel: 'snippets' as const,
+      isCreatingThread: false,
+      selectedSnippetId: snippetId,
+    };
+    return navigation.navigate(nextNavigation, { type: 'snippet', id: snippetId }, replace);
+  }
+
   function open() {
     if (!canView) return;
     if (input.navigation.sidebarPanel !== 'skills' && !confirmDiscard()) return;
@@ -274,6 +287,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
       select,
       selectRevision: (revisionId: string) => navigateToSkill(selectedSkillId, revisionId),
       navigateToEnvironment,
+      navigateToSnippet,
       saved,
       changed,
       archive: admin.archive,
@@ -289,7 +303,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
 
 function clearResourceSearchParams() {
   const url = new URL(window.location.href);
-  for (const param of ['session', 'group', 'automation', 'environment', 'skill', 'revision']) {
+  for (const param of ['session', 'group', 'automation', 'environment', 'skill', 'snippet', 'revision']) {
     url.searchParams.delete(param);
   }
   window.history.replaceState(window.history.state, '', url);

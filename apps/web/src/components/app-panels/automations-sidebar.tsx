@@ -1,11 +1,11 @@
 import { useMemo, useState, type SyntheticEvent } from 'react';
-import { Archive, ChevronDown, CornerUpLeft, PanelLeftClose, Plus, RotateCcw, X } from 'lucide-react';
+import { ChevronDown, CornerUpLeft, PanelLeftClose, Plus, X } from 'lucide-react';
 import type { Automation, Group } from '../../api.js';
 import { archivedAutomationsOpenStorageKey } from '../../app-helpers.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
-import { formatDate } from './shared.js';
+import { formatDate, SidebarArchiveRestoreAction } from './shared.js';
 import { SidebarFooter, type SidebarFooterProps } from './sidebar-footer.js';
 
 export function AutomationsSidebar(props: {
@@ -188,28 +188,22 @@ function AutomationSidebarButton(props: {
         </span>
       </button>
       {props.automation.canManage && !props.automation.archivedAt && props.onArchive ? (
-        <Button
+        <SidebarArchiveRestoreAction
+          archived={false}
+          resourceLabel="automation"
+          resourceType="automation"
           className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-          variant="ghost"
-          size="sm"
           onClick={() => props.onArchive?.(props.automation.id)}
-          aria-label="Archive automation"
-          title="Archive automation"
-        >
-          <Archive className="h-3.5 w-3.5" />
-        </Button>
+        />
       ) : null}
       {props.automation.canManage && props.automation.archivedAt && props.onUnarchive ? (
-        <Button
+        <SidebarArchiveRestoreAction
+          archived
+          resourceLabel="automation"
+          resourceType="automation"
           className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-          variant="ghost"
-          size="sm"
           onClick={() => props.onUnarchive?.(props.automation.id)}
-          aria-label="Restore automation"
-          title="Restore automation"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-        </Button>
+        />
       ) : null}
     </div>
   );

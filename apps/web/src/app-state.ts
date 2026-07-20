@@ -11,6 +11,30 @@ import {
 export type ActiveProgress = { text: string; omitted: number; lastSequence?: number };
 export type ActiveProgressByMessageId = Record<string, ActiveProgress>;
 
+export type SnippetMutationContext = {
+  authority: string;
+  version: number;
+  editorEpoch: number;
+  panel: string;
+  selectedSnippetId: string;
+};
+
+export function isSnippetMutationAuthoritative(
+  origin: Pick<SnippetMutationContext, 'authority' | 'version'>,
+  current: Pick<SnippetMutationContext, 'authority' | 'version'>,
+): boolean {
+  return current.authority === origin.authority && current.version === origin.version;
+}
+
+export function isSnippetMutationCurrent(origin: SnippetMutationContext, current: SnippetMutationContext): boolean {
+  return (
+    isSnippetMutationAuthoritative(origin, current) &&
+    current.editorEpoch === origin.editorEpoch &&
+    current.panel === origin.panel &&
+    current.selectedSnippetId === origin.selectedSnippetId
+  );
+}
+
 const activeProgressMaxChars = 20_000;
 
 export function upsertEvent(events: AgentEvent[], event: AgentEvent): AgentEvent[] {

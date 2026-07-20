@@ -46,6 +46,24 @@ Managed matches are server-pinned to the current revision when the integration m
 
 Integrations discard caller-supplied `context.skills` and `context.skillRefs`; only the server's own lookup may attach canonical skill context and source provenance. At run time, managed historical pins still require live ownership, sharing, enabled, archive, owner-group, and message-author authorization. `skills_loaded` is the canonical resolution/discovery audit source, while `skill_invoked` records actual use with managed revision identity when applicable.
 
+### Prompt snippets and the cross-source skill contract
+
+Personal prompt snippets are a web-composer convenience, not an integration primitive. The web client resolves `//name` at the caret and replaces that token with editable body text before submission. The submitted message contains only the expanded prompt: it carries no snippet ID, name, provenance, or back-reference. Control-plane ingress and Slack, GitHub, generic webhook, automation, and future integration adapters must not resolve `//` tokens or read a user's personal snippet library; outside the web composer, `//name` remains ordinary text.
+
+Skills are the portable behavior primitive. Every source that supports skill invocation must normalize an authorized selection to the same message-scoped `SkillInvocationRef[]` representation, persisted as aligned `context.skills` and `context.skillRefs` values:
+
+```ts
+type SkillInvocationRef = {
+  id: string;
+  name: string;
+  revisionId?: string;
+};
+```
+
+Web pickers may submit selected refs, while integration adapters may derive them from an explicitly addressed command or source configuration. In both cases the server remains the trust boundary: it resolves or canonicalizes the selection, authorizes it for the message actor and target context, pins managed skills to the current revision, and leaves repository skills revisionless. Provider-specific command syntax must not produce a provider-specific execution contract.
+
+If reusable integration text is needed later, model it as an explicitly owned and shared integration or automation template rather than exposing personal snippets to external sources.
+
 ## Cross-Integration Learnings
 
 Slack, GitHub, and the web UI now exercise the same product loop from different entry points. New integrations should follow these constraints instead of creating source-specific side channels:

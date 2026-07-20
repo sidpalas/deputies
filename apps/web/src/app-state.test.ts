@@ -1,4 +1,9 @@
-import { applyFrozenSessionOrder, sortSessionsByLastActivity } from './app-state.js';
+import {
+  applyFrozenSessionOrder,
+  isSnippetMutationAuthoritative,
+  isSnippetMutationCurrent,
+  sortSessionsByLastActivity,
+} from './app-state.js';
 import type { Session } from './api.js';
 
 describe('session ordering helpers', () => {
@@ -53,6 +58,35 @@ describe('session ordering helpers', () => {
         (item) => item.id,
       ),
     ).toEqual([active.id, archived.id]);
+  });
+});
+
+describe('snippet mutation authority', () => {
+  const origin = {
+    authority: 'user-a\u0000token',
+    version: 3,
+    editorEpoch: 7,
+    panel: 'snippets',
+    selectedSnippetId: 'one',
+  };
+
+  it('rejects a save response after another snippet editor is opened', () => {
+    expect(isSnippetMutationCurrent(origin, { ...origin, selectedSnippetId: 'two' })).toBe(false);
+  });
+
+  it('rejects a create response after navigating away', () => {
+    const createOrigin = { ...origin, selectedSnippetId: '' };
+    expect(isSnippetMutationCurrent(createOrigin, { ...createOrigin, panel: 'sessions' })).toBe(false);
+  });
+
+  it('rejects a response after the authenticated identity changes', () => {
+    expect(isSnippetMutationCurrent(origin, { ...origin, authority: 'user-b\u0000token' })).toBe(false);
+  });
+
+  it('rejects leave-and-return editor effects while retaining cache authority', () => {
+    const returned = { ...origin, editorEpoch: origin.editorEpoch + 2 };
+    expect(isSnippetMutationCurrent(origin, returned)).toBe(false);
+    expect(isSnippetMutationAuthoritative(origin, returned)).toBe(true);
   });
 });
 

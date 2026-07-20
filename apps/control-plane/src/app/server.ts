@@ -35,8 +35,10 @@ import { type GitHubIssueContextFetcher } from '../integrations/github/issue-con
 import { type GitHubReactionSender } from '../integrations/github/reaction-sender.js';
 import { MessageService, MessageServiceError } from '../messages/service.js';
 import { SandboxCleanupService, SandboxKeepaliveService, SandboxLifecycleService } from '../sandbox/service.js';
+import { SnippetService } from '../snippets/service.js';
 import { sandboxRuntimeId } from '../sandbox/runtime.js';
 import type { SandboxProvider } from '../sandbox/types.js';
+import { registerSnippetRoutes } from './snippet-routes.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { SkillService } from '../skills/service.js';
@@ -120,6 +122,7 @@ export type AppServices = {
   messages: MessageService;
   automations: AutomationService;
   skills: SkillService;
+  snippets: SnippetService;
   artifacts: ArtifactService;
   externalResources: ExternalResourceService;
   genericWebhooks: GenericWebhookService;
@@ -152,6 +155,7 @@ export function createServices(
   const environments = new EnvironmentService(store);
   const automations = new AutomationService(store, sessions, messages, environments);
   const skills = new SkillService(store);
+  const snippets = new SnippetService(store);
   const services: AppServices = {
     store,
     events,
@@ -160,6 +164,7 @@ export function createServices(
     messages,
     automations,
     skills,
+    snippets,
     artifacts: new ArtifactService(store, events, options.artifactObjectStorage),
     externalResources: new ExternalResourceService(store, events),
     genericWebhooks: new GenericWebhookService(store, sessions, messages, skills, {
@@ -228,6 +233,8 @@ export function createApp(config: AppConfig, services = createServices()) {
     app.use('/skills/*', apiAuthMiddleware(config, services.store));
     app.use('/skills', apiAuthMiddleware(config, services.store));
   }
+  app.use('/snippets/*', apiAuthMiddleware(config, services.store));
+  app.use('/snippets', apiAuthMiddleware(config, services.store));
   app.use('/environments/*', apiAuthMiddleware(config, services.store));
   app.use('/environments', apiAuthMiddleware(config, services.store));
   app.use('/repositories/*', apiAuthMiddleware(config, services.store));
@@ -403,6 +410,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   });
   registerEnvironmentRoutes(app, config, services);
   registerSkillRoutes(app, config, services);
+  registerSnippetRoutes(app, config, services);
   registerTelemetryRoutes(app, config);
 
   registerRepositoryRoutes(app, config, services);

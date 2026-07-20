@@ -268,11 +268,13 @@ The web entrypoint should proxy these paths to the control-plane API:
 /health
 /auth*
 /automations*
+/environments*
 /sessions*
 /events*
 /groups*
 /repositories*
 /skills*
+/snippets*
 /models*
 /setup*
 /telemetry*

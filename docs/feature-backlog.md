@@ -6,7 +6,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 - GitHub collaborator permission gating in addition to the current repository, user, org, and trigger-phrase gates.
 - GitHub label-based triggers for teams that want non-mention workflows.
-- Record existing or updated GitHub PRs as external resources, not only PRs created through `gh pr create`; include cases like `gh pr edit`, `gh pr view/checkout`, and branch pushes that resolve to an open PR.
+- Expand the existing `gh pr create` external-resource recording to existing or updated GitHub PRs, including `gh pr edit`, `gh pr view/checkout`, and branch pushes that resolve to an open PR.
 - Continue consolidating shared integration utilities, especially allowlist helpers, prompt section rendering, and callback target parsing before adding the next major integration.
 - Source-agnostic start/queued/final-response lifecycle so integrations add lightweight start signals while callback senders own exactly one final external reply.
 - Global runner/agent instruction injection for integration behavior that should not appear in chat-visible source prompts.
@@ -16,8 +16,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 ## Web UI
 
 - Saved session views/grouping for common filters, sources, repositories, and teams.
-- User-selectable model, repository, branch, and execution settings.
-- Repository picker with saved defaults per user/team/source.
+- Saved codebase, branch, model, and reasoning defaults per user/group/integration source, building on the existing environment/repository picker and per-session controls.
 - Audit and document preview-origin isolation after signed preview auth, including whether separate eTLD+1 deployment remains required for defense-in-depth against untrusted preview content.
 - Surface sandbox cleanup events and failures more clearly.
 - Expand callback delivery UI with filtering and clearer retry/failure history.
@@ -30,7 +29,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Agent authentication to external services: instance-level remote MCP/Executor support is implemented through `MCP_SERVERS`; remaining work is per-user/per-access-group MCP configuration, CLI credential policy, API-token lifecycle, and short-lived provider tokens.
 - Credential scoping and injection policy for tools, commands, per-user MCP servers, and sandbox environments.
 - Sandbox credential broker for GitHub repository operations: keep GitHub App installation tokens outside the sandbox trust domain, route `git` smart-HTTP and `gh` operations through a control-plane or sandbox-bridge proxy, and enforce push/PR policy server-side with opaque per-session sandbox credentials. Treat this as the gate for safely preparing untrusted PR branches or forks; until then repository setup assumes trusted, allowlisted repositories.
-- First-class multi-repository session support, including environments made of one or more writable repositories, a stable primary repository as the default entry point, and a session/run-scoped active repository for repository-aware actions.
+- Named agent presets that bundle versioned agent instructions with model/reasoning defaults, managed skills, environment/runtime defaults, and scoped tool or MCP policy. Keep the preset separate from stored prompt templates: a preset defines how the agent works and may reference a default prompt, while the rendered prompt remains user-visible session input.
 - Prompt templates and snapshot tests for Slack/GitHub/Linear inputs.
 - Better repo resolution from Slack/GitHub/Linear context.
 - Setup/install hook observability beyond `repository_ready`.
@@ -38,14 +37,13 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 ## Automations
 
-- Automatic stale session archival when associated GitHub PRs are closed, plus an agent-accessible archive-thread tool for direct-to-main workflows after successful commit/push completion.
-- Scheduled prompts for a session, repository, or integration source.
-- Recurring tasks with cron-like schedules, timezone support, pause/resume, and failure backoff.
+- Automatic stale session archival when associated GitHub PRs are closed; direct-to-main workflows can already archive their current or child sessions through the `deputies` control tool.
+- Scheduled follow-up prompts for an existing session and integration-source-aware scheduled callbacks, beyond the current automation-per-invocation session creation.
+- Timezone-aware schedules and failure backoff for the existing UTC cron automations.
 - One-off delayed tasks and reminders.
-- Automation ownership, audit trail, run history, and last/next-run visibility in the web UI.
+- Automation definition and invocation changes in the product-wide audit trail; ownership, invocation history, and next-run visibility already exist.
 - Integration-triggered automations such as daily Slack summaries, weekly repository health checks, and scheduled GitHub issue/PR sweeps.
-- Guardrails for max frequency, concurrency, allowed repositories/sources, and external callback behavior.
-- Scheduler loop that enqueues normal messages into sessions instead of bypassing session/message/run invariants.
+- Guardrails beyond the existing no-overlap default: max frequency, configurable concurrency, allowed repositories/sources, and external callback behavior.
 
 ## Sandboxes
 
@@ -68,7 +66,6 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Observability pass across control-plane, workers, sandbox orchestrators, and sandbox bridge: structured request/lifecycle logs with session/run/sandbox correlation IDs, sandbox create/connect/exec/preview/destroy audit events, useful latency/error metrics, and optional trace propagation for HTTP orchestrator and provider calls.
 - Pending-message, active-run, and worker-throughput dashboards.
 - Event table pagination and session/event retention policies.
-- Deployment guides for Railway, Docker-Compose, and Kubernetes.
 - Migration/release runbooks.
 - Production readiness checklist.
 

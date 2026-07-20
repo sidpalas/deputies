@@ -7,6 +7,11 @@ import {
   listSkillRevisions,
   setSkillShares,
   updateAutomation,
+  createSnippet,
+  archiveSnippet,
+  listSnippets,
+  restoreSnippet,
+  updateSnippet,
 } from './api.js';
 
 describe('automation API requests', () => {
@@ -71,6 +76,43 @@ describe('automation API requests', () => {
       repository: 'acme/api',
       branch: 'main',
     });
+  });
+});
+
+describe('snippet API requests', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('lists personal snippets and creates name/body only', async () => {
+    const snippet = { id: 'snippet-1', name: 'review', body: 'Review it' };
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ snippets: [snippet] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ snippet }), { status: 201 }));
+    await expect(listSnippets({ token: 'token' })).resolves.toEqual([snippet]);
+    await createSnippet({ token: 'token', name: 'review', body: 'Review it' });
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0]), window.location.href).pathname).toBe('/snippets');
+    expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toEqual({ name: 'review', body: 'Review it' });
+  });
+
+  it('updates, archives, and restores snippets with the expected paths and methods', async () => {
+    const snippet = { id: 'snippet-1', name: 'review', body: 'Review it' };
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(JSON.stringify({ snippet }), { status: 200 }));
+    await updateSnippet({ token: 'token', snippetId: snippet.id, body: 'Updated' });
+    await archiveSnippet({ token: 'token', snippetId: snippet.id });
+    await restoreSnippet({ token: 'token', snippetId: snippet.id });
+    expect(
+      fetchMock.mock.calls.map(([url, init]) => [
+        new URL(String(url), window.location.href).pathname,
+        init?.method,
+        JSON.parse(init?.body as string),
+      ]),
+    ).toEqual([
+      ['/snippets/snippet-1', 'PATCH', { body: 'Updated' }],
+      ['/snippets/snippet-1/archive', 'POST', {}],
+      ['/snippets/snippet-1/restore', 'POST', {}],
+    ]);
   });
 });
 

@@ -36,6 +36,7 @@ import type {
   CreateSessionWithFirstMessageInput,
   CreateSessionWithFirstMessageResult,
   CreateSkillRecord,
+  CreateSnippetRecord,
   ClaimedMessage,
   ClaimedMessageBatch,
   ListAutomationInvocationsOptions,
@@ -64,9 +65,11 @@ import type {
   SkillRevisionSelection,
   SkillRunCandidate,
   SkillShareMode,
+  SnippetRecord,
   UpdateAutomationRecord,
   UpdateEnvironmentRecord,
   UpdateSkillRecord,
+  UpdateSnippetRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -120,7 +123,65 @@ export class MemoryStore implements AppStore {
   private readonly integrationDeliveries = new Map<string, IntegrationDeliveryRecord>();
   private readonly sessionSearchDocs = new Map<string, SessionSearchDocInput>();
   private readonly sessionStars = new Map<string, Set<string>>();
+  private readonly snippets = new Map<string, SnippetRecord>();
   private searchIndexCursor = 0;
+
+  async createSnippet(record: CreateSnippetRecord): Promise<SnippetRecord> {
+    if (!this.authUsers.has(record.ownerUserId)) throw new Error(`User does not exist: ${record.ownerUserId}`);
+    this.assertSnippetName(record.ownerUserId, record.name);
+    this.snippets.set(record.id, { ...record });
+    return { ...record };
+  }
+
+  async getSnippetForUser(id: string, ownerUserId: string): Promise<SnippetRecord | null> {
+    const value = this.snippets.get(id);
+    return value?.ownerUserId === ownerUserId ? { ...value } : null;
+  }
+
+  async listSnippetsForUser(ownerUserId: string): Promise<SnippetRecord[]> {
+    return [...this.snippets.values()]
+      .filter((item) => item.ownerUserId === ownerUserId)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((item) => ({ ...item }));
+  }
+
+  async updateSnippet(record: UpdateSnippetRecord): Promise<SnippetRecord | null> {
+    const existing = this.snippets.get(record.id);
+    if (!existing || existing.ownerUserId !== record.ownerUserId || existing.archivedAt) return null;
+    if (record.name !== undefined) this.assertSnippetName(record.ownerUserId, record.name, record.id);
+    const updated = { ...existing, ...record };
+    this.snippets.set(record.id, updated);
+    return { ...updated };
+  }
+
+  async archiveSnippet(id: string, ownerUserId: string, archivedAt: Date): Promise<SnippetRecord | null> {
+    const existing = this.snippets.get(id);
+    if (!existing || existing.ownerUserId !== ownerUserId) return null;
+    if (existing.archivedAt) return { ...existing };
+    const updated = { ...existing, archivedAt: existing.archivedAt ?? archivedAt, updatedAt: archivedAt };
+    this.snippets.set(id, updated);
+    return { ...updated };
+  }
+
+  async restoreSnippet(id: string, ownerUserId: string, updatedAt: Date): Promise<SnippetRecord | null> {
+    const existing = this.snippets.get(id);
+    if (!existing || existing.ownerUserId !== ownerUserId) return null;
+    if (!existing.archivedAt) return { ...existing };
+    this.assertSnippetName(ownerUserId, existing.name, id);
+    const { archivedAt: _, ...active } = existing;
+    const updated = { ...active, updatedAt };
+    this.snippets.set(id, updated);
+    return { ...updated };
+  }
+
+  private assertSnippetName(ownerUserId: string, name: string, exceptId?: string): void {
+    if (
+      [...this.snippets.values()].some(
+        (item) => item.ownerUserId === ownerUserId && item.name === name && !item.archivedAt && item.id !== exceptId,
+      )
+    )
+      throw new StoreConflictError('snippet_name_exists', 'An active snippet with this name already exists');
+  }
 
   async upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord> {
     const accountKey = authAccountKey(record.provider, record.providerAccountId);

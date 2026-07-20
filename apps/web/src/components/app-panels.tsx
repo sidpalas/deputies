@@ -20,6 +20,8 @@ export { MessageComposer } from './app-panels/message-composer.js';
 export { NewThreadPanel } from './app-panels/new-thread-panel.js';
 export { SkillsPanel } from './app-panels/skills-panel.js';
 export { SkillsSidebar } from './app-panels/skills-sidebar.js';
+export { SnippetsPanel } from './app-panels/snippets-panel.js';
+export { SnippetsSidebar } from './app-panels/snippets-sidebar.js';
 export type { SidebarFooterProps } from './app-panels/sidebar-footer.js';
 export { SetupGuidePanel } from './app-panels/setup-guide-panel.js';
 export { ThreadHeader } from './app-panels/thread-header.js';

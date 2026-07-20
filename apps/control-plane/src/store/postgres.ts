@@ -26,6 +26,7 @@ import type {
   CreateSessionWithFirstMessageInput,
   CreateSessionWithFirstMessageResult,
   CreateSkillRecord,
+  CreateSnippetRecord,
   CreateWebhookSourceRecord,
   EventDeltaCompactionInput,
   EnvironmentWithDetailsRecord,
@@ -64,9 +65,11 @@ import type {
   SkillRevisionSelection,
   SkillRunCandidate,
   SkillShareMode,
+  SnippetRecord,
   UpdateAutomationRecord,
   UpdateEnvironmentRecord,
   UpdateSkillRecord,
+  UpdateSnippetRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
 } from './types.js';
@@ -161,6 +164,93 @@ export class PostgresStore implements AppStore {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  async createSnippet(record: CreateSnippetRecord): Promise<SnippetRecord> {
+    try {
+      const result = await this.pool.query(
+        `INSERT INTO snippets (id, owner_user_id, name, body, archived_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [
+          record.id,
+          record.ownerUserId,
+          record.name,
+          record.body,
+          record.archivedAt ?? null,
+          record.createdAt,
+          record.updatedAt,
+        ],
+      );
+      return toSnippet(result.rows[0]);
+    } catch (error) {
+      throwSnippetConflict(error);
+    }
+  }
+
+  async getSnippetForUser(id: string, ownerUserId: string): Promise<SnippetRecord | null> {
+    const result = await this.pool.query('SELECT * FROM snippets WHERE id = $1 AND owner_user_id = $2', [
+      id,
+      ownerUserId,
+    ]);
+    return result.rows[0] ? toSnippet(result.rows[0]) : null;
+  }
+
+  async listSnippetsForUser(ownerUserId: string): Promise<SnippetRecord[]> {
+    const result = await this.pool.query('SELECT * FROM snippets WHERE owner_user_id = $1 ORDER BY name', [
+      ownerUserId,
+    ]);
+    return result.rows.map(toSnippet);
+  }
+
+  async updateSnippet(record: UpdateSnippetRecord): Promise<SnippetRecord | null> {
+    try {
+      const assignments = ['updated_at = $3'];
+      const values: unknown[] = [record.id, record.ownerUserId, record.updatedAt];
+      if (record.name !== undefined) {
+        values.push(record.name);
+        assignments.push(`name = $${values.length}`);
+      }
+      if (record.body !== undefined) {
+        values.push(record.body);
+        assignments.push(`body = $${values.length}`);
+      }
+      const result = await this.pool.query(
+        `UPDATE snippets SET ${assignments.join(', ')}
+         WHERE id=$1 AND owner_user_id=$2 AND archived_at IS NULL RETURNING *`,
+        values,
+      );
+      return result.rows[0] ? toSnippet(result.rows[0]) : null;
+    } catch (error) {
+      throwSnippetConflict(error);
+    }
+  }
+
+  async archiveSnippet(id: string, ownerUserId: string, archivedAt: Date): Promise<SnippetRecord | null> {
+    const result = await this.pool.query(
+      `UPDATE snippets
+       SET archived_at=COALESCE(archived_at, $3),
+           updated_at=CASE WHEN archived_at IS NULL THEN $3 ELSE updated_at END
+       WHERE id=$1 AND owner_user_id=$2
+       RETURNING *`,
+      [id, ownerUserId, archivedAt],
+    );
+    return result.rows[0] ? toSnippet(result.rows[0]) : null;
+  }
+
+  async restoreSnippet(id: string, ownerUserId: string, updatedAt: Date): Promise<SnippetRecord | null> {
+    try {
+      const result = await this.pool.query(
+        `UPDATE snippets
+         SET archived_at=NULL,
+             updated_at=CASE WHEN archived_at IS NOT NULL THEN $3 ELSE updated_at END
+         WHERE id=$1 AND owner_user_id=$2
+         RETURNING *`,
+        [id, ownerUserId, updatedAt],
+      );
+      return result.rows[0] ? toSnippet(result.rows[0]) : null;
+    } catch (error) {
+      throwSnippetConflict(error);
+    }
   }
 
   async listenEvents(onEvent: (event: EventRecord) => void): Promise<PostgresEventListener> {
@@ -3656,4 +3746,33 @@ function isUniqueViolation(error: unknown, constraint: string): boolean {
     'constraint' in error &&
     error.constraint === constraint,
   );
+}
+
+type SnippetRow = {
+  id: string;
+  owner_user_id: string;
+  name: string;
+  body: string;
+  archived_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+function toSnippet(row: SnippetRow): SnippetRecord {
+  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    name: row.name,
+    body: row.body,
+    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function throwSnippetConflict(error: unknown): never {
+  if (isUniqueViolation(error, 'snippets_active_owner_name_unique')) {
+    throw new StoreConflictError('snippet_name_exists', 'An active snippet with this name already exists');
+  }
+  throw error;
 }

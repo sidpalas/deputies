@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SyntheticEvent } from 'react';
 import {
-  Archive,
   ChevronDown,
   FilePlus2,
   ListTree,
@@ -9,7 +8,6 @@ import {
   PanelLeftClose,
   Plus,
   RefreshCw,
-  RotateCcw,
   Star,
   X,
   type LucideIcon,
@@ -20,7 +18,13 @@ import { cn } from '../../lib/utils.js';
 import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
-import { formatDate, sessionDisplayStatus, sessionDisplayTooltip, statusTextClass } from './shared.js';
+import {
+  formatDate,
+  sessionDisplayStatus,
+  sessionDisplayTooltip,
+  SidebarArchiveRestoreAction,
+  statusTextClass,
+} from './shared.js';
 import { SidebarFooter, type SidebarFooterProps } from './sidebar-footer.js';
 
 type SessionFilters = {
@@ -783,30 +787,22 @@ function SessionButton(props: {
               <Star className={cn('h-3.5 w-3.5', props.session.starred && 'fill-current text-warning')} />
             </Button>
             {canArchive ? (
-              <Button
+              <SidebarArchiveRestoreAction
+                archived={false}
+                resourceLabel="session"
+                resourceType="session"
                 className="h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-destructive md:pointer-events-none md:opacity-0 md:shadow-none md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
-                variant="ghost"
-                size="icon"
-                type="button"
                 onClick={archiveSession}
-                aria-label="Archive session"
-                title="Archive session"
-              >
-                <Archive className="h-3.5 w-3.5" />
-              </Button>
+              />
             ) : null}
             {canRestore ? (
-              <Button
+              <SidebarArchiveRestoreAction
+                archived
+                resourceLabel="session"
+                resourceType="session"
                 className="h-5 w-5 bg-card/90 p-0 text-muted-foreground shadow-sm hover:text-foreground md:pointer-events-none md:opacity-0 md:shadow-none md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
-                variant="ghost"
-                size="icon"
-                type="button"
                 onClick={restoreSession}
-                aria-label="Restore session"
-                title="Restore session"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </Button>
+              />
             ) : null}
           </div>
         ) : null}

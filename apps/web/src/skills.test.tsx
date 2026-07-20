@@ -1,9 +1,14 @@
 import { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { Group, Skill } from './api.js';
+import type { Group, Skill, Snippet } from './api.js';
 import { MessageComposer } from './components/app-panels/message-composer.js';
 import { NewThreadPanel } from './components/app-panels/new-thread-panel.js';
-import { prepareSkillSubmission, useSkillInvocationDraft } from './components/app-panels/skill-invocation-draft.js';
+import {
+  matchingSkills,
+  prepareSkillSubmission,
+  skillInvocationQueryAtCaret,
+  useSkillInvocationDraft,
+} from './components/app-panels/skill-invocation-draft.js';
 import { SkillPicker } from './components/app-panels/skill-picker.js';
 import { SkillsPanel } from './components/app-panels/skills-panel.js';
 import { SkillsSidebar } from './components/app-panels/skills-sidebar.js';
@@ -35,6 +40,15 @@ const revisionedSkill: Skill = {
   currentRevisionNumber: 2,
 };
 
+const snippet: Snippet = {
+  id: 'snippet-1',
+  ownerUserId: 'user-1',
+  name: 'review-pr',
+  body: 'Review this pull request',
+  createdAt: '2026-07-15T10:00:00.000Z',
+  updatedAt: '2026-07-15T10:00:00.000Z',
+};
+
 const group: Group = {
   id: 'group-1',
   name: 'Platform',
@@ -52,6 +66,21 @@ const group: Group = {
 afterEach(() => {
   vi.restoreAllMocks();
   window.history.replaceState({}, '', '/');
+});
+
+it('matches standalone skill queries at the caret but rejects snippets, paths, and URLs', () => {
+  expect(matchingSkills([skill], [], '/rev')).toEqual([skill]);
+  expect(matchingSkills([skill], [], 'Please /rev')).toEqual([skill]);
+  expect(matchingSkills([skill], [], 'First paragraph\n\n/rev')).toEqual([skill]);
+  expect(skillInvocationQueryAtCaret('Before /review-change after', 11)).toEqual({
+    start: 7,
+    end: 21,
+    query: 'rev',
+  });
+
+  for (const prompt of ['//review', 'https://example.com', 'path/review', 'some/review']) {
+    expect(skillInvocationQueryAtCaret(prompt, prompt.length)).toBeNull();
+  }
 });
 
 it('opens the picker from a slash at position zero and supports chip removal', () => {
@@ -72,8 +101,20 @@ it('opens the picker from a slash at position zero and supports chip removal', (
 
   render(<Harness />);
   const list = screen.getByRole('listbox', { name: 'Available skills' });
-  expect(list.parentElement).not.toHaveClass('absolute');
-  expect(list).toHaveClass('h-[clamp(8rem,35dvh,16rem)]', 'overflow-auto');
+  expect(list.parentElement).toHaveClass(
+    'absolute',
+    'bottom-full',
+    'left-0',
+    'right-0',
+    'rounded-t-md',
+    'border',
+    'p-2',
+    'shadow-2xl',
+    'ring-1',
+    'ring-foreground/20',
+  );
+  expect(list.parentElement).not.toHaveClass('left-3', 'right-3');
+  expect(list).toHaveClass('max-h-[clamp(8rem,35dvh,16rem)]', 'overflow-auto');
   const firstOption = screen.getByRole('option', { name: /review-change/i });
   expect(firstOption).toHaveClass('bg-accent');
   expect(firstOption).toHaveAttribute('aria-selected', 'true');
@@ -87,13 +128,151 @@ it('selects the first slash match on Enter without sending the message', () => {
   const onSubmit = vi.fn(async () => true);
   render(<MessageComposer {...messageComposerProps(onSubmit)} />);
 
-  const textarea = screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  const textarea = screen.getByPlaceholderText<HTMLTextAreaElement>(
+    'Ask your deputy to investigate, change code, or follow up...',
+  );
   fireEvent.change(textarea, { target: { value: '/rev' } });
   fireEvent.keyDown(textarea, { key: 'Enter' });
 
   expect(onSubmit).not.toHaveBeenCalled();
   expect(textarea).toHaveValue('');
   expect(screen.getByRole('button', { name: 'Remove review-change skill' })).toBeInTheDocument();
+});
+
+it('attaches a skill from the middle of a follow-up and removes only its token', () => {
+  const onSubmit = vi.fn(async () => true);
+  render(<MessageComposer {...messageComposerProps(onSubmit)} />);
+
+  const textarea = screen.getByPlaceholderText<HTMLTextAreaElement>(
+    'Ask your deputy to investigate, change code, or follow up...',
+  );
+  fireEvent.change(textarea, { target: { value: 'Please /rev carefully.' } });
+  textarea.setSelectionRange(11, 11);
+  fireEvent.select(textarea);
+
+  expect(screen.getByRole('listbox', { name: 'Available skills' })).toBeInTheDocument();
+  fireEvent.keyDown(textarea, { key: 'Enter' });
+
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(textarea).toHaveValue('Please  carefully.');
+  expect(textarea).toHaveFocus();
+  expect(textarea.selectionStart).toBe(7);
+  expect(screen.getByRole('button', { name: 'Remove review-change skill' })).toBeInTheDocument();
+});
+
+it('attaches a mid-input skill in the new-thread composer and preserves text after the caret', () => {
+  const onSubmit = vi.fn(async () => true);
+  function Harness() {
+    const [prompt, setPrompt] = useState('Before /review-change after');
+    return (
+      <NewThreadPanel
+        {...newThreadPanelProps([revisionedSkill], onSubmit)}
+        prompt={prompt}
+        onPromptChange={setPrompt}
+      />
+    );
+  }
+  render(<Harness />);
+  const textarea = screen.getByPlaceholderText<HTMLTextAreaElement>(
+    'Ask Deputies to investigate, change code, or answer a question...',
+  );
+  expect(textarea).toHaveClass('min-h-40');
+  textarea.setSelectionRange(11, 11);
+  fireEvent.select(textarea);
+  expect(textarea).toHaveClass('min-h-40');
+  fireEvent.click(screen.getByRole('option', { name: /review-change/i }));
+
+  expect(textarea).toHaveValue('Before  after');
+  expect(textarea).toHaveClass('min-h-40');
+  expect(textarea).toHaveFocus();
+  expect(textarea.selectionStart).toBe(7);
+  expect(screen.getByRole('button', { name: 'Remove review-change skill' })).toBeInTheDocument();
+});
+
+it('submits an unselected mid-message skill token as ordinary text', async () => {
+  const onSubmit = vi.fn(async () => true);
+  render(<MessageComposer {...messageComposerProps(onSubmit)} />);
+  const textarea = screen.getByPlaceholderText<HTMLTextAreaElement>(
+    'Ask your deputy to investigate, change code, or follow up...',
+  );
+  fireEvent.change(textarea, { target: { value: 'Please /review-change carefully.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+  await waitFor(() =>
+    expect(onSubmit).toHaveBeenCalledWith({
+      prompt: 'Please /review-change carefully.',
+      skills: [],
+      skillRefs: [],
+    }),
+  );
+});
+
+it('expands filtered snippets by keyboard in MessageComposer and submits no snippet metadata', async () => {
+  const onSubmit = vi.fn(async () => true);
+  render(<MessageComposer {...messageComposerProps(onSubmit)} snippets={[snippet]} snippetsEnabled />);
+  const textarea = screen.getByPlaceholderText<HTMLTextAreaElement>(
+    'Ask your deputy to investigate, change code, or follow up...',
+  );
+  fireEvent.change(textarea, { target: { value: 'Please //rev carefully' } });
+  textarea.setSelectionRange(12, 12);
+  fireEvent.select(textarea);
+  const snippetList = screen.getByRole('listbox', { name: 'Personal snippets' });
+  expect(snippetList).toHaveClass('max-h-[clamp(8rem,35dvh,16rem)]', 'overflow-auto');
+  expect(snippetList.parentElement).toHaveClass('absolute', 'bottom-full', 'left-0', 'right-0');
+  fireEvent.keyDown(textarea, { key: 'ArrowDown' });
+  fireEvent.keyDown(textarea, { key: 'Enter' });
+  expect(textarea).toHaveValue(`Please ${snippet.body} carefully`);
+  fireEvent.change(textarea, { target: { value: `Please ${snippet.body} carefully now` } });
+  fireEvent.keyDown(textarea, { key: 'Enter' });
+  await waitFor(() =>
+    expect(onSubmit).toHaveBeenCalledWith({
+      prompt: `Please ${snippet.body} carefully now`,
+      skills: [],
+      skillRefs: [],
+    }),
+  );
+});
+
+it('expands snippets by mouse in NewThreadPanel while a single slash remains the skills picker', async () => {
+  const onSubmit = vi.fn(async () => true);
+  function Harness() {
+    const [prompt, setPrompt] = useState('Context\n\n//pull\nThanks');
+    return (
+      <NewThreadPanel
+        {...newThreadPanelProps([skill], onSubmit)}
+        snippets={[snippet]}
+        snippetsEnabled
+        prompt={prompt}
+        onPromptChange={setPrompt}
+      />
+    );
+  }
+  render(<Harness />);
+  const textarea = screen.getByPlaceholderText<HTMLTextAreaElement>(
+    'Ask Deputies to investigate, change code, or answer a question...',
+  );
+  textarea.setSelectionRange(15, 15);
+  fireEvent.select(textarea);
+  fireEvent.click(screen.getByRole('option', { name: /review-pr/i }));
+  expect(textarea).toHaveValue(`Context\n\n${snippet.body}\nThanks`);
+  fireEvent.change(textarea, { target: { value: '/rev' } });
+  expect(screen.queryByRole('listbox', { name: 'Personal snippets' })).not.toBeInTheDocument();
+  expect(screen.getByRole('listbox', { name: 'Available skills' })).toBeInTheDocument();
+  fireEvent.change(textarea, { target: { value: `${snippet.body} edited` } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+  await waitFor(() =>
+    expect(onSubmit).toHaveBeenCalledWith({ prompt: `${snippet.body} edited`, skills: [], skillRefs: [] }),
+  );
+});
+
+it('never interprets the double-slash snippet namespace as a skill on submit', () => {
+  const invalidRepositorySkill = {
+    ...skill,
+    id: 'repo:acme/widgets:/review',
+    name: '/review',
+    source: 'repo' as const,
+  };
+  expect(prepareSkillSubmission('//review', [], [invalidRepositorySkill])).toEqual({ prompt: '//review', skills: [] });
 });
 
 it('navigates slash matches with the keyboard before selecting', () => {
@@ -420,12 +599,14 @@ it('restores composer text and chips after a failed send', async () => {
   );
 });
 
-it('renders selected skills inside the composer input surface', () => {
+it('overlays the skill picker without resizing the composer input surface', () => {
   render(<MessageComposer {...messageComposerProps(vi.fn(async () => true))} />);
 
   const textarea = screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  expect(textarea).toHaveClass('min-h-28');
   fireEvent.change(textarea, { target: { value: '/rev' } });
-  expect(textarea).toHaveClass('min-h-12');
+  expect(textarea).toHaveClass('min-h-28');
+  expect(screen.getByRole('listbox', { name: 'Available skills' }).parentElement).toHaveClass('absolute');
   fireEvent.click(screen.getByRole('option', { name: /review-change/i }));
 
   const chip = screen.getByRole('button', { name: 'Remove review-change skill' });
