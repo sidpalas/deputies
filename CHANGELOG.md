@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.21.0](https://github.com/sidpalas/deputies/compare/v0.20.0...v0.21.0) (2026-07-20)
+
+
+### Features
+
+* add personal prompt snippets ([f46e9e1](https://github.com/sidpalas/deputies/commit/f46e9e1bba4651cc351229f229b28a55fefcf045))
+
+
+### Bug Fixes
+
+* disable DeepSeek reasoning for generated titles ([6a8ba2c](https://github.com/sidpalas/deputies/commit/6a8ba2c04e9c09ff4ffa459980370fe955658704))
+* install postgres tools in agent setup ([58d9e51](https://github.com/sidpalas/deputies/commit/58d9e51a7e3044c337d2868ea3071564c711db19))
+* keep archived session selected ([51e7dd2](https://github.com/sidpalas/deputies/commit/51e7dd245e8fad5cfdb6bda8641821af9b9cadc3))
+* keep the web client responsive during session updates ([cbe14a5](https://github.com/sidpalas/deputies/commit/cbe14a53c14edbf70f224d911660f0e91b668f0d))
+* make title generation robust and configurable ([f6a5309](https://github.com/sidpalas/deputies/commit/f6a5309f925e2a8cf3b80bed77686e820e38dd43))
+
+
+### Performance Improvements
+
+* start title generation before sandbox setup ([f649658](https://github.com/sidpalas/deputies/commit/f64965809c0bc46ac1d68f891327c8204fb79fd4))
+
 ## [0.20.0](https://github.com/sidpalas/deputies/compare/v0.19.1...v0.20.0) (2026-07-19)
 
 
