@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+postgres_bin=$(pg_config --bindir)
+export PATH="$postgres_bin:$PATH"
+
 PGDATA=${PGDATA:-$HOME/.deputies/postgres}
 PGHOST=${PGHOST:-127.0.0.1}
 PGPORT=${PGPORT:-5432}
