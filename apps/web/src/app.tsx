@@ -96,6 +96,12 @@ import {
 } from './session-event-plan.js';
 import { SelectedResourceCoordinator, type SelectedResourceContext } from './selected-resource-coordinator.js';
 import {
+  SessionIndexCoordinator,
+  type SessionIndexContext,
+  type SessionIndexListResult,
+  type SessionIndexTicket,
+} from './session-index-coordinator.js';
+import {
   activeProgressDisplayText,
   applyFrozenSessionOrder,
   appendActiveProgressEvents,
@@ -468,6 +474,7 @@ export function App() {
   const [revealedSessionLineageSearchQuery, setRevealedSessionLineageSearchQuery] = useState('');
   const [supplementalSelectedSession, setSupplementalSelectedSession] = useState<Session | null>(null);
   const [selectedSessionParent, setSelectedSessionParent] = useState<Session | null>(null);
+  const [selectedSessionParentRefreshVersion, setSelectedSessionParentRefreshVersion] = useState(0);
   const [sessionFilters, setSessionFilters] = useState<SessionFilters>(loadInitialSessionFilters);
   const [sessionTagOptions, setSessionTagOptions] = useState<SessionTagSummary[]>([]);
   const [sessionListHovered, setSessionListHovered] = useState(false);
@@ -533,7 +540,9 @@ export function App() {
   const sessionsRefreshWaitersRef = useRef<Array<() => void>>([]);
   const sessionsRefreshRequestRef = useRef(0);
   const archivedSessionsRequestRef = useRef(0);
-  const sessionSummaryRefreshInFlightRef = useRef(new Set<string>());
+  const sessionSummaryRefreshInFlightRef = useRef(
+    new Map<string, { operation: symbol; promise: Promise<void>; resolve: () => void }>(),
+  );
   const sessionSummaryRefreshQueuedRef = useRef(new Set<string>());
   const sessionStatusMutationPendingRef = useRef(new Map<string, number>());
   const canonicalSessionMutationPendingRef = useRef(new Map<string, number>());
@@ -547,11 +556,21 @@ export function App() {
   const supplementalSelectedSessionRef = useRef(supplementalSelectedSession);
   supplementalSelectedSessionRef.current = supplementalSelectedSession;
   const sessionMutationVersionRef = useRef(new Map<string, number>());
+  const titleMutationQueuesRef = useRef(
+    new Map<string, { latest: string | null; running: boolean; waiters: Array<(saved: boolean) => void> }>(),
+  );
   const sessionSummaryMutationVersionRef = useRef(new Map<string, number>());
   const sessionSummaryApplicationVersionRef = useRef(new Map<string, number>());
   const sessionSearchSummaryEpochRef = useRef(0);
   const handleApiErrorRef = useRef<(error: unknown) => void>(() => undefined);
   const selectedResourceCoordinatorRef = useRef<SelectedResourceCoordinator | null>(null);
+  const sessionIndexCoordinatorRef = useRef<SessionIndexCoordinator | null>(null);
+  const activeFirstPageIdsRef = useRef(new Set<string>());
+  const activePaginationIdsRef = useRef(new Set<string>());
+  const archivedSessionIdsRef = useRef(new Set<string>());
+  const childSessionIdsRef = useRef(new Map<string, Set<string>>());
+  const searchSessionIdsRef = useRef(new Set<string>());
+  const lineageSessionIdsRef = useRef(new Set<string>());
   const selectedSnapshotDisplacementRef = useRef({ contextKey: '', resources: new Set<DetailResource>() });
   function createSelectedResourceCoordinator(): SelectedResourceCoordinator {
     return new SelectedResourceCoordinator({
@@ -967,6 +986,9 @@ export function App() {
   function exitSessionLineageReveal(options: { clearFilters?: boolean; restoreSearch?: boolean } = {}) {
     const searchQuery = options.restoreSearch ? revealedSessionLineageSearchQuery : '';
     lineageRevealRequestRef.current += 1;
+    const releasedIds = new Set(lineageSessionIdsRef.current);
+    lineageSessionIdsRef.current.clear();
+    removeUnownedSessions(releasedIds);
     setRevealedSessionLineage([]);
     setRevealedSessionLineageSearchQuery('');
     if (options.clearFilters) applySessionFilters(emptySessionFilters, { preserveLineage: true });
@@ -980,10 +1002,15 @@ export function App() {
   }
 
   function resetAuthBoundSessionState() {
+    abortTitleMutationQueues();
     abortSubmissionFallback();
     abortCreatedSessionBackfill();
     resetIncrementalRecovery();
     sessionSummaryAuthorityEpochRef.current += 1;
+    sessionIndexCoordinatorRef.current?.setContext({
+      authorityEpoch: sessionSummaryAuthorityEpochRef.current,
+      viewKey: 'session-index',
+    });
     sessionDetailLoadGenerationRef.current += 1;
     eventCursor.current = 0;
     globalEventCursor.current = 0;
@@ -1002,11 +1029,19 @@ export function App() {
     selectedSessionParentRef.current = null;
     supplementalSelectedSessionRef.current = null;
     sessionsRef.current = [];
+    activeFirstPageIdsRef.current.clear();
+    activePaginationIdsRef.current.clear();
+    archivedSessionIdsRef.current.clear();
+    childSessionIdsRef.current.clear();
+    searchSessionIdsRef.current.clear();
+    lineageSessionIdsRef.current.clear();
     for (const [key, version] of sessionMutationVersionRef.current) {
       sessionMutationVersionRef.current.set(key, version + 1);
     }
     sessionStatusMutationPendingRef.current.clear();
     canonicalSessionMutationPendingRef.current.clear();
+    for (const operation of sessionSummaryRefreshInFlightRef.current.values()) operation.resolve();
+    sessionSummaryRefreshInFlightRef.current.clear();
     sessionSummaryRefreshQueuedRef.current.clear();
     sessionSummaryApplicationVersionRef.current.clear();
     invalidateChildSessionRequests();
@@ -1034,6 +1069,11 @@ export function App() {
     sessionsRefreshRequestRef.current += 1;
     archivedSessionsRequestRef.current += 1;
     sessionSearchRequestRef.current += 1;
+    activeFirstPageIdsRef.current.clear();
+    activePaginationIdsRef.current.clear();
+    archivedSessionIdsRef.current.clear();
+    childSessionIdsRef.current.clear();
+    searchSessionIdsRef.current.clear();
     invalidateChildSessionRequests();
     setSessionsLoadingMore(false);
     setArchivedSessionsLoading(false);
@@ -1053,6 +1093,8 @@ export function App() {
     const lineage = [session];
     const visited = new Set([session.id]);
     let current = session;
+    const ticket = captureIndexTicket('lineage', { kind: 'lineage', selected: session.id, requestId });
+    if (!ticket) return;
 
     try {
       while (current.parentSessionId && !visited.has(current.parentSessionId)) {
@@ -1061,32 +1103,41 @@ export function App() {
           (candidate) => candidate.id === current.parentSessionId,
         );
         const parent = cached ?? (await getSession({ sessionId: current.parentSessionId, token }));
+        if (indexTicketEligibleRows(ticket, [parent]).length === 0) return;
         if (lineageRevealRequestRef.current !== requestId) return;
         lineage.push(parent);
         current = parent;
       }
       if (lineageRevealRequestRef.current !== requestId) return;
+      if (indexTicketEligibleRows(ticket, lineage).length !== lineage.length) return;
+      lineageSessionIdsRef.current = new Set(lineage.map((row) => row.id));
       setRevealedSessionLineage(lineage);
       setRevealedSessionLineageSearchQuery(sessionSearchQuery);
       setSessionSearchQuery('');
       selectSession(session.id, { keepSidebarOpen: true });
     } catch (err) {
       if (lineageRevealRequestRef.current === requestId) handleApiError(err);
+    } finally {
+      sessionIndexCoordinatorRef.current?.release(ticket);
     }
   }
 
-  function sessionMutationKey(sessionId: string, kind: 'star' | 'status' | 'tags'): string {
+  function sessionMutationKey(sessionId: string, kind: 'star' | 'status' | 'tags' | 'title'): string {
     return `${sessionId}:${kind}`;
   }
 
-  function nextSessionMutationVersion(sessionId: string, kind: 'star' | 'status' | 'tags'): number {
+  function nextSessionMutationVersion(sessionId: string, kind: 'star' | 'status' | 'tags' | 'title'): number {
     const key = sessionMutationKey(sessionId, kind);
     const next = (sessionMutationVersionRef.current.get(key) ?? 0) + 1;
     sessionMutationVersionRef.current.set(key, next);
     return next;
   }
 
-  function isCurrentSessionMutation(sessionId: string, kind: 'star' | 'status' | 'tags', version: number): boolean {
+  function isCurrentSessionMutation(
+    sessionId: string,
+    kind: 'star' | 'status' | 'tags' | 'title',
+    version: number,
+  ): boolean {
     return sessionMutationVersionRef.current.get(sessionMutationKey(sessionId, kind)) === version;
   }
 
@@ -1103,7 +1154,11 @@ export function App() {
     void refreshLoadedSessionSummary(sessionId);
   }
 
-  function beginCanonicalSessionMutation(sessionId: string, kind: 'star' | 'status' | 'tags', version: number) {
+  function beginCanonicalSessionMutation(
+    sessionId: string,
+    kind: 'star' | 'status' | 'tags' | 'title',
+    version: number,
+  ) {
     canonicalSessionMutationPendingRef.current.set(sessionMutationKey(sessionId, kind), version);
     sessionsRefreshRequestRef.current += 1;
     archivedSessionsRequestRef.current += 1;
@@ -1115,7 +1170,11 @@ export function App() {
     setSessionSearchLoadingMore(false);
   }
 
-  function finishCanonicalSessionMutation(sessionId: string, kind: 'star' | 'status' | 'tags', version: number) {
+  function finishCanonicalSessionMutation(
+    sessionId: string,
+    kind: 'star' | 'status' | 'tags' | 'title',
+    version: number,
+  ) {
     const key = sessionMutationKey(sessionId, kind);
     if (canonicalSessionMutationPendingRef.current.get(key) !== version) return;
     canonicalSessionMutationPendingRef.current.delete(key);
@@ -1199,6 +1258,9 @@ export function App() {
     const requestId = sessionSearchRequestRef.current + 1;
     sessionSearchRequestRef.current = requestId;
     if (!query || !canCallApi) {
+      const releasedIds = new Set(searchSessionIdsRef.current);
+      searchSessionIdsRef.current.clear();
+      removeUnownedSessions(releasedIds);
       setSessionSearchResults([]);
       setSessionSearchNextCursor(null);
       setSessionSearchLoading(false);
@@ -1210,33 +1272,40 @@ export function App() {
         setSessionSearchLoading(false);
         return;
       }
-      const summaryVersions = captureSessionSummaryVersions();
       const summaryEpoch = sessionSearchSummaryEpochRef.current;
+      const ticket = captureIndexTicket('search:first', {
+        kind: 'search',
+        query,
+        filters: sessionFilters,
+        cursor: null,
+      });
+      if (!ticket) return;
       searchSessions(token, { query, limit: sessionSearchPageSize, ...sessionFilterRequestOptions(sessionFilters) })
         .then((page) => {
           if (sessionSearchRequestRef.current !== requestId) return;
-          if (sessionSearchSummaryEpochRef.current !== summaryEpoch) {
+          if (!sessionIndexCoordinatorRef.current?.isTicketCurrent(ticket)) return;
+          const rows = page.results.map((result) => result.session);
+          const eligible = indexTicketEligibleRows(ticket, rows);
+          if (eligible.length !== rows.length) {
+            sessionIndexCoordinatorRef.current?.release(ticket);
             setSessionSearchRefreshVersion((current) => current + 1);
             return;
           }
-          markAcceptedSessionSummaries(
-            page.results.map((result) => result.session),
-            summaryVersions,
-          );
+          if (sessionSearchSummaryEpochRef.current !== summaryEpoch) {
+            sessionIndexCoordinatorRef.current?.release(ticket);
+            setSessionSearchRefreshVersion((current) => current + 1);
+            return;
+          }
+          for (const session of eligible) markSessionSummaryApplied(session.id);
           setSessionSearchResults(page.results);
-          setSessions((current) =>
-            mergeSessionSummariesByVersion(
-              current,
-              page.results.map((result) => result.session),
-              summaryVersions,
-            ),
-          );
+          replaceSessionOwnerRows(searchSessionIdsRef, new Set(rows.map((session) => session.id)), eligible);
           setSessionSearchNextCursor(page.nextCursor);
         })
         .catch((err) => {
           if (sessionSearchRequestRef.current === requestId) handleApiError(err);
         })
         .finally(() => {
+          sessionIndexCoordinatorRef.current?.release(ticket);
           if (sessionSearchRequestRef.current === requestId) setSessionSearchLoading(false);
         });
     }, 250);
@@ -1428,15 +1497,26 @@ export function App() {
   useLayoutEffect(() => {
     mountedRef.current = true;
     const coordinator = createSelectedResourceCoordinator();
+    const indexCoordinator = new SessionIndexCoordinator({
+      loadList: async (ticket) => refreshSessionsWithTicket(ticket),
+      loadSummary: async (sessionId, generation, context) =>
+        refreshLoadedSessionSummary(sessionId, true, { generation, context }),
+      onError: (error) => handleApiErrorRef.current(error),
+    });
     selectedResourceCoordinatorRef.current = coordinator;
+    sessionIndexCoordinatorRef.current = indexCoordinator;
     coordinator.setContext(selectedResourceContext(selectedSessionIdRef.current));
+    indexCoordinator.setContext({ authorityEpoch: sessionSummaryAuthorityEpochRef.current, viewKey: 'session-index' });
     return () => {
       mountedRef.current = false;
+      abortTitleMutationQueues();
       abortSubmissionFallback();
       abortCreatedSessionBackfill();
       resetIncrementalRecovery();
       coordinator.dispose();
+      indexCoordinator.dispose();
       if (selectedResourceCoordinatorRef.current === coordinator) selectedResourceCoordinatorRef.current = null;
+      if (sessionIndexCoordinatorRef.current === indexCoordinator) sessionIndexCoordinatorRef.current = null;
     };
   }, []);
 
@@ -1606,11 +1686,24 @@ export function App() {
     if (selectedSessionParentRequestRef.current.key === key) return;
     const requestId = selectedSessionParentRequestRef.current.requestId + 1;
     selectedSessionParentRequestRef.current = { key, requestId };
+    const ticket = captureIndexTicket('selected-parent', {
+      kind: 'selected-parent',
+      selected: selectedSession.id,
+      parent: parentSessionId,
+    });
+    if (!ticket) return;
     setSelectedSessionParent(null);
     void getSession({ sessionId: parentSessionId, token })
       .then((parent) => {
         if (selectedSessionParentRequestRef.current.requestId !== requestId) return;
         if (selectedSessionIdRef.current !== selectedSession.id) return;
+        if (!sessionIndexCoordinatorRef.current?.isTicketCurrent(ticket)) return;
+        if (indexTicketEligibleRows(ticket, [parent]).length === 0) {
+          sessionIndexCoordinatorRef.current?.release(ticket);
+          selectedSessionParentRequestRef.current = { key: '', requestId };
+          setSelectedSessionParentRefreshVersion((current) => current + 1);
+          return;
+        }
         selectedSessionParentRequestRef.current = { key: '', requestId };
         setSelectedSessionParent(parent);
       })
@@ -1619,8 +1712,16 @@ export function App() {
         if (selectedSessionIdRef.current !== selectedSession.id) return;
         selectedSessionParentRequestRef.current = { key: '', requestId };
         if (!(err instanceof ApiError && (err.status === 403 || err.status === 404))) handleApiError(err);
-      });
-  }, [selectedSession, sessions, canonicalRevealedSessionLineage, canCallApi, token]);
+      })
+      .finally(() => sessionIndexCoordinatorRef.current?.release(ticket));
+  }, [
+    selectedSession,
+    sessions,
+    canonicalRevealedSessionLineage,
+    canCallApi,
+    token,
+    selectedSessionParentRefreshVersion,
+  ]);
 
   useLayoutEffect(() => {
     const container = threadScrollRef.current;
@@ -1766,11 +1867,12 @@ export function App() {
         return;
       }
       markSessionSummaryChanged(event.sessionId);
-      if (eventPlan.sessionEffect === 'summary') {
-        refreshLoadedSessionSummary(event.sessionId).catch(() => undefined);
-      } else {
-        scheduleSessionsRefresh();
-      }
+      sessionIndexCoordinatorRef.current?.requestInvalidation(
+        event.sessionId,
+        eventPlan.sessionEffect,
+        sessionHasAnyIndexOwner(event.sessionId) || Boolean(loadedSessionSummary(event.sessionId)),
+        hasActiveSessionFilters(sessionFiltersRef.current),
+      );
     }
   }
 
@@ -1783,12 +1885,16 @@ export function App() {
     const entries = [...recoveryPresentationEffectsRef.current];
     recoveryPresentationEffectsRef.current.clear();
     if (entries.length === 0) return;
-    for (const [sessionId] of entries) markSessionSummaryChanged(sessionId);
-    if (entries.some(([, effect]) => effect === 'list')) {
-      scheduleSessionsRefresh(0);
-      return;
+    for (const [sessionId, effect] of entries) {
+      if (effect === 'none') continue;
+      markSessionSummaryChanged(sessionId);
+      sessionIndexCoordinatorRef.current?.requestInvalidation(
+        sessionId,
+        effect,
+        sessionHasAnyIndexOwner(sessionId) || Boolean(loadedSessionSummary(sessionId)),
+        hasActiveSessionFilters(sessionFiltersRef.current),
+      );
     }
-    for (const [sessionId] of entries) refreshLoadedSessionSummary(sessionId).catch(() => undefined);
   }
 
   function requestIncrementalRecovery(restartStream: boolean) {
@@ -1989,11 +2095,83 @@ export function App() {
   }
 
   function markSessionSummaryChanged(sessionId: string) {
+    sessionIndexCoordinatorRef.current?.markSummaryChanged(sessionId);
     sessionSearchSummaryEpochRef.current += 1;
     sessionSummaryMutationVersionRef.current.set(
       sessionId,
       (sessionSummaryMutationVersionRef.current.get(sessionId) ?? 0) + 1,
     );
+  }
+
+  function captureIndexTicket(owner: string, view: unknown): SessionIndexTicket | null {
+    return sessionIndexCoordinatorRef.current?.captureTicket(owner, JSON.stringify(view)) ?? null;
+  }
+
+  function indexTicketEligibleRows(ticket: SessionIndexTicket, rows: Session[]): Session[] {
+    const coordinator = sessionIndexCoordinatorRef.current;
+    if (!coordinator?.isTicketCurrent(ticket)) return [];
+    return rows.filter((row) => {
+      if (coordinator.isRowCurrent(ticket, row.id)) return true;
+      // A list snapshot may complete after an invalidation but still carry a newer
+      // server revision. Accept only that demonstrably newer direct authority.
+      const current = loadedSessionSummary(row.id);
+      return Boolean(current && sessionUpdatedAfter(row, current));
+    });
+  }
+
+  function sessionOwnedOutsideFirstPage(sessionId: string): boolean {
+    return (
+      activePaginationIdsRef.current.has(sessionId) ||
+      archivedSessionIdsRef.current.has(sessionId) ||
+      [...childSessionIdsRef.current.values()].some((ids) => ids.has(sessionId)) ||
+      searchSessionIdsRef.current.has(sessionId) ||
+      lineageSessionIdsRef.current.has(sessionId) ||
+      selectedSessionParentRef.current?.id === sessionId ||
+      supplementalSelectedSessionRef.current?.id === sessionId
+    );
+  }
+
+  function sessionHasAnyIndexOwner(sessionId: string): boolean {
+    return activeFirstPageIdsRef.current.has(sessionId) || sessionOwnedOutsideFirstPage(sessionId);
+  }
+
+  function removeUnownedSessions(candidateIds: ReadonlySet<string>) {
+    if (candidateIds.size === 0) return;
+    setSessions((current) =>
+      current.filter(
+        (session) =>
+          !candidateIds.has(session.id) ||
+          sessionHasAnyIndexOwner(session.id) ||
+          selectedSessionIdRef.current === session.id,
+      ),
+    );
+  }
+
+  function replaceSessionOwnerRows(ownerRef: { current: Set<string> }, nextIds: Set<string>, incoming: Session[]) {
+    const previousIds = new Set(ownerRef.current);
+    ownerRef.current = nextIds;
+    setSessions((current) =>
+      mergeSessionsById(
+        current.filter(
+          (session) =>
+            !previousIds.has(session.id) ||
+            nextIds.has(session.id) ||
+            sessionHasAnyIndexOwner(session.id) ||
+            selectedSessionIdRef.current === session.id,
+        ),
+        incoming,
+      ),
+    );
+  }
+
+  function reconcileRejectedIndexRows(ticket: SessionIndexTicket, rows: Session[], eligible: Session[]) {
+    const eligibleIds = new Set(eligible.map((session) => session.id));
+    if (!sessionIndexCoordinatorRef.current?.isTicketCurrent(ticket)) return;
+    for (const session of rows) {
+      if (!eligibleIds.has(session.id) && loadedSessionSummary(session.id)) {
+        void refreshLoadedSessionSummary(session.id);
+      }
+    }
   }
 
   function markSessionSummaryApplied(sessionId: string) {
@@ -2003,39 +2181,12 @@ export function App() {
     );
   }
 
-  function markAcceptedSessionSummaries(sessions: Session[], versions: Map<string, number>) {
-    for (const session of sessions) {
-      if (sessionSummaryVersionIsCurrent(versions, session.id)) markSessionSummaryApplied(session.id);
-    }
-  }
-
   function captureSessionSummaryVersions(): Map<string, number> {
     return new Map(sessionSummaryMutationVersionRef.current);
   }
 
   function sessionSummaryVersionIsCurrent(versions: Map<string, number>, sessionId: string): boolean {
     return sessionSummaryMutationVersionRef.current.get(sessionId) === versions.get(sessionId);
-  }
-
-  function mergeSessionSummariesByVersion(
-    current: Session[],
-    incoming: Session[],
-    versions: Map<string, number>,
-  ): Session[] {
-    const eligible = incoming.filter(
-      (session) =>
-        sessionSummaryVersionIsCurrent(versions, session.id) ||
-        !current.some((candidate) => candidate.id === session.id),
-    );
-    return mergeSessionsById(current, eligible);
-  }
-
-  function reconcileChangedSessionSummaries(sessions: Session[], versions: Map<string, number>) {
-    for (const session of sessions) {
-      if (!sessionSummaryVersionIsCurrent(versions, session.id)) {
-        void refreshLoadedSessionSummary(session.id, true);
-      }
-    }
   }
 
   function queueActiveProgressEvent(event: AgentEvent) {
@@ -2077,16 +2228,32 @@ export function App() {
   }
 
   async function refreshSessions() {
+    await refreshSessionsWithTicket();
+  }
+
+  async function refreshSessionsWithTicket(coordinatorTicket?: SessionIndexTicket): Promise<SessionIndexListResult> {
     if (canonicalSessionMutationPendingRef.current.size) {
-      sessionsRefreshQueuedRef.current = true;
       await new Promise<void>((resolve) => sessionsRefreshWaitersRef.current.push(resolve));
-      return;
+      if (coordinatorTicket && sessionIndexCoordinatorRef.current?.isTicketCurrent(coordinatorTicket)) {
+        return refreshSessionsWithTicket(coordinatorTicket);
+      }
+      return { satisfiedIds: new Set() };
     }
     if (sessionsRefreshInFlightRef.current) {
-      sessionsRefreshQueuedRef.current = true;
+      const waitingAuthorityEpoch = sessionSummaryAuthorityEpochRef.current;
       await new Promise<void>((resolve) => sessionsRefreshWaitersRef.current.push(resolve));
-      return;
+      if (coordinatorTicket && sessionIndexCoordinatorRef.current?.isTicketCurrent(coordinatorTicket)) {
+        return refreshSessionsWithTicket(coordinatorTicket);
+      }
+      if (!coordinatorTicket && mountedRef.current && sessionSummaryAuthorityEpochRef.current === waitingAuthorityEpoch)
+        return refreshSessionsWithTicket();
+      return { satisfiedIds: new Set() };
     }
+
+    const filters = sessionFiltersRef.current;
+    const ticketOwner = 'active:first';
+    const ticket = coordinatorTicket ?? captureIndexTicket(ticketOwner, { kind: 'active', filters, cursor: null });
+    if (!ticket) return { satisfiedIds: new Set() };
 
     const completionWaiters = sessionsRefreshWaitersRef.current.splice(0);
     const requestId = sessionsRefreshRequestRef.current + 1;
@@ -2097,14 +2264,32 @@ export function App() {
     setLoading(true);
     setError('');
     const refreshStartCursor = sessionsNextCursorRef.current;
-    const filters = sessionFiltersRef.current;
     const filtersActive = hasActiveSessionFilters(filters);
     const filterOptions = sessionFilterRequestOptions(filters);
     const summaryMutationVersionsAtStart = captureSessionSummaryVersions();
+    let satisfiedIds = new Set<string>();
     try {
       const page = await listSessions(tokenRef.current, { limit: sessionListPageSize, ...filterOptions });
-      if (sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return;
-      if (sessionsRefreshRequestRef.current !== requestId) return;
+      const eligiblePageSessions = indexTicketEligibleRows(ticket, page.sessions);
+      if (eligiblePageSessions.length !== page.sessions.length) {
+        if (coordinatorTicket) {
+          const eligibleIds = new Set(eligiblePageSessions.map((session) => session.id));
+          for (const session of page.sessions) {
+            if (eligibleIds.has(session.id)) continue;
+            sessionIndexCoordinatorRef.current?.requestInvalidation(
+              session.id,
+              'list',
+              sessionHasAnyIndexOwner(session.id) || Boolean(loadedSessionSummary(session.id)),
+              filtersActive,
+            );
+          }
+        } else {
+          sessionsRefreshQueuedRef.current = true;
+        }
+        return { satisfiedIds };
+      }
+      if (sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return { satisfiedIds };
+      if (sessionsRefreshRequestRef.current !== requestId) return { satisfiedIds };
       const selectedId = selectedSessionIdRef.current;
       let selected: Session | null = null;
       let selectedRemoved = false;
@@ -2119,9 +2304,24 @@ export function App() {
           }
         }
       }
-      if (selectedSessionIdRef.current !== selectedId) return;
-      if (sessionsRefreshRequestRef.current !== requestId) return;
+      if (selectedSessionIdRef.current !== selectedId) return { satisfiedIds };
+      if (sessionsRefreshRequestRef.current !== requestId) return { satisfiedIds };
+      const eligibleSelected = selected ? (indexTicketEligibleRows(ticket, [selected])[0] ?? null) : null;
+      if (selected && !eligibleSelected) {
+        if (coordinatorTicket) {
+          sessionIndexCoordinatorRef.current?.requestInvalidation(
+            selected.id,
+            'list',
+            sessionHasAnyIndexOwner(selected.id) || Boolean(loadedSessionSummary(selected.id)),
+            filtersActive,
+          );
+        } else {
+          sessionsRefreshQueuedRef.current = true;
+        }
+        return { satisfiedIds };
+      }
       const cursorAdvancedDuringRefresh = sessionsNextCursorRef.current !== refreshStartCursor;
+      selected = eligibleSelected;
       const selectedSummaryChanged =
         selectedId &&
         sessionSummaryMutationVersionRef.current.get(selectedId) !== summaryMutationVersionsAtStart.get(selectedId);
@@ -2129,29 +2329,57 @@ export function App() {
       if (!selectedSummaryChanged) {
         setSupplementalSelectedSession(filtersActive && selected && !selectedWasRemoved ? selected : null);
       }
-      markAcceptedSessionSummaries(
-        selected ? [...page.sessions, selected] : page.sessions,
-        summaryMutationVersionsAtStart,
-      );
+      for (const session of selected ? [...eligiblePageSessions, selected] : eligiblePageSessions) {
+        markSessionSummaryApplied(session.id);
+      }
       invalidateChildSessionRequests();
+      const incomingIds = new Set(eligiblePageSessions.map((session) => session.id));
+      const oldFirstPageIds = new Set(activeFirstPageIdsRef.current);
+      const releasedChildIds = new Set<string>();
+      for (const ids of childSessionIdsRef.current.values()) {
+        for (const id of ids) releasedChildIds.add(id);
+      }
+      childSessionIdsRef.current.clear();
+      for (const id of incomingIds) activePaginationIdsRef.current.delete(id);
+      satisfiedIds = new Set(incomingIds);
+      if (selected) satisfiedIds.add(selected.id);
+      if (!cursorAdvancedDuringRefresh) {
+        for (const id of oldFirstPageIds) {
+          if (!incomingIds.has(id) && !sessionOwnedOutsideFirstPage(id)) satisfiedIds.add(id);
+        }
+      }
       setSessions((current) => {
-        const incoming = selected && !filtersActive ? [...page.sessions, selected] : page.sessions;
+        const incoming = selected && !filtersActive ? [...eligiblePageSessions, selected] : eligiblePageSessions;
+        const withoutOmittedFirstPage = cursorAdvancedDuringRefresh
+          ? current
+          : current.filter(
+              (session) =>
+                !oldFirstPageIds.has(session.id) ||
+                incomingIds.has(session.id) ||
+                sessionOwnedOutsideFirstPage(session.id),
+            );
+        const withoutReleasedChildren = withoutOmittedFirstPage.filter(
+          (session) =>
+            !releasedChildIds.has(session.id) ||
+            sessionHasAnyIndexOwner(session.id) ||
+            selectedSessionIdRef.current === session.id,
+        );
         const next = filtersActive
-          ? mergeSessionSummariesByVersion(
+          ? mergeSessionsById(
               cursorAdvancedDuringRefresh
-                ? current
-                : current.filter(
+                ? withoutReleasedChildren
+                : withoutReleasedChildren.filter(
                     (session) =>
                       session.status === 'archived' ||
                       !sessionSummaryVersionIsCurrent(summaryMutationVersionsAtStart, session.id),
                   ),
               incoming,
-              summaryMutationVersionsAtStart,
             )
-          : mergeSessionSummariesByVersion(current, incoming, summaryMutationVersionsAtStart);
+          : mergeSessionsById(withoutReleasedChildren, incoming);
+        if (!cursorAdvancedDuringRefresh) activeFirstPageIdsRef.current = incomingIds;
         return selectedWasRemoved && selectedId ? next.filter((session) => session.id !== selectedId) : next;
       });
-      reconcileChangedSessionSummaries(page.sessions, summaryMutationVersionsAtStart);
+      if (!coordinatorTicket) reconcileRejectedIndexRows(ticket, page.sessions, eligiblePageSessions);
       setSessionsNextCursor((current) => {
         const next = current !== refreshStartCursor ? current : page.nextCursor;
         sessionsNextCursorRef.current = next;
@@ -2165,7 +2393,7 @@ export function App() {
         }
         if (current) return current;
         if (sessionStorage.getItem(newSessionSelectedStorageKey) === 'true') return '';
-        const next = page.sessions[0]?.id ?? selected?.id ?? '';
+        const next = eligiblePageSessions[0]?.id ?? selected?.id ?? '';
         if (next) {
           pendingSessionMilestoneTriggerRef.current = sessionDetailMilestoneStartedRef.current
             ? 'selection'
@@ -2176,6 +2404,7 @@ export function App() {
         }
         return next;
       });
+      return { satisfiedIds };
     } catch (err) {
       if (
         sessionSummaryAuthorityEpochRef.current === authorityEpoch &&
@@ -2184,10 +2413,12 @@ export function App() {
         setSessionsLoaded(true);
         handleApiError(err);
       }
+      return { satisfiedIds };
     } finally {
+      if (!coordinatorTicket) sessionIndexCoordinatorRef.current?.release(ticket);
       if (sessionsRefreshRequestRef.current === requestId || !sessionsRefreshQueuedRef.current) setLoading(false);
       sessionsRefreshInFlightRef.current = false;
-      for (const resolve of completionWaiters) resolve();
+      for (const resolve of [...completionWaiters, ...sessionsRefreshWaitersRef.current.splice(0)]) resolve();
       if (sessionsRefreshQueuedRef.current) {
         sessionsRefreshQueuedRef.current = false;
         scheduleSessionsRefresh(0);
@@ -2195,19 +2426,65 @@ export function App() {
     }
   }
 
-  async function refreshLoadedSessionSummary(sessionId: string, includeUnloaded = false) {
+  async function refreshLoadedSessionSummary(
+    sessionId: string,
+    includeUnloaded = false,
+    coordinatorAuthority?: { generation: number; context: SessionIndexContext },
+  ) {
     if (!sessionId || (!includeUnloaded && !sessionsRef.current.some((session) => session.id === sessionId))) return;
+    if (
+      coordinatorAuthority &&
+      !sessionIndexCoordinatorRef.current?.isSummaryCurrent(
+        sessionId,
+        coordinatorAuthority.generation,
+        coordinatorAuthority.context,
+      )
+    )
+      return;
     const inFlight = sessionSummaryRefreshInFlightRef.current;
-    if (inFlight.has(sessionId) || sessionStatusMutationPendingRef.current.has(sessionId)) {
+    const currentOperation = inFlight.get(sessionId);
+    if (currentOperation) {
+      if (coordinatorAuthority) {
+        await currentOperation.promise;
+        if (
+          mountedRef.current &&
+          sessionIndexCoordinatorRef.current?.isSummaryCurrent(
+            sessionId,
+            coordinatorAuthority.generation,
+            coordinatorAuthority.context,
+          )
+        ) {
+          await refreshLoadedSessionSummary(sessionId, includeUnloaded, coordinatorAuthority);
+        }
+      } else {
+        sessionSummaryRefreshQueuedRef.current.add(sessionId);
+      }
+      return;
+    }
+    if (sessionStatusMutationPendingRef.current.has(sessionId)) {
       sessionSummaryRefreshQueuedRef.current.add(sessionId);
       return;
     }
     const mutationGeneration = sessionSummaryMutationVersionRef.current.get(sessionId) ?? 0;
     const authorityEpoch = sessionSummaryAuthorityEpochRef.current;
-    inFlight.add(sessionId);
+    const operation = Symbol(sessionId);
+    let resolveOperation: () => void = () => undefined;
+    const operationPromise = new Promise<void>((resolve) => {
+      resolveOperation = resolve;
+    });
+    inFlight.set(sessionId, { operation, promise: operationPromise, resolve: resolveOperation });
     try {
-      const session = await getSession({ sessionId, token });
-      if (sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return;
+      const session = await getSession({ sessionId, token: tokenRef.current });
+      if (!mountedRef.current || sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return;
+      if (
+        coordinatorAuthority &&
+        !sessionIndexCoordinatorRef.current?.satisfyDirectSummary(
+          sessionId,
+          coordinatorAuthority.generation,
+          coordinatorAuthority.context,
+        )
+      )
+        return;
       if (
         sessionStatusMutationPendingRef.current.has(sessionId) ||
         (sessionSummaryMutationVersionRef.current.get(sessionId) ?? 0) !== mutationGeneration
@@ -2217,7 +2494,16 @@ export function App() {
       }
       applySessionListUpdate(session);
     } catch (err) {
-      if (sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return;
+      if (!mountedRef.current || sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return;
+      if (
+        coordinatorAuthority &&
+        !sessionIndexCoordinatorRef.current?.isSummaryCurrent(
+          sessionId,
+          coordinatorAuthority.generation,
+          coordinatorAuthority.context,
+        )
+      )
+        return;
       if (
         sessionStatusMutationPendingRef.current.has(sessionId) ||
         (sessionSummaryMutationVersionRef.current.get(sessionId) ?? 0) !== mutationGeneration
@@ -2232,8 +2518,13 @@ export function App() {
         handleApiError(err);
       }
     } finally {
-      inFlight.delete(sessionId);
+      const finishingOperation = inFlight.get(sessionId);
+      if (finishingOperation?.operation === operation) {
+        inFlight.delete(sessionId);
+        finishingOperation.resolve();
+      }
       if (
+        mountedRef.current &&
         sessionSummaryAuthorityEpochRef.current === authorityEpoch &&
         sessionSummaryRefreshQueuedRef.current.delete(sessionId) &&
         !sessionStatusMutationPendingRef.current.has(sessionId)
@@ -2246,24 +2537,33 @@ export function App() {
   async function loadMoreSessions() {
     if (!sessionsNextCursor || sessionsLoadingMore || !canCallApi || canonicalSessionMutationPendingRef.current.size)
       return;
-    const requestId = sessionsRefreshRequestRef.current;
     const filters = sessionFiltersRef.current;
-    const summaryVersions = captureSessionSummaryVersions();
+    const cursor = sessionsNextCursor;
+    const ticket = captureIndexTicket('active:more', { kind: 'active', filters, cursor });
+    if (!ticket) return;
+    const requestId = sessionsRefreshRequestRef.current;
+    let retry = false;
     setSessionsLoadingMore(true);
     setError('');
     try {
       const page = await listSessions(token, {
-        cursor: sessionsNextCursor,
+        cursor,
         limit: sessionListPageSize,
         ...sessionFilterRequestOptions(filters),
       });
+      if (!sessionIndexCoordinatorRef.current?.isTicketCurrent(ticket)) return;
+      const eligible = indexTicketEligibleRows(ticket, page.sessions);
+      if (eligible.length !== page.sessions.length) {
+        retry = true;
+        return;
+      }
       if (sessionsRefreshRequestRef.current !== requestId) return;
-      markAcceptedSessionSummaries(page.sessions, summaryVersions);
-      setSessions((current) => mergeSessionSummariesByVersion(current, page.sessions, summaryVersions));
-      reconcileChangedSessionSummaries(page.sessions, summaryVersions);
+      for (const session of eligible) markSessionSummaryApplied(session.id);
+      setSessions((current) => mergeSessionsById(current, eligible));
+      for (const session of eligible) activePaginationIdsRef.current.add(session.id);
       setSessionOrderIds((current) => [
         ...current,
-        ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
+        ...eligible.map((session) => session.id).filter((id) => !current.includes(id)),
       ]);
       sessionsNextCursorRef.current = page.nextCursor;
       setSessionsNextCursor(page.nextCursor);
@@ -2271,7 +2571,11 @@ export function App() {
       if (sessionsRefreshRequestRef.current !== requestId) return;
       handleApiError(err);
     } finally {
+      sessionIndexCoordinatorRef.current?.release(ticket);
       if (sessionsRefreshRequestRef.current === requestId) setSessionsLoadingMore(false);
+      if (retry && mountedRef.current && sessionsRefreshRequestRef.current === requestId) {
+        window.setTimeout(() => void loadMoreSessions(), 0);
+      }
     }
   }
 
@@ -2280,7 +2584,15 @@ export function App() {
     const requestEpoch = childSessionRequestEpochRef.current;
     const cursor = childSessionCursors.get(parent.id);
     const filters = sessionFiltersRef.current;
-    const summaryVersions = captureSessionSummaryVersions();
+    const ticket = captureIndexTicket(`children:${parent.id}`, {
+      kind: 'children',
+      parent: parent.id,
+      archived: parent.status === 'archived',
+      filters,
+      cursor: cursor ?? null,
+    });
+    if (!ticket) return;
+    let retry = false;
     setChildSessionsLoading((current) => new Set(current).add(parent.id));
     setError('');
     try {
@@ -2291,25 +2603,48 @@ export function App() {
         archived: parent.status === 'archived',
         ...sessionFilterRequestOptions(filters),
       });
+      if (!sessionIndexCoordinatorRef.current?.isTicketCurrent(ticket)) return;
+      const eligible = indexTicketEligibleRows(ticket, page.sessions);
+      if (eligible.length !== page.sessions.length) {
+        retry = true;
+        return;
+      }
       if (childSessionRequestEpochRef.current !== requestEpoch) return;
-      markAcceptedSessionSummaries(page.sessions, summaryVersions);
-      setSessions((current) => mergeSessionSummariesByVersion(current, page.sessions, summaryVersions));
-      reconcileChangedSessionSummaries(page.sessions, summaryVersions);
+      for (const session of eligible) markSessionSummaryApplied(session.id);
+      const previousOwned = new Set(childSessionIdsRef.current.get(parent.id));
+      const owned = cursor ? new Set(previousOwned) : new Set<string>();
+      for (const session of eligible) owned.add(session.id);
+      childSessionIdsRef.current.set(parent.id, owned);
+      setSessions((current) =>
+        mergeSessionsById(
+          current.filter(
+            (session) =>
+              Boolean(cursor) ||
+              !previousOwned.has(session.id) ||
+              owned.has(session.id) ||
+              sessionHasAnyIndexOwner(session.id) ||
+              selectedSessionIdRef.current === session.id,
+          ),
+          eligible,
+        ),
+      );
       setSessionOrderIds((current) => [
         ...current,
-        ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
+        ...eligible.map((session) => session.id).filter((id) => !current.includes(id)),
       ]);
       setChildSessionCursors((current) => new Map(current).set(parent.id, page.nextCursor));
     } catch (err) {
       if (childSessionRequestEpochRef.current !== requestEpoch) return;
       handleApiError(err);
     } finally {
+      sessionIndexCoordinatorRef.current?.release(ticket);
       if (childSessionRequestEpochRef.current === requestEpoch) {
         setChildSessionsLoading((current) => {
           const next = new Set(current);
           next.delete(parent.id);
           return next;
         });
+        if (retry && mountedRef.current) window.setTimeout(() => void loadChildSessions(parent), 0);
       }
     }
   }
@@ -2325,7 +2660,14 @@ export function App() {
     archivedSessionsRequestRef.current = requestId;
     const filters = sessionFiltersRef.current;
     const cursor = archivedSessionsNextCursor;
-    const summaryVersions = captureSessionSummaryVersions();
+    const requestCursor = reset ? null : cursor;
+    const ticket = captureIndexTicket('archived', {
+      kind: 'archived',
+      filters,
+      cursor: requestCursor,
+    });
+    if (!ticket) return;
+    let retry = false;
     setArchivedSessionsLoading(true);
     setError('');
     try {
@@ -2335,13 +2677,23 @@ export function App() {
         ...sessionFilterRequestOptions(filters),
         ...(reset || !cursor ? {} : { cursor }),
       });
+      if (!sessionIndexCoordinatorRef.current?.isTicketCurrent(ticket)) return;
+      const eligible = indexTicketEligibleRows(ticket, page.sessions);
+      if (eligible.length !== page.sessions.length) {
+        retry = true;
+        return;
+      }
       if (archivedSessionsRequestRef.current !== requestId) return;
-      markAcceptedSessionSummaries(page.sessions, summaryVersions);
-      setSessions((current) => mergeSessionSummariesByVersion(current, page.sessions, summaryVersions));
-      reconcileChangedSessionSummaries(page.sessions, summaryVersions);
+      for (const session of eligible) markSessionSummaryApplied(session.id);
+      if (reset || !cursor) {
+        replaceSessionOwnerRows(archivedSessionIdsRef, new Set(eligible.map((session) => session.id)), eligible);
+      } else {
+        for (const session of eligible) archivedSessionIdsRef.current.add(session.id);
+        setSessions((current) => mergeSessionsById(current, eligible));
+      }
       setSessionOrderIds((current) => [
         ...current,
-        ...page.sessions.map((session) => session.id).filter((id) => !current.includes(id)),
+        ...eligible.map((session) => session.id).filter((id) => !current.includes(id)),
       ]);
       setArchivedSessionsNextCursor(page.nextCursor);
       setArchivedSessionsLoaded(true);
@@ -2349,7 +2701,11 @@ export function App() {
       if (archivedSessionsRequestRef.current !== requestId) return;
       handleApiError(err);
     } finally {
+      sessionIndexCoordinatorRef.current?.release(ticket);
       if (archivedSessionsRequestRef.current === requestId) setArchivedSessionsLoading(false);
+      if (retry && mountedRef.current && archivedSessionsRequestRef.current === requestId) {
+        window.setTimeout(() => void loadArchivedSessions(reset), 0);
+      }
     }
   }
 
@@ -2364,9 +2720,15 @@ export function App() {
     const requestId = sessionSearchRequestRef.current;
     if (!query || !cursor || sessionSearchLoadingMore || !canCallApi || canonicalSessionMutationPendingRef.current.size)
       return;
+    const ticket = captureIndexTicket('search:more', {
+      kind: 'search',
+      query,
+      filters: sessionFiltersRef.current,
+      cursor,
+    });
+    if (!ticket) return;
     setSessionSearchLoadingMore(true);
     setError('');
-    const summaryVersions = captureSessionSummaryVersions();
     const summaryEpoch = sessionSearchSummaryEpochRef.current;
     try {
       const page = await searchSessions(token, {
@@ -2376,27 +2738,29 @@ export function App() {
         ...sessionFilterRequestOptions(sessionFiltersRef.current),
       });
       if (sessionSearchRequestRef.current !== requestId || sessionSearchQueryRef.current.trim() !== query) return;
-      if (sessionSearchSummaryEpochRef.current !== summaryEpoch) {
+      if (!sessionIndexCoordinatorRef.current?.isTicketCurrent(ticket)) return;
+      const rows = page.results.map((result) => result.session);
+      const eligible = indexTicketEligibleRows(ticket, rows);
+      if (eligible.length !== rows.length) {
+        sessionIndexCoordinatorRef.current?.release(ticket);
         setSessionSearchRefreshVersion((current) => current + 1);
         return;
       }
-      markAcceptedSessionSummaries(
-        page.results.map((result) => result.session),
-        summaryVersions,
-      );
+      if (sessionSearchSummaryEpochRef.current !== summaryEpoch) {
+        sessionIndexCoordinatorRef.current?.release(ticket);
+        setSessionSearchRefreshVersion((current) => current + 1);
+        return;
+      }
+      for (const session of eligible) markSessionSummaryApplied(session.id);
       setSessionSearchResults((current) => mergeSessionSearchResultsById(current, page.results));
-      setSessions((current) =>
-        mergeSessionSummariesByVersion(
-          current,
-          page.results.map((result) => result.session),
-          summaryVersions,
-        ),
-      );
+      for (const session of eligible) searchSessionIdsRef.current.add(session.id);
+      setSessions((current) => mergeSessionsById(current, eligible));
       setSessionSearchNextCursor(page.nextCursor);
     } catch (err) {
       if (sessionSearchRequestRef.current !== requestId) return;
       handleApiError(err);
     } finally {
+      sessionIndexCoordinatorRef.current?.release(ticket);
       if (sessionSearchRequestRef.current === requestId) setSessionSearchLoadingMore(false);
     }
   }
@@ -2978,25 +3342,68 @@ export function App() {
     }));
   }
 
-  async function handleUpdateTitle(title: string): Promise<boolean> {
+  function abortTitleMutationQueues() {
+    for (const queue of titleMutationQueuesRef.current.values()) {
+      for (const resolve of queue.waiters) resolve(false);
+    }
+    titleMutationQueuesRef.current.clear();
+  }
+
+  function handleUpdateTitle(title: string): Promise<boolean> {
     const nextTitle = title.trim();
-    if (!canWriteSelectedSession || !selectedSessionId || !nextTitle) return false;
+    if (!canWriteSelectedSession || !selectedSessionId || !nextTitle) return Promise.resolve(false);
     const sessionId = selectedSessionId;
-    const authorityEpoch = sessionSummaryAuthorityEpochRef.current;
     const supplementalOnly = isSupplementalSession(sessionId);
-    setError('');
+    let queue = titleMutationQueuesRef.current.get(sessionId);
+    if (!queue) {
+      queue = { latest: null, running: false, waiters: [] };
+      titleMutationQueuesRef.current.set(sessionId, queue);
+    }
+    queue.latest = nextTitle;
+    const result = new Promise<boolean>((resolve) => queue!.waiters.push(resolve));
+    if (!queue.running) void runTitleMutationQueue(sessionId, supplementalOnly, queue);
+    return result;
+  }
+
+  async function runTitleMutationQueue(
+    sessionId: string,
+    supplementalOnly: boolean,
+    queue: { latest: string | null; running: boolean; waiters: Array<(saved: boolean) => void> },
+  ) {
+    queue.running = true;
+    const authorityEpoch = sessionSummaryAuthorityEpochRef.current;
+    let saved = false;
     try {
-      const session = await updateSession({ sessionId, title: nextTitle, token });
-      if (sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return false;
-      const current =
-        sessionsRef.current.find((candidate) => candidate.id === sessionId) ??
-        (supplementalSelectedSessionRef.current?.id === sessionId ? supplementalSelectedSessionRef.current : null);
-      applySessionListUpdate({ ...(current ?? session), title: nextTitle }, { supplementalOnly });
-      return true;
-    } catch (err) {
-      if (sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return false;
-      handleApiError(err);
-      return false;
+      while (queue.latest && mountedRef.current && sessionSummaryAuthorityEpochRef.current === authorityEpoch) {
+        const nextTitle = queue.latest;
+        queue.latest = null;
+        const mutationVersion = nextSessionMutationVersion(sessionId, 'title');
+        markSessionSummaryChanged(sessionId);
+        setError('');
+        try {
+          const session = await updateSession({ sessionId, title: nextTitle, token: tokenRef.current });
+          if (
+            sessionSummaryAuthorityEpochRef.current !== authorityEpoch ||
+            !isCurrentSessionMutation(sessionId, 'title', mutationVersion)
+          )
+            break;
+          if (queue.latest) continue;
+          if (selectedSessionIdRef.current === sessionId) {
+            const current = loadedSessionSummary(sessionId);
+            applySessionListUpdate({ ...(current ?? session), title: nextTitle }, { supplementalOnly });
+          }
+          saved = true;
+        } catch (err) {
+          if (queue.latest) continue;
+          if (sessionSummaryAuthorityEpochRef.current === authorityEpoch) handleApiError(err);
+          saved = false;
+        }
+      }
+    } finally {
+      if (titleMutationQueuesRef.current.get(sessionId) === queue) titleMutationQueuesRef.current.delete(sessionId);
+      for (const resolve of queue.waiters) resolve(saved);
+      queue.waiters = [];
+      queue.running = false;
     }
   }
 
@@ -4045,6 +4452,19 @@ export function App() {
   function applySessionListUpdate(session: Session, options: { forceKeep?: boolean; supplementalOnly?: boolean } = {}) {
     markSessionSummaryChanged(session.id);
     markSessionSummaryApplied(session.id);
+    setRevealedSessionLineage((current) =>
+      current.map((candidate) => (candidate.id === session.id ? session : candidate)),
+    );
+    setSelectedSessionParent((current) => {
+      if (current?.id !== session.id) return current;
+      selectedSessionParentRef.current = session;
+      return session;
+    });
+    setSupplementalSelectedSession((current) => {
+      if (current?.id !== session.id) return current;
+      supplementalSelectedSessionRef.current = session;
+      return session;
+    });
     const isSupplementalSelection =
       !sessionsRef.current.some((candidate) => candidate.id === session.id) &&
       (options.supplementalOnly ||
@@ -4102,6 +4522,9 @@ export function App() {
   function loadedSessionSummary(sessionId: string): Session | null {
     return (
       sessionsRef.current.find((candidate) => candidate.id === sessionId) ??
+      sessionSearchResults.find((result) => result.session.id === sessionId)?.session ??
+      revealedSessionLineage.find((candidate) => candidate.id === sessionId) ??
+      (selectedSessionParentRef.current?.id === sessionId ? selectedSessionParentRef.current : null) ??
       (supplementalSelectedSessionRef.current?.id === sessionId ? supplementalSelectedSessionRef.current : null)
     );
   }

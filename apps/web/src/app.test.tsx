@@ -81,6 +81,7 @@ type MockApiOptions = {
   sessionsNextCursor?: string | null;
   onListSessionsRequest?: (request: { count: number; url: URL }) => Response | Promise<Response> | undefined;
   onGetSessionRequest?: (sessionId: string) => Response | Promise<Response> | undefined;
+  onUpdateSessionRequest?: (body: Record<string, unknown>) => Response | Promise<Response> | undefined;
   onUpdateAccessRequest?: (body: Record<string, unknown>) => Response | Promise<Response>;
   onStarSessionRequest?: (request: { starred: boolean }) => Response | Promise<Response> | undefined;
   sessionDetailStatusById?: Record<string, number>;
@@ -2102,6 +2103,44 @@ it('does not let a delayed access response regress a newer first-page session sn
   expect(screen.queryByRole('heading', { name: 'Stale access response title' })).not.toBeInTheDocument();
 });
 
+it('does not let an older title mutation response overwrite a newer title', async () => {
+  const first = deferred<Response>();
+  const second = deferred<Response>();
+  const titles: unknown[] = [];
+  mockApi({
+    onUpdateSessionRequest: (body) => {
+      titles.push(body.title);
+      return body.title === 'First title' ? first.promise : second.promise;
+    },
+  });
+  render(<App />);
+
+  await screen.findByRole('heading', { name: 'Existing session' });
+  fireEvent.click(screen.getByRole('button', { name: 'Edit title' }));
+  const input = screen.getByDisplayValue('Existing session');
+  const form = input.closest('form');
+  if (!form) throw new Error('Expected title form');
+  fireEvent.change(input, { target: { value: 'First title' } });
+  fireEvent.submit(form);
+  await waitFor(() => expect(titles).toEqual(['First title']));
+  fireEvent.change(input, { target: { value: 'Second title' } });
+  fireEvent.submit(form);
+  expect(titles).toEqual(['First title']);
+
+  await act(async () => {
+    first.resolve(jsonResponse({ session: { ...session, title: 'First title' } }));
+    await first.promise;
+  });
+  await waitFor(() => expect(titles).toEqual(['First title', 'Second title']));
+
+  await act(async () => {
+    second.resolve(jsonResponse({ session: { ...session, title: 'Second title' } }));
+    await second.promise;
+  });
+  expect(await screen.findByRole('heading', { name: 'Second title' })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'First title' })).not.toBeInTheDocument();
+});
+
 it('shows an organization-visible session owner group name for non-members', async () => {
   const clientGroupId = '00000000-0000-4000-8000-000000000011';
   mockApi({
@@ -2192,6 +2231,25 @@ it('refreshes sessions when the global event stream reports an external session'
   expect(await screen.findByText('Slack thread')).toBeInTheDocument();
 });
 
+it('removes an active first-page row omitted by an authoritative refresh', async () => {
+  const omitted = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000098',
+    title: 'Archived elsewhere',
+  };
+  mockApi({
+    onListSessionsRequest: ({ count }) =>
+      jsonResponse({ sessions: count === 1 ? [session, omitted] : [session], nextCursor: null }),
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('button', { name: 'Archived elsewhere' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Archived elsewhere' })).not.toBeInTheDocument());
+  expect(screen.getByRole('button', { name: 'Existing session' })).toBeInTheDocument();
+});
+
 it('uses the latest filters for the first session refresh after a filter change', async () => {
   const requests: string[] = [];
   mockApi({
@@ -2280,6 +2338,35 @@ it('keeps loaded archived rows when a filtered active refresh completes', async 
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 
   await waitFor(() => expect(screen.getByRole('button', { name: /Archived session/ })).toBeInTheDocument());
+});
+
+it('removes an archived row omitted by an authoritative archived reset', async () => {
+  const archivedSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000091',
+    title: 'Archived elsewhere row',
+    status: 'archived',
+  };
+  let archivedRequests = 0;
+  mockApi({
+    onListSessionsRequest: ({ url }) => {
+      if (url.searchParams.get('archived') === 'true') {
+        archivedRequests += 1;
+        return jsonResponse({ sessions: archivedRequests === 1 ? [archivedSession] : [], nextCursor: null });
+      }
+      return jsonResponse({ sessions: [session], nextCursor: null });
+    },
+  });
+  render(<App />);
+
+  await screen.findByRole('heading', { name: 'Existing session' });
+  fireEvent.click(screen.getByText('Archived'));
+  expect(await screen.findByRole('button', { name: /Archived elsewhere row/ })).toBeInTheDocument();
+
+  fireEvent.click(screen.getAllByTitle('Star session')[0]!);
+
+  await waitFor(() => expect(archivedRequests).toBeGreaterThanOrEqual(2));
+  await waitFor(() => expect(screen.queryByRole('button', { name: /Archived elsewhere row/ })).not.toBeInTheDocument());
 });
 
 it('keeps the selected session open after unstarring it with the starred filter active', async () => {
@@ -2606,6 +2693,28 @@ it('preserves load-more sessions when a refresh resolves later', async () => {
 
   expect(screen.getByText('Loaded later')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Load more sessions' })).not.toBeInTheDocument();
+});
+
+it('owns an active pagination cursor synchronously', async () => {
+  const secondPage = deferred<Response>();
+  let secondPageRequests = 0;
+  mockApi({
+    onListSessionsRequest: ({ url }) => {
+      if (url.searchParams.get('cursor') === 'page-2') {
+        secondPageRequests += 1;
+        return secondPage.promise;
+      }
+      return jsonResponse({ sessions: [session], nextCursor: 'page-2' });
+    },
+  });
+  render(<App />);
+
+  const loadMore = await screen.findByRole('button', { name: 'Load more sessions' });
+  fireEvent.click(loadMore);
+  fireEvent.click(loadMore);
+  await waitFor(() => expect(secondPageRequests).toBe(1));
+
+  secondPage.resolve(jsonResponse({ sessions: [], nextCursor: null }));
 });
 
 it('shows a loaded session when the sidebar becomes hovered before the page resolves', async () => {
@@ -5048,6 +5157,40 @@ it('ignores a child page that resolves after the session list refreshes', async 
   expect(sidebar.getByRole('button', { name: 'Load 1 more sub-session' })).toBeInTheDocument();
 });
 
+it('removes a child omitted by an authoritative child-page replacement', async () => {
+  const parentSession = { ...session, directChildCount: 1 };
+  const oldChild = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000305',
+    title: 'Old child row',
+    parentSessionId: session.id,
+    spawnDepth: 1,
+  };
+  const nextChild = { ...oldChild, id: '00000000-0000-4000-8000-000000000306', title: 'Current child row' };
+  let childRequests = 0;
+  mockApi({
+    onListSessionsRequest: ({ url }) => {
+      if (url.searchParams.get('parentSessionId') === session.id) {
+        childRequests += 1;
+        return jsonResponse({ sessions: [childRequests === 1 ? oldChild : nextChild], nextCursor: null });
+      }
+      return jsonResponse({ sessions: [parentSession], nextCursor: null });
+    },
+  });
+  render(<App />);
+
+  const sidebar = within((await screen.findByRole('heading', { name: 'Sessions' })).closest('aside')!);
+  fireEvent.click(sidebar.getByRole('button', { name: 'Load 1 more sub-session' }));
+  expect(await sidebar.findByRole('button', { name: 'Old child row' })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(sidebar.getByRole('button', { name: 'Load 1 more sub-session' })).toBeEnabled());
+  fireEvent.click(sidebar.getByRole('button', { name: 'Load 1 more sub-session' }));
+
+  expect(await sidebar.findByRole('button', { name: 'Current child row' })).toBeInTheDocument();
+  expect(sidebar.queryByRole('button', { name: 'Old child row' })).not.toBeInTheDocument();
+});
+
 it('restores the child count when archiving a parent fails', async () => {
   mockApi({ sessionOverride: { directChildCount: 2 }, archiveStatus: 500 });
   render(<App />);
@@ -5609,6 +5752,8 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === `/sessions/${currentSession.id}` && method === 'PATCH') {
       const body = JSON.parse(String(init?.body)) as { title?: string; tags?: string[] };
+      const customResponse = options.onUpdateSessionRequest?.(body);
+      if (customResponse) return customResponse;
       currentSession = {
         ...currentSession,
         ...(body.title ? { title: body.title } : {}),

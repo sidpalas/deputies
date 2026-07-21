@@ -739,9 +739,141 @@ untyped records. Validate shape and session ownership before direct upsert.
 
 ### Deferred: aggregated bootstrap snapshot
 
-Consider only if initial selection remains a measured bottleneck after live fanout is fixed. A
-useful server contract would return all initial resources with a consistent per-session event
-high-water sequence, rather than merely bundling six unrelated reads.
+Consider only if initial selection remains a measured bottleneck after live fanout is fixed. This
+is a consistency feature as well as a request-count optimization: merely bundling six unrelated
+reads does not create a snapshot and must not be treated as newer authority.
+
+#### Problem the extension solves
+
+Independent bootstrap requests can observe different committed server states. For example, the
+active list may be read before an archive mutation while the selected summary and groups are read
+after it. Without server-provided revision metadata, the client can reject responses invalidated by
+newer local work, but it cannot determine which committed server state each response represents or
+identify an exact snapshot-to-stream handoff.
+
+The extension should provide two related values:
+
+- a **snapshot revision**, identifying the committed state represented by every included resource;
+- an **event high-water cursor**, meaning all applicable events through that cursor are reflected
+  in the snapshot and changes after it are available through replay.
+
+The resulting bootstrap and replay boundary is:
+
+1. atomically read bootstrap state and its event high-water cursor;
+2. apply the snapshot as one client authority transition;
+3. open or resume the global event stream strictly after that cursor;
+4. route replayed events through the existing planner and coordinators.
+
+Every committed mutation must therefore be either represented by the snapshot or replayable after
+its cursor, never neither. Event records and the state changes they describe must commit in the
+same transaction, or an equivalent ordering guarantee must exist.
+
+#### Recommended first contract
+
+Start with a focused aggregate for the session-index/selection bootstrap rather than every detail
+resource:
+
+```ts
+type SessionBootstrapSnapshot = {
+  snapshot: {
+    revision: number;
+    globalEventCursor: number;
+  };
+  sessions: {
+    items: Session[];
+    nextCursor: string | null;
+  };
+  selectedSession?: Session;
+};
+```
+
+The server should construct this response in one consistent read transaction, preferably
+`REPEATABLE READ`, and capture `revision` and `globalEventCursor` inside that transaction. The
+response contract must state that every returned entity incorporates all authorized changes
+through the advertised revision/cursor. The snapshot is scoped to the requesting authorization
+identity; an auth transition invalidates it and requires a new bootstrap.
+
+This first contract intentionally leaves messages, retained event history, artifacts, external
+resources, callbacks, and services on the existing phased bootstrap loader. Add them only when
+measurement shows that an aggregate materially improves initial-selection latency and they can be
+read under the same consistency guarantee.
+
+#### Stable pagination and searches
+
+The first aggregate does not by itself make later pages stable. If page drift is observed, extend
+the API with a short-lived, authorization-bound snapshot token:
+
+```ts
+type SnapshotHandle = {
+  token: string;
+  revision: number;
+  globalEventCursor: number;
+  expiresAt: string;
+};
+```
+
+First-page, archived, child, and search responses would return or accept that token, and every
+cursor derived from the response would remain bound to the same snapshot. This prevents inserts,
+removals, or ordering changes between page one and page two from causing duplicate or omitted
+rows. Cursors must encode or validate the snapshot identity and filter/search context.
+
+Do not hold an open PostgreSQL transaction across arbitrary client requests. Implement snapshot
+tokens only if the persistence model supports bounded historical/as-of reads or another durable
+snapshot representation. Otherwise retain the current coordinator ownership model and treat page
+drift as requiring a fresh first-page generation.
+
+#### Lighter high-water-only alternative
+
+Adding `{ revision, globalEventCursor }` to independent responses is useful but weaker than a
+shared snapshot. It allows the client to compare authority, reject older responses, select an exact
+replay boundary, and retry incompatible bootstrap reads. It does **not** prove that separate
+responses are mutually consistent unless the server also supports reads as of the same revision.
+The API and client must not label independently read resources an aggregate snapshot solely because
+their responses contain nearby high-water values.
+
+#### Required guarantees
+
+1. **Consistent inclusion:** all aggregate resources reflect one committed snapshot.
+2. **Atomic event boundary:** every mutation is in the snapshot or in replay after its cursor.
+3. **Comparable authority:** revision ordering is documented, monotonic, and scoped consistently.
+4. **Stable pagination when promised:** all pages and searches using a snapshot token read the same
+   data and ordering basis.
+5. **Replay retention:** events after the advertised cursor remain available long enough to finish
+   bootstrap and reconnect; an expired cursor produces an explicit full-bootstrap requirement.
+6. **Authorization consistency:** revisions, cursors, and snapshot tokens cannot expose rows outside
+   the caller's current visibility and cannot survive an identity change.
+
+#### Client integration
+
+- Add one atomic reducer/application path for the aggregate rather than invoking existing resource
+  setters independently.
+- Advance local global-event authority to the advertised cursor only after the whole snapshot is
+  accepted.
+- Reject the aggregate if auth authority, selection intent, or bootstrap generation changed while
+  it was in flight.
+- Continue using session-index and selected-resource generations for responses arriving after
+  bootstrap. Server revisions complement request leases; they do not replace client coordination.
+- If replay reports that the high-water cursor expired, discard the incomplete recovery generation
+  and perform one bounded full bootstrap.
+
+#### Extension verification
+
+- A mutation committed before snapshot capture appears in the snapshot and is not required from
+  replay.
+- A mutation committed after snapshot capture is absent from the snapshot and appears after
+  `globalEventCursor`.
+- No transaction-boundary race can make a mutation absent from both sources.
+- Bootstrap resources all report the same revision.
+- An older aggregate cannot overwrite a newer mutation, summary, list, or auth authority.
+- Replaying from the advertised cursor is idempotent with entities already in the snapshot.
+- Auth changes and unmount abort snapshot application and stream handoff.
+- Snapshot-token pagination does not duplicate or omit rows while concurrent sessions are created,
+  archived, restored, retitled, or reordered.
+- Expired snapshot/replay cursors cause one explicit bounded bootstrap, not an automatic retry loop.
+
+Implement this extension only after measuring the current completed synchronization architecture.
+The initial decision gate is either material bootstrap latency/request pressure or a demonstrated
+snapshot-to-replay consistency defect; it is not needed to complete live session synchronization.
 
 ## 12. Suggested commit sequence
 
