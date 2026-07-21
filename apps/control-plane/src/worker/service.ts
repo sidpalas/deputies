@@ -239,7 +239,7 @@ export class WorkerService {
     const runSequences = claimed.messages.map((message) => message.sequence);
     let steeringHandler: ((message: import('../runner/types.js').RunnerMessageInput) => Promise<void>) | undefined;
     let steeringPoll: Promise<void> | undefined;
-    let steeringError: unknown;
+    let steeringError: Error | undefined;
     let steeringStopped = false;
     const pollSteering = () => {
       if (steeringStopped || abort.signal.aborted || !steeringHandler || steeringPoll) return;
@@ -281,7 +281,7 @@ export class WorkerService {
         }
       })()
         .catch((error: unknown) => {
-          steeringError ??= error;
+          steeringError ??= error instanceof Error ? error : new Error('Steering delivery failed', { cause: error });
           abort.abort();
         })
         .then(() => {
@@ -318,8 +318,10 @@ export class WorkerService {
     const steeringInterval = setInterval(pollSteering, 500);
     pollCancellation();
 
+    let result: RunnerResult | null = null;
+    let runError: Error | undefined;
     try {
-      const result = await this.runClaimedMessage(claimed, abort.signal, (handler) => {
+      result = await this.runClaimedMessage(claimed, abort.signal, (handler) => {
         steeringHandler = handler;
         pollSteering();
         return async () => {
@@ -328,16 +330,18 @@ export class WorkerService {
         };
       });
       await steeringPoll;
-      if (steeringError !== undefined) throw steeringError;
-      return result;
+    } catch (error: unknown) {
+      runError = error instanceof Error ? error : new Error('Runner failed', { cause: error });
     } finally {
       steeringStopped = true;
       clearInterval(heartbeat);
       clearInterval(cancellationPoll);
       clearInterval(steeringInterval);
       await steeringPoll;
-      if (steeringError !== undefined) throw steeringError;
     }
+    if (steeringError) throw steeringError;
+    if (runError) throw runError;
+    return result;
   }
 
   private async runClaimedMessage(

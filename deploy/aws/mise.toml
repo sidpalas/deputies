@@ -15,7 +15,7 @@ run = "terraform -chdir=terraform/live/prod validate"
 
 [tasks."validate:ci"]
 description = "Initialize and validate AWS Terraform without a backend"
-run = "terraform -chdir=terraform/live/prod init -backend=false && terraform -chdir=terraform/live/prod fmt -check -recursive && terraform -chdir=terraform/live/prod validate"
+run = "terraform -chdir=terraform/live/prod init -backend=false -lockfile=readonly && terraform -chdir=terraform/live/prod fmt -check -recursive && terraform -chdir=terraform/live/prod validate"
 
 [tasks.plan]
 description = "Plan AWS reference deployment"

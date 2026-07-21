@@ -32,7 +32,6 @@ import {
   listArtifacts,
   listCallbacks,
   listEnvironments,
-  listEvents,
   listIncrementalEvents,
   listGroups,
   listSessionTags,
@@ -3360,7 +3359,7 @@ export function App() {
       titleMutationQueuesRef.current.set(sessionId, queue);
     }
     queue.latest = nextTitle;
-    const result = new Promise<boolean>((resolve) => queue!.waiters.push(resolve));
+    const result = new Promise<boolean>((resolve) => queue.waiters.push(resolve));
     if (!queue.running) void runTitleMutationQueue(sessionId, supplementalOnly, queue);
     return result;
   }

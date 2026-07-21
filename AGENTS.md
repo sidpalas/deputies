@@ -78,6 +78,8 @@ When asked to run or preview the Deputies app from this checkout inside the sand
 ## Common Test Commands
 
 ```sh
+mise run //:lint
+mise run //:check
 mise run //apps/control-plane:typecheck
 mise run //apps/control-plane:test
 mise run //apps/control-plane:test:integration
@@ -86,6 +88,8 @@ mise run //apps/web:test
 mise run //apps/web:e2e
 mise run //apps/web:build
 ```
+
+Before committing, lint must pass. Before pushing or squash-merging a pull request, run the canonical `mise run //:check`; the pull-request `Run Tests` workflow must also pass before merge.
 
 ## Web API Routes
 

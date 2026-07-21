@@ -1,9 +1,7 @@
 PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 if command -v mise >/dev/null 2>&1; then
-  mise run //:format:check
-  mise run //:lint
+  mise run //:check
 else
-  pnpm format:check
-  pnpm lint
+  pnpm check
 fi

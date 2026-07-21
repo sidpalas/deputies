@@ -20,6 +20,16 @@ The Portless commands used below run through mise tasks with `pnpm dlx`, so ther
 
 Install ngrok separately only if you need external webhook delivery into your local machine, such as Slack or GitHub events; it is not needed for the default local UI, API, or sandbox flow.
 
+## Shipping Changes
+
+Run the canonical repository check before pushing:
+
+```sh
+mise run //:check
+```
+
+This checks formatting, lint, package typechecks, unit tests, and infrastructure definitions. The Husky pre-commit hook checks formatting and lint, and the pre-push hook runs the full check. Changes to `main` are shipped through a pull request and squash merge; the `Run Tests` workflow runs on the pull request so lint and the rest of the required test suite pass before merge.
+
 ## Setup
 
 Create a local env file:
@@ -206,6 +216,8 @@ mise run //deploy/local:infra:down
 mise run //apps/control-plane:db:migrate
 mise run //deploy/local:portless:start
 mise run //deploy/local:portless:alias:web
+mise run //:lint
+mise run //:check
 mise run //apps/control-plane:dev
 mise run //apps/web:dev
 mise run //apps/control-plane:typecheck

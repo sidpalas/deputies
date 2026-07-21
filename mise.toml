@@ -73,7 +73,7 @@ docker buildx build --platform "$platforms" -f apps/web/Dockerfile -t "$WEB_IMAG
 
 [tasks.check]
 description = "Run formatting, linting, typechecks, and unit tests"
-depends = ["format:check", "lint", "typecheck", "test", "infra:validate"]
+run = "pnpm check && mise run //:infra:validate"
 
 [tasks."ci:smoke:local"]
 description = "Run smoke GitHub Actions workflow locally with Agent CI"
