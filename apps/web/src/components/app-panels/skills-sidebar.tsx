@@ -13,6 +13,7 @@ export function SkillsSidebar(props: {
   footerProps: SidebarFooterProps;
   groups: Group[];
   loading: boolean;
+  readOnly?: boolean;
   skills: Skill[];
   selectedSkillId: string;
   onBackToSessions: () => void;
@@ -64,7 +65,7 @@ export function SkillsSidebar(props: {
         <Button
           size="icon"
           onClick={props.onCreateSkill}
-          disabled={!props.canCallApi || !props.canCreateSkills}
+          disabled={props.readOnly || !props.canCallApi || !props.canCreateSkills}
           aria-label="New skill"
         >
           <Plus className="h-4 w-4" />
@@ -94,6 +95,7 @@ export function SkillsSidebar(props: {
           title="My skills"
           skills={personal}
           selectedSkillId={props.selectedSkillId}
+          readOnly={props.readOnly ?? false}
           onArchiveSkill={props.onArchiveSkill}
           onSelectSkill={props.onSelectSkill}
         />
@@ -105,6 +107,7 @@ export function SkillsSidebar(props: {
               title={group.name}
               skills={items}
               selectedSkillId={props.selectedSkillId}
+              readOnly={props.readOnly ?? false}
               onArchiveSkill={props.onArchiveSkill}
               onSelectSkill={props.onSelectSkill}
             />
@@ -114,6 +117,7 @@ export function SkillsSidebar(props: {
           title="Shared with my groups"
           skills={shared}
           selectedSkillId={props.selectedSkillId}
+          readOnly={props.readOnly ?? false}
           onArchiveSkill={props.onArchiveSkill}
           onSelectSkill={props.onSelectSkill}
         />
@@ -128,6 +132,7 @@ export function SkillsSidebar(props: {
                 <SkillSection
                   skills={archivedSkills}
                   selectedSkillId={props.selectedSkillId}
+                  readOnly={props.readOnly ?? false}
                   onRestoreSkill={props.onRestoreSkill}
                   onSelectSkill={props.onSelectSkill}
                 />
@@ -152,6 +157,7 @@ function SkillSection(props: {
   title?: string;
   skills: Skill[];
   selectedSkillId: string;
+  readOnly?: boolean;
   onArchiveSkill?: (skillId: string) => void;
   onRestoreSkill?: (skillId: string) => void;
   onSelectSkill: (skillId: string) => void;
@@ -166,8 +172,8 @@ function SkillSection(props: {
       ) : null}
       <div className="grid gap-1">
         {props.skills.map((skill) => {
-          const canArchive = Boolean(skill.canManage && !skill.archivedAt && props.onArchiveSkill);
-          const canRestore = Boolean(skill.canManage && skill.archivedAt && props.onRestoreSkill);
+          const canArchive = Boolean(!props.readOnly && skill.canManage && !skill.archivedAt && props.onArchiveSkill);
+          const canRestore = Boolean(!props.readOnly && skill.canManage && skill.archivedAt && props.onRestoreSkill);
           return (
             <div
               key={skill.id}

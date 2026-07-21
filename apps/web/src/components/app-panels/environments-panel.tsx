@@ -60,6 +60,7 @@ export function EnvironmentsPanel(props: {
   repositoryOptionsError: string;
   showOpenSidebar: boolean;
   openSidebarLabel?: string;
+  loadRevisionHistory?: (environmentId: string, token: string) => Promise<EnvironmentRevision[]>;
   onCreateEnvironment: () => boolean;
   onDirtyChange: (dirty: boolean) => void;
   onEnvironmentChanged: (environment: Environment) => void;
@@ -77,7 +78,7 @@ export function EnvironmentsPanel(props: {
     selectedRevisionId: props.selectedRevisionId,
     token: props.token,
     enabled: Boolean(selected),
-    loadRevisions,
+    loadRevisions: props.loadRevisionHistory ?? loadRevisions,
     onSelectRevision: props.onSelectRevision,
     onError: props.onError,
   });
@@ -211,7 +212,7 @@ export function EnvironmentsPanel(props: {
   }
 
   async function archiveSelectedEnvironment() {
-    if (!selected?.canManage || selected.archivedAt) return;
+    if (!props.canCallApi || !selected?.canManage || selected.archivedAt) return;
     if (dirty && !window.confirm('Discard unsaved changes and archive this environment?')) return;
     setSaving(true);
     setFormError('');
@@ -227,7 +228,7 @@ export function EnvironmentsPanel(props: {
   }
 
   async function unarchiveSelectedEnvironment() {
-    if (!selected?.canManage || !selected.archivedAt) return;
+    if (!props.canCallApi || !selected?.canManage || !selected.archivedAt) return;
     setSaving(true);
     setFormError('');
     try {
@@ -495,7 +496,7 @@ export function EnvironmentsPanel(props: {
                     type="button"
                     variant="secondary"
                     onClick={() => void unarchiveSelectedEnvironment()}
-                    disabled={saving || !selected.canManage || Boolean(viewedRevision)}
+                    disabled={!props.canCallApi || saving || !selected.canManage || Boolean(viewedRevision)}
                   >
                     <RotateCcw className="h-4 w-4" /> Restore
                   </Button>
@@ -505,7 +506,7 @@ export function EnvironmentsPanel(props: {
                     className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10"
                     variant="secondary"
                     onClick={() => void archiveSelectedEnvironment()}
-                    disabled={saving || !selected.canManage || Boolean(viewedRevision)}
+                    disabled={!props.canCallApi || saving || !selected.canManage || Boolean(viewedRevision)}
                   >
                     <Archive className="h-4 w-4" /> Archive
                   </Button>

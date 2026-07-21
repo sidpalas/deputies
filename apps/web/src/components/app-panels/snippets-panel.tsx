@@ -13,6 +13,7 @@ export function SnippetsPanel(props: {
   selectedId: string;
   loading: boolean;
   mutationPending: boolean;
+  readOnly?: boolean;
   showOpenSidebar: boolean;
   onOpenSidebar: () => void;
   onSave: (input: { snippetId?: string; name?: string; body?: string }) => Promise<Snippet | null>;
@@ -50,7 +51,7 @@ export function SnippetsPanel(props: {
   const nameError = slugNameValidationError(name);
   const valid = Boolean(name) && !nameError && Boolean(body.trim()) && new TextEncoder().encode(body).length <= 65536;
   async function save() {
-    if (!valid || !dirty || saving || props.mutationPending) return;
+    if (props.readOnly || !valid || !dirty || saving || props.mutationPending) return;
     const selectedId = props.selectedId;
     const editVersion = editVersionRef.current;
     setSaving(true);
@@ -124,7 +125,7 @@ export function SnippetsPanel(props: {
                     editVersionRef.current += 1;
                     setName(e.target.value);
                   }}
-                  disabled={saving || props.mutationPending || Boolean(props.snippet?.archivedAt)}
+                  disabled={props.readOnly || saving || props.mutationPending || Boolean(props.snippet?.archivedAt)}
                   aria-invalid={Boolean(nameError)}
                   aria-describedby={nameError ? 'snippet-name-error' : undefined}
                 />
@@ -154,18 +155,25 @@ export function SnippetsPanel(props: {
                     editVersionRef.current += 1;
                     setBody(e.target.value);
                   }}
-                  disabled={saving || props.mutationPending || Boolean(props.snippet?.archivedAt)}
+                  disabled={props.readOnly || saving || props.mutationPending || Boolean(props.snippet?.archivedAt)}
                 />
               </label>
               <div className="flex gap-2">
                 <Button
                   type="submit"
-                  disabled={!valid || !dirty || saving || props.mutationPending || Boolean(props.snippet?.archivedAt)}
+                  disabled={
+                    props.readOnly ||
+                    !valid ||
+                    !dirty ||
+                    saving ||
+                    props.mutationPending ||
+                    Boolean(props.snippet?.archivedAt)
+                  }
                 >
                   <Save className="h-4 w-4" />
                   {props.snippet ? 'Save snippet' : 'Create snippet'}
                 </Button>
-                {props.snippet ? (
+                {props.snippet && !props.readOnly ? (
                   props.snippet.archivedAt ? (
                     <Button
                       type="button"

@@ -12,6 +12,7 @@ export function SnippetsSidebar(props: {
   selectedId: string;
   loading: boolean;
   mutationPending: boolean;
+  readOnly?: boolean;
   footerProps: SidebarFooterProps;
   onSelect: (id: string) => void;
   onCreate: () => void;
@@ -38,14 +39,16 @@ export function SnippetsSidebar(props: {
           <span className="font-medium">{item.name}</span>
           <span className="block truncate text-xs text-muted-foreground">{item.body}</span>
         </button>
-        <SidebarArchiveRestoreAction
-          archived={Boolean(item.archivedAt)}
-          resourceLabel={`${item.name} snippet`}
-          resourceType="snippet"
-          className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-          disabled={props.mutationPending}
-          onClick={() => (item.archivedAt ? props.onRestore(item.id) : props.onArchive(item.id))}
-        />
+        {!props.readOnly ? (
+          <SidebarArchiveRestoreAction
+            archived={Boolean(item.archivedAt)}
+            resourceLabel={`${item.name} snippet`}
+            resourceType="snippet"
+            className="w-8 shrink-0 p-0 md:w-auto md:px-2.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+            disabled={props.mutationPending}
+            onClick={() => (item.archivedAt ? props.onRestore(item.id) : props.onArchive(item.id))}
+          />
+        ) : null}
       </div>
     ));
   return (
@@ -58,7 +61,7 @@ export function SnippetsSidebar(props: {
         <Button variant="secondary" size="icon" onClick={props.onBack} aria-label="Back to sessions">
           <CornerUpLeft className="h-4 w-4" />
         </Button>
-        <Button size="icon" onClick={props.onCreate} aria-label="New snippet">
+        <Button size="icon" onClick={props.onCreate} aria-label="New snippet" disabled={props.readOnly}>
           <Plus className="h-4 w-4" />
         </Button>
       </div>

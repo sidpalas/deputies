@@ -20,8 +20,8 @@
           "status": "completed",
           "prompt": "Hello 👋",
           "createdAt": "2026-05-19T15:08:44.143Z",
-          "authorUserId": "e575cfc9-47de-4f7b-93a4-cf3fc06f4a62",
-          "authorName": "sidpalas",
+          "authorUserId": "demo-user-2",
+          "authorName": "user2",
           "context": {
             "model": "openai-codex/gpt-5.5"
           }
@@ -33,8 +33,8 @@
           "status": "completed",
           "prompt": "Goodbye!",
           "createdAt": "2026-05-19T15:08:48.928Z",
-          "authorUserId": "e575cfc9-47de-4f7b-93a4-cf3fc06f4a62",
-          "authorName": "sidpalas",
+          "authorUserId": "demo-user-2",
+          "authorName": "user2",
           "context": {
             "model": "openai-codex/gpt-5.3-codex-spark"
           }

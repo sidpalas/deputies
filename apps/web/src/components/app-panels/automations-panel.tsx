@@ -9,6 +9,7 @@ import {
   updateAutomation,
   type Automation,
   type AutomationInvocation,
+  type AutomationInvocationPage,
   type BranchOption,
   type Environment,
   type Group,
@@ -122,6 +123,12 @@ export function AutomationsPanel(props: {
   selectedAutomationId: string;
   showOpenSidebar: boolean;
   openSidebarLabel?: string;
+  loadInvocationPage?: (input: {
+    automationId: string;
+    token: string;
+    limit: number;
+    cursor?: string;
+  }) => Promise<AutomationInvocationPage>;
   onAutomationChanged: (automation: Automation) => void;
   onArchiveAutomation: (automationId: string) => void;
   onAutomationSaved: (automation: Automation) => void;
@@ -228,7 +235,8 @@ export function AutomationsPanel(props: {
     setInvocationsLoading(true);
     setOlderInvocationsLoading(false);
     setInvocationsNextCursor('');
-    listAutomationInvocations({ automationId: selected.id, token: props.token, limit: invocationHistoryPageSize })
+    const loadInvocationPage = props.loadInvocationPage ?? listAutomationInvocations;
+    loadInvocationPage({ automationId: selected.id, token: props.token, limit: invocationHistoryPageSize })
       .then((page) => {
         if (cancelled) return;
         setInvocations(page.invocations);
@@ -243,7 +251,7 @@ export function AutomationsPanel(props: {
     return () => {
       cancelled = true;
     };
-  }, [selected?.id, props.selectedAutomationId, props.token]);
+  }, [selected?.id, props.selectedAutomationId, props.token, props.loadInvocationPage]);
 
   useEffect(() => {
     const repository = form.repository.trim();
@@ -298,7 +306,7 @@ export function AutomationsPanel(props: {
   }
 
   async function toggleEnabled(automation: Automation) {
-    if (!automation.canManage || automation.archivedAt) return;
+    if (!props.canCallApi || !automation.canManage || automation.archivedAt) return;
     setSaving(true);
     try {
       const updated = await updateAutomation({
@@ -316,7 +324,7 @@ export function AutomationsPanel(props: {
   }
 
   async function invokeSelected(options: { allowOverlap?: boolean; disabledConfirmed?: boolean } = {}) {
-    if (!selected?.canManage || selected.archivedAt) return;
+    if (!props.canCallApi || !selected?.canManage || selected.archivedAt) return;
     if (selectedOwnerGroupArchived) return;
     const allowDisabled = !selected.enabled;
     const allowOverlap = options.allowOverlap === true;
@@ -360,7 +368,7 @@ export function AutomationsPanel(props: {
     const automationId = selected.id;
     setOlderInvocationsLoading(true);
     try {
-      const page = await listAutomationInvocations({
+      const page = await (props.loadInvocationPage ?? listAutomationInvocations)({
         automationId,
         token: props.token,
         limit: invocationHistoryPageSize,
@@ -435,13 +443,13 @@ export function AutomationsPanel(props: {
                     <Button
                       variant="secondary"
                       onClick={() => void toggleEnabled(selected)}
-                      disabled={saving || !selected.canManage}
+                      disabled={!props.canCallApi || saving || !selected.canManage}
                     >
                       {selected.enabled ? 'Disable' : 'Enable'}
                     </Button>
                     <Button
                       onClick={() => void invokeSelected()}
-                      disabled={saving || !selected.canManage || selectedOwnerGroupArchived}
+                      disabled={!props.canCallApi || saving || !selected.canManage || selectedOwnerGroupArchived}
                     >
                       <Play className="h-4 w-4" /> Invoke now
                     </Button>
@@ -680,6 +688,7 @@ export function AutomationsPanel(props: {
                   {selected ? (
                     <AutomationArchiveAction
                       automation={selected}
+                      disabled={!props.canCallApi}
                       saving={saving}
                       onArchiveAutomation={props.onArchiveAutomation}
                       onUnarchiveAutomation={props.onUnarchiveAutomation}
@@ -808,6 +817,7 @@ function EnvironmentRevisionPolicy(props: {
 
 function AutomationArchiveAction(props: {
   automation: Automation;
+  disabled: boolean;
   saving: boolean;
   onArchiveAutomation: (automationId: string) => void;
   onUnarchiveAutomation: (automationId: string) => void;
@@ -818,7 +828,7 @@ function AutomationArchiveAction(props: {
         type="button"
         variant="secondary"
         onClick={() => props.onUnarchiveAutomation(props.automation.id)}
-        disabled={props.saving || !props.automation.canManage}
+        disabled={props.disabled || props.saving || !props.automation.canManage}
       >
         <RotateCcw className="h-4 w-4" /> Restore automation
       </Button>
@@ -831,7 +841,7 @@ function AutomationArchiveAction(props: {
       className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10"
       variant="secondary"
       onClick={() => props.onArchiveAutomation(props.automation.id)}
-      disabled={props.saving || !props.automation.canManage}
+      disabled={props.disabled || props.saving || !props.automation.canManage}
     >
       <Archive className="h-4 w-4" /> Archive automation
     </Button>

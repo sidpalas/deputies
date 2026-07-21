@@ -40,6 +40,7 @@ export function SkillsPanel(props: {
   selectedRevisionId: string;
   loaded: boolean;
   loading: boolean;
+  readOnly?: boolean;
   token: string;
   groups: Group[];
   creatableGroups: Group[];
@@ -61,7 +62,7 @@ export function SkillsPanel(props: {
     currentRevisionId: selected?.currentRevisionId,
     selectedRevisionId: props.selectedRevisionId,
     token: props.token,
-    enabled: Boolean(selected?.canManage),
+    enabled: Boolean(selected?.canManage) && !props.readOnly,
     loadRevisions,
     onSelectRevision: props.onSelectRevision,
     onError: props.onError,
@@ -80,7 +81,8 @@ export function SkillsPanel(props: {
   const selectedArchived = Boolean(selected?.archivedAt);
   const selectedGroupOwned = selected?.ownerKind === 'group';
   const groupOwned = Boolean(selectedGroupOwned || (!selected && form.ownerGroupId));
-  const canEdit = selected ? Boolean(selected.canManage) && !selectedArchived && !viewedRevision : true;
+  const canEdit =
+    !props.readOnly && (selected ? Boolean(selected.canManage) && !selectedArchived && !viewedRevision : true);
   const nameError = skillNameValidationError(form.name);
   const bodySizeBytes = new TextEncoder().encode(form.body).byteLength;
   const complete = Boolean(!nameError && form.name && form.description.trim() && bodySizeBytes <= 65_536);
@@ -140,7 +142,7 @@ export function SkillsPanel(props: {
   }
 
   async function promote(groupId: string) {
-    if (!selected?.canManage || selectedGroupOwned || selectedArchived || !groupId || saving) return;
+    if (props.readOnly || !selected?.canManage || selectedGroupOwned || selectedArchived || !groupId || saving) return;
     const target = props.groups.find((group) => group.id === groupId);
     if (
       !window.confirm(
@@ -161,7 +163,7 @@ export function SkillsPanel(props: {
   }
 
   function archiveSelectedSkill() {
-    if (!selected?.canManage || selected.archivedAt) return;
+    if (props.readOnly || !selected?.canManage || selected.archivedAt) return;
     if (dirty && !window.confirm('Discard unsaved changes and archive this skill?')) return;
     props.onArchiveSkill(selected.id);
   }
@@ -205,7 +207,10 @@ export function SkillsPanel(props: {
                 {selected ? (
                   <div className="flex shrink-0 items-center gap-2">
                     {dirty ? <UnsavedIndicator /> : null}
-                    {selected.canManage && selected.currentRevisionId && selected.currentRevisionNumber ? (
+                    {!props.readOnly &&
+                    selected.canManage &&
+                    selected.currentRevisionId &&
+                    selected.currentRevisionNumber ? (
                       <RevisionSelector
                         currentRevisionId={selected.currentRevisionId}
                         currentRevisionNumber={selected.currentRevisionNumber}
@@ -216,7 +221,7 @@ export function SkillsPanel(props: {
                         onSelectRevision={revisionViewer.selectRevision}
                       />
                     ) : null}
-                    {!viewedRevision && !selected.canManage ? (
+                    {!viewedRevision && (props.readOnly || !selected.canManage) ? (
                       <span className="rounded border border-border bg-muted px-2 py-1 text-xs text-muted-foreground">
                         Read only
                       </span>
@@ -337,7 +342,7 @@ export function SkillsPanel(props: {
                     <p className="mt-1 text-sm text-muted-foreground">
                       Sharing grants read and invocation access. It never grants edit access.
                     </p>
-                    {!selected || selected.canManage ? (
+                    {!props.readOnly && (!selected || selected.canManage) ? (
                       <>
                         <fieldset className="mt-4 grid gap-2 text-sm" disabled={!canEdit}>
                           {(['none', 'specific', 'all_groups'] as const).map((mode) => (
@@ -365,7 +370,9 @@ export function SkillsPanel(props: {
                         ) : null}
                       </>
                     ) : (
-                      <p className="mt-4 text-sm text-foreground">{readOnlyShareModeSummary(selected.shareMode)}</p>
+                      selected && (
+                        <p className="mt-4 text-sm text-foreground">{readOnlyShareModeSummary(selected.shareMode)}</p>
+                      )
                     )}
                   </div>
                 ) : null}
@@ -379,7 +386,7 @@ export function SkillsPanel(props: {
                         type="button"
                         variant="secondary"
                         onClick={() => props.onRestoreSkill(selected.id)}
-                        disabled={!selected.canManage || dirty || saving}
+                        disabled={props.readOnly || !selected.canManage || dirty || saving}
                       >
                         <RotateCcw className="h-4 w-4" /> Restore skill
                       </Button>
@@ -389,7 +396,7 @@ export function SkillsPanel(props: {
                         variant="secondary"
                         className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10"
                         onClick={archiveSelectedSkill}
-                        disabled={!selected.canManage || saving}
+                        disabled={props.readOnly || !selected.canManage || saving}
                       >
                         <Archive className="h-4 w-4" /> Archive skill
                       </Button>
@@ -399,7 +406,12 @@ export function SkillsPanel(props: {
               </form>
             </Card>
 
-            {selected && !viewedRevision && !selectedArchived && selected.canManage && !selectedGroupOwned ? (
+            {selected &&
+            !props.readOnly &&
+            !viewedRevision &&
+            !selectedArchived &&
+            selected.canManage &&
+            !selectedGroupOwned ? (
               <PromoteCard
                 groups={props.creatableGroups}
                 saving={saving || dirty}
