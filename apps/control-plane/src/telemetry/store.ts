@@ -64,6 +64,7 @@ const storeMethods = [
   'getExternalResources',
   'getExternalThread',
   'getGroup',
+  'getGroups',
   'getGroupMember',
   'getLatestEventByType',
   'getLatestRunForSession',

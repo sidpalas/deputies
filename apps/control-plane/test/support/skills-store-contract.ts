@@ -11,6 +11,18 @@ const archivedOwnerGroup = '00000000-0000-4000-8000-000000000204';
 
 export function defineSkillsStoreContract(getStore: () => AppStore): void {
   describe('skills store contract', () => {
+    it('batch loads groups once in requested order while deduplicating and omitting missing ids', async () => {
+      const store = getStore();
+      await seed(store);
+
+      await expect(store.getGroups([])).resolves.toEqual([]);
+      expect(
+        (await store.getGroups([targetGroup, ownerGroup, targetGroup, '00000000-0000-4000-8000-000000000299'])).map(
+          ({ id }) => id,
+        ),
+      ).toEqual([targetGroup, ownerGroup]);
+    });
+
     it('supports CRUD and case-insensitive uniqueness within each owner scope', async () => {
       const store = getStore();
       await seed(store);

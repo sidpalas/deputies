@@ -143,6 +143,93 @@ describe('skills API', () => {
     expect(invalidModeShape.status).toBe(400);
   });
 
+  it('batches and deduplicates owner groups when serializing skill lists and session pickers', async () => {
+    await createGroup(replacementGroupId, 'Replacement owners');
+    const firstOwner = await createUser('first-owner', [[ownerGroupId, 'member']]);
+    const secondOwner = await createUser('second-owner', [[replacementGroupId, 'member']]);
+    const targetMember = await createUser('batch-target', [[targetGroupId, 'member']]);
+
+    for (const [owner, groupId, name] of [
+      [firstOwner, ownerGroupId, 'first-shared'],
+      [firstOwner, ownerGroupId, 'second-shared'],
+      [secondOwner, replacementGroupId, 'third-shared'],
+    ] as const) {
+      const response = await post('/skills', owner, {
+        ownerGroupId: groupId,
+        name,
+        description: name,
+        body: name,
+        shareMode: 'specific',
+        groupIds: [targetGroupId],
+      });
+      expect(response.status).toBe(201);
+    }
+
+    const getGroup = vi.spyOn(store, 'getGroup');
+    const getGroups = vi.spyOn(store, 'getGroups');
+    const list = await request(`/skills?scope=shared&groupId=${targetGroupId}`, targetMember);
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toMatchObject({
+      skills: [
+        expect.objectContaining({ name: 'first-shared', ownerGroupName: 'Owners' }),
+        expect.objectContaining({ name: 'second-shared', ownerGroupName: 'Owners' }),
+        expect.objectContaining({ name: 'third-shared', ownerGroupName: 'Replacement owners' }),
+      ],
+    });
+    expect(getGroups).toHaveBeenCalledTimes(1);
+    expect(getGroups).toHaveBeenCalledWith([ownerGroupId, replacementGroupId]);
+    expect(getGroup).toHaveBeenCalledTimes(2);
+    expect(getGroup.mock.calls).toEqual([[targetGroupId], [targetGroupId]]);
+
+    getGroup.mockClear();
+    getGroups.mockClear();
+    const candidates = await request(`/skills/invocation-candidates?ownerGroupId=${targetGroupId}`, targetMember);
+    expect(candidates.status).toBe(200);
+    await expect(candidates.json()).resolves.toMatchObject({
+      skills: [
+        expect.objectContaining({ name: 'first-shared' }),
+        expect.objectContaining({ name: 'second-shared' }),
+        expect.objectContaining({ name: 'third-shared' }),
+      ],
+    });
+    expect(getGroups).toHaveBeenCalledTimes(1);
+    expect(getGroups).toHaveBeenCalledWith([ownerGroupId, replacementGroupId]);
+    expect(getGroup).toHaveBeenCalledTimes(2);
+    expect(getGroup.mock.calls).toEqual([[targetGroupId], [targetGroupId]]);
+
+    const session = await services.sessions.create({
+      ownerGroupId: targetGroupId,
+      createdByUserId: targetMember.userId,
+      visibility: 'group',
+      writePolicy: 'group_members',
+    });
+    getGroup.mockClear();
+    getGroups.mockClear();
+
+    const picker = await request(`/sessions/${session.id}/skills`, targetMember);
+    expect(picker.status).toBe(200);
+    await expect(picker.json()).resolves.toMatchObject({
+      skills: [
+        expect.objectContaining({
+          name: 'first-shared',
+          provenance: expect.objectContaining({ ownerGroupName: 'Owners' }),
+        }),
+        expect.objectContaining({
+          name: 'second-shared',
+          provenance: expect.objectContaining({ ownerGroupName: 'Owners' }),
+        }),
+        expect.objectContaining({
+          name: 'third-shared',
+          provenance: expect.objectContaining({ ownerGroupName: 'Replacement owners' }),
+        }),
+      ],
+    });
+    expect(getGroups).toHaveBeenCalledTimes(1);
+    expect(getGroups).toHaveBeenCalledWith([ownerGroupId, replacementGroupId]);
+    expect(getGroup).toHaveBeenCalledTimes(1);
+    expect(getGroup).toHaveBeenCalledWith(targetGroupId);
+  });
+
   it('creates and updates group skill sharing atomically without revisioning sharing-only changes', async () => {
     const creator = await createUser('atomic-sharing-creator', [[ownerGroupId, 'member']]);
     const createdResponse = await post('/skills', creator, {

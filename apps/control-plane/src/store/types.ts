@@ -1122,6 +1122,7 @@ export interface AuthStore {
 export interface GroupStore {
   createGroup(record: GroupRecord): Promise<GroupRecord>;
   getGroup(id: string): Promise<GroupRecord | null>;
+  getGroups(ids: string[]): Promise<GroupRecord[]>;
   listGroups(): Promise<GroupRecord[]>;
   updateGroup(record: GroupRecord): Promise<GroupRecord>;
   upsertGroupMember(record: GroupMemberRecord): Promise<GroupMemberRecord>;

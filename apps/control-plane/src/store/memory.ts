@@ -265,6 +265,13 @@ export class MemoryStore implements AppStore {
     return this.groups.get(id) ?? null;
   }
 
+  async getGroups(ids: string[]): Promise<GroupRecord[]> {
+    return [...new Set(ids)].flatMap((id) => {
+      const group = this.groups.get(id);
+      return group ? [group] : [];
+    });
+  }
+
   async listGroups(): Promise<GroupRecord[]> {
     return [...this.groups.values()].sort((a, b) => a.name.localeCompare(b.name));
   }

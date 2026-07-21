@@ -17,7 +17,7 @@ import {
 } from '../skills/invocation.js';
 import { SkillServiceError } from '../skills/service.js';
 import { StoreConflictError } from '../store/types.js';
-import type { SkillRecord, SkillRunCandidate, SkillShareMode } from '../store/types.js';
+import type { GroupRecord, SkillRecord, SkillRunCandidate, SkillShareMode } from '../store/types.js';
 import { writeError } from './http-error.js';
 import { optionalString, readJsonBody } from './request.js';
 import type { AppServices, AppVariables } from './server.js';
@@ -58,11 +58,11 @@ export function registerSkillRoutes(
       return writeError(c, 400, 'invalid_request', 'Expected scope to be personal, group, or shared');
     }
     const source = scope === 'personal' ? 'personal' : scope === 'group' ? 'group' : 'shared';
+    const visibleSkills = skills.filter((skill) => canReadSkill(auth, skill));
+    const ownerGroups = await loadSkillOwnerGroups(services, visibleSkills);
     return c.json({
       skills: await Promise.all(
-        skills
-          .filter((skill) => canReadSkill(auth, skill))
-          .map((skill) => serializeSkill(services, auth, skill, source)),
+        visibleSkills.map((skill) => serializeSkill(services, auth, skill, source, ownerGroups)),
       ),
     });
   });
@@ -146,8 +146,11 @@ export function registerSkillRoutes(
       repoSkillsEnabled: false,
       canUse: (skill) => canReadSkill(auth, skill),
     });
+    const ownerGroups = await loadSkillOwnerGroups(services, candidates);
     return c.json({
-      skills: await Promise.all(candidates.map((skill) => serializePickerCandidate(services, auth, skill))),
+      skills: await Promise.all(
+        candidates.map((skill) => serializePickerCandidate(services, auth, skill, ownerGroups)),
+      ),
     });
   });
 
@@ -293,10 +296,23 @@ export function registerSkillRoutes(
       repoSkillsEnabled: config.repoSkillsEnabled,
       canUse: (skill) => canInvokeSkillInSession(auth, skill, session, authorUserId),
     });
+    const ownerGroups = await loadSkillOwnerGroups(services, candidates);
     return c.json({
-      skills: await Promise.all(candidates.map((skill) => serializePickerCandidate(services, auth, skill))),
+      skills: await Promise.all(
+        candidates.map((skill) => serializePickerCandidate(services, auth, skill, ownerGroups)),
+      ),
     });
   });
+}
+
+async function loadSkillOwnerGroups(
+  services: AppServices,
+  skills: Array<SkillRecord | SkillInvocationCandidate>,
+): Promise<Map<string, GroupRecord>> {
+  const ownerGroupIds = [
+    ...new Set(skills.flatMap((skill) => ('ownerGroupId' in skill && skill.ownerGroupId ? [skill.ownerGroupId] : []))),
+  ];
+  return new Map((await services.store.getGroups(ownerGroupIds)).map((group) => [group.id, group]));
 }
 
 async function mutateSkill(
@@ -326,8 +342,11 @@ async function serializeSkill(
   auth: RequestAuthorization,
   skill: SkillRecord,
   source: 'personal' | 'group' | 'shared',
+  ownerGroups?: ReadonlyMap<string, GroupRecord>,
 ) {
-  const ownerGroup = skill.ownerGroupId ? await services.store.getGroup(skill.ownerGroupId) : null;
+  const ownerGroup = skill.ownerGroupId
+    ? (ownerGroups?.get(skill.ownerGroupId) ?? (ownerGroups ? null : await services.store.getGroup(skill.ownerGroupId)))
+    : null;
   const canManage = canManageSkill(auth, skill);
   return {
     id: skill.id,
@@ -352,8 +371,13 @@ async function serializeSkill(
   };
 }
 
-async function serializePickerSkill(services: AppServices, auth: RequestAuthorization, skill: SkillRunCandidate) {
-  const serialized = await serializeSkill(services, auth, skill, skill.source);
+async function serializePickerSkill(
+  services: AppServices,
+  auth: RequestAuthorization,
+  skill: SkillRunCandidate,
+  ownerGroups: ReadonlyMap<string, GroupRecord>,
+) {
+  const serialized = await serializeSkill(services, auth, skill, skill.source, ownerGroups);
   const { body: _body, ...picker } = serialized;
   return {
     ...picker,
@@ -370,8 +394,9 @@ async function serializePickerCandidate(
   services: AppServices,
   auth: RequestAuthorization,
   skill: SkillInvocationCandidate,
+  ownerGroups: ReadonlyMap<string, GroupRecord>,
 ) {
-  if (skill.source !== 'repo') return serializePickerSkill(services, auth, skill);
+  if (skill.source !== 'repo') return serializePickerSkill(services, auth, skill, ownerGroups);
   return serializeRepositoryPickerSkill(skill);
 }
 

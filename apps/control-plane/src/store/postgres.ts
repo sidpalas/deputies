@@ -465,6 +465,22 @@ export class PostgresStore implements AppStore {
     return result.rows[0] ? toGroup(result.rows[0]) : null;
   }
 
+  async getGroups(ids: string[]): Promise<GroupRecord[]> {
+    const uniqueIds = [...new Set(ids)];
+    if (!uniqueIds.length) return [];
+    const result = await this.pool.query<GroupRow>(
+      `SELECT ${groupSelectColumns}
+       FROM groups
+       WHERE id = ANY($1::uuid[])`,
+      [uniqueIds],
+    );
+    const groupsById = new Map(result.rows.map((row) => [row.id, toGroup(row)]));
+    return uniqueIds.flatMap((id) => {
+      const group = groupsById.get(id);
+      return group ? [group] : [];
+    });
+  }
+
   async listGroups(): Promise<GroupRecord[]> {
     const result = await this.pool.query<GroupRow>(
       `SELECT ${groupSelectColumns}
