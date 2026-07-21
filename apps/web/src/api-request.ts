@@ -55,6 +55,7 @@ export async function streamEventResponse<TEvent>(
   input: {
     token: string;
     signal: AbortSignal;
+    onOpen?: () => void;
     onEvent: (event: TEvent) => void;
   },
 ): Promise<void> {
@@ -92,6 +93,7 @@ export async function streamEventResponse<TEvent>(
     throw new ApiError(response.status, `Event stream failed with ${response.status}`);
   }
   if (!response.body) throw new ApiError(response.status, 'Event stream response has no body');
+  input.onOpen?.();
   dispatchApiConnectionOk('stream');
 
   const reader = response.body.getReader();

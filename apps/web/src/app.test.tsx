@@ -98,8 +98,13 @@ type MockApiOptions = {
   onRetryMessage?: (messageId: string) => void;
   onReplayCallback?: (callbackId: string) => void;
   onStreamOpen?: (push: StreamEventPusher) => void;
-  onGlobalStreamOpen?: (push: StreamEventPusher) => void;
-  onGlobalStreamRequest?: (url: URL) => void;
+  onGlobalStreamOpen?: (push: StreamEventPusher, close: () => void) => void;
+  onGlobalStreamRequest?: (url: URL, count: number) => Response | Promise<Response> | void;
+  onListEventsRequest?: (request: {
+    count: number;
+    sessionId: string;
+    url: URL;
+  }) => Response | Promise<Response> | undefined;
   onListSessions?: (count: number) => void;
   globalStreamStatus?: number;
   hangArchive?: boolean;
@@ -2301,6 +2306,372 @@ it('refreshes sessions after returning from a hidden tab to catch phone updates'
   expect(await screen.findByText('This session is archived.')).toBeInTheDocument();
 });
 
+it('coalesces simultaneous wake, visibility, and online recovery signals', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(new Date('2026-05-05T12:00:00.000Z'));
+  const recoveryPage = deferred<Response>();
+  const requests: string[] = [];
+  let streamRequestCount = 0;
+  let sessionsRequestCount = 0;
+  mockApi({
+    requests,
+    events: [eventFixture({ sequence: 4, type: 'run_started', payload: {} })],
+    onListSessions: (count) => {
+      sessionsRequestCount = count;
+    },
+    onListSessionsRequest: ({ count }) => (count === 2 ? recoveryPage.promise : undefined),
+    onGlobalStreamRequest: (_url, count) => {
+      streamRequestCount = count;
+      return undefined;
+    },
+    onListEventsRequest: ({ url }) =>
+      url.searchParams.has('after')
+        ? jsonResponse({
+            events: [eventFixture({ sequence: 5, type: 'message_updated', payload: { sequence: 1 } })],
+            cursor: 5,
+            hasMore: false,
+          })
+        : undefined,
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  await waitFor(() => expect(streamRequestCount).toBe(1));
+  requests.length = 0;
+
+  setVisibilityState('hidden');
+  fireEvent(document, new Event('visibilitychange'));
+  vi.setSystemTime(new Date('2026-05-05T12:00:06.000Z'));
+  setVisibilityState('visible');
+  fireEvent(document, new Event('visibilitychange'));
+  fireEvent(window, new Event('online'));
+  await act(() => vi.advanceTimersByTimeAsync(1_000));
+
+  await waitFor(() => expect(sessionsRequestCount).toBe(2));
+  expect(streamRequestCount).toBe(2);
+  fireEvent(window, new Event('online'));
+
+  await act(async () => {
+    recoveryPage.resolve(jsonResponse({ sessions: [session], nextCursor: null }));
+    await recoveryPage.promise;
+  });
+
+  await waitFor(() =>
+    expect(requests.filter((request) => request.includes(`/sessions/${session.id}/events?`))).toHaveLength(1),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(125));
+  expect(requests.filter((request) => request === 'GET /sessions?limit=50')).toHaveLength(1);
+  expect(requests.filter((request) => request === `GET /sessions/${session.id}/messages`)).toHaveLength(1);
+  expect(detailResourceRequests(requests)).toEqual([`GET /sessions/${session.id}/messages`]);
+});
+
+it('waits for a successful stream reopen before recovering after repeated reconnect failures', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  let streamRequestCount = 0;
+  let sessionsRequestCount = 0;
+  const recoveryEventUrls: URL[] = [];
+  mockApi({
+    events: [eventFixture({ sequence: 3, type: 'run_started', payload: {} })],
+    onListSessions: (count) => {
+      sessionsRequestCount = count;
+    },
+    onGlobalStreamRequest: (_url, count) => {
+      streamRequestCount = count;
+      if (count === 2 || count === 3) return new Response(null, { status: 503 });
+      return undefined;
+    },
+    onListEventsRequest: ({ url }) => {
+      if (url.searchParams.has('after')) recoveryEventUrls.push(url);
+      return undefined;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  await waitFor(() => expect(streamRequestCount).toBe(1));
+  fireEvent(window, new Event('online'));
+  await waitFor(() => expect(streamRequestCount).toBe(2));
+  expect(sessionsRequestCount).toBe(1);
+
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  expect(streamRequestCount).toBe(3);
+  expect(sessionsRequestCount).toBe(1);
+  await act(() => vi.advanceTimersByTimeAsync(1_000));
+
+  await waitFor(() => expect(streamRequestCount).toBe(4));
+  await waitFor(() => expect(sessionsRequestCount).toBe(2));
+  await waitFor(() => expect(recoveryEventUrls).toHaveLength(1));
+  expect(recoveryEventUrls[0]!.searchParams.get('after')).toBe('3');
+});
+
+it('recovers after a global stream closes cleanly', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  let closeStream: (() => void) | undefined;
+  let streamOpenCount = 0;
+  let sessionsRequestCount = 0;
+  const recoveryAfterValues: string[] = [];
+  mockApi({
+    events: [eventFixture({ sequence: 2, type: 'run_started', payload: {} })],
+    onListSessions: (count) => {
+      sessionsRequestCount = count;
+    },
+    onGlobalStreamOpen: (_push, close) => {
+      streamOpenCount += 1;
+      closeStream = close;
+    },
+    onListEventsRequest: ({ url }) => {
+      const after = url.searchParams.get('after');
+      if (after !== null) recoveryAfterValues.push(after);
+      return undefined;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  await waitFor(() => expect(streamOpenCount).toBe(1));
+  act(() => closeStream?.());
+  await act(() => vi.advanceTimersByTimeAsync(500));
+
+  await waitFor(() => expect(streamOpenCount).toBe(2));
+  await waitFor(() => expect(sessionsRequestCount).toBe(2));
+  await waitFor(() => expect(recoveryAfterValues).toEqual(['2']));
+});
+
+it('waits for the coalesced first-page generation before reading recovery events', async () => {
+  const firstRefresh = deferred<Response>();
+  const recoveryRefresh = deferred<Response>();
+  let sessionsRequestCount = 0;
+  let recoveryEventReadCount = 0;
+  mockApi({
+    onListSessions: (count) => {
+      sessionsRequestCount = count;
+    },
+    onListSessionsRequest: ({ count }) => {
+      if (count === 2) return firstRefresh.promise;
+      if (count === 3) return recoveryRefresh.promise;
+      return undefined;
+    },
+    onListEventsRequest: ({ url }) => {
+      if (url.searchParams.has('after')) recoveryEventReadCount += 1;
+      return undefined;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(sessionsRequestCount).toBe(2));
+  fireEvent(window, new Event('online'));
+  expect(recoveryEventReadCount).toBe(0);
+
+  await act(async () => {
+    firstRefresh.resolve(jsonResponse({ sessions: [session], nextCursor: null }));
+    await firstRefresh.promise;
+  });
+  await waitFor(() => expect(sessionsRequestCount).toBe(3));
+  expect(recoveryEventReadCount).toBe(0);
+
+  await act(async () => {
+    recoveryRefresh.resolve(jsonResponse({ sessions: [session], nextCursor: null }));
+    await recoveryRefresh.promise;
+  });
+  await waitFor(() => expect(recoveryEventReadCount).toBe(1));
+});
+
+it('deduplicates planner effects shared by stream replay and REST recovery', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: string[] = [];
+  let streamOpenCount = 0;
+  const duplicateEvent = eventFixture({ sequence: 5, type: 'message_updated', payload: { sequence: 1 } });
+  mockApi({
+    requests,
+    events: [eventFixture({ sequence: 4, type: 'run_started', payload: {} })],
+    onGlobalStreamOpen: (push) => {
+      streamOpenCount += 1;
+      if (streamOpenCount === 2) push(duplicateEvent);
+    },
+    onListEventsRequest: ({ url }) =>
+      url.searchParams.has('after') ? jsonResponse({ events: [duplicateEvent], cursor: 5, hasMore: false }) : undefined,
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  requests.length = 0;
+  fireEvent(window, new Event('online'));
+  await waitFor(() => expect(streamOpenCount).toBe(2));
+  await act(() => vi.advanceTimersByTimeAsync(125));
+
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}/messages`));
+  expect(requests.filter((request) => request === `GET /sessions/${session.id}/messages`)).toHaveLength(1);
+  expect(requests.filter((request) => request === 'GET /sessions?limit=50')).toHaveLength(1);
+  expect(requests.filter((request) => request === `GET /sessions/${session.id}`)).toHaveLength(0);
+});
+
+it('reconciles stream presentation events after the recovery list authority settles', async () => {
+  const recoveredEvents = deferred<Response>();
+  const requests: string[] = [];
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  let recoveryReadStarted = false;
+  mockApi({
+    requests,
+    events: [eventFixture({ sequence: 2, type: 'run_started', payload: {} })],
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+    onListEventsRequest: ({ url }) => {
+      if (url.searchParams.has('after')) {
+        recoveryReadStarted = true;
+        return recoveredEvents.promise;
+      }
+      return undefined;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  requests.length = 0;
+  fireEvent(window, new Event('online'));
+  await waitFor(() => expect(recoveryReadStarted).toBe(true));
+  act(() => {
+    pushGlobalEvent?.(
+      eventFixture({
+        id: 30,
+        sequence: 3,
+        type: 'message_completed',
+        messageId: '00000000-0000-4000-8000-000000000130',
+        payload: { sequence: 1 },
+      }),
+    );
+  });
+
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}`));
+  await act(async () => {
+    recoveredEvents.resolve(jsonResponse({ events: [], cursor: 3, hasMore: false }));
+    await recoveredEvents.promise;
+  });
+});
+
+it('defers stream presentation effects that arrive during the recovery list request', async () => {
+  const recoveryPage = deferred<Response>();
+  const requests: string[] = [];
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  let recoveryListStarted = false;
+  mockApi({
+    requests,
+    events: [eventFixture({ sequence: 2, type: 'run_started', payload: {} })],
+    onListSessionsRequest: ({ count }) => {
+      if (count !== 2) return undefined;
+      recoveryListStarted = true;
+      return recoveryPage.promise;
+    },
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  requests.length = 0;
+  fireEvent(window, new Event('online'));
+  await waitFor(() => expect(recoveryListStarted).toBe(true));
+  act(() => {
+    pushGlobalEvent?.(
+      eventFixture({
+        id: 31,
+        sequence: 3,
+        type: 'message_completed',
+        messageId: '00000000-0000-4000-8000-000000000131',
+        payload: { sequence: 1 },
+      }),
+    );
+  });
+  expect(requests).not.toContain(`GET /sessions/${session.id}`);
+
+  await act(async () => {
+    recoveryPage.resolve(jsonResponse({ sessions: [session], nextCursor: null }));
+    await recoveryPage.promise;
+  });
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}`));
+});
+
+it('ignores a stale incremental recovery response after selection changes', async () => {
+  const recoveredEvents = deferred<Response>();
+  const secondSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000099',
+    title: 'Second recovery session',
+  };
+  let recoveryReadStarted = false;
+  mockApi({
+    sessions: [session, secondSession],
+    eventsBySession: {
+      [session.id]: [eventFixture({ sequence: 2, type: 'run_started', payload: {} })],
+      [secondSession.id]: [],
+    },
+    onListEventsRequest: ({ sessionId, url }) => {
+      if (sessionId === session.id && url.searchParams.has('after')) {
+        recoveryReadStarted = true;
+        return recoveredEvents.promise;
+      }
+      return undefined;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  fireEvent(window, new Event('online'));
+  await waitFor(() => expect(recoveryReadStarted).toBe(true));
+  fireEvent.click(screen.getByRole('button', { name: /Second recovery session/ }));
+  expect(await screen.findByRole('heading', { name: 'Second recovery session' })).toBeInTheDocument();
+
+  await act(async () => {
+    recoveredEvents.resolve(
+      jsonResponse({
+        events: [
+          eventFixture({
+            sequence: 3,
+            type: 'agent_text_delta',
+            messageId: '00000000-0000-4000-8000-000000000299',
+            payload: { text: 'stale recovered text' },
+          }),
+        ],
+        cursor: 3,
+        hasMore: false,
+      }),
+    );
+    await recoveredEvents.promise;
+  });
+
+  expect(screen.queryByText('stale recovered text')).not.toBeInTheDocument();
+});
+
+it('uses only per-session after cursors for repeated post-selection recovery reads', async () => {
+  const recoveryAfterValues: string[] = [];
+  mockApi({
+    events: [eventFixture({ sequence: 7, type: 'run_started', payload: {} })],
+    onListEventsRequest: ({ url }) => {
+      const after = url.searchParams.get('after');
+      if (after !== null) {
+        recoveryAfterValues.push(after);
+        const sequence = Number(after) + 1;
+        return jsonResponse({
+          events: [eventFixture({ sequence, type: 'run_completed', payload: {} })],
+          cursor: sequence,
+          hasMore: false,
+        });
+      }
+      return undefined;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  fireEvent(window, new Event('online'));
+  await waitFor(() => expect(recoveryAfterValues).toEqual(['7']));
+  fireEvent(window, new Event('online'));
+  await waitFor(() => expect(recoveryAfterValues).toEqual(['7', '8']));
+});
+
 it('clears a selected session when refresh fallback loses read access', async () => {
   const sessions = [{ ...session }];
   mockApi({ sessions, sessionDetailStatusById: { [session.id]: 403 } });
@@ -4215,6 +4586,8 @@ function mockApi(options: MockApiOptions = {}) {
   let sessionsRequestCount = 0;
   let sessionSkillsRequestCount = 0;
   let servicesRequestCount = 0;
+  let eventsRequestCount = 0;
+  let globalStreamRequestCount = 0;
   let skills = options.skills;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
@@ -4706,6 +5079,9 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname.match(/^\/sessions\/[^/]+\/events$/)) {
       const sessionId = url.pathname.split('/')[2]!;
+      eventsRequestCount += 1;
+      const customResponse = options.onListEventsRequest?.({ count: eventsRequestCount, sessionId, url });
+      if (customResponse) return customResponse;
       return jsonResponse({
         events: filterEventsAfter(
           options.eventsBySession?.[sessionId] ?? options.events ?? [],
@@ -4785,7 +5161,9 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === '/events/stream') {
-      options.onGlobalStreamRequest?.(url);
+      globalStreamRequestCount += 1;
+      const customResponse = options.onGlobalStreamRequest?.(url, globalStreamRequestCount);
+      if (customResponse) return customResponse;
       if (options.globalStreamStatus) return new Response(null, { status: options.globalStreamStatus });
       return new Response(
         new ReadableStream({
@@ -4793,7 +5171,7 @@ function mockApi(options: MockApiOptions = {}) {
             const pushStreamEvent: StreamEventPusher = (event) => {
               controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
             };
-            options.onGlobalStreamOpen?.(pushStreamEvent);
+            options.onGlobalStreamOpen?.(pushStreamEvent, () => controller.close());
           },
         }),
         { status: 200 },
@@ -4870,8 +5248,7 @@ function filterEventsAfter(events: unknown[], after: string | null): unknown[] {
   const cursor = Number(after ?? 0);
   return events.filter((event) => {
     if (!event || typeof event !== 'object') return true;
-    const record = event as { id?: unknown; sequence?: unknown };
-    const eventCursor = typeof record.id === 'number' ? record.id : record.sequence;
+    const eventCursor = (event as { sequence?: unknown }).sequence;
     return typeof eventCursor !== 'number' || eventCursor > cursor;
   });
 }

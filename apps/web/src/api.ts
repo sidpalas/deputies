@@ -1385,6 +1385,7 @@ export async function streamEvents(input: {
   after: number;
   token: string;
   signal: AbortSignal;
+  onOpen?: () => void;
   onEvent: (event: AgentEvent) => void;
 }): Promise<void> {
   await streamEventResponse(`/sessions/${input.sessionId}/events/stream?after=${input.after}`, input);
@@ -1401,6 +1402,7 @@ export async function streamGlobalEvents(input: {
   after: number;
   token: string;
   signal: AbortSignal;
+  onOpen?: () => void;
   onEvent: (event: AgentEvent) => void;
 }): Promise<void> {
   const replay = input.after > 0 ? 'true' : 'false';

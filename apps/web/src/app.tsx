@@ -32,6 +32,7 @@ import {
   listArtifacts,
   listCallbacks,
   listEnvironments,
+  listEvents,
   listGroups,
   listSessionTags,
   listExternalResources,
@@ -85,7 +86,12 @@ import {
   type SessionMilestoneInteraction,
 } from './telemetry.js';
 import { componentCause, componentName, loadSessionDetailPhases } from './session-detail-loader.js';
-import { planSessionEvent, type DetailResource, type DirectSessionAction } from './session-event-plan.js';
+import {
+  planSessionEvent,
+  type DetailResource,
+  type DirectSessionAction,
+  type SessionPresentationEffect,
+} from './session-event-plan.js';
 import { SelectedResourceCoordinator, type SelectedResourceContext } from './selected-resource-coordinator.js';
 import {
   activeProgressDisplayText,
@@ -484,10 +490,19 @@ export function App() {
   } = navigation;
   const { messages, events, activeProgress, artifacts, services, externalResources, callbacks } = sessionDetail;
   const eventCursor = useRef(0);
+  const appliedSelectedEventSequencesRef = useRef(new Set<number>());
   const globalEventCursor = useRef(0);
-  const lastBackgroundedAt = useRef<number | null>(null);
   const wasPageHiddenRef = useRef(!isPageVisible());
   const wakeRecoveryActive = useRef(false);
+  const recoveryGenerationRef = useRef(0);
+  const recoveryPendingRef = useRef(false);
+  const recoveryRunningRef = useRef(false);
+  const recoveryListAuthorityGenerationRef = useRef(0);
+  const recoveryPresentationEffectsRef = useRef(new Map<string, SessionPresentationEffect>());
+  const recoveryRestartRequestedRef = useRef(false);
+  const recoveryAbortRef = useRef<AbortController | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const [streamRestartGeneration, setStreamRestartGeneration] = useState(0);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const threadAutoFollowRef = useRef(true);
@@ -510,6 +525,7 @@ export function App() {
   const sessionsRefreshTimerRef = useRef<number | null>(null);
   const sessionsRefreshInFlightRef = useRef(false);
   const sessionsRefreshQueuedRef = useRef(false);
+  const sessionsRefreshWaitersRef = useRef<Array<() => void>>([]);
   const sessionsRefreshRequestRef = useRef(0);
   const archivedSessionsRequestRef = useRef(0);
   const sessionSummaryRefreshInFlightRef = useRef(new Set<string>());
@@ -886,11 +902,13 @@ export function App() {
   function setSelectedSessionId(next: StateUpdate<string>) {
     const nextSessionId = resolveStateUpdate(next, navigationRef.current.selectedSessionId);
     if (nextSessionId !== selectedSessionIdRef.current) {
+      resetIncrementalRecovery();
       sessionSelectionVersionRef.current += 1;
       sessionDetailLoadGenerationRef.current += 1;
       selectedSessionIdRef.current = nextSessionId;
       selectedResourceCoordinatorRef.current?.setContext(selectedResourceContext(nextSessionId));
       clearSessionDetail();
+      eventCursor.current = 0;
     }
     navigationRef.current = { ...navigationRef.current, selectedSessionId: nextSessionId };
     setNavigation((current) => ({ ...current, selectedSessionId: nextSessionId }));
@@ -930,12 +948,16 @@ export function App() {
   }
 
   function resetAuthBoundSessionState() {
+    resetIncrementalRecovery();
     sessionSummaryAuthorityEpochRef.current += 1;
     sessionDetailLoadGenerationRef.current += 1;
     eventCursor.current = 0;
     globalEventCursor.current = 0;
     selectedResourceCoordinatorRef.current?.setContext(selectedResourceContext(selectedSessionIdRef.current));
     sessionsRefreshRequestRef.current += 1;
+    sessionsRefreshQueuedRef.current = false;
+    clearScheduledSessionsRefresh();
+    for (const resolve of sessionsRefreshWaitersRef.current.splice(0)) resolve();
     archivedSessionsRequestRef.current += 1;
     sessionSearchRequestRef.current += 1;
     lineageRevealRequestRef.current += 1;
@@ -1442,41 +1464,31 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const markWakeRecovery = () => {
-      wakeRecoveryActive.current = true;
-      setConnectionStatus(wakeRecoveryConnectionStatus());
-    };
     const handlePageMayResume = () => {
       if (isPageVisible()) {
-        const backgroundedAt = lastBackgroundedAt.current;
-        if (backgroundedAt && Date.now() - backgroundedAt >= wakeRecoveryThresholdMs) markWakeRecovery();
-        lastBackgroundedAt.current = null;
+        if (wasPageHiddenRef.current) requestIncrementalRecovery(true);
+        wasPageHiddenRef.current = false;
       } else {
-        lastBackgroundedAt.current = Date.now();
+        wasPageHiddenRef.current = true;
       }
       setPageVisible(isPageVisible());
     };
     let lastTick = Date.now();
     const interval = window.setInterval(() => {
       const now = Date.now();
-      if (isPageVisible() && now - lastTick >= wakeRecoveryThresholdMs) markWakeRecovery();
+      if (isPageVisible() && now - lastTick >= wakeRecoveryThresholdMs) requestIncrementalRecovery(true);
       lastTick = now;
     }, 1_000);
     const handleVisibilityChange = handlePageMayResume;
+    const handleOnline = () => requestIncrementalRecovery(true);
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('online', markWakeRecovery);
+    window.addEventListener('online', handleOnline);
     return () => {
       window.clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('online', markWakeRecovery);
+      window.removeEventListener('online', handleOnline);
     };
   }, []);
-
-  useEffect(() => {
-    if (!pageVisible || !canCallApi || !isWakeRecoveryStatus(connectionStatus)) return;
-    refreshSessions().catch(() => undefined);
-    if (selectedSessionId) refreshSessionDetail(selectedSessionId).catch(() => undefined);
-  }, [pageVisible, canCallApi, selectedSessionId, token, connectionStatus.state, connectionStatus.message]);
 
   useEffect(() => {
     getHealth()
@@ -1508,18 +1520,6 @@ export function App() {
     if (!canViewAutomations || sidebarPanel !== 'automations') return;
     refreshAutomations().catch(() => undefined);
   }, [canViewAutomations, sidebarPanel, token]);
-
-  useEffect(() => {
-    if (!pageVisible) {
-      wasPageHiddenRef.current = true;
-      return;
-    }
-    if (!wasPageHiddenRef.current || !canCallApi || !sessionsLoaded) return;
-
-    wasPageHiddenRef.current = false;
-    refreshSessions().catch(() => undefined);
-    if (selectedSessionId) refreshSessionDetail(selectedSessionId).catch(() => undefined);
-  }, [pageVisible, canCallApi, sessionsLoaded, selectedSessionId, token]);
 
   useEffect(() => {
     if (!selectedSessionId || !canCallApi) {
@@ -1607,6 +1607,7 @@ export function App() {
     if (!pageVisible || !canCallApi || !sessionsLoaded) return;
 
     const abort = new AbortController();
+    streamAbortRef.current = abort;
     const authorityEpoch = sessionSummaryAuthorityEpochRef.current;
     let reconnectDelayMs = realtimeReconnectInitialDelayMs;
 
@@ -1617,72 +1618,28 @@ export function App() {
             after: globalEventCursor.current,
             token,
             signal: abort.signal,
+            onOpen: () => {
+              reconnectDelayMs = realtimeReconnectInitialDelayMs;
+              recoveryRestartRequestedRef.current = false;
+              runIncrementalRecoveryAfterStreamOpen();
+            },
             onEvent: (event) => {
               if (sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return;
               reconnectDelayMs = realtimeReconnectInitialDelayMs;
               if (typeof event.id === 'number')
                 globalEventCursor.current = Math.max(globalEventCursor.current, event.id);
-
-              const activeSessionId = selectedSessionIdRef.current;
-              if (event.type === 'skills_loaded' && event.sessionId === activeSessionId) {
-                skillsWorkspace.actions.invalidateSessionCatalog();
-              }
-              const activeSessionHasMessages = messagesRef.current.some(
-                (message) => message.sessionId === activeSessionId,
-              );
-              const eventPlan = planSessionEvent(event);
-              if (event.sessionId === activeSessionId) {
-                const shouldResetPendingDetail =
-                  pendingCreatedSessionIdRef.current === activeSessionId &&
-                  detailLoadedSessionIdRef.current !== activeSessionId &&
-                  !activeSessionHasMessages;
-                eventCursor.current = Math.max(eventCursor.current, event.sequence);
-                if (shouldUseActiveProgressEvent(event, messagesRef.current)) {
-                  queueActiveProgressEvent(event);
-                } else {
-                  if (event.type === 'agent_response_final' && event.messageId) {
-                    discardQueuedActiveProgress(event.messageId);
-                  }
-                  setSessionDetail((current) => {
-                    const base = shouldResetPendingDetail ? emptySessionDetail() : current;
-                    return {
-                      ...base,
-                      activeProgress:
-                        event.type === 'agent_response_final' && event.messageId
-                          ? omitActiveProgress(base.activeProgress, event.messageId)
-                          : base.activeProgress,
-                      events: upsertEvent(base.events, event),
-                    };
-                  });
-                }
-                if (eventPlan.directActions.length > 0) {
-                  supersedeSelectedResources(
-                    selectedResourceContext(activeSessionId),
-                    directActionResources(eventPlan.directActions),
-                  );
-                  setSessionDetail((current) => applyDirectSessionActions(current, eventPlan.directActions));
-                }
-                if (eventPlan.detailResources.size > 0) {
-                  selectedResourceCoordinatorRef.current?.invalidate(
-                    selectedResourceContext(activeSessionId),
-                    eventPlan.detailResources,
-                  );
-                }
-              }
-
-              if (eventPlan.sessionEffect !== 'none') {
-                markSessionSummaryChanged(event.sessionId);
-                if (eventPlan.sessionEffect === 'summary') {
-                  refreshLoadedSessionSummary(event.sessionId).catch(() => undefined);
-                } else {
-                  scheduleSessionsRefresh();
-                }
-              }
+              applySynchronizedSessionEvent(event, true);
             },
           });
+          if (!abort.signal.aborted && sessionSummaryAuthorityEpochRef.current === authorityEpoch) {
+            recoveryRestartRequestedRef.current = false;
+            requestIncrementalRecovery(false);
+            setConnectionStatus({ state: 'reconnecting', message: 'Realtime connection interrupted.' });
+          }
         } catch (err: unknown) {
           if (abort.signal.aborted || sessionSummaryAuthorityEpochRef.current !== authorityEpoch) break;
-          scheduleSessionsRefresh(0);
+          recoveryRestartRequestedRef.current = false;
+          requestIncrementalRecovery(false);
           setConnectionStatus({ state: 'reconnecting', message: errorMessage(err) });
         }
 
@@ -1696,9 +1653,193 @@ export function App() {
 
     return () => {
       abort.abort();
-      clearScheduledSessionsRefresh();
+      if (streamAbortRef.current === abort) streamAbortRef.current = null;
+      if (sessionsRefreshWaitersRef.current.length === 0) clearScheduledSessionsRefresh();
     };
-  }, [pageVisible, canCallApi, sessionsLoaded, token]);
+  }, [pageVisible, canCallApi, sessionsLoaded, token, streamRestartGeneration]);
+
+  function applySynchronizedSessionEvent(event: AgentEvent, reconcilePresentation: boolean) {
+    const activeSessionId = selectedSessionIdRef.current;
+    const selectedEventAlreadyApplied =
+      event.sessionId === activeSessionId && appliedSelectedEventSequencesRef.current.has(event.sequence);
+    if (event.sessionId === activeSessionId && !selectedEventAlreadyApplied) {
+      appliedSelectedEventSequencesRef.current.add(event.sequence);
+    }
+    if (event.type === 'skills_loaded' && event.sessionId === activeSessionId && !selectedEventAlreadyApplied) {
+      skillsWorkspace.actions.invalidateSessionCatalog();
+    }
+    const activeSessionHasMessages = messagesRef.current.some((message) => message.sessionId === activeSessionId);
+    const eventPlan = planSessionEvent(event);
+    if (event.sessionId === activeSessionId && !selectedEventAlreadyApplied) {
+      const shouldResetPendingDetail =
+        pendingCreatedSessionIdRef.current === activeSessionId &&
+        detailLoadedSessionIdRef.current !== activeSessionId &&
+        !activeSessionHasMessages;
+      eventCursor.current = Math.max(eventCursor.current, event.sequence);
+      if (shouldUseActiveProgressEvent(event, messagesRef.current)) {
+        queueActiveProgressEvent(event);
+      } else {
+        if (event.type === 'agent_response_final' && event.messageId) discardQueuedActiveProgress(event.messageId);
+        setSessionDetail((current) => {
+          const base = shouldResetPendingDetail ? emptySessionDetail() : current;
+          return {
+            ...base,
+            activeProgress:
+              event.type === 'agent_response_final' && event.messageId
+                ? omitActiveProgress(base.activeProgress, event.messageId)
+                : base.activeProgress,
+            events: upsertEvent(base.events, event),
+          };
+        });
+      }
+      if (eventPlan.directActions.length > 0) {
+        supersedeSelectedResources(
+          selectedResourceContext(activeSessionId),
+          directActionResources(eventPlan.directActions),
+        );
+        setSessionDetail((current) => applyDirectSessionActions(current, eventPlan.directActions));
+      }
+      if (eventPlan.detailResources.size > 0) {
+        selectedResourceCoordinatorRef.current?.invalidate(
+          selectedResourceContext(activeSessionId),
+          eventPlan.detailResources,
+        );
+      }
+    }
+
+    if (reconcilePresentation && eventPlan.sessionEffect !== 'none') {
+      const recoveryListGeneration = recoveryListAuthorityGenerationRef.current;
+      if (recoveryListGeneration !== 0) {
+        deferRecoveryPresentationEffect(event.sessionId, eventPlan.sessionEffect);
+        return;
+      }
+      markSessionSummaryChanged(event.sessionId);
+      if (eventPlan.sessionEffect === 'summary') {
+        refreshLoadedSessionSummary(event.sessionId).catch(() => undefined);
+      } else {
+        scheduleSessionsRefresh();
+      }
+    }
+  }
+
+  function deferRecoveryPresentationEffect(sessionId: string, effect: SessionPresentationEffect) {
+    const current = recoveryPresentationEffectsRef.current.get(sessionId);
+    if (current !== 'list') recoveryPresentationEffectsRef.current.set(sessionId, effect);
+  }
+
+  function flushRecoveryPresentationEffects() {
+    const entries = [...recoveryPresentationEffectsRef.current];
+    recoveryPresentationEffectsRef.current.clear();
+    if (entries.length === 0) return;
+    for (const [sessionId] of entries) markSessionSummaryChanged(sessionId);
+    if (entries.some(([, effect]) => effect === 'list')) {
+      scheduleSessionsRefresh(0);
+      return;
+    }
+    for (const [sessionId] of entries) refreshLoadedSessionSummary(sessionId).catch(() => undefined);
+  }
+
+  function requestIncrementalRecovery(restartStream: boolean) {
+    if (recoveryPendingRef.current) {
+      if (!restartStream && recoveryRunningRef.current) {
+        recoveryGenerationRef.current += 1;
+        recoveryRunningRef.current = false;
+        recoveryAbortRef.current?.abort();
+        recoveryAbortRef.current = null;
+        return;
+      }
+      if (restartStream && !recoveryRunningRef.current) {
+        if (recoveryRestartRequestedRef.current) return;
+        recoveryRestartRequestedRef.current = true;
+        wakeRecoveryActive.current = true;
+        setConnectionStatus(wakeRecoveryConnectionStatus());
+        streamAbortRef.current?.abort();
+        setStreamRestartGeneration((current) => current + 1);
+      }
+      return;
+    }
+    recoveryGenerationRef.current += 1;
+    recoveryPendingRef.current = true;
+    recoveryRunningRef.current = false;
+    if (!restartStream) return;
+    recoveryRestartRequestedRef.current = true;
+    wakeRecoveryActive.current = true;
+    setConnectionStatus(wakeRecoveryConnectionStatus());
+    streamAbortRef.current?.abort();
+    setStreamRestartGeneration((current) => current + 1);
+  }
+
+  function resetIncrementalRecovery() {
+    recoveryGenerationRef.current += 1;
+    recoveryPendingRef.current = false;
+    recoveryRunningRef.current = false;
+    recoveryListAuthorityGenerationRef.current = 0;
+    recoveryPresentationEffectsRef.current.clear();
+    recoveryRestartRequestedRef.current = false;
+    recoveryAbortRef.current?.abort();
+    recoveryAbortRef.current = null;
+  }
+
+  function incrementalRecoveryIsCurrent(
+    generation: number,
+    authorityEpoch: number,
+    context: SelectedResourceContext,
+  ): boolean {
+    return (
+      recoveryGenerationRef.current === generation &&
+      recoveryPendingRef.current &&
+      sessionSummaryAuthorityEpochRef.current === authorityEpoch &&
+      isSelectedResourceContextCurrent(context)
+    );
+  }
+
+  function runIncrementalRecoveryAfterStreamOpen() {
+    if (!recoveryPendingRef.current || recoveryRunningRef.current) return;
+    const generation = recoveryGenerationRef.current;
+    const authorityEpoch = sessionSummaryAuthorityEpochRef.current;
+    const sessionId = selectedSessionIdRef.current;
+    const context = selectedResourceContext(sessionId);
+    const abort = new AbortController();
+    recoveryAbortRef.current?.abort();
+    recoveryAbortRef.current = abort;
+    recoveryRunningRef.current = true;
+
+    void (async () => {
+      try {
+        recoveryListAuthorityGenerationRef.current = generation;
+        try {
+          await refreshSessions();
+        } finally {
+          if (recoveryListAuthorityGenerationRef.current === generation) {
+            recoveryListAuthorityGenerationRef.current = 0;
+            flushRecoveryPresentationEffects();
+          }
+        }
+        if (!incrementalRecoveryIsCurrent(generation, authorityEpoch, context) || abort.signal.aborted) return;
+        if (!sessionId) return;
+
+        if (detailLoadedSessionIdRef.current !== sessionId) {
+          await loadAndApplySessionDetail(sessionId, true, abort.signal);
+          return;
+        }
+
+        const after = eventCursor.current;
+        const recoveredEvents = await listEvents(sessionId, tokenRef.current, after, { signal: abort.signal });
+        if (!incrementalRecoveryIsCurrent(generation, authorityEpoch, context) || abort.signal.aborted) return;
+        for (const event of recoveredEvents) applySynchronizedSessionEvent(event, false);
+      } catch (err) {
+        if (incrementalRecoveryIsCurrent(generation, authorityEpoch, context) && !abort.signal.aborted) {
+          handleApiError(err);
+        }
+      } finally {
+        if (recoveryGenerationRef.current === generation) {
+          recoveryPendingRef.current = false;
+          recoveryRunningRef.current = false;
+          if (recoveryAbortRef.current === abort) recoveryAbortRef.current = null;
+        }
+      }
+    })();
+  }
 
   function clearScheduledSessionsRefresh() {
     if (sessionsRefreshTimerRef.current === null) return;
@@ -1811,16 +1952,20 @@ export function App() {
   async function refreshSessions() {
     if (canonicalSessionMutationPendingRef.current.size) {
       sessionsRefreshQueuedRef.current = true;
+      await new Promise<void>((resolve) => sessionsRefreshWaitersRef.current.push(resolve));
       return;
     }
-    const requestId = sessionsRefreshRequestRef.current + 1;
-    sessionsRefreshRequestRef.current = requestId;
-    invalidateChildSessionRequests();
     if (sessionsRefreshInFlightRef.current) {
       sessionsRefreshQueuedRef.current = true;
+      await new Promise<void>((resolve) => sessionsRefreshWaitersRef.current.push(resolve));
       return;
     }
 
+    const completionWaiters = sessionsRefreshWaitersRef.current.splice(0);
+    const requestId = sessionsRefreshRequestRef.current + 1;
+    sessionsRefreshRequestRef.current = requestId;
+    const authorityEpoch = sessionSummaryAuthorityEpochRef.current;
+    invalidateChildSessionRequests();
     sessionsRefreshInFlightRef.current = true;
     setLoading(true);
     setError('');
@@ -1830,14 +1975,15 @@ export function App() {
     const filterOptions = sessionFilterRequestOptions(filters);
     const summaryMutationVersionsAtStart = captureSessionSummaryVersions();
     try {
-      const page = await listSessions(token, { limit: sessionListPageSize, ...filterOptions });
+      const page = await listSessions(tokenRef.current, { limit: sessionListPageSize, ...filterOptions });
+      if (sessionSummaryAuthorityEpochRef.current !== authorityEpoch) return;
       if (sessionsRefreshRequestRef.current !== requestId) return;
       const selectedId = selectedSessionIdRef.current;
       let selected: Session | null = null;
       let selectedRemoved = false;
       if (selectedId && !page.sessions.some((session) => session.id === selectedId)) {
         try {
-          selected = await getSession({ sessionId: selectedId, token });
+          selected = await getSession({ sessionId: selectedId, token: tokenRef.current });
         } catch (err) {
           if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
             selectedRemoved = true;
@@ -1900,13 +2046,17 @@ export function App() {
         return next;
       });
     } catch (err) {
-      if (sessionsRefreshRequestRef.current === requestId) {
+      if (
+        sessionSummaryAuthorityEpochRef.current === authorityEpoch &&
+        sessionsRefreshRequestRef.current === requestId
+      ) {
         setSessionsLoaded(true);
         handleApiError(err);
       }
     } finally {
       if (sessionsRefreshRequestRef.current === requestId || !sessionsRefreshQueuedRef.current) setLoading(false);
       sessionsRefreshInFlightRef.current = false;
+      for (const resolve of completionWaiters) resolve();
       if (sessionsRefreshQueuedRef.current) {
         sessionsRefreshQueuedRef.current = false;
         scheduleSessionsRefresh(0);
@@ -2173,6 +2323,7 @@ export function App() {
       if (signal?.aborted) return null;
       if (selectedSessionIdRef.current !== sessionId) return null;
       eventCursor.current = Math.max(eventCursor.current, loaded.events.at(-1)?.sequence ?? 0);
+      for (const event of loaded.events) appliedSelectedEventSequencesRef.current.add(event.sequence);
       setSessionDetail((current) => {
         const messages = selectedResourceVersionIsCurrent(context, resourceVersions, 'messages')
           ? loaded.messages
@@ -2198,6 +2349,7 @@ export function App() {
         };
       });
       satisfySelectedSnapshotDisplacement(new Set(selectedDetailResources));
+      detailLoadedSessionIdRef.current = sessionId;
       setDetailLoadedSessionId(sessionId);
       return loaded;
     } catch (err) {
@@ -2260,6 +2412,7 @@ export function App() {
           return null;
         }
         eventCursor.current = Math.max(eventCursor.current, detail.events.at(-1)?.sequence ?? 0);
+        for (const event of detail.events) appliedSelectedEventSequencesRef.current.add(event.sequence);
         setSessionDetail((current) => {
           const messages = selectedResourceVersionIsCurrent(context, resourceVersions, 'messages')
             ? detail.messages
@@ -2274,6 +2427,7 @@ export function App() {
           };
         });
         satisfySelectedSnapshotDisplacement(new Set(['messages']));
+        detailLoadedSessionIdRef.current = sessionId;
         setDetailLoadedSessionId(sessionId);
         milestones.detail.success({
           messageCount: detail.messages.length,
@@ -2415,6 +2569,7 @@ export function App() {
       // first message. Fast deployments can emit completion events before React
       // commits the selected-session state below; the pending ref lets the SSE
       // handler accept only this new session without treating full detail as loaded.
+      resetIncrementalRecovery();
       sessionSelectionVersionRef.current += 1;
       sessionDetailLoadGenerationRef.current += 1;
       selectedSessionIdRef.current = session.id;
@@ -2501,10 +2656,12 @@ export function App() {
     } catch (err) {
       if (pendingCreatedSessionIdRef.current) {
         pendingCreatedSessionIdRef.current = '';
+        resetIncrementalRecovery();
         sessionSelectionVersionRef.current += 1;
         sessionDetailLoadGenerationRef.current += 1;
         selectedSessionIdRef.current = previousSelectedSessionId;
         selectedResourceCoordinatorRef.current?.setContext(selectedResourceContext(previousSelectedSessionId));
+        eventCursor.current = 0;
       }
       setNewThreadPrompt(firstPrompt);
       setNewThreadEnvironmentId(firstEnvironmentId);
@@ -2941,6 +3098,7 @@ export function App() {
   function clearSessionDetail() {
     clearQueuedActiveProgress();
     messagesRef.current = [];
+    appliedSelectedEventSequencesRef.current.clear();
     detailLoadedSessionIdRef.current = '';
     setSessionDetail(emptySessionDetail());
   }
@@ -3025,6 +3183,7 @@ export function App() {
 
   function startNewThread() {
     if (!canCreateThread) return;
+    resetIncrementalRecovery();
     sessionSelectionVersionRef.current += 1;
     sessionDetailLoadGenerationRef.current += 1;
     selectedSessionIdRef.current = '';
@@ -3066,6 +3225,7 @@ export function App() {
     sessionStorage.removeItem(groupsPanelOpenStorageKey);
     autoScrolledSessionId.current = '';
     if (selectionChanged) {
+      resetIncrementalRecovery();
       pendingSessionMilestoneTriggerRef.current = 'selection';
       sessionSelectionVersionRef.current += 1;
       sessionDetailLoadGenerationRef.current += 1;
@@ -3500,6 +3660,7 @@ export function App() {
       preserveDirectChildCount: true,
     });
     if (restoreSelection) {
+      resetIncrementalRecovery();
       sessionSelectionVersionRef.current += 1;
       sessionDetailLoadGenerationRef.current += 1;
       selectedSessionIdRef.current = rollback.selectedSessionId;
