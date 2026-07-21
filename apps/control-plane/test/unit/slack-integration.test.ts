@@ -150,6 +150,7 @@ describe('Slack integration', () => {
         sequence: 1,
         status: 'cancelled',
         prompt: 'from slack',
+        steering: false,
         source: 'slack',
         context: {
           callback: {
@@ -216,6 +217,7 @@ describe('Slack integration', () => {
         sequence: 1,
         status: 'failed',
         prompt: 'from slack',
+        steering: false,
         source: 'slack',
         context: {
           callback: {
@@ -276,6 +278,7 @@ describe('Slack integration', () => {
         sequence: 1,
         status: 'processing' as const,
         prompt: 'from slack',
+        steering: false,
         source: 'slack',
         context: {
           callback: {

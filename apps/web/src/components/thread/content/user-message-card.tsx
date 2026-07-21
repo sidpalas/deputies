@@ -28,6 +28,8 @@ export function UserMessageCard(props: {
   onCancelRun: () => void;
   onEditMessage: (message: Message) => void;
   onMessageDraftChange: (value: string) => void;
+  onToggleSteering: (message: Message) => void;
+  steeringPending: boolean;
   openableManagedSkillIds?: ReadonlySet<string>;
   onOpenSkill?: (skillId: string, revisionId: string) => void;
   onRetryFailedMessages: (messageIds: string[]) => void;
@@ -44,9 +46,25 @@ export function UserMessageCard(props: {
           </span>
           <InlineTimestamp value={message.createdAt} />
           <Badge className={cn('shrink-0', statusTextClass(message.status))}>{messageStatusLabel(message)}</Badge>
+          {message.status === 'pending' && message.steering ? <Badge className="shrink-0">Steering</Badge> : null}
         </h3>
         {props.canWriteSession && message.status === 'pending' && props.editingMessageId !== message.id ? (
           <div className="flex gap-1">
+            <Button
+              className="h-7 px-2"
+              variant={message.steering ? 'secondary' : 'ghost'}
+              size="sm"
+              aria-pressed={message.steering}
+              title={
+                message.steering
+                  ? 'Cancel steering and leave this message in the ordinary queue.'
+                  : 'Send this message into the active turn ahead of ordinary queued messages.'
+              }
+              disabled={props.steeringPending}
+              onClick={() => props.onToggleSteering(message)}
+            >
+              {message.steering ? 'Cancel steering' : 'Steer'}
+            </Button>
             <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onEditMessage(message)}>
               Edit
             </Button>

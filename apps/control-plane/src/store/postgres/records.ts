@@ -120,6 +120,7 @@ export type MessageRow = QueryResultRow & {
   sequence: PgInteger;
   status: MessageStatus;
   prompt: string;
+  steering: boolean;
   author_user_id: string | null;
   author_name: string | null;
   source: string | null;
@@ -462,6 +463,7 @@ export function toMessage(row: MessageRow): MessageRecord {
     sequence: Number(row.sequence),
     status: row.status,
     prompt: row.prompt,
+    steering: row.steering,
     createdAt: row.created_at,
   };
   if (row.author_user_id) record.authorUserId = row.author_user_id;

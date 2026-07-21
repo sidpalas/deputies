@@ -668,7 +668,7 @@ export class PostgresStore implements AppStore {
       ]);
       if (existing.rows[0]) {
         const message = await client.query<MessageRow>(
-          `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+          `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
            FROM messages
            WHERE session_id = $1
            ORDER BY sequence ASC
@@ -743,13 +743,14 @@ export class PostgresStore implements AppStore {
       );
 
       const messageResult = await client.query<MessageRow>(
-        `INSERT INTO messages (id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at)
-         VALUES ($1, $2, 1, 'pending', $3, $4, $5, $6, $7, $8)
-         RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
+        `INSERT INTO messages (id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at)
+         VALUES ($1, $2, 1, 'pending', $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
         [
           input.message.id,
           input.session.id,
           input.message.prompt,
+          input.message.steering ?? false,
           input.message.authorUserId ?? null,
           input.message.authorName ?? null,
           input.message.source ?? null,
@@ -1387,7 +1388,7 @@ export class PostgresStore implements AppStore {
         `UPDATE messages
          SET status = 'cancelled'
          WHERE session_id = $1 AND status = 'pending'
-         RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
+         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
         [input.sessionId],
       );
 
@@ -2291,15 +2292,16 @@ export class PostgresStore implements AppStore {
   async createMessage(record: CreateMessageRecord): Promise<MessageRecord> {
     return this.transaction(async (client) => {
       const result = await client.query<MessageRow>(
-        `INSERT INTO messages (id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
+        `INSERT INTO messages (id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
         [
           record.id,
           record.sessionId,
           record.sequence,
           record.status,
           record.prompt,
+          record.steering ?? false,
           record.authorUserId ?? null,
           record.authorName ?? null,
           record.source ?? null,
@@ -2329,7 +2331,7 @@ export class PostgresStore implements AppStore {
 
   async getMessages(sessionId: string): Promise<MessageRecord[]> {
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
        FROM messages
        WHERE session_id = $1
        ORDER BY sequence ASC`,
@@ -2342,7 +2344,7 @@ export class PostgresStore implements AppStore {
   async getMessagesByIds(messageIds: string[]): Promise<MessageRecord[]> {
     if (!messageIds.length) return [];
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
        FROM messages
        WHERE id = ANY($1::uuid[])`,
       [messageIds],
@@ -2353,7 +2355,7 @@ export class PostgresStore implements AppStore {
 
   async getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null> {
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
        FROM messages
        WHERE session_id = $1 AND id = $2`,
       [input.sessionId, input.messageId],
@@ -2368,7 +2370,7 @@ export class PostgresStore implements AppStore {
         [sessionId],
       ),
       this.pool.query<MessageRow>(
-        `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+        `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
          FROM messages
          WHERE session_id = $1
          ORDER BY sequence DESC
@@ -2385,7 +2387,7 @@ export class PostgresStore implements AppStore {
   async getSessionTranscript(input: SessionTranscriptOptions): Promise<SessionTranscriptPage> {
     const requested = input.limit + 1;
     const messageResult = await this.pool.query<MessageRow>(
-      `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
        FROM messages
        WHERE session_id = $1
          AND ($2::bigint IS NULL OR sequence < $2)
@@ -2420,16 +2422,27 @@ export class PostgresStore implements AppStore {
   async updatePendingMessage(input: {
     sessionId: string;
     messageId: string;
-    prompt: string;
+    prompt?: string;
+    steering?: boolean;
     context?: Record<string, unknown>;
   }): Promise<MessageRecord | null> {
     const result = await this.pool.query<MessageRow>(
       `UPDATE messages
-       SET prompt = $3,
-           context = CASE WHEN $4::boolean THEN $5::jsonb ELSE context END
+       SET prompt = CASE WHEN $3::boolean THEN $4::text ELSE prompt END,
+           context = CASE WHEN $5::boolean THEN $6::jsonb ELSE context END,
+           steering = CASE WHEN $7::boolean THEN $8::boolean ELSE steering END
        WHERE session_id = $1 AND id = $2 AND status = 'pending'
-       RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
-      [input.sessionId, input.messageId, input.prompt, input.context !== undefined, input.context ?? null],
+       RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+      [
+        input.sessionId,
+        input.messageId,
+        input.prompt !== undefined,
+        input.prompt ?? null,
+        input.context !== undefined,
+        input.context ?? null,
+        input.steering !== undefined,
+        input.steering ?? null,
+      ],
     );
     return result.rows[0] ? toMessage(result.rows[0]) : null;
   }
@@ -2444,7 +2457,7 @@ export class PostgresStore implements AppStore {
 
       const result = await client.query<MessageRow>(
         `UPDATE messages SET status = 'cancelled' WHERE session_id = $1 AND id = $2 AND status = 'pending'
-         RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
+         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
         [input.sessionId, input.messageId],
       );
       if (!result.rows[0]) return null;
@@ -2478,6 +2491,76 @@ export class PostgresStore implements AppStore {
     return batch ? { message: batch.messages[0]!, run: batch.run } : null;
   }
 
+  async persistActiveRunExecutionSignature(input: {
+    runId: string;
+    leaseOwner: string;
+    now: Date;
+    signature: Record<string, unknown>;
+  }): Promise<RunRecord | null> {
+    const signature = executionSignature(input.signature);
+    const result = await this.pool.query<RunRow>(
+      `UPDATE runs
+       SET metadata = metadata || jsonb_build_object('executionSignature', $4::jsonb)
+       WHERE id = $1 AND status = 'running' AND lease_owner = $2 AND lease_expires_at > $3
+       RETURNING id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at,
+                 attempt, started_at, completed_at, failed_at, error, metadata`,
+      [input.runId, input.leaseOwner, input.now, signature],
+    );
+    return result.rows[0] ? toRun(result.rows[0]) : null;
+  }
+
+  async claimPendingSteeringMessages(input: {
+    runId: string;
+    leaseOwner: string;
+    now: Date;
+  }): Promise<MessageRecord[]> {
+    return this.transaction(async (client) => {
+      const runResult = await client.query<RunRow>(
+        `SELECT id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at,
+                attempt, started_at, completed_at, failed_at, error, metadata
+         FROM runs
+         WHERE id = $1 AND status = 'running' AND lease_owner = $2 AND lease_expires_at > $3
+         FOR UPDATE`,
+        [input.runId, input.leaseOwner, input.now],
+      );
+      const runRow = runResult.rows[0];
+      if (!runRow) return [];
+
+      const result = await client.query<MessageRow>(
+        `UPDATE messages
+         SET status = 'processing'
+         WHERE id IN (
+           SELECT m.id FROM messages m
+           WHERE m.session_id = $1 AND m.status = 'pending' AND m.steering = true
+             AND $2::jsonb IS NOT NULL
+             AND COALESCE((
+               SELECT jsonb_object_agg(entry.key, entry.value)
+               FROM jsonb_each(COALESCE(m.context, '{}'::jsonb)) entry
+               WHERE entry.key IN ('repository', 'branch', 'environment', 'model', 'reasoningLevel')
+                 AND entry.value <> 'null'::jsonb
+             ), '{}'::jsonb) = $2::jsonb
+           ORDER BY m.sequence
+           FOR UPDATE
+         )
+         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+        [runRow.session_id, runRow.metadata.executionSignature ?? null],
+      );
+      const messages = result.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence);
+      if (!messages.length) return [];
+      const run = toRun(runRow);
+      const messageIds = [...new Set([...getRunMessageIds(run), ...messages.map((message) => message.id)])];
+      const existingSequences = Array.isArray(run.metadata.sequences)
+        ? run.metadata.sequences.filter((sequence): sequence is number => typeof sequence === 'number')
+        : [];
+      const sequences = [...new Set([...existingSequences, ...messages.map((message) => message.sequence)])];
+      await client.query('UPDATE runs SET metadata = metadata || $2::jsonb WHERE id = $1', [
+        input.runId,
+        { messageIds, sequences },
+      ]);
+      return messages;
+    });
+  }
+
   async claimNextPendingMessageBatch(input: {
     runId: string;
     runnerType: string;
@@ -2497,7 +2580,7 @@ export class PostgresStore implements AppStore {
             AND NOT EXISTS (
               SELECT 1 FROM runs r
               WHERE r.session_id = s.id
-                AND r.status IN ('starting', 'running', 'cancelling')
+                AND r.status IN ('starting', 'running', 'completing', 'cancelling')
             )
           ORDER BY m.created_at ASC, m.sequence ASC
           FOR UPDATE OF s SKIP LOCKED
@@ -2511,7 +2594,7 @@ export class PostgresStore implements AppStore {
         `UPDATE messages
          SET status = 'processing'
          WHERE session_id = $1 AND status = 'pending'
-          RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
+          RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
         [sessionId],
       );
       const messages = updatedMessages.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence);
@@ -2552,6 +2635,55 @@ export class PostgresStore implements AppStore {
     return this.finishRun(input.runId, input.leaseOwner, 'completed', input.completedAt);
   }
 
+  async beginRunCompletion(input: {
+    runId: string;
+    leaseOwner: string;
+    now: Date;
+    result: Record<string, unknown>;
+  }): Promise<ClaimedMessageBatch | null> {
+    return this.transaction(async (client) => {
+      const result = await client.query<RunRow>(
+        `UPDATE runs SET status = 'completing', heartbeat_at = $3,
+                         metadata = jsonb_set(metadata, '{runnerResult}', $4::jsonb, true)
+         WHERE id = $1 AND lease_owner = $2 AND status = 'running' AND lease_expires_at > $3
+         RETURNING id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, attempt, started_at, completed_at, failed_at, error, metadata`,
+        [input.runId, input.leaseOwner, input.now, input.result],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      const messageResult = await client.query<MessageRow>(
+        `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
+         FROM messages WHERE id = ANY($1::uuid[]) ORDER BY sequence`,
+        [getRunMessageIds(toRun(row))],
+      );
+      return { run: toRun(row), messages: messageResult.rows.map(toMessage) };
+    });
+  }
+
+  async claimExpiredRunCompletion(input: {
+    leaseOwner: string;
+    leaseExpiresAt: Date;
+    now: Date;
+  }): Promise<ClaimedMessageBatch | null> {
+    return this.transaction(async (client) => {
+      const result = await client.query<RunRow>(
+        `UPDATE runs SET lease_owner = $1, lease_expires_at = $2, heartbeat_at = $3
+         WHERE id = (SELECT id FROM runs WHERE status = 'completing' AND lease_expires_at <= $3
+                     ORDER BY lease_expires_at FOR UPDATE SKIP LOCKED LIMIT 1)
+         RETURNING id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, attempt, started_at, completed_at, failed_at, error, metadata`,
+        [input.leaseOwner, input.leaseExpiresAt, input.now],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      const messages = await client.query<MessageRow>(
+        `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
+         FROM messages WHERE id = ANY($1::uuid[]) ORDER BY sequence`,
+        [getRunMessageIds(toRun(row))],
+      );
+      return { run: toRun(row), messages: messages.rows.map(toMessage) };
+    });
+  }
+
   async completeRunBatch(input: {
     runId: string;
     leaseOwner: string;
@@ -2570,7 +2702,7 @@ export class PostgresStore implements AppStore {
       `UPDATE runs
        SET lease_expires_at = $3,
            heartbeat_at = $4
-         WHERE id = $1 AND lease_owner = $2 AND status IN ('running', 'cancelling') AND lease_expires_at > $4
+         WHERE id = $1 AND lease_owner = $2 AND status IN ('running', 'completing', 'cancelling') AND lease_expires_at > $4
        RETURNING id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, attempt, started_at, completed_at, failed_at, error, metadata`,
       [input.runId, input.leaseOwner, input.leaseExpiresAt, input.heartbeatAt],
     );
@@ -2633,7 +2765,7 @@ export class PostgresStore implements AppStore {
           `UPDATE messages
            SET status = 'pending'
           WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
-            RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
+            RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
           [messageIds],
         );
 
@@ -2709,7 +2841,7 @@ export class PostgresStore implements AppStore {
         `UPDATE messages
          SET status = 'cancelling'
          WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
-          RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
+          RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
         [messageIds],
       );
 
@@ -2951,6 +3083,11 @@ export class PostgresStore implements AppStore {
     const result = await this.pool.query<ArtifactRow>(
       `INSERT INTO artifacts (id, session_id, run_id, message_id, type, title, url, storage_key, payload, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (id) DO UPDATE SET id = artifacts.id
+       WHERE (artifacts.session_id, artifacts.run_id, artifacts.message_id, artifacts.type, artifacts.title,
+              artifacts.url, artifacts.storage_key, artifacts.payload)
+         IS NOT DISTINCT FROM (EXCLUDED.session_id, EXCLUDED.run_id, EXCLUDED.message_id, EXCLUDED.type,
+                               EXCLUDED.title, EXCLUDED.url, EXCLUDED.storage_key, EXCLUDED.payload)
        RETURNING id, session_id, run_id, message_id, type, title, url, storage_key, payload, created_at`,
       [
         record.id,
@@ -2965,7 +3102,8 @@ export class PostgresStore implements AppStore {
         record.createdAt,
       ],
     );
-    return toArtifact(result.rows[0]!);
+    if (!result.rows[0]) throw new Error(`Artifact idempotency mismatch: ${record.id}`);
+    return toArtifact(result.rows[0]);
   }
 
   async getArtifacts(sessionId: string): Promise<ArtifactRecord[]> {
@@ -3014,6 +3152,12 @@ export class PostgresStore implements AppStore {
     const result = await this.pool.query<CallbackDeliveryRow>(
       `INSERT INTO callback_deliveries (id, session_id, run_id, message_id, target_type, target, status, event_type, payload, created_at, updated_at, next_attempt_at, max_attempts)
        VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11, $12)
+       ON CONFLICT (id) DO UPDATE SET id = callback_deliveries.id
+       WHERE (callback_deliveries.session_id, callback_deliveries.run_id, callback_deliveries.message_id,
+              callback_deliveries.target_type, callback_deliveries.target, callback_deliveries.event_type,
+              callback_deliveries.payload)
+         IS NOT DISTINCT FROM (EXCLUDED.session_id, EXCLUDED.run_id, EXCLUDED.message_id,
+                               EXCLUDED.target_type, EXCLUDED.target, EXCLUDED.event_type, EXCLUDED.payload)
        RETURNING id, session_id, run_id, message_id, target_type, target, status, event_type, payload, attempts, max_attempts, last_error, created_at, updated_at, next_attempt_at, last_attempt_at, delivered_at`,
       [
         record.id,
@@ -3030,7 +3174,8 @@ export class PostgresStore implements AppStore {
         record.maxAttempts ?? 5,
       ],
     );
-    return toCallbackDelivery(result.rows[0]!);
+    if (!result.rows[0]) throw new Error(`Callback idempotency mismatch: ${record.id}`);
+    return toCallbackDelivery(result.rows[0]);
   }
 
   async listCallbackDeliveries(input: { sessionId: string; messageId?: string }): Promise<CallbackDeliveryRecord[]> {
@@ -3190,8 +3335,9 @@ export class PostgresStore implements AppStore {
          WHERE id = $2
            AND id = $8
            AND lease_owner = $9
-           AND status IN ('running', 'cancelling')
+           AND status IN ('running', 'completing', 'cancelling')
            AND lease_expires_at > $10
+         FOR UPDATE
        ), next_sequence AS (
          INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
          SELECT $1, 'events', 2 FROM owned_run
@@ -3477,7 +3623,11 @@ export class PostgresStore implements AppStore {
               completed_at = CASE WHEN $2 = 'completed' THEN $3 ELSE completed_at END,
               failed_at = CASE WHEN $2 IN ('failed', 'cancelled') THEN $3 ELSE failed_at END,
              error = $4
-         WHERE id = $1 AND lease_owner = $5 AND status IN ('running', 'cancelling') AND lease_expires_at > $3
+         WHERE id = $1 AND lease_owner = $5
+           AND (($2 = 'cancelled' AND status = 'cancelling')
+             OR ($2 = 'completed' AND status = 'completing')
+             OR ($2 = 'failed' AND status IN ('running', 'completing')))
+           AND lease_expires_at > $3
            RETURNING id, session_id, message_id, status, runner_type, lease_owner, lease_expires_at, heartbeat_at, attempt, started_at, completed_at, failed_at, error, metadata`,
         [runId, status, finishedAt, error ?? null, leaseOwner],
       );
@@ -3490,7 +3640,7 @@ export class PostgresStore implements AppStore {
         `UPDATE messages
          SET status = $2
           WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
-            RETURNING id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at`,
+            RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
         [messageIds, status],
       );
 
@@ -3507,8 +3657,33 @@ export class PostgresStore implements AppStore {
         WHERE id = $1`,
         [run.session_id, status, finishedAt],
       );
+      const messages = messageResult.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence);
+      const events: EventRecord[] = [];
+      if (status === 'completed') {
+        for (const message of messages) {
+          const eventResult = await client.query<EventRow>(
+            `WITH next_sequence AS (
+               INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
+               VALUES ($1, 'events', 2)
+               ON CONFLICT (session_id, kind) DO UPDATE
+               SET next_sequence = session_sequence_counters.next_sequence + 1
+               RETURNING next_sequence - 1 AS sequence
+             ), inserted AS (
+               INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
+               SELECT $1, $2, $3, sequence, 'message_completed', $4, $5 FROM next_sequence
+               ON CONFLICT (run_id, message_id, type) WHERE type = 'message_completed' DO NOTHING
+               RETURNING id, session_id, run_id, message_id, sequence, type, payload, created_at
+             )
+             SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at,
+                    pg_notify($6, json_build_object('id', id)::text)
+             FROM inserted`,
+            [run.session_id, run.id, message.id, { sequence: message.sequence }, finishedAt, eventNotificationChannel],
+          );
+          if (eventResult.rows[0]) events.push(toEvent(eventResult.rows[0]));
+        }
+      }
 
-      return { messages: messageResult.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence), run: toRun(run) };
+      return { messages, run: toRun(run), events };
     });
   }
 
@@ -3838,6 +4013,14 @@ async function assertAutomationEnvironmentAvailableWithClient(
       'Environment is no longer available to the automation owner group',
     );
   }
+}
+
+const executionContextKeys = ['repository', 'branch', 'environment', 'model', 'reasoningLevel'] as const;
+
+function executionSignature(context: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    executionContextKeys.filter((key) => context[key] != null).map((key) => [key, context[key]]),
+  );
 }
 
 function isUniqueViolation(error: unknown, constraint: string): boolean {

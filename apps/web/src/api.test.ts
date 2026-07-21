@@ -11,8 +11,30 @@ import {
   archiveSnippet,
   listSnippets,
   restoreSnippet,
+  updateMessageSteering,
   updateSnippet,
 } from './api.js';
+
+describe('message API requests', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('updates only steering for a message', async () => {
+    const message = { id: 'message-1', steering: true };
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ message }), { status: 200 }));
+
+    await expect(
+      updateMessageSteering({ sessionId: 'session-1', messageId: 'message-1', steering: true, token: 'token' }),
+    ).resolves.toEqual(message);
+
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0]), window.location.href).pathname).toBe(
+      '/sessions/session-1/messages/message-1',
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('PATCH');
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({ steering: true });
+  });
+});
 
 describe('automation API requests', () => {
   afterEach(() => vi.restoreAllMocks());

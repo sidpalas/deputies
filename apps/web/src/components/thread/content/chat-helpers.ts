@@ -61,8 +61,13 @@ export function formatAssistantDisplayText(text: string): string {
 
 export function groupMessagesByRun(messages: Message[], events: AgentEvent[]): MessageGroup[] {
   const batchBySequence = new Map<number, { runId: string; sequences: number[] }>();
+  const recoveredRunIds = new Set(
+    events
+      .filter((event) => event.type === 'run_failed' && event.runId && event.payload.recovered === true)
+      .map((event) => event.runId!),
+  );
   for (const event of events) {
-    if (event.type !== 'message_started' || !event.runId) continue;
+    if (event.type !== 'message_started' || !event.runId || recoveredRunIds.has(event.runId)) continue;
     const sequences = Array.isArray(event.payload.sequences)
       ? event.payload.sequences.filter((value): value is number => typeof value === 'number')
       : [];
@@ -70,10 +75,20 @@ export function groupMessagesByRun(messages: Message[], events: AgentEvent[]): M
     for (const sequence of sequences) batchBySequence.set(sequence, { runId: event.runId, sequences });
   }
 
+  const reorderablePending = messages
+    .filter((message) => message.status === 'pending' && !batchBySequence.has(message.sequence))
+    .sort((left, right) => Number(right.steering) - Number(left.steering) || left.sequence - right.sequence);
+  let pendingIndex = 0;
+  const displayMessages = messages.map((message) =>
+    message.status === 'pending' && !batchBySequence.has(message.sequence)
+      ? (reorderablePending[pendingIndex++] ?? message)
+      : message,
+  );
+
   const groups: MessageGroup[] = [];
   const seen = new Set<string>();
 
-  for (const message of messages) {
+  for (const message of displayMessages) {
     if (seen.has(message.id)) continue;
     const batch = batchBySequence.get(message.sequence);
     if (!batch) {
@@ -85,7 +100,7 @@ export function groupMessagesByRun(messages: Message[], events: AgentEvent[]): M
     const minSequence = Math.min(...batch.sequences);
     const maxSequence = Math.max(...batch.sequences);
     const batchSequenceSet = new Set(batch.sequences);
-    const batchMessages = messages.filter((candidate) => {
+    const batchMessages = displayMessages.filter((candidate) => {
       if (batchSequenceSet.has(candidate.sequence)) return true;
       return candidate.status === 'cancelled' && candidate.sequence > minSequence && candidate.sequence < maxSequence;
     });
@@ -112,7 +127,12 @@ export function isCancellingRunGroup(messages: Message[]): boolean {
 export function groupDiagnosticsByRun(events: AgentEvent[]): Record<string, AgentEvent[]> {
   const grouped: Record<string, AgentEvent[]> = {};
   for (const event of events) {
-    if (event.type === 'message_created' || event.type === 'agent_text_delta' || event.type === 'agent_response_final')
+    if (
+      event.type === 'message_created' ||
+      event.type === 'message_updated' ||
+      event.type === 'agent_text_delta' ||
+      event.type === 'agent_response_final'
+    )
       continue;
     for (const key of diagnosticGroupKeys(event)) {
       const group = grouped[key] ?? [];

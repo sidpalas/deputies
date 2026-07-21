@@ -19,6 +19,7 @@ export type RunnerInput = {
   emit: (event: NormalizedEvent) => Promise<void>;
   updateSessionContext?: (context: Record<string, unknown>) => Promise<Record<string, unknown>>;
   shouldPersist?: () => Promise<boolean>;
+  activeMessageDelivery?: (handler: (message: RunnerMessageInput) => Promise<void>) => () => Promise<void>;
 };
 
 export type RunnerMessageInput = {

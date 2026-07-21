@@ -19,6 +19,7 @@ import type {
   SessionStore,
 } from '../store/types.js';
 import { traceAsync } from '../telemetry/index.js';
+import { parseRunnerResult, serializeRunnerResult } from './persisted-result.js';
 
 type WorkerStore = RunStore & SessionStore & MessageStore & SandboxStore & CallbackStore;
 const titleGenerationTimeoutMs = 30_000;
@@ -73,6 +74,16 @@ export class WorkerService {
   }
 
   private async processNextInternal(): Promise<boolean> {
+    const completionNow = new Date();
+    const completion = await this.options.store.claimExpiredRunCompletion({
+      leaseOwner: this.options.leaseOwner,
+      leaseExpiresAt: new Date(completionNow.getTime() + this.leaseDurationMs),
+      now: completionNow,
+    });
+    if (completion) {
+      await this.resumeCompletionSafely(completion);
+      return true;
+    }
     await this.recoverStaleRuns();
 
     const now = new Date();
@@ -98,31 +109,18 @@ export class WorkerService {
     try {
       const result = await this.runWithHeartbeat(claimed);
       if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
-      const completed = await traceAsync('worker.finalize_run', { 'deputies.result': 'completed' }, () =>
-        this.options.store.completeRunBatch({
-          runId: claimed.run.id,
-          leaseOwner: this.options.leaseOwner,
-          completedAt: new Date(),
-        }),
-      );
-      if (!completed) return true;
-      for (const message of completed.messages) {
-        await this.options.events.append({
-          sessionId: message.sessionId,
-          runId: completed.run.id,
-          messageId: message.id,
-          type: 'message_completed',
-          payload: { sequence: message.sequence },
-        });
+      if (!result) return true;
+      const completing = await this.options.store.beginRunCompletion({
+        runId: claimed.run.id,
+        leaseOwner: this.options.leaseOwner,
+        now: new Date(),
+        result: serializeRunnerResult(result),
+      });
+      if (!completing) {
+        if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
+        return true;
       }
-      await this.notifyRunCompleted(completed.messages[0]!, completed.run);
-      if (result) {
-        await this.enqueueDeputyCompletionNotification({
-          sessionId: completed.messages[0]!.sessionId,
-          runId: completed.run.id,
-          outcome: { status: 'completed' },
-        });
-      }
+      await this.resumeCompletionSafely(completing);
     } catch (error) {
       if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
       const message = error instanceof Error ? error.message : 'Unknown worker error';
@@ -134,7 +132,10 @@ export class WorkerService {
           error: message,
         }),
       );
-      if (!failed) return true;
+      if (!failed) {
+        if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
+        return true;
+      }
       await this.options.events.append({
         sessionId: failed.messages[0]!.sessionId,
         runId: failed.run.id,
@@ -162,6 +163,56 @@ export class WorkerService {
     return true;
   }
 
+  private async resumeCompletionSafely(completing: ClaimedMessageBatch): Promise<void> {
+    try {
+      await this.publishCompletionWithHeartbeat(completing, parseRunnerResult(completing.run.metadata.runnerResult));
+    } catch (error) {
+      console.warn(`Completion publication will be retried: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async publishCompletionWithHeartbeat(completing: ClaimedMessageBatch, result: RunnerResult): Promise<void> {
+    let lost = false;
+    const renew = async () => {
+      const now = new Date();
+      const renewed = await this.options.store.renewRunLease({
+        runId: completing.run.id,
+        leaseOwner: this.options.leaseOwner,
+        heartbeatAt: now,
+        leaseExpiresAt: new Date(now.getTime() + this.leaseDurationMs),
+      });
+      if (!renewed) lost = true;
+    };
+    const timer = setInterval(
+      () =>
+        void renew().catch(() => {
+          lost = true;
+        }),
+      this.heartbeatIntervalMs,
+    );
+    try {
+      await renew();
+      if (lost) throw new Error('Run ownership lost while completing');
+      await this.publishCompletedResult(completing, result);
+      if (lost) throw new Error('Run ownership lost while completing');
+      const completed = await this.options.store.completeRunBatch({
+        runId: completing.run.id,
+        leaseOwner: this.options.leaseOwner,
+        completedAt: new Date(),
+      });
+      if (!completed) throw new Error('Run ownership lost while completing');
+      for (const event of completed.events ?? []) this.options.events.publishExternal(event);
+      await this.notifyRunCompleted(completed.messages[0]!, completed.run);
+      await this.enqueueDeputyCompletionNotification({
+        sessionId: completed.messages[0]!.sessionId,
+        runId: completed.run.id,
+        outcome: { status: 'completed' },
+      });
+    } finally {
+      clearInterval(timer);
+    }
+  }
+
   async recoverStaleRuns(): Promise<number> {
     const recovered = await this.options.store.recoverStaleRuns({
       now: new Date(),
@@ -185,6 +236,58 @@ export class WorkerService {
 
   private async runWithHeartbeat(claimed: ClaimedMessageBatch): Promise<RunnerResult | null> {
     const abort = new AbortController();
+    const runSequences = claimed.messages.map((message) => message.sequence);
+    let steeringHandler: ((message: import('../runner/types.js').RunnerMessageInput) => Promise<void>) | undefined;
+    let steeringPoll: Promise<void> | undefined;
+    let steeringError: unknown;
+    let steeringStopped = false;
+    const pollSteering = () => {
+      if (steeringStopped || abort.signal.aborted || !steeringHandler || steeringPoll) return;
+      steeringPoll = (async () => {
+        const messages = await this.options.store.claimPendingSteeringMessages({
+          runId: claimed.run.id,
+          leaseOwner: this.options.leaseOwner,
+          now: new Date(),
+        });
+        runSequences.push(...messages.map((message) => message.sequence));
+        for (const message of messages) {
+          if (abort.signal.aborted || !steeringHandler) break;
+          if (!(await this.isRunStrictlyOwnedByThisWorker(claimed.run.id))) {
+            throw new Error('Run ownership lost while delivering steering message');
+          }
+          const started = await this.options.events.appendForRun(
+            {
+              sessionId: message.sessionId,
+              runId: claimed.run.id,
+              messageId: message.id,
+              type: 'message_started',
+              payload: { sequences: runSequences, batchSize: runSequences.length },
+            },
+            {
+              runId: claimed.run.id,
+              leaseOwner: this.options.leaseOwner,
+              now: new Date(),
+            },
+          );
+          if (!started) throw new Error('Run ownership lost while delivering steering message');
+          await steeringHandler({
+            messageId: message.id,
+            prompt: message.prompt,
+            sequence: message.sequence,
+            ...(message.authorUserId ? { authorUserId: message.authorUserId } : {}),
+            ...(message.context ? { context: message.context } : {}),
+            skillInvocations: normalizeRunnerSkillInvocations(message.context),
+          });
+        }
+      })()
+        .catch((error: unknown) => {
+          steeringError ??= error;
+          abort.abort();
+        })
+        .then(() => {
+          steeringPoll = undefined;
+        });
+    };
     const pollCancellation = () => {
       this.options.store
         .getRun(claimed.run.id)
@@ -212,17 +315,36 @@ export class WorkerService {
         });
     }, this.heartbeatIntervalMs);
     const cancellationPoll = setInterval(pollCancellation, this.cancellationPollIntervalMs);
+    const steeringInterval = setInterval(pollSteering, 500);
     pollCancellation();
 
     try {
-      return await this.runClaimedMessage(claimed, abort.signal);
+      const result = await this.runClaimedMessage(claimed, abort.signal, (handler) => {
+        steeringHandler = handler;
+        pollSteering();
+        return async () => {
+          await steeringPoll;
+          steeringHandler = undefined;
+        };
+      });
+      await steeringPoll;
+      if (steeringError !== undefined) throw steeringError;
+      return result;
     } finally {
+      steeringStopped = true;
       clearInterval(heartbeat);
       clearInterval(cancellationPoll);
+      clearInterval(steeringInterval);
+      await steeringPoll;
+      if (steeringError !== undefined) throw steeringError;
     }
   }
 
-  private async runClaimedMessage(claimed: ClaimedMessageBatch, signal: AbortSignal): Promise<RunnerResult | null> {
+  private async runClaimedMessage(
+    claimed: ClaimedMessageBatch,
+    signal: AbortSignal,
+    activeMessageDelivery: NonNullable<import('../runner/types.js').RunnerInput['activeMessageDelivery']>,
+  ): Promise<RunnerResult | null> {
     const primary = claimed.messages[0]!;
     await this.appendOwnedRunEvent({
       sessionId: primary.sessionId,
@@ -257,7 +379,14 @@ export class WorkerService {
       if (!session) throw new Error(`Session not found: ${primary.sessionId}`);
       const sessionContext =
         created || restarted ? await this.clearSessionServicesForRun(session, claimed) : (session.context ?? {});
-      let runContext = { ...sessionContext, ...buildBatchContext(claimed.messages) };
+      let runContext = mergeRunContext(sessionContext, claimed.messages);
+      const signatureStored = await this.options.store.persistActiveRunExecutionSignature({
+        runId: claimed.run.id,
+        leaseOwner: this.options.leaseOwner,
+        now: new Date(),
+        signature: executionSignature(runContext),
+      });
+      if (!signatureStored) throw new Error('Run ownership lost before execution');
       const result = await traceAsync(
         'worker.runner_run',
         { 'deputies.runner_type': this.options.runnerType, 'deputies.message_count': claimed.messages.length },
@@ -282,6 +411,7 @@ export class WorkerService {
             context: runContext,
             sandbox,
             signal,
+            activeMessageDelivery,
             updateSessionContext: async (context) => {
               if (signal.aborted || !(await this.isRunOwnedByThisWorker(claimed.run.id))) return runContext;
               const session = await this.options.store.getSession(primary.sessionId);
@@ -326,40 +456,57 @@ export class WorkerService {
       );
       if (await this.isRunCancellationRequested(claimed.run.id)) return null;
       if (!(await this.isRunOwnedByThisWorker(claimed.run.id))) return null;
-      await this.appendOwnedRunEvent({
-        sessionId: primary.sessionId,
-        runId: claimed.run.id,
-        messageId: primary.id,
-        type: 'agent_response_final',
-        payload: {
-          text: result.text,
-          ...(result.model ? { model: result.model } : {}),
-          ...(result.usage ? { usage: result.usage } : {}),
-        },
-      });
-      const artifacts = await traceAsync('worker.persist_artifacts', {}, (span) =>
-        this.artifacts
-          .recordRunArtifacts({
-            sessionId: primary.sessionId,
-            runId: claimed.run.id,
-            messageId: primary.id,
-            result,
-          })
-          .then((records) => {
-            span.setAttribute('deputies.artifact_count', records.length);
-            return records;
-          }),
-      );
-      await new CallbackService(this.options.store).enqueueCompletion({
-        claimed: { message: primary, run: claimed.run },
-        result,
-        artifactRecords: artifacts,
-      });
       return result;
     } finally {
       const current = await this.options.store.getActiveSandbox(primary.sessionId, record.provider);
       if (current?.id === record.id) await this.options.store.updateSandbox({ ...current, updatedAt: new Date() });
     }
+  }
+
+  private async publishCompletedResult(completed: ClaimedMessageBatch, result: RunnerResult): Promise<void> {
+    const primary = completed.messages[0]!;
+    const existingFinal = (await this.options.events.list(primary.sessionId)).some(
+      (event) =>
+        event.runId === completed.run.id && event.messageId === primary.id && event.type === 'agent_response_final',
+    );
+    if (!existingFinal) {
+      const final = await this.options.events.appendForRun(
+        {
+          sessionId: primary.sessionId,
+          runId: completed.run.id,
+          messageId: primary.id,
+          type: 'agent_response_final',
+          payload: {
+            text: result.text,
+            ...(result.model ? { model: result.model } : {}),
+            ...(result.usage ? { usage: result.usage } : {}),
+          },
+        },
+        { runId: completed.run.id, leaseOwner: this.options.leaseOwner, now: new Date() },
+      );
+      if (!final) throw new Error('Run ownership lost while publishing final response');
+    }
+    const artifacts = await traceAsync('worker.persist_artifacts', {}, (span) =>
+      this.artifacts
+        .recordRunArtifacts({
+          sessionId: primary.sessionId,
+          runId: completed.run.id,
+          messageId: primary.id,
+          result,
+          leaseOwner: this.options.leaseOwner,
+        })
+        .then((records) => {
+          span.setAttribute('deputies.artifact_count', records.length);
+          return records;
+        }),
+    );
+    if (!(await this.isRunOwnedByThisWorker(completed.run.id)))
+      throw new Error('Run ownership lost while publishing completion callback');
+    await new CallbackService(this.options.store).enqueueCompletion({
+      claimed: { message: primary, run: completed.run },
+      result,
+      artifactRecords: artifacts,
+    });
   }
 
   private generateInitialTitle(messages: ClaimedMessageBatch['messages'], runId: string, runSignal: AbortSignal): void {
@@ -430,7 +577,18 @@ export class WorkerService {
     const run = await this.options.store.getRun(runId);
     return (
       !!run &&
-      (run.status === 'running' || run.status === 'cancelling') &&
+      (run.status === 'running' || run.status === 'completing' || run.status === 'cancelling') &&
+      run.leaseOwner === this.options.leaseOwner &&
+      !!run.leaseExpiresAt &&
+      run.leaseExpiresAt > new Date()
+    );
+  }
+
+  private async isRunStrictlyOwnedByThisWorker(runId: string): Promise<boolean> {
+    const run = await this.options.store.getRun(runId);
+    return (
+      !!run &&
+      run.status === 'running' &&
       run.leaseOwner === this.options.leaseOwner &&
       !!run.leaseExpiresAt &&
       run.leaseExpiresAt > new Date()
@@ -658,6 +816,26 @@ function buildBatchPrompt(messages: ClaimedMessageBatch['messages']): string {
 
 function buildBatchContext(messages: ClaimedMessageBatch['messages']): Record<string, unknown> {
   return messages.reduce<Record<string, unknown>>((merged, message) => ({ ...merged, ...(message.context ?? {}) }), {});
+}
+
+const executionContextKeys = ['repository', 'branch', 'environment', 'model', 'reasoningLevel'] as const;
+
+function executionSignature(context: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    executionContextKeys.filter((key) => context[key] != null).map((key) => [key, context[key]]),
+  );
+}
+
+function mergeRunContext(
+  sessionContext: Record<string, unknown>,
+  messages: ClaimedMessageBatch['messages'],
+): Record<string, unknown> {
+  const batchContext = buildBatchContext(messages);
+  const merged = { ...sessionContext, ...batchContext };
+  for (const key of executionContextKeys) {
+    if (batchContext[key] === undefined) delete merged[key];
+  }
+  return merged;
 }
 
 function readTitleGenerationFallback(context: Record<string, unknown>): string | undefined {

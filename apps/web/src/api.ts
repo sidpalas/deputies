@@ -170,6 +170,7 @@ export type Message = {
   sessionId: string;
   sequence: number;
   status: string;
+  steering: boolean;
   prompt: string;
   createdAt: string;
   authorUserId?: string;
@@ -1212,6 +1213,20 @@ export async function updateMessage(input: {
         ? { context: { skills: input.skills, ...(input.skillRefs ? { skillRefs: input.skillRefs } : {}) } }
         : {}),
     },
+  });
+  return body.message;
+}
+
+export async function updateMessageSteering(input: {
+  sessionId: string;
+  messageId: string;
+  steering: boolean;
+  token: string;
+}): Promise<Message> {
+  const body = await request<{ message: Message }>(`/sessions/${input.sessionId}/messages/${input.messageId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: { steering: input.steering },
   });
   return body.message;
 }

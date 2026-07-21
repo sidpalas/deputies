@@ -443,6 +443,7 @@ export const demoShowcaseSessions: StaticDemoSession[] = [
         sessionId: 'd7d24550-4804-45d5-9df8-da26e079e796',
         sequence: 1,
         status: 'completed',
+        steering: false,
         prompt: 'please generate a fun image and store it as an artifact',
         createdAt: '2026-05-19T14:49:24.276Z',
         authorUserId: demoCurrentUser.id,
@@ -453,6 +454,7 @@ export const demoShowcaseSessions: StaticDemoSession[] = [
         sessionId: 'd7d24550-4804-45d5-9df8-da26e079e796',
         sequence: 2,
         status: 'completed',
+        steering: false,
         prompt: 'Now use remotion to generate a short video and attach it as an artifact as well.',
         createdAt: '2026-05-19T14:51:34.017Z',
         authorUserId: demoCurrentUser.id,
@@ -726,6 +728,7 @@ export const demoShowcaseSessions: StaticDemoSession[] = [
         sessionId: 'demo-session-release-parent',
         sequence: 1,
         status: 'completed',
+        steering: false,
         prompt:
           'Review the changes merged since the last release and prepare a concise readiness report. Delegate the authentication changes for a focused review.',
         createdAt: '2026-07-18T13:30:05.000Z',
@@ -931,6 +934,7 @@ export const demoShowcaseSessions: StaticDemoSession[] = [
         sessionId: 'demo-session-release-child',
         sequence: 1,
         status: 'completed',
+        steering: false,
         prompt:
           'Perform a focused security review of the authentication changes. Check authorization boundaries, session handling, and failure paths.',
         createdAt: '2026-07-18T13:34:05.000Z',

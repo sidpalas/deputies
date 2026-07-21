@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { EventService } from '../events/service.js';
 import type { RunnerArtifact, RunnerResult } from '../runner/types.js';
 import type { ArtifactRecord, CreateArtifactRecord, SessionRecord } from '../store/types.js';
@@ -31,17 +31,20 @@ export class ArtifactService {
     runId: string;
     messageId: string;
     result: RunnerResult;
+    leaseOwner?: string;
   }): Promise<ArtifactRecord[]> {
     const artifacts = input.result.artifacts ?? [];
     const records: ArtifactRecord[] = [];
 
-    for (const artifact of artifacts) {
+    for (const [index, artifact] of artifacts.entries()) {
       records.push(
         await this.create({
           sessionId: input.sessionId,
           runId: input.runId,
           messageId: input.messageId,
           artifact,
+          id: deterministicUuid(`run-artifact:${input.runId}:${index}`),
+          ...(input.leaseOwner ? { leaseOwner: input.leaseOwner } : {}),
         }),
       );
     }
@@ -81,8 +84,10 @@ export class ArtifactService {
     runId: string;
     messageId: string;
     artifact: RunnerArtifact;
+    id?: string;
+    leaseOwner?: string;
   }): Promise<ArtifactRecord> {
-    const id = randomUUID();
+    const id = input.id ?? randomUUID();
     const artifact = input.artifact;
     const createdAt = new Date();
     const create: CreateArtifactRecord = {
@@ -106,7 +111,7 @@ export class ArtifactService {
       if (!session) throw new ArtifactServiceError('not_found', 'Session not found');
       const storageKey = buildStorageKey(
         session.createdAt,
-        createdAt,
+        input.id ? session.createdAt : createdAt,
         input.sessionId,
         input.runId,
         id,
@@ -130,16 +135,34 @@ export class ArtifactService {
 
     try {
       const record = await this.store.createArtifact(create);
-      await this.events.append({
+      const existingEvent = (await this.events.list(input.sessionId)).some(
+        (event) =>
+          event.runId === input.runId &&
+          event.type === 'artifact_created' &&
+          event.payload.artifact &&
+          typeof event.payload.artifact === 'object' &&
+          'id' in event.payload.artifact &&
+          event.payload.artifact.id === id,
+      );
+      if (existingEvent) return record;
+      const eventInput = {
         sessionId: input.sessionId,
         runId: input.runId,
         messageId: input.messageId,
         type: 'artifact_created',
         payload: { artifact: record },
-      });
+      } as const;
+      if (input.leaseOwner) {
+        const persisted = await this.events.appendForRun(eventInput, {
+          runId: input.runId,
+          leaseOwner: input.leaseOwner,
+          now: new Date(),
+        });
+        if (!persisted) throw new Error('Run ownership lost while publishing artifact');
+      } else await this.events.append(eventInput);
       return record;
     } catch (error) {
-      if (create.storageKey) await this.cleanupStoredObject(create.storageKey);
+      if (create.storageKey && !input.id) await this.cleanupStoredObject(create.storageKey);
       throw error;
     }
   }
@@ -208,6 +231,14 @@ export class ArtifactService {
       sizeBytes,
     };
   }
+}
+
+export function deterministicUuid(value: string): string {
+  const bytes = createHash('sha256').update(value).digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function numberPayload(value: unknown): number | undefined {

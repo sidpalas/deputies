@@ -1407,12 +1407,200 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(claimed?.messages.map((message) => message.prompt)).toEqual(['first', 'edited second']);
     expect(claimed?.run.metadata).toMatchObject({ messageIds: [first.id, second.id], sequences: [1, 2] });
 
+    await store.beginRunCompletion({
+      runId: claimed!.run.id,
+      leaseOwner: 'worker-1',
+      now: new Date(),
+      result: { text: 'done' },
+    });
     const completed = await store.completeRunBatch({
       runId: claimed!.run.id,
       leaseOwner: 'worker-1',
       completedAt: new Date(),
     });
     expect(completed?.messages.map((message) => message.status)).toEqual(['completed', 'completed']);
+  });
+
+  it('attaches steering messages to the owned active run in sequence order', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Postgres steering queue' });
+    const primary = await services.messages.enqueue({ sessionId: session.id, prompt: 'primary' });
+    const now = new Date();
+    const claimed = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000903',
+      runnerType: 'pi',
+      leaseOwner: 'worker-1',
+      leaseExpiresAt: new Date(now.getTime() + 60_000),
+      now,
+    });
+    await store.persistActiveRunExecutionSignature({
+      runId: claimed!.run.id,
+      leaseOwner: 'worker-1',
+      now: new Date(),
+      signature: { repository: { owner: 'acme', repo: 'app' }, model: 'model-1' },
+    });
+    const ordinary = await services.messages.enqueue({ sessionId: session.id, prompt: 'ordinary' });
+    const first = await services.messages.enqueue({
+      sessionId: session.id,
+      prompt: 'first steer',
+      context: { model: 'model-1', repository: { repo: 'app', owner: 'acme' } },
+    });
+    const second = await services.messages.enqueue({
+      sessionId: session.id,
+      prompt: 'second steer',
+      context: { repository: { owner: 'acme', repo: 'app' }, model: 'model-1' },
+    });
+    const incompatible = await services.messages.enqueue({
+      sessionId: session.id,
+      prompt: 'wrong model',
+      context: { repository: { owner: 'acme', repo: 'app' }, model: 'model-2' },
+    });
+    await services.messages.updatePending({ sessionId: session.id, messageId: first.id, steering: true });
+    await services.messages.updatePending({ sessionId: session.id, messageId: second.id, steering: true });
+    await services.messages.updatePending({ sessionId: session.id, messageId: incompatible.id, steering: true });
+
+    const steering = await store.claimPendingSteeringMessages({
+      runId: claimed!.run.id,
+      leaseOwner: 'worker-1',
+      now: new Date(),
+    });
+
+    expect(steering.map((message) => message.id)).toEqual([first.id, second.id]);
+    await expect(store.getMessage({ sessionId: session.id, messageId: incompatible.id })).resolves.toMatchObject({
+      status: 'pending',
+    });
+    await expect(store.getMessage({ sessionId: session.id, messageId: ordinary.id })).resolves.toMatchObject({
+      status: 'pending',
+      steering: false,
+    });
+    await expect(store.getRun(claimed!.run.id)).resolves.toMatchObject({
+      metadata: {
+        messageIds: [primary.id, first.id, second.id],
+        sequences: [primary.sequence, first.sequence, second.sequence],
+      },
+    });
+
+    await store.beginRunCompletion({
+      runId: claimed!.run.id,
+      leaseOwner: 'worker-1',
+      now: new Date(),
+      result: { text: 'done' },
+    });
+    const completed = await store.completeRunBatch({
+      runId: claimed!.run.id,
+      leaseOwner: 'worker-1',
+      completedAt: new Date(),
+    });
+    expect(completed?.messages.map((message) => message.id)).toEqual([primary.id, first.id, second.id]);
+    expect(completed?.messages.every((message) => message.status === 'completed')).toBe(true);
+
+    const next = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000904',
+      runnerType: 'pi',
+      leaseOwner: 'worker-2',
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      now: new Date(),
+    });
+    expect(next?.messages.map((message) => message.id)).toEqual([ordinary.id, incompatible.id]);
+  });
+
+  it('canonicalizes execution signatures when claiming steering in Postgres', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Postgres execution signature' });
+    const primary = await services.messages.enqueue({ sessionId: session.id, prompt: 'primary' });
+    const now = new Date();
+    const claimed = await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000905',
+      runnerType: 'pi',
+      leaseOwner: 'worker-1',
+      leaseExpiresAt: new Date(now.getTime() + 60_000),
+      now,
+    });
+    const beforeSignature = await services.messages.enqueue({ sessionId: session.id, prompt: 'before signature' });
+    await services.messages.updatePending({ sessionId: session.id, messageId: beforeSignature.id, steering: true });
+    await expect(
+      store.claimPendingSteeringMessages({ runId: claimed!.run.id, leaseOwner: 'worker-1', now }),
+    ).resolves.toEqual([]);
+
+    await store.persistActiveRunExecutionSignature({
+      runId: claimed!.run.id,
+      leaseOwner: 'worker-1',
+      now,
+      signature: { repository: null, environment: undefined, ignored: 'value' },
+    });
+    const emptyContexts: Record<string, unknown>[] = [
+      { callback: { type: 'http' } },
+      { repository: null, environment: null, model: undefined },
+    ];
+    const emptyCandidates = await Promise.all(
+      emptyContexts.map(async (context, index) => {
+        const message = await services.messages.enqueue({
+          sessionId: session.id,
+          prompt: `empty signature ${index}`,
+          context,
+        });
+        await services.messages.updatePending({ sessionId: session.id, messageId: message.id, steering: true });
+        return message;
+      }),
+    );
+    await expect(
+      store.claimPendingSteeringMessages({ runId: claimed!.run.id, leaseOwner: 'worker-1', now }),
+    ).resolves.toMatchObject([beforeSignature, ...emptyCandidates].map(({ id }) => ({ id, status: 'processing' })));
+
+    const signature = {
+      repository: { owner: 'acme', options: { mirror: null, depth: 1 } },
+      environment: { region: 'us', variables: { OPTIONAL: null } },
+      branch: 'main',
+      model: 'provider/model-a',
+      reasoningLevel: 'high',
+    };
+    await store.persistActiveRunExecutionSignature({
+      runId: claimed!.run.id,
+      leaseOwner: 'worker-1',
+      now,
+      signature,
+    });
+    const candidates = [
+      ['reordered keys', { ...signature, repository: { options: { depth: 1, mirror: null }, owner: 'acme' } }],
+      ['nested null changed', { ...signature, repository: { owner: 'acme', options: { depth: 1 } } }],
+      ['repository changed', { ...signature, repository: { owner: 'other' } }],
+      ['environment changed', { ...signature, environment: { region: 'eu' } }],
+      ['revision changed', { ...signature, environment: { ...signature.environment, revision: 'two' } }],
+      ['branch changed', { ...signature, branch: 'other' }],
+      ['model changed', { ...signature, model: 'provider/model-b' }],
+      ['reasoning changed', { ...signature, reasoningLevel: 'low' }],
+    ] as const;
+    const messages = await Promise.all(
+      candidates.map(async ([prompt, context]) => {
+        const message = await services.messages.enqueue({ sessionId: session.id, prompt, context });
+        await services.messages.updatePending({
+          sessionId: session.id,
+          messageId: message.id,
+          steering: true,
+          context,
+        });
+        return message;
+      }),
+    );
+    await expect(
+      store.claimPendingSteeringMessages({ runId: claimed!.run.id, leaseOwner: 'worker-1', now }),
+    ).resolves.toMatchObject([{ id: messages[0]!.id, status: 'processing' }]);
+    await expect(store.getRun(claimed!.run.id)).resolves.toMatchObject({
+      metadata: {
+        messageIds: [primary.id, beforeSignature.id, ...emptyCandidates.map(({ id }) => id), messages[0]!.id],
+      },
+    });
+    const run = await store.getRun(claimed!.run.id);
+    expect(messages.slice(1).every((message) => !(run?.metadata.messageIds as string[]).includes(message.id))).toBe(
+      true,
+    );
+    await Promise.all(
+      messages.slice(1).map((message) =>
+        expect(store.getMessage({ sessionId: session.id, messageId: message.id })).resolves.toMatchObject({
+          status: 'pending',
+        }),
+      ),
+    );
   });
 
   it('does not double-claim one session under concurrent workers', async () => {
@@ -1615,6 +1803,17 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
 
     expect(cancelling?.run.status).toBe('cancelling');
     expect(cancelling?.messages.map((message) => message.status)).toEqual(['cancelling', 'cancelling']);
+    await expect(
+      store.completeRunBatch({ runId: claimed.run.id, leaseOwner: 'worker-1', completedAt: new Date() }),
+    ).resolves.toBeNull();
+    await expect(
+      store.failRunBatch({
+        runId: claimed.run.id,
+        leaseOwner: 'worker-1',
+        failedAt: new Date(),
+        error: 'must not win cancellation',
+      }),
+    ).resolves.toBeNull();
     await services.messages.enqueue({ sessionId: session.id, prompt: 'third' });
     await expect(
       store.claimNextPendingMessageBatch({

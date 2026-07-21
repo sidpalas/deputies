@@ -55,6 +55,7 @@ import {
   unarchiveEnvironment,
   unarchiveSession,
   updateMessage,
+  updateMessageSteering,
   updateSession,
   updateSessionAccess,
   updateSessionTags,
@@ -439,6 +440,7 @@ export function App() {
   const [followUpModel, setFollowUpModel] = useState('');
   const [followUpReasoningLevel, setFollowUpReasoningLevel] = useState<ReasoningLevel | ''>('');
   const [editingMessageId, setEditingMessageId] = useState('');
+  const [steeringMessageIds, setSteeringMessageIds] = useState<Set<string>>(() => new Set());
   const [messageDraft, setMessageDraft] = useState('');
   const [draftToken, setDraftToken] = useState(token);
   const [loginUsername, setLoginUsername] = useState('');
@@ -3191,6 +3193,45 @@ export function App() {
     }
   }
 
+  async function toggleMessageSteering(selectedMessage: Message) {
+    if (
+      !canWriteSelectedSession ||
+      !selectedSessionId ||
+      selectedMessage.status !== 'pending' ||
+      steeringMessageIds.has(selectedMessage.id)
+    )
+      return;
+    const context = selectedResourceContext(selectedSessionId);
+    const messagesVersion = selectedResourceCoordinatorRef.current?.captureVersion(context, 'messages') ?? -1;
+    setSteeringMessageIds((current) => new Set(current).add(selectedMessage.id));
+    setError('');
+    try {
+      const message = await updateMessageSteering({
+        sessionId: selectedSessionId,
+        messageId: selectedMessage.id,
+        steering: !selectedMessage.steering,
+        token,
+      });
+      if (!isSelectedResourceContextCurrent(context) || message.sessionId !== context.sessionId) return;
+      if (!(selectedResourceCoordinatorRef.current?.isVersionCurrent(context, 'messages', messagesVersion) ?? false)) {
+        selectedResourceCoordinatorRef.current?.invalidate(context, new Set(['messages']));
+        return;
+      }
+      applySelectedResourceMutation(context, new Set<DetailResource>(['messages']), (current) => ({
+        ...current,
+        messages: current.messages.map((candidate) => (candidate.id === message.id ? message : candidate)),
+      }));
+    } catch (err) {
+      if (isSelectedResourceContextCurrent(context)) handleApiError(err);
+    } finally {
+      setSteeringMessageIds((current) => {
+        const next = new Set(current);
+        next.delete(selectedMessage.id);
+        return next;
+      });
+    }
+  }
+
   async function retryFailedMessages(messageIds: string[]) {
     if (!canWriteSelectedSession || !selectedSessionId || selectedSessionArchived || !messageIds.length) return;
     const context = selectedResourceContext(selectedSessionId);
@@ -4721,6 +4762,8 @@ export function App() {
                                   onCancelRun={fireAndForget(cancelRun)}
                                   onEditMessage={fireAndForget(startEditingMessage)}
                                   onMessageDraftChange={setMessageDraft}
+                                  onToggleSteering={fireAndForget(toggleMessageSteering)}
+                                  steeringMessageIds={steeringMessageIds}
                                   openableManagedSkillIds={skillsWorkspace.model.openableManagedSkillIds}
                                   onOpenSkill={skillsWorkspace.actions.select}
                                   onRetryFailedMessages={fireAndForget(retryFailedMessages)}

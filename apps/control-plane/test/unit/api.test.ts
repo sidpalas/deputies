@@ -1588,6 +1588,36 @@ describe('core API', () => {
     expect((await resume.json()) as { session: { queuePausedAt?: string } }).toMatchObject({ session: {} });
   });
 
+  it('validates and toggles steering only for pending messages', async () => {
+    const created = await postJson(`${baseUrl}/sessions`, { title: 'Steering edits' });
+    const { session } = (await created.json()) as { session: { id: string } };
+    const enqueued = await postJson(`${baseUrl}/sessions/${session.id}/messages`, { prompt: 'keep this prompt' });
+    const initial = (await enqueued.json()) as { message: { id: string; steering: boolean } };
+    expect(initial.message.steering).toBe(false);
+    const url = `${baseUrl}/sessions/${session.id}/messages/${initial.message.id}`;
+
+    for (const steering of [true, false]) {
+      const response = await patchJson(url, { steering });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ message: { prompt: 'keep this prompt', steering } });
+    }
+    for (const body of [{ steering: 'yes' }, {}]) {
+      const response = await patchJson(url, body);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error: 'invalid_request' });
+    }
+
+    await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000304',
+      runnerType: 'fake',
+      leaseOwner: 'worker',
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      now: new Date(),
+    });
+    const conflict = await patchJson(url, { steering: true });
+    expect(conflict.status).toBe(409);
+  });
+
   it('retries a failed message by enqueueing a new copy', async () => {
     const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Retry failed message' });
     const { session } = (await createSession.json()) as { session: { id: string } };

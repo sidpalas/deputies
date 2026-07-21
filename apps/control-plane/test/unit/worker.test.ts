@@ -61,6 +61,167 @@ describe('WorkerService', () => {
     ]);
   });
 
+  it('leaves a completing run durable for retry when success publication throws', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Publication failure' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'publish this' });
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: {
+        async recordRunArtifacts() {
+          throw new Error('artifact publication failed');
+        },
+      },
+      runner: new FakeRunner(),
+      runnerType: 'fake',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+    });
+
+    await expect(worker.processNext()).resolves.toBe(true);
+    await expect(store.getLatestRunForSession(session.id)).resolves.toMatchObject({
+      status: 'completing',
+      metadata: { runnerResult: { text: expect.stringContaining('publish this') } },
+    });
+    await expect(services.messages.list(session.id)).resolves.toMatchObject([{ status: 'processing' }]);
+    const eventTypes = (await services.events.list(session.id)).map((event) => event.type);
+    expect(eventTypes).not.toContain('run_failed');
+    expect(eventTypes).not.toContain('message_failed');
+    expect(eventTypes).not.toContain('message_completed');
+  });
+
+  it('reclaims durable completion without rerunning the runner or duplicating published effects', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Completion retry' });
+    await services.messages.enqueue({
+      sessionId: session.id,
+      prompt: 'publish once',
+      context: { callback: { type: 'http', url: 'https://example.com/completion' } },
+    });
+    const run = vi.fn<Runner['run']>().mockResolvedValue({
+      text: 'durable result',
+      artifacts: [{ type: 'report', title: 'Durable report', payload: { value: 1 } }],
+    });
+    const firstWorker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: {
+        async recordRunArtifacts(input) {
+          await services.artifacts.recordRunArtifacts(input);
+          throw new Error('crash after artifact publication');
+        },
+      },
+      runner: { run },
+      runnerType: 'completion-retry',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'worker-a',
+      leaseDurationMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+
+    await expect(firstWorker.processNext()).resolves.toBe(true);
+    expect(run).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const mustNotRun = vi
+      .fn<Runner['run']>()
+      .mockRejectedValue(new Error('runner must not execute during completion retry'));
+    const secondWorker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner: { run: mustNotRun },
+      runnerType: 'completion-retry',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'worker-b',
+      leaseDurationMs: 60_000,
+      heartbeatIntervalMs: 1_000,
+    });
+
+    await expect(secondWorker.processNext()).resolves.toBe(true);
+    expect(mustNotRun).not.toHaveBeenCalled();
+    await expect(store.getLatestRunForSession(session.id)).resolves.toMatchObject({ status: 'completed' });
+    await expect(services.messages.list(session.id)).resolves.toMatchObject([{ status: 'completed' }]);
+    expect(
+      (await services.events.list(session.id)).filter((event) => event.type === 'agent_response_final'),
+    ).toHaveLength(1);
+    expect((await services.events.list(session.id)).filter((event) => event.type === 'artifact_created')).toHaveLength(
+      1,
+    );
+    expect((await services.events.list(session.id)).filter((event) => event.type === 'message_completed')).toHaveLength(
+      1,
+    );
+    await expect(store.getArtifacts(session.id)).resolves.toHaveLength(1);
+    await expect(store.listCallbackDeliveries({ sessionId: session.id })).resolves.toHaveLength(1);
+  });
+
+  it('rejects completion events from the previous owner after lease takeover', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Completion ownership' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'finish safely' });
+    const startedAt = new Date('2026-07-21T00:00:00.000Z');
+    const claimed = await store.claimNextPendingMessageBatch({
+      runId: 'completion-ownership-run',
+      runnerType: 'test',
+      leaseOwner: 'worker-a',
+      leaseExpiresAt: new Date(startedAt.getTime() + 1_000),
+      now: startedAt,
+    });
+    await store.beginRunCompletion({
+      runId: claimed!.run.id,
+      leaseOwner: 'worker-a',
+      now: startedAt,
+      result: { text: 'persisted' },
+    });
+    const followUp = await services.messages.enqueue({ sessionId: session.id, prompt: 'wait for completion' });
+    await expect(
+      store.claimNextPendingMessageBatch({
+        runId: 'must-not-start',
+        runnerType: 'test',
+        leaseOwner: 'worker-b',
+        leaseExpiresAt: new Date(startedAt.getTime() + 3_000),
+        now: new Date(startedAt.getTime() + 2_000),
+      }),
+    ).resolves.toBeNull();
+    const reclaimed = await store.claimExpiredRunCompletion({
+      leaseOwner: 'worker-b',
+      leaseExpiresAt: new Date(startedAt.getTime() + 3_000),
+      now: new Date(startedAt.getTime() + 2_000),
+    });
+    expect(reclaimed?.run.id).toBe(claimed!.run.id);
+
+    await expect(
+      services.events.appendForRun(
+        {
+          sessionId: session.id,
+          runId: claimed!.run.id,
+          messageId: claimed!.messages[0]!.id,
+          type: 'agent_response_final',
+          payload: { text: 'stale publication' },
+        },
+        { runId: claimed!.run.id, leaseOwner: 'worker-a', now: new Date(startedAt.getTime() + 2_100) },
+      ),
+    ).resolves.toBeNull();
+    await store.completeRunBatch({
+      runId: claimed!.run.id,
+      leaseOwner: 'worker-b',
+      completedAt: new Date(startedAt.getTime() + 2_200),
+    });
+    await expect(
+      store.claimNextPendingMessageBatch({
+        runId: 'follow-up-run',
+        runnerType: 'test',
+        leaseOwner: 'worker-b',
+        leaseExpiresAt: new Date(startedAt.getTime() + 4_000),
+        now: new Date(startedAt.getTime() + 2_300),
+      }),
+    ).resolves.toMatchObject({ messages: [{ id: followUp.id }] });
+  });
+
   it('generates an initial title asynchronously with the session model', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -1304,6 +1465,152 @@ describe('WorkerService', () => {
     ]);
   });
 
+  it.each(['complete', 'fail'] as const)(
+    'finalizes cancellation requested while %sRunBatch is blocked',
+    async (outcome) => {
+      const store = new BlockingFinalizationStore(outcome);
+      const services = createServices(store);
+      const session = await services.sessions.create({ title: `Cancel during ${outcome}` });
+      await services.messages.enqueue({
+        sessionId: session.id,
+        prompt: 'primary',
+        context: { callback: { type: 'http', url: 'https://example.com/race-callback' } },
+      });
+      const runner = new FinalizationRaceRunner(outcome);
+      const worker = new WorkerService({
+        store,
+        events: services.events,
+        artifacts: services.artifacts,
+        runner,
+        runnerType: 'finalization-race',
+        sandboxProvider: new FakeSandboxProvider(),
+        leaseOwner: 'test-worker',
+        heartbeatIntervalMs: 60_000,
+        cancellationPollIntervalMs: 60_000,
+      });
+
+      const processing = worker.processNext();
+      await runner.waitForStart();
+      const steering = await services.messages.enqueue({ sessionId: session.id, prompt: 'attached steer' });
+      await services.messages.updatePending({ sessionId: session.id, messageId: steering.id, steering: true });
+      await runner.waitForDelivery();
+      runner.release();
+      await store.waitForFinalization();
+
+      await services.messages.cancelActiveRun({ sessionId: session.id });
+      store.releaseFinalization();
+      await expect(processing).resolves.toBe(true);
+
+      await expect(services.messages.list(session.id)).resolves.toMatchObject([
+        { prompt: 'primary', status: 'cancelled' },
+        { prompt: 'attached steer', status: 'cancelled' },
+      ]);
+      await expect(store.getLatestRunForSession(session.id)).resolves.toMatchObject({ status: 'cancelled' });
+      const eventTypes = (await services.events.list(session.id)).map((event) => event.type);
+      expect(eventTypes).toContain('run_cancelled');
+      expect(eventTypes).not.toContain('message_completed');
+      expect(eventTypes).not.toContain('message_failed');
+      expect(eventTypes).not.toContain('run_failed');
+      if (outcome === 'complete') {
+        expect(eventTypes).not.toContain('agent_response_final');
+        await expect(store.getArtifacts(session.id)).resolves.toEqual([]);
+        await expect(store.listCallbackDeliveries({ sessionId: session.id })).resolves.toEqual([]);
+        const deliver = vi.fn();
+        const dispatcher = new CallbackDispatcher(store, services.events, [{ type: 'http', deliver }]);
+        await expect(dispatcher.dispatchDue()).resolves.toBe(0);
+        expect(deliver).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it('canonicalizes execution signatures when claiming steering in memory', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Execution signature' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'primary' });
+    const now = new Date();
+    const claimed = await store.claimNextPendingMessageBatch({
+      runId: 'signature-run-a',
+      runnerType: 'test',
+      leaseOwner: 'worker-a',
+      leaseExpiresAt: new Date(now.getTime() + 60_000),
+      now,
+    });
+    expect(claimed).not.toBeNull();
+
+    const beforeSignature = await services.messages.enqueue({ sessionId: session.id, prompt: 'before signature' });
+    await services.messages.updatePending({ sessionId: session.id, messageId: beforeSignature.id, steering: true });
+    await expect(
+      store.claimPendingSteeringMessages({ runId: claimed!.run.id, leaseOwner: 'worker-a', now }),
+    ).resolves.toEqual([]);
+
+    await store.persistActiveRunExecutionSignature({
+      runId: claimed!.run.id,
+      leaseOwner: 'worker-a',
+      now,
+      signature: { repository: null, environment: undefined, ignored: 'value' },
+    });
+    const emptyContexts: Array<[string, Record<string, unknown>]> = [
+      ['no execution fields', { callback: { type: 'http' } }],
+      ['explicit top-level null', { repository: null, environment: null, model: undefined }],
+    ];
+    const emptyCandidates = await Promise.all(
+      emptyContexts.map(async ([prompt, context]) => {
+        const message = await services.messages.enqueue({ sessionId: session.id, prompt, context });
+        await services.messages.updatePending({ sessionId: session.id, messageId: message.id, steering: true });
+        return message;
+      }),
+    );
+
+    await expect(
+      store.claimPendingSteeringMessages({ runId: claimed!.run.id, leaseOwner: 'worker-a', now }),
+    ).resolves.toMatchObject([beforeSignature, ...emptyCandidates].map(({ id }) => ({ id, status: 'processing' })));
+
+    const signature = {
+      repository: { owner: 'acme', options: { mirror: null, depth: 1 } },
+      environment: { region: 'us', variables: { OPTIONAL: null } },
+      branch: 'main',
+      model: 'provider/model-a',
+      reasoningLevel: 'high',
+    };
+    await store.persistActiveRunExecutionSignature({ runId: claimed!.run.id, leaseOwner: 'worker-a', now, signature });
+    const candidates = [
+      ['reordered keys', { ...signature, repository: { options: { depth: 1, mirror: null }, owner: 'acme' } }, true],
+      ['nested null changed', { ...signature, repository: { owner: 'acme', options: { depth: 1 } } }, false],
+      ['repository changed', { ...signature, repository: { owner: 'other' } }, false],
+      ['environment changed', { ...signature, environment: { region: 'eu' } }, false],
+      ['revision changed', { ...signature, environment: { ...signature.environment, revision: 'two' } }, false],
+      ['branch changed', { ...signature, branch: 'other' }, false],
+      ['model changed', { ...signature, model: 'provider/model-b' }, false],
+      ['reasoning changed', { ...signature, reasoningLevel: 'low' }, false],
+    ] as const;
+    const messages = await Promise.all(
+      candidates.map(async ([prompt, context]) => {
+        const message = await services.messages.enqueue({ sessionId: session.id, prompt, context });
+        await services.messages.updatePending({
+          sessionId: session.id,
+          messageId: message.id,
+          steering: true,
+          context,
+        });
+        return message;
+      }),
+    );
+    await expect(
+      store.claimPendingSteeringMessages({ runId: claimed!.run.id, leaseOwner: 'worker-a', now }),
+    ).resolves.toMatchObject([{ id: messages[0]!.id, status: 'processing' }]);
+    const run = await store.getRun(claimed!.run.id);
+    expect(run?.metadata.messageIds).toEqual([
+      claimed!.messages[0]!.id,
+      beforeSignature.id,
+      ...emptyCandidates.map(({ id }) => id),
+      messages[0]!.id,
+    ]);
+    expect(messages.slice(1).every((message) => !(run?.metadata.messageIds as string[]).includes(message.id))).toBe(
+      true,
+    );
+  });
+
   it('aborts active execution when heartbeat loses the lease', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -1380,6 +1687,51 @@ describe('WorkerService', () => {
 
     blockingRunner.release();
     await expect(active).resolves.toBe(true);
+  });
+
+  it('delivers only steering pending messages in sequence and fails all attached messages on rejection', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Active steering' });
+    await services.messages.enqueue({ sessionId: session.id, prompt: 'primary' });
+    const runner = new ActiveDeliveryRunner();
+    const worker = new WorkerService({
+      store,
+      events: services.events,
+      artifacts: services.artifacts,
+      runner,
+      runnerType: 'active',
+      sandboxProvider: new FakeSandboxProvider(),
+      leaseOwner: 'test-worker',
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const processing = worker.processNext();
+    await runner.waitForStart();
+    const ordinary = await services.messages.enqueue({ sessionId: session.id, prompt: 'ordinary' });
+    const first = await services.messages.enqueue({ sessionId: session.id, prompt: 'first steer' });
+    const second = await services.messages.enqueue({ sessionId: session.id, prompt: 'second steer' });
+    await services.messages.updatePending({ sessionId: session.id, messageId: first.id, steering: true });
+    await services.messages.updatePending({ sessionId: session.id, messageId: second.id, steering: true });
+    await waitFor(() => runner.delivered.length === 2);
+    expect(runner.delivered).toEqual(['first steer', 'second steer']);
+    expect(await store.getMessage({ sessionId: session.id, messageId: ordinary.id })).toMatchObject({
+      status: 'pending',
+    });
+
+    runner.rejectNext = true;
+    const rejected = await services.messages.enqueue({ sessionId: session.id, prompt: 'reject steer' });
+    await services.messages.updatePending({ sessionId: session.id, messageId: rejected.id, steering: true });
+    await expect(processing).resolves.toBe(true);
+    const messages = await services.messages.list(session.id);
+    expect(messages.filter((message) => message.id !== ordinary.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ prompt: 'primary', status: 'failed' }),
+        expect.objectContaining({ prompt: 'first steer', status: 'failed' }),
+        expect.objectContaining({ prompt: 'second steer', status: 'failed' }),
+        expect.objectContaining({ prompt: 'reject steer', status: 'failed' }),
+      ]),
+    );
   });
 
   it('restarts a stopped persisted sandbox for follow-up messages', async () => {
@@ -1791,6 +2143,99 @@ class StaleEmittingRunner implements Runner {
   }
 }
 
+class BlockingFinalizationStore extends MemoryStore {
+  private readonly entered: Promise<void>;
+  private markEntered!: () => void;
+  private readonly gate: Promise<void>;
+  private releaseGate!: () => void;
+
+  constructor(private readonly outcome: 'complete' | 'fail') {
+    super();
+    this.entered = new Promise((resolve) => {
+      this.markEntered = resolve;
+    });
+    this.gate = new Promise((resolve) => {
+      this.releaseGate = resolve;
+    });
+  }
+
+  override async completeRunBatch(input: Parameters<MemoryStore['completeRunBatch']>[0]) {
+    return super.completeRunBatch(input);
+  }
+
+  override async beginRunCompletion(input: Parameters<MemoryStore['beginRunCompletion']>[0]) {
+    if (this.outcome === 'complete') {
+      this.markEntered();
+      await this.gate;
+    }
+    return super.beginRunCompletion(input);
+  }
+
+  override async failRunBatch(input: Parameters<MemoryStore['failRunBatch']>[0]) {
+    if (this.outcome === 'fail') {
+      this.markEntered();
+      await this.gate;
+    }
+    return super.failRunBatch(input);
+  }
+
+  async waitForFinalization(): Promise<void> {
+    await this.entered;
+  }
+
+  releaseFinalization(): void {
+    this.releaseGate();
+  }
+}
+
+class FinalizationRaceRunner implements Runner {
+  private readonly started: Promise<void>;
+  private markStarted!: () => void;
+  private readonly delivered: Promise<void>;
+  private markDelivered!: () => void;
+  private readonly gate: Promise<void>;
+  private releaseGate!: () => void;
+
+  constructor(private readonly outcome: 'complete' | 'fail') {
+    this.started = new Promise((resolve) => {
+      this.markStarted = resolve;
+    });
+    this.delivered = new Promise((resolve) => {
+      this.markDelivered = resolve;
+    });
+    this.gate = new Promise((resolve) => {
+      this.releaseGate = resolve;
+    });
+  }
+
+  async run(input: RunnerInput): Promise<RunnerResult> {
+    const unregister = input.activeMessageDelivery!(() => {
+      this.markDelivered();
+      return Promise.resolve();
+    });
+    this.markStarted();
+    await this.gate;
+    await unregister();
+    if (this.outcome === 'fail') throw new Error('expected runner failure');
+    return {
+      text: 'completed before cancellation race',
+      artifacts: [{ type: 'report', title: 'Race artifact', payload: { outcome: 'complete' } }],
+    };
+  }
+
+  async waitForStart(): Promise<void> {
+    await this.started;
+  }
+
+  async waitForDelivery(): Promise<void> {
+    await this.delivered;
+  }
+
+  release(): void {
+    this.releaseGate();
+  }
+}
+
 class BlockingRunner implements Runner {
   private started = false;
   private aborted = false;
@@ -1831,6 +2276,28 @@ class BlockingRunner implements Runner {
 
   release(): void {
     this.abortRun();
+  }
+
+  async waitForStart(): Promise<void> {
+    await waitFor(() => this.started);
+  }
+}
+
+class ActiveDeliveryRunner implements Runner {
+  delivered: string[] = [];
+  rejectNext = false;
+  private started = false;
+
+  async run(input: RunnerInput): Promise<RunnerResult> {
+    const unregister = input.activeMessageDelivery!((message) => {
+      this.delivered.push(message.prompt);
+      if (this.rejectNext) return Promise.reject(new Error('steering rejected'));
+      return Promise.resolve();
+    });
+    this.started = true;
+    await new Promise<void>((resolve) => input.signal?.addEventListener('abort', () => resolve(), { once: true }));
+    await unregister();
+    throw new Error('Operation aborted');
   }
 
   async waitForStart(): Promise<void> {

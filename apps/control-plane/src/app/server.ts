@@ -691,34 +691,51 @@ export function createApp(config: AppConfig, services = createServices()) {
 
   app.patch('/sessions/:sessionId/messages/:messageId', async (c) => {
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    if (typeof body.prompt !== 'string') return writeError(c, 400, 'invalid_request', 'Expected string field: prompt');
-    const prompt = optionalString(body.prompt) ?? '';
+    const hasPrompt = Object.hasOwn(body, 'prompt');
+    const hasContext = Object.hasOwn(body, 'context');
+    const hasSteering = Object.hasOwn(body, 'steering');
+    if (!hasPrompt && !hasContext && !hasSteering)
+      return writeError(c, 400, 'invalid_request', 'Expected prompt, context, or steering update');
+    if (hasPrompt && typeof body.prompt !== 'string')
+      return writeError(c, 400, 'invalid_request', 'Expected string field: prompt');
+    if (hasSteering && typeof body.steering !== 'boolean')
+      return writeError(c, 400, 'invalid_request', 'Expected boolean field: steering');
+    const prompt = hasPrompt ? (optionalString(body.prompt) ?? '') : undefined;
     try {
       const session = getAuthorizedSession(c, c.req.param('sessionId'));
       if (!session) return writeError(c, 404, 'not_found', 'Session not found');
       const auth = await requireRequestAuthorization(config, services.store, c);
       if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
       const existing = await services.store.getMessage({ sessionId: session.id, messageId: c.req.param('messageId') });
-      const skillContext = await canonicalizeMessageSkillContext({
-        skills: services.skills,
-        events: services.store,
-        ownerGroupId: session.ownerGroupId,
-        sessionId: session.id,
-        ...(existing?.authorUserId ? { userId: existing.authorUserId } : {}),
-        skillsEnabled: config.skillsEnabled,
-        repoSkillsEnabled: config.repoSkillsEnabled,
-        canUse: (skill) => canInvokeSkillInSession(auth, skill, session, existing?.authorUserId),
-        value: body.context,
-      });
+      const skillContext =
+        hasPrompt || hasContext
+          ? await canonicalizeMessageSkillContext({
+              skills: services.skills,
+              events: services.store,
+              ownerGroupId: session.ownerGroupId,
+              sessionId: session.id,
+              ...(existing?.authorUserId ? { userId: existing.authorUserId } : {}),
+              skillsEnabled: config.skillsEnabled,
+              repoSkillsEnabled: config.repoSkillsEnabled,
+              canUse: (skill) => canInvokeSkillInSession(auth, skill, session, existing?.authorUserId),
+              value: body.context,
+            })
+          : undefined;
       const effectiveSkills = skillContext?.skills ?? existing?.context?.skills;
-      if (!prompt && (!Array.isArray(effectiveSkills) || !effectiveSkills.length)) {
+      const effectivePrompt = prompt ?? existing?.prompt ?? '';
+      if (
+        (hasPrompt || hasContext) &&
+        !effectivePrompt &&
+        (!Array.isArray(effectiveSkills) || !effectiveSkills.length)
+      ) {
         return writeError(c, 400, 'invalid_request', 'Expected prompt text or at least one invoked skill');
       }
       const context = skillContext ? { ...(existing?.context ?? {}), ...skillContext } : undefined;
       const message = await services.messages.updatePending({
         sessionId: c.req.param('sessionId'),
         messageId: c.req.param('messageId'),
-        prompt,
+        ...(prompt !== undefined ? { prompt } : {}),
+        ...(hasSteering ? { steering: body.steering as boolean } : {}),
         ...(context ? { context } : {}),
       });
       return c.json({ message });

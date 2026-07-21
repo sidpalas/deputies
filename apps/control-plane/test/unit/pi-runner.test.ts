@@ -10,6 +10,7 @@ import { EventService } from '../../src/events/service.js';
 import type { NormalizedEvent } from '../../src/events/types.js';
 import type { McpConnection } from '../../src/mcp/types.js';
 import type { GitHubRepositoryAccess } from '../../src/repositories/setup.js';
+import type { RunnerMessageInput } from '../../src/runner/types.js';
 import { PiRunner } from '../../src/runner-pi/runner.js';
 import { createSandboxPiToolDefinitions } from '../../src/runner-pi/sandbox-tools.js';
 import {
@@ -177,6 +178,156 @@ describe('PiRunner', () => {
     piMock.openSessionCalls.length = 0;
     piMock.openSessionError = undefined;
     piMock.resourceLoaderOptions.length = 0;
+  });
+
+  it('registers steering only after the initial prompt starts and uses Pi steer options', async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    let activeHandler: ((message: RunnerMessageInput) => Promise<void>) | undefined;
+    let releasePrimary!: () => void;
+    const primaryBlocked = new Promise<void>((resolve) => {
+      releasePrimary = resolve;
+    });
+    const calls: Array<{ prompt: string; options: unknown }> = [];
+    const prompt = vi.fn(async (text: string, options: unknown) => {
+      calls.push({ prompt: text, options });
+      if (text === 'initial') {
+        expect(activeHandler).toBeUndefined();
+        listener?.({ type: 'agent_start' });
+        await primaryBlocked;
+      }
+    });
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }], stopReason: 'stop' }],
+        prompt,
+        abort: vi.fn(),
+        dispose: vi.fn(),
+        subscribe(callback: (event: AgentSessionEvent) => void) {
+          listener = callback;
+          return () => {
+            listener = undefined;
+          };
+        },
+      },
+      extensionsResult: {},
+    });
+    const register = vi.fn((handler: NonNullable<typeof activeHandler>) => {
+      activeHandler = handler;
+      return async () => {};
+    });
+    const running = new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      prompt: 'initial',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async () => {},
+      activeMessageDelivery: register,
+    });
+
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(calls[0]?.prompt).toBe('initial');
+    expect(register).toHaveBeenCalledTimes(1);
+    await activeHandler!({ messageId: 'message-2', prompt: 'steer now', sequence: 2 });
+    expect(calls[1]).toEqual({
+      prompt: 'steer now',
+      options: { streamingBehavior: 'steer', expandPromptTemplates: false },
+    });
+    releasePrimary();
+    await expect(running).resolves.toMatchObject({ text: 'done' });
+  });
+
+  it('does not prompt a prepared steering message after losing final run ownership', async () => {
+    let activeHandler: ((message: RunnerMessageInput) => Promise<void>) | undefined;
+    let releasePreparation!: () => void;
+    const preparationBlocked = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    let releaseInitial!: () => void;
+    const initialBlocked = new Promise<void>((resolve) => {
+      releaseInitial = resolve;
+    });
+    const listForRun = vi.fn(async (input: { invokedNames: string[] }) => {
+      if (input.invokedNames.includes('review')) await preparationBlocked;
+      return [
+        {
+          id: 'skill-review',
+          revisionId: 'revision-review-1',
+          revisionNumber: 1,
+          name: 'review',
+          description: 'Review the implementation',
+          body: 'Review carefully.',
+          autoLoad: false,
+          source: 'group' as const,
+          createdAt: new Date('2026-01-01T00:00:00Z'),
+        },
+      ];
+    });
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const prompt = vi.fn(async () => {
+      listener?.({ type: 'agent_start' });
+      await initialBlocked;
+    });
+    const dispose = vi.fn();
+    piMock.createAgentSession.mockResolvedValue({
+      session: {
+        sessionId: 'pi-session',
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }], stopReason: 'stop' }],
+        prompt,
+        abort: vi.fn(),
+        dispose,
+        subscribe: vi.fn((callback: (event: AgentSessionEvent) => void) => {
+          listener = callback;
+          return () => {
+            listener = undefined;
+          };
+        }),
+      },
+      extensionsResult: {},
+    });
+    let ownsRun = true;
+    const running = new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      skills: { repoScanEnabled: false, listForRun },
+    }).run({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      ownerGroupId: 'group-1',
+      prompt: 'initial',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async () => {},
+      shouldPersist: async () => ownsRun,
+      activeMessageDelivery: (handler) => {
+        activeHandler = handler;
+        return async () => {};
+      },
+    });
+
+    await vi.waitFor(() => expect(activeHandler).toBeDefined());
+    const steering = activeHandler!({
+      messageId: 'message-2',
+      prompt: 'steer with review',
+      sequence: 2,
+      skillInvocations: [{ name: 'review' }],
+    });
+    await vi.waitFor(() => expect(listForRun).toHaveBeenCalledTimes(3));
+    ownsRun = false;
+    releasePreparation();
+
+    await expect(steering).rejects.toThrow('Run ownership lost before steering prompt');
+    releaseInitial();
+    await expect(running).resolves.toMatchObject({ text: 'done' });
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith('initial', { expandPromptTemplates: false });
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it('uses minimal reasoning and a larger title budget without changing model compatibility', async () => {

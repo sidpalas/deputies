@@ -98,6 +98,8 @@ type MockApiOptions = {
   };
   onCancelRun?: () => void;
   onRetryMessage?: (messageId: string) => void;
+  onUpdateMessage?: (messageId: string, body: Record<string, unknown>) => void;
+  onUpdateMessageRequest?: (messageId: string, body: Record<string, unknown>) => Response | Promise<Response>;
   onReplayCallback?: (callbackId: string) => void;
   onMessageSubmitRequest?: (request: { count: number; body: Record<string, unknown> }) => Response | Promise<Response>;
   onStreamOpen?: (push: StreamEventPusher) => void;
@@ -3459,6 +3461,82 @@ it('applies queue pause and resume Session responses without broad reconciliatio
   expect(detailResourceRequests(requests)).toEqual([]);
 });
 
+it('toggles steering on a pending message and applies the response state', async () => {
+  const updates: Array<{ messageId: string; body: Record<string, unknown> }> = [];
+  mockApi({
+    messages: [
+      messageFixture({
+        id: '00000000-0000-4000-8000-000000000102',
+        sequence: 1,
+        status: 'pending',
+        prompt: 'steer queued work',
+      }),
+    ],
+    onUpdateMessage: (messageId, body) => updates.push({ messageId, body }),
+  });
+  render(<App />);
+
+  const messageCard = await screen.findByRole('article', { name: 'Message 1' });
+  const steerButton = within(messageCard).getByRole('button', { name: 'Steer' });
+  expect(steerButton).toHaveAttribute('aria-pressed', 'false');
+  fireEvent.click(steerButton);
+
+  await waitFor(() =>
+    expect(updates).toEqual([{ messageId: '00000000-0000-4000-8000-000000000102', body: { steering: true } }]),
+  );
+  expect(await within(messageCard).findByRole('button', { name: 'Cancel steering' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  expect(within(messageCard).getByText('Steering')).toBeInTheDocument();
+});
+
+it('does not let a delayed steering response overwrite a newer stream refresh', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const updateResponse = deferred<Response>();
+  const requests: string[] = [];
+  const messages = [
+    messageFixture({
+      id: '00000000-0000-4000-8000-000000000103',
+      sequence: 1,
+      status: 'pending',
+      steering: true,
+      prompt: 'keep newer steering',
+    }),
+  ];
+  let pushEvent: StreamEventPusher | undefined;
+  mockApi({
+    requests,
+    messages,
+    onGlobalStreamOpen: (push) => {
+      pushEvent = push;
+    },
+    onUpdateMessageRequest: () => updateResponse.promise,
+  });
+  render(<App />);
+
+  const messageCard = await screen.findByRole('article', { name: 'Message 1' });
+  const steeringButton = within(messageCard).getByRole('button', { name: 'Cancel steering' });
+  requests.length = 0;
+  fireEvent.click(steeringButton);
+  expect(steeringButton).toBeDisabled();
+
+  await waitFor(() => expect(pushEvent).toBeDefined());
+  pushEvent!(eventFixture({ sequence: 10, type: 'message_updated', payload: { sequence: 1 } }));
+  await act(() => vi.advanceTimersByTimeAsync(125));
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}/messages`));
+  expect(within(messageCard).getByRole('button', { name: 'Cancel steering' })).toBeDisabled();
+
+  await act(async () => {
+    updateResponse.resolve(jsonResponse({ message: { ...messages[0], steering: false } }));
+    await updateResponse.promise;
+  });
+
+  const refreshedButton = within(messageCard).getByRole('button', { name: 'Cancel steering' });
+  expect(refreshedButton).toHaveAttribute('aria-pressed', 'true');
+  expect(refreshedButton).toBeEnabled();
+});
+
 it('shows cancelling state on the active message cancel action', async () => {
   mockApi({
     sessionOverride: { status: 'active' },
@@ -3652,6 +3730,7 @@ it('retries all failed messages in a failed message group', async () => {
   });
   render(<App />);
 
+  expect(await screen.findByText('Run · 2 messages')).toBeInTheDocument();
   fireEvent.click(await screen.findByRole('button', { name: 'Retry 2 failed' }));
 
   await waitFor(() =>
@@ -5587,6 +5666,21 @@ function mockApi(options: MockApiOptions = {}) {
       return jsonResponse({ message }, 202);
     }
 
+    const updateMessageMatch = url.pathname.match(new RegExp(`^/sessions/${currentSession.id}/messages/([^/]+)$`));
+    if (updateMessageMatch && method === 'PATCH') {
+      const messageId = updateMessageMatch[1]!;
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      options.onUpdateMessage?.(messageId, body);
+      const customResponse = options.onUpdateMessageRequest?.(messageId, body);
+      if (customResponse) return customResponse;
+      const currentMessage = messages.find((message) => (message as { id?: string }).id === messageId) as
+        | Record<string, unknown>
+        | undefined;
+      const updatedMessage = { ...currentMessage, ...body };
+      messages = messages.map((message) => ((message as { id?: string }).id === messageId ? updatedMessage : message));
+      return jsonResponse({ message: updatedMessage });
+    }
+
     const retryMessageMatch = url.pathname.match(new RegExp(`^/sessions/${currentSession.id}/messages/([^/]+)/retry$`));
     if (retryMessageMatch && method === 'POST') {
       const messageId = retryMessageMatch[1]!;
@@ -5762,11 +5856,13 @@ function messageFixture(input: {
   id: string;
   sequence: number;
   status: string;
+  steering?: boolean;
   prompt: string;
   source?: string;
   context?: Record<string, unknown>;
 }) {
   return {
+    steering: false,
     ...input,
     sessionId: session.id,
     createdAt: '2026-05-05T12:01:00.000Z',

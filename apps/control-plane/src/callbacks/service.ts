@@ -6,6 +6,7 @@ import { isIP } from 'node:net';
 import type { EventService } from '../events/service.js';
 import type { RunnerArtifact, RunnerResult } from '../runner/types.js';
 import type { ArtifactRecord, CallbackDeliveryRecord, CallbackStore, ClaimedMessage } from '../store/types.js';
+import { deterministicUuid } from '../artifacts/service.js';
 
 const DEFAULT_HTTP_CALLBACK_TIMEOUT_MS = 10_000;
 
@@ -80,7 +81,9 @@ export class CallbackService {
         : (input.result.artifacts ?? []).map(serializeRunnerArtifact),
     };
     const delivery = await this.store.createCallbackDelivery({
-      id: randomUUID(),
+      id: deterministicUuid(
+        `completion-callback:${input.claimed.run.id}:${input.claimed.message.id}:message_completed`,
+      ),
       sessionId: input.claimed.message.sessionId,
       runId: input.claimed.run.id,
       messageId: input.claimed.message.id,

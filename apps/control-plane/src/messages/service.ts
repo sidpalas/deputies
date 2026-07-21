@@ -53,6 +53,7 @@ export class MessageService {
       sequence,
       status: 'pending',
       prompt: input.prompt,
+      steering: false,
       createdAt: new Date(),
     };
 
@@ -87,6 +88,7 @@ export class MessageService {
       sequence,
       status: input.status ?? 'cancelled',
       prompt: input.prompt,
+      steering: false,
       createdAt: new Date(),
     };
     if (input.authorUserId) record.authorUserId = input.authorUserId;
@@ -116,7 +118,8 @@ export class MessageService {
   async updatePending(input: {
     sessionId: string;
     messageId: string;
-    prompt: string;
+    prompt?: string;
+    steering?: boolean;
     context?: Record<string, unknown>;
   }): Promise<MessageRecord> {
     const message = await this.store.updatePendingMessage(input);

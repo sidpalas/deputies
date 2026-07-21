@@ -301,10 +301,74 @@ export class PiRunner implements Runner {
     let responseText = '';
     let session: AgentSession | undefined;
     let unsubscribe: (() => void) | undefined;
+    let unsubscribeActiveMessages: (() => Promise<void>) | undefined;
+    const activeMessagePrompts = new Set<Promise<void>>();
     let completed = false;
+
+    const activateActiveMessages = () => {
+      if (unsubscribeActiveMessages || !session) return;
+      unsubscribeActiveMessages = input.activeMessageDelivery?.((message) => {
+        const delivery = (async () => {
+          const steeringSkills = await preparePiSkills({
+            runnerInput: {
+              ...input,
+              messageId: message.messageId ?? input.messageId,
+              prompt: message.prompt,
+              messages: [message],
+              skillInvocations: message.skillInvocations ?? [],
+            },
+            ...(this.options.skills ? { provider: this.options.skills } : {}),
+            repositories: repositorySetup?.map((setup) => setup.plan) ?? [],
+          }).catch((error: unknown) => {
+            if (input.signal?.aborted) throw error;
+            console.warn('Skill loading degraded during steering preparation; affected skills were skipped.');
+            return unavailablePiSkills(
+              {
+                ...input,
+                messageId: message.messageId ?? input.messageId,
+                prompt: message.prompt,
+                messages: [message],
+              },
+              'Skills could not be prepared for this steering message.',
+            );
+          });
+          enqueueEvent({
+            sessionId: input.sessionId,
+            runId: input.runId,
+            messageId: message.messageId ?? input.messageId,
+            type: 'skills_loaded',
+            payload: steeringSkills.event,
+            createdAt: new Date(),
+          });
+          for (const invocation of steeringSkills.userInvocations) {
+            enqueueEvent({
+              sessionId: input.sessionId,
+              runId: input.runId,
+              messageId: invocation.messageId,
+              type: 'skill_invoked',
+              payload: { ...invocation.skill, trigger: 'user' },
+              createdAt: new Date(),
+            });
+          }
+          if (input.signal?.aborted) throw new Error('Operation aborted');
+          if (input.shouldPersist && !(await input.shouldPersist())) {
+            throw new Error('Run ownership lost before steering prompt');
+          }
+          await session!.prompt(steeringSkills.prompt, {
+            streamingBehavior: 'steer',
+            expandPromptTemplates: false,
+          });
+        })();
+        activeMessagePrompts.add(delivery);
+        const remove = () => activeMessagePrompts.delete(delivery);
+        void delivery.then(remove, remove);
+        return delivery;
+      });
+    };
 
     const emitEvent = (event: AgentSessionEvent) => {
       if (input.signal?.aborted) return;
+      if (event.type === 'agent_start') activateActiveMessages();
       const normalized = normalizePiEvent(event, input);
       if (!normalized) return;
       if (normalized.type === 'agent_text_delta') {
@@ -380,6 +444,9 @@ export class PiRunner implements Runner {
       } catch (error) {
         promptError = error;
       }
+      await unsubscribeActiveMessages?.();
+      unsubscribeActiveMessages = undefined;
+      await Promise.allSettled([...activeMessagePrompts]);
       await eventEmitter.drain(promptError === undefined ? {} : { primaryError: promptError });
       if (input.signal?.aborted) throw new Error('Operation aborted');
 
@@ -403,6 +470,7 @@ export class PiRunner implements Runner {
       return { text: responseText, ...responseMetadata };
     } finally {
       input.signal?.removeEventListener('abort', abortSession);
+      await unsubscribeActiveMessages?.();
       unsubscribe?.();
       session?.dispose();
       if (mcpSetup) await closeMcpConnections(mcpSetup.connections);

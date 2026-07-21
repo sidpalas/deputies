@@ -709,6 +709,7 @@ it('renders sent skill chips and keeps skill load and invocation details in acti
           sessionId: 'session-1',
           sequence: 1,
           status: 'completed',
+          steering: false,
           prompt: 'Inspect this',
           context: {
             skills: ['review-change'],
@@ -721,6 +722,8 @@ it('renders sent skill chips and keeps skill load and invocation details in acti
       onCancelQueuedMessage={() => undefined}
       onCancelRun={() => undefined}
       onEditMessage={() => undefined}
+      onToggleSteering={() => undefined}
+      steeringMessageIds={new Set()}
       onMessageDraftChange={() => undefined}
       openableManagedSkillIds={new Set(['skill-1'])}
       onOpenSkill={onOpenSkill}

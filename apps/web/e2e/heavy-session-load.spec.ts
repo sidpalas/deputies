@@ -161,6 +161,7 @@ function buildSessionFixture(input: {
       sessionId: input.sessionId,
       sequence,
       status: 'completed',
+      steering: false,
       prompt: `Investigate synthetic load case ${sequence} with a detailed event history.`,
       createdAt: timestamp(sequence * 60_000),
       ...(sequence % 2 === 0 ? { context: { branch: `perf-fixture-${sequence}` } } : {}),

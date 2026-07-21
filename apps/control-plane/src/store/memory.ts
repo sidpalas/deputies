@@ -376,6 +376,7 @@ export class MemoryStore implements AppStore {
       sessionId: session.id,
       sequence: 1,
       status: 'pending',
+      steering: input.message.steering ?? false,
     };
     this.sessions.set(session.id, session);
     this.messages.set(session.id, [message]);
@@ -1161,7 +1162,8 @@ export class MemoryStore implements AppStore {
 
   async createMessage(record: CreateMessageRecord): Promise<MessageRecord> {
     const sessionMessages = this.messages.get(record.sessionId) ?? [];
-    sessionMessages.push(record);
+    const message: MessageRecord = { ...record, steering: record.steering ?? false };
+    sessionMessages.push(message);
     this.messages.set(record.sessionId, sessionMessages);
 
     if (record.status === 'pending') {
@@ -1175,7 +1177,7 @@ export class MemoryStore implements AppStore {
       });
     }
 
-    return record;
+    return message;
   }
 
   async getMessages(sessionId: string): Promise<MessageRecord[]> {
@@ -1224,7 +1226,8 @@ export class MemoryStore implements AppStore {
   async updatePendingMessage(input: {
     sessionId: string;
     messageId: string;
-    prompt: string;
+    prompt?: string;
+    steering?: boolean;
     context?: Record<string, unknown>;
   }): Promise<MessageRecord | null> {
     const sessionMessages = this.messages.get(input.sessionId) ?? [];
@@ -1234,7 +1237,8 @@ export class MemoryStore implements AppStore {
     if (!message) return null;
     const updated = {
       ...message,
-      prompt: input.prompt,
+      ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+      ...(input.steering !== undefined ? { steering: input.steering } : {}),
       ...(input.context !== undefined ? { context: structuredClone(input.context) } : {}),
     };
     sessionMessages[sessionMessages.indexOf(message)] = updated;
@@ -1268,6 +1272,73 @@ export class MemoryStore implements AppStore {
     return batch ? { message: batch.messages[0]!, run: batch.run } : null;
   }
 
+  async persistActiveRunExecutionSignature(input: {
+    runId: string;
+    leaseOwner: string;
+    now: Date;
+    signature: Record<string, unknown>;
+  }): Promise<RunRecord | null> {
+    const run = this.runs.get(input.runId);
+    if (
+      !run ||
+      run.status !== 'running' ||
+      run.leaseOwner !== input.leaseOwner ||
+      !run.leaseExpiresAt ||
+      run.leaseExpiresAt <= input.now
+    )
+      return null;
+    const updated = {
+      ...run,
+      metadata: { ...run.metadata, executionSignature: structuredClone(executionSignature(input.signature)) },
+    };
+    this.runs.set(run.id, updated);
+    return updated;
+  }
+
+  async claimPendingSteeringMessages(input: {
+    runId: string;
+    leaseOwner: string;
+    now: Date;
+  }): Promise<MessageRecord[]> {
+    const run = this.runs.get(input.runId);
+    if (
+      !run ||
+      run.status !== 'running' ||
+      run.leaseOwner !== input.leaseOwner ||
+      !run.leaseExpiresAt ||
+      run.leaseExpiresAt <= input.now
+    )
+      return [];
+    const activeSignature = run.metadata.executionSignature;
+    if (!isJsonObject(activeSignature)) return [];
+    const sessionMessages = this.messages.get(run.sessionId) ?? [];
+    const messages = sessionMessages
+      .filter(
+        (message) =>
+          message.status === 'pending' &&
+          message.steering &&
+          deterministicJsonEqual(executionSignature(message.context ?? {}), activeSignature),
+      )
+      .sort((a, b) => a.sequence - b.sequence)
+      .map((message) => ({ ...message, status: 'processing' as const }));
+    if (!messages.length) return [];
+    for (const message of messages) {
+      const index = sessionMessages.findIndex((candidate) => candidate.id === message.id);
+      sessionMessages[index] = message;
+    }
+    const existingIds = Array.isArray(run.metadata.messageIds) ? run.metadata.messageIds : [run.messageId];
+    const existingSequences = Array.isArray(run.metadata.sequences) ? run.metadata.sequences : [];
+    this.runs.set(run.id, {
+      ...run,
+      metadata: {
+        ...run.metadata,
+        messageIds: [...new Set([...existingIds, ...messages.map((message) => message.id)])],
+        sequences: [...new Set([...existingSequences, ...messages.map((message) => message.sequence)])],
+      },
+    });
+    return messages;
+  }
+
   async claimNextPendingMessageBatch(input: {
     runId: string;
     runnerType: string;
@@ -1278,7 +1349,7 @@ export class MemoryStore implements AppStore {
     for (const [sessionId, sessionMessages] of this.messages) {
       const currentSession = this.sessions.get(sessionId);
       if (currentSession?.queuePausedAt || currentSession?.status === 'archived') continue;
-      if (this.hasActiveRun(sessionId, input.now)) continue;
+      if (this.hasActiveRun(sessionId)) continue;
 
       const pendingMessages = sessionMessages
         .filter((candidate) => candidate.status === 'pending')
@@ -1323,6 +1394,63 @@ export class MemoryStore implements AppStore {
     return batch ? { message: batch.messages[0]!, run: batch.run } : null;
   }
 
+  async beginRunCompletion(input: {
+    runId: string;
+    leaseOwner: string;
+    now: Date;
+    result: Record<string, unknown>;
+  }): Promise<ClaimedMessageBatch | null> {
+    const run = this.runs.get(input.runId);
+    if (
+      !run ||
+      run.status !== 'running' ||
+      run.leaseOwner !== input.leaseOwner ||
+      !run.leaseExpiresAt ||
+      run.leaseExpiresAt <= input.now
+    )
+      return null;
+    const completingRun: RunRecord = {
+      ...run,
+      status: 'completing',
+      heartbeatAt: input.now,
+      metadata: { ...run.metadata, runnerResult: input.result },
+    };
+    this.runs.set(run.id, completingRun);
+    const messages = getRunMessageIds(run).map((id) => {
+      const message = (this.messages.get(run.sessionId) ?? []).find((candidate) => candidate.id === id);
+      if (!message) throw new Error(`Message does not exist: ${id}`);
+      return message;
+    });
+    return { run: completingRun, messages };
+  }
+
+  async claimExpiredRunCompletion(input: {
+    leaseOwner: string;
+    leaseExpiresAt: Date;
+    now: Date;
+  }): Promise<ClaimedMessageBatch | null> {
+    const run = [...this.runs.values()]
+      .filter(
+        (candidate) =>
+          candidate.status === 'completing' && !!candidate.leaseExpiresAt && candidate.leaseExpiresAt <= input.now,
+      )
+      .sort((a, b) => a.leaseExpiresAt!.getTime() - b.leaseExpiresAt!.getTime())[0];
+    if (!run) return null;
+    const claimed = {
+      ...run,
+      leaseOwner: input.leaseOwner,
+      leaseExpiresAt: input.leaseExpiresAt,
+      heartbeatAt: input.now,
+    };
+    this.runs.set(run.id, claimed);
+    const messages = getRunMessageIds(run).map((id) => {
+      const message = (this.messages.get(run.sessionId) ?? []).find((candidate) => candidate.id === id);
+      if (!message) throw new Error(`Message does not exist: ${id}`);
+      return message;
+    });
+    return { run: claimed, messages };
+  }
+
   async completeRunBatch(input: {
     runId: string;
     leaseOwner: string;
@@ -1340,7 +1468,7 @@ export class MemoryStore implements AppStore {
     const run = this.runs.get(input.runId);
     if (
       !run ||
-      (run.status !== 'running' && run.status !== 'cancelling') ||
+      (run.status !== 'running' && run.status !== 'completing' && run.status !== 'cancelling') ||
       run.leaseOwner !== input.leaseOwner ||
       !run.leaseExpiresAt ||
       run.leaseExpiresAt <= input.heartbeatAt
@@ -1598,7 +1726,14 @@ export class MemoryStore implements AppStore {
   }
 
   async createArtifact(record: CreateArtifactRecord): Promise<ArtifactRecord> {
-    if (this.artifacts.has(record.id)) throw new Error(`Artifact already exists: ${record.id}`);
+    const existing = this.artifacts.get(record.id);
+    if (existing) {
+      const { createdAt: _existingAt, ...existingValue } = existing;
+      const { createdAt: _recordAt, ...recordValue } = record;
+      if (JSON.stringify(existingValue) !== JSON.stringify(recordValue))
+        throw new Error(`Artifact idempotency mismatch: ${record.id}`);
+      return existing;
+    }
     this.artifacts.set(record.id, record);
     return record;
   }
@@ -1618,6 +1753,20 @@ export class MemoryStore implements AppStore {
   }
 
   async createCallbackDelivery(record: CreateCallbackDeliveryRecord): Promise<CallbackDeliveryRecord> {
+    const existing = this.callbacks.get(record.id);
+    if (existing) {
+      if (
+        existing.sessionId !== record.sessionId ||
+        existing.runId !== record.runId ||
+        existing.messageId !== record.messageId ||
+        existing.targetType !== record.targetType ||
+        existing.eventType !== record.eventType ||
+        JSON.stringify(existing.target) !== JSON.stringify(record.target) ||
+        JSON.stringify(existing.payload) !== JSON.stringify(record.payload)
+      )
+        throw new Error(`Callback idempotency mismatch: ${record.id}`);
+      return existing;
+    }
     const delivery: CallbackDeliveryRecord = {
       ...record,
       status: 'pending',
@@ -1749,7 +1898,7 @@ export class MemoryStore implements AppStore {
     if (
       !run ||
       event.runId !== guard.runId ||
-      (run.status !== 'running' && run.status !== 'cancelling') ||
+      (run.status !== 'running' && run.status !== 'completing' && run.status !== 'cancelling') ||
       run.leaseOwner !== guard.leaseOwner ||
       !run.leaseExpiresAt ||
       run.leaseExpiresAt <= guard.now
@@ -1922,11 +2071,16 @@ export class MemoryStore implements AppStore {
     return true;
   }
 
-  private hasActiveRun(sessionId: string, now: Date): boolean {
+  private hasActiveRun(sessionId: string): boolean {
     for (const run of this.runs.values()) {
       if (run.sessionId !== sessionId) continue;
-      if (run.status !== 'running' && run.status !== 'starting' && run.status !== 'cancelling') continue;
-      if (run.leaseExpiresAt && run.leaseExpiresAt <= now) continue;
+      if (
+        run.status !== 'running' &&
+        run.status !== 'completing' &&
+        run.status !== 'starting' &&
+        run.status !== 'cancelling'
+      )
+        continue;
       return true;
     }
     return false;
@@ -1940,7 +2094,13 @@ export class MemoryStore implements AppStore {
   ): ClaimedMessageBatch | null {
     const run = this.runs.get(runId);
     if (!run) return null;
-    if ((run.status !== 'running' && run.status !== 'cancelling') || run.leaseOwner !== leaseOwner) return null;
+    const validStatus =
+      status === 'cancelled'
+        ? run.status === 'cancelling'
+        : status === 'completed'
+          ? run.status === 'completing'
+          : run.status === 'running' || run.status === 'completing';
+    if (!validStatus || run.leaseOwner !== leaseOwner) return null;
     if (!run.leaseExpiresAt || run.leaseExpiresAt <= finishedAt) return null;
 
     const sessionMessages = this.messages.get(run.sessionId) ?? [];
@@ -1977,8 +2137,27 @@ export class MemoryStore implements AppStore {
       updatedAt: finishedAt,
       lastActivityAt: finishedAt,
     });
+    const events =
+      status === 'completed'
+        ? terminalMessages.map((message) => {
+            const existing = (this.events.get(run.sessionId) ?? []).find(
+              (event) => event.runId === run.id && event.messageId === message.id && event.type === 'message_completed',
+            );
+            return (
+              existing ??
+              this.appendEventWithNextSequenceSync({
+                sessionId: message.sessionId,
+                runId: run.id,
+                messageId: message.id,
+                type: 'message_completed',
+                payload: { sequence: message.sequence },
+                createdAt: finishedAt,
+              })
+            );
+          })
+        : [];
 
-    return { messages: terminalMessages, run: terminalRun };
+    return { messages: terminalMessages, run: terminalRun, events };
   }
 
   private refreshQueuedSessionStatus(sessionId: string, updatedAt: Date): void {
@@ -2053,6 +2232,31 @@ export class MemoryStore implements AppStore {
     const existing = this.environmentActivity.get(environmentId) ?? [];
     this.environmentActivity.set(environmentId, [...existing, ...activity.map(cloneEnvironmentActivity)]);
   }
+}
+
+const executionContextKeys = ['repository', 'branch', 'environment', 'model', 'reasoningLevel'] as const;
+
+function executionSignature(context: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    executionContextKeys.filter((key) => context[key] != null).map((key) => [key, context[key]]),
+  );
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function deterministicJsonEqual(left: unknown, right: unknown): boolean {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (!isJsonObject(value)) return value;
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, normalize(value[key])]),
+    );
+  };
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
 function authAccountKey(provider: string, providerAccountId: string): string {

@@ -88,6 +88,8 @@ export function ChatPanel(props: {
   onCancelRun: () => void;
   onEditMessage: (message: Message) => void;
   onMessageDraftChange: (value: string) => void;
+  onToggleSteering: (message: Message) => void;
+  steeringMessageIds: ReadonlySet<string>;
   onRetryFailedMessages: (messageIds: string[]) => void;
   onSaveEdit: () => void;
   onExtendSandbox: (port?: number) => void;
@@ -110,13 +112,14 @@ export function ChatPanel(props: {
         const activeRun = isActiveRunGroup(group.messages);
         const cancellingRun = isCancellingRunGroup(group.messages);
         const failedMessages = group.messages.filter((message) => message.status === 'failed');
+        const activeMessageCount = group.messages.filter((message) => message.status !== 'cancelled').length;
         return (
           <div className="grid min-w-0 gap-2" key={group.key}>
             {group.messages.length > 1 ? (
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
-                  Queued batch · {group.messages.filter((message) => message.status !== 'cancelled').length} active
-                  messages
+                  {activeRun ? 'Active run' : 'Run'} · {activeMessageCount}{' '}
+                  {activeMessageCount === 1 ? 'message' : 'messages'}
                 </p>
                 <div className="flex flex-wrap justify-end gap-2">
                   {failedMessages.length > 0 && !activeRun ? (
@@ -148,6 +151,8 @@ export function ChatPanel(props: {
                 onCancelRun={props.onCancelRun}
                 onEditMessage={props.onEditMessage}
                 onMessageDraftChange={props.onMessageDraftChange}
+                onToggleSteering={props.onToggleSteering}
+                steeringPending={props.steeringMessageIds.has(message.id)}
                 {...(props.openableManagedSkillIds ? { openableManagedSkillIds: props.openableManagedSkillIds } : {})}
                 {...(props.onOpenSkill ? { onOpenSkill: props.onOpenSkill } : {})}
                 onRetryFailedMessages={props.onRetryFailedMessages}

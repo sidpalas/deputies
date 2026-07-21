@@ -13,6 +13,7 @@ export type MessageStatus = 'pending' | 'processing' | 'cancelling' | 'completed
 export type RunStatus =
   | 'starting'
   | 'running'
+  | 'completing'
   | 'cancelling'
   | 'completed'
   | 'failed'
@@ -158,6 +159,7 @@ export type MessageRecord = {
   sequence: number;
   status: MessageStatus;
   prompt: string;
+  steering: boolean;
   createdAt: Date;
   authorUserId?: string;
   authorName?: string;
@@ -204,6 +206,7 @@ export type ClaimedMessage = {
 export type ClaimedMessageBatch = {
   messages: MessageRecord[];
   run: RunRecord;
+  events?: EventRecord[];
 };
 
 export type RecoveredRun = {
@@ -501,6 +504,7 @@ export type CreateMessageRecord = {
   sequence: number;
   status: MessageStatus;
   prompt: string;
+  steering?: boolean;
   createdAt: Date;
   authorUserId?: string;
   authorName?: string;
@@ -907,7 +911,8 @@ export interface MessageStore {
   updatePendingMessage(input: {
     sessionId: string;
     messageId: string;
-    prompt: string;
+    prompt?: string;
+    steering?: boolean;
     context?: Record<string, unknown>;
   }): Promise<MessageRecord | null>;
   cancelPendingMessage(input: {
@@ -923,6 +928,13 @@ export interface MessageStore {
 }
 
 export interface RunStore {
+  persistActiveRunExecutionSignature(input: {
+    runId: string;
+    leaseOwner: string;
+    now: Date;
+    signature: Record<string, unknown>;
+  }): Promise<RunRecord | null>;
+  claimPendingSteeringMessages(input: { runId: string; leaseOwner: string; now: Date }): Promise<MessageRecord[]>;
   claimNextPendingMessage(input: {
     runId: string;
     runnerType: string;
@@ -956,6 +968,17 @@ export interface RunStore {
     leaseOwner: string;
     cancelledAt: Date;
     error: string;
+  }): Promise<ClaimedMessageBatch | null>;
+  beginRunCompletion(input: {
+    runId: string;
+    leaseOwner: string;
+    now: Date;
+    result: Record<string, unknown>;
+  }): Promise<ClaimedMessageBatch | null>;
+  claimExpiredRunCompletion(input: {
+    leaseOwner: string;
+    leaseExpiresAt: Date;
+    now: Date;
   }): Promise<ClaimedMessageBatch | null>;
   completeRun(input: { runId: string; leaseOwner: string; completedAt: Date }): Promise<ClaimedMessage | null>;
   failRun(input: { runId: string; leaseOwner: string; failedAt: Date; error: string }): Promise<ClaimedMessage | null>;

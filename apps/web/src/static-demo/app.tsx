@@ -658,6 +658,8 @@ function StaticSessionView(props: {
               onCancelQueuedMessage={() => undefined}
               onCancelRun={() => undefined}
               onEditMessage={() => undefined}
+              onToggleSteering={() => undefined}
+              steeringMessageIds={new Set()}
               onMessageDraftChange={() => undefined}
               onRetryFailedMessages={() => undefined}
               onSaveEdit={() => undefined}
