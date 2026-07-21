@@ -4,10 +4,11 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$repo_root"
 
+export PGPORT=${PGPORT:-5432}
 ./deploy/sandboxes/daytona/start-postgres.sh
 
-export DATABASE_URL=${DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:5432/deputies}
-export TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:5432/deputies_test}
+export DATABASE_URL=${DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:$PGPORT/deputies}
+export TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:$PGPORT/deputies_test}
 export API_AUTH_MODE=${API_AUTH_MODE:-none}
 
 mise exec -- pnpm install --frozen-lockfile

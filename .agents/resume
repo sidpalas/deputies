@@ -6,5 +6,6 @@ cd "$repo_root"
 
 postgres_bin=$(pg_config --bindir)
 export PATH="$postgres_bin:$PATH"
+export PGPORT=${PGPORT:-5432}
 
 bash ./deploy/sandboxes/daytona/start-postgres.sh

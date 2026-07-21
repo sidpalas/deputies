@@ -40,8 +40,9 @@ fi
 
 postgres_bin=$(pg_config --bindir)
 export PATH="$postgres_bin:$PATH"
-export DATABASE_URL=${DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:5432/deputies}
-export TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:5432/deputies_test}
+export PGPORT=${PGPORT:-5432}
+export DATABASE_URL=${DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:$PGPORT/deputies}
+export TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:$PGPORT/deputies_test}
 
 echo "Starting Postgres and applying migrations..."
 bash ./deploy/sandboxes/daytona/start-postgres.sh
