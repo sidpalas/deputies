@@ -2212,6 +2212,38 @@ it('uses the latest filters for the first session refresh after a filter change'
   });
 });
 
+it('keeps starred sessions grouped when other filters are active but not when filtering by stars', async () => {
+  const starredSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000089',
+    title: 'Starred session',
+    starred: true,
+  };
+  mockApi({ sessions: [session, starredSession] });
+  render(<App />);
+
+  const sidebar = within((await screen.findByRole('heading', { name: 'Sessions' })).closest('aside')!);
+  const starredHeading = sidebar.getByRole('heading', { name: 'Starred' });
+  const starredButton = sidebar.getByRole('button', { name: 'Starred session' });
+  const regularButton = sidebar.getByRole('button', { name: 'Existing session' });
+  expect(starredHeading.compareDocumentPosition(starredButton)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(starredButton.compareDocumentPosition(regularButton)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+  fireEvent.click(sidebar.getByRole('button', { name: 'Created' }));
+
+  await waitFor(() => expect(sidebar.getByRole('heading', { name: 'Starred' })).toBeInTheDocument());
+  expect(sidebar.getByRole('button', { name: 'Starred session' })).toBeInTheDocument();
+  expect(sidebar.getByRole('button', { name: 'Existing session' })).toBeInTheDocument();
+
+  fireEvent.click(
+    sidebar
+      .getAllByRole('button', { name: 'Starred' })
+      .find((button) => button.getAttribute('aria-pressed') === 'false')!,
+  );
+
+  await waitFor(() => expect(sidebar.queryByRole('heading', { name: 'Starred' })).not.toBeInTheDocument());
+});
+
 it('keeps loaded archived rows when a filtered active refresh completes', async () => {
   const activeSession = { ...session, starred: true };
   const archivedSession = {

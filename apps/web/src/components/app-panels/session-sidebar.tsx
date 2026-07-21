@@ -98,9 +98,19 @@ export function ThreadSidebar(props: {
     [props.sessions, revealedIds],
   );
   const revealedSessionTree = useMemo(() => buildSessionTree(props.revealedLineage), [props.revealedLineage]);
-  const activeSessionTree = useMemo(() => buildSessionTree(activeSessions), [activeSessions]);
-  const archivedSessionTree = useMemo(() => buildSessionTree(archivedSessions), [archivedSessions]);
   const searching = Boolean(props.searchQuery.trim());
+  const groupStarredSessions = !searching && !props.sessionFilters.starredByMe;
+  const starredSessions = useMemo(
+    () => (groupStarredSessions ? activeSessions.filter((session) => session.starred) : []),
+    [activeSessions, groupStarredSessions],
+  );
+  const unstarredSessions = useMemo(
+    () => (groupStarredSessions ? activeSessions.filter((session) => !session.starred) : activeSessions),
+    [activeSessions, groupStarredSessions],
+  );
+  const starredSessionTree = useMemo(() => buildSessionTree(starredSessions), [starredSessions]);
+  const activeSessionTree = useMemo(() => buildSessionTree(unstarredSessions), [unstarredSessions]);
+  const archivedSessionTree = useMemo(() => buildSessionTree(archivedSessions), [archivedSessions]);
   const archivedOpen = props.archivedSessionsOpen;
 
   useEffect(() => () => props.onSessionListHoverChange(false), [props.onSessionListHoverChange]);
@@ -229,6 +239,28 @@ export function ThreadSidebar(props: {
                     onShowInTree={props.onShowInTree}
                     onStarChange={props.onSessionStarChange}
                     showActions={false}
+                  />
+                </div>
+              </div>
+            ) : null}
+            {starredSessions.length ? (
+              <div className="mb-4 border-b border-border pb-3">
+                <h3 className="mb-1 flex items-center gap-1 text-sm font-medium text-muted-foreground">
+                  <Star className="h-3.5 w-3.5 fill-current text-warning" />
+                  Starred
+                </h3>
+                <div className="grid min-w-0 gap-1">
+                  <SessionTree
+                    nodes={starredSessionTree}
+                    selectedSessionId={props.selectedSessionId}
+                    canWriteSession={props.canWriteSession}
+                    onArchive={props.onArchive}
+                    onSelect={props.onSelect}
+                    onShowInTree={props.onShowInTree}
+                    onStarChange={props.onSessionStarChange}
+                    childSessionCursors={props.childSessionCursors}
+                    childSessionsLoading={props.childSessionsLoading}
+                    onLoadChildSessions={props.onLoadChildSessions}
                   />
                 </div>
               </div>
