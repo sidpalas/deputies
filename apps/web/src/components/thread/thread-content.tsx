@@ -408,7 +408,7 @@ export function MobileContextPanel(props: {
       open={open}
       onToggle={handleToggle}
     >
-      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-foreground">Context</summary>
+      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-foreground">Session details</summary>
       <ContextPanelContent {...props} />
     </details>
   );
@@ -431,10 +431,10 @@ export function DesktopContextPanel(props: {
 }) {
   return (
     <aside
-      aria-label="Desktop context"
+      aria-label="Session details"
       className="hidden min-h-0 overflow-auto border-l border-border bg-card/50 p-4 xl:block"
     >
-      <h2 className="text-sm font-semibold">Context</h2>
+      <h2 className="text-sm font-semibold">Session details</h2>
       <ContextPanelContent {...props} />
     </aside>
   );

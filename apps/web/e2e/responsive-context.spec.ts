@@ -6,14 +6,14 @@ test.beforeEach(async ({ page }) => {
   await mockApi(page);
 });
 
-test('keeps context collapsed by default on narrow screens', async ({ page }) => {
+test('keeps session details collapsed by default on narrow screens', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
 
   await expect(page.getByRole('log', { name: 'Session messages' })).toBeVisible();
   await expect(page.getByPlaceholder('Ask your deputy to investigate, change code, or follow up...')).toBeVisible();
 
-  const contextDisclosure = page.locator('details').filter({ has: page.getByText('Context', { exact: true }) });
+  const contextDisclosure = page.locator('details').filter({ has: page.getByText('Session details', { exact: true }) });
   await expect(contextDisclosure).toBeVisible();
   await expect(contextDisclosure).not.toHaveAttribute('open', '');
   await expect(contextDisclosure.getByText('Completion reply')).not.toBeVisible();
@@ -22,14 +22,14 @@ test('keeps context collapsed by default on narrow screens', async ({ page }) =>
   expect(messageLogBox?.height).toBeGreaterThan(300);
 });
 
-test('keeps context collapsed around tablet and small desktop widths', async ({ page }) => {
+test('keeps session details collapsed around tablet and small desktop widths', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 900 });
   await page.goto('/');
 
-  const contextDisclosure = page.locator('details').filter({ has: page.getByText('Context', { exact: true }) });
+  const contextDisclosure = page.locator('details').filter({ has: page.getByText('Session details', { exact: true }) });
   await expect(contextDisclosure).toBeVisible();
   await expect(contextDisclosure).not.toHaveAttribute('open', '');
-  await expect(page.getByRole('heading', { name: 'Context' })).not.toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Session details' })).not.toBeVisible();
 });
 
 test('keeps the mobile sessions navigation dock reachable on short screens', async ({ page }) => {
@@ -53,17 +53,19 @@ test('keeps the mobile sessions navigation dock reachable on short screens', asy
   await expect(page.getByRole('menuitem', { name: /Skills/ })).toBeVisible();
 });
 
-test('shows context as a sidebar on wide screens', async ({ page }) => {
+test('shows session details as a sidebar on wide screens', async ({ page }) => {
   await page.setViewportSize({ width: 1360, height: 900 });
   await page.goto('/');
 
-  await expect(page.getByRole('heading', { name: 'Context' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Session details' })).toBeVisible();
   await page
     .locator('aside')
     .getByText(/http ·/)
     .click();
   await expect(page.locator('aside').getByText('Type: Completion reply')).toBeVisible();
-  await expect(page.locator('details').filter({ has: page.getByText('Context', { exact: true }) })).not.toBeVisible();
+  await expect(
+    page.locator('details').filter({ has: page.getByText('Session details', { exact: true }) }),
+  ).not.toBeVisible();
 });
 
 async function mockApi(page: Page): Promise<void> {

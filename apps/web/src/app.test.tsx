@@ -1989,7 +1989,7 @@ it('saves session access group when selected', async () => {
   mockApi({ accessUpdates, authMode: 'session', currentUser: user, groups: [group, clientGroup] });
   render(<App />);
 
-  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  const contextPanel = within(await screen.findByLabelText('Session details'));
   const accessGroup = await contextPanel.findByLabelText('Access group');
   expect(contextPanel.queryByRole('button', { name: 'Save group' })).not.toBeInTheDocument();
 
@@ -2024,7 +2024,7 @@ it('does not let a delayed access mutation response regress a newer selected-ses
   });
   render(<App />);
 
-  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  const contextPanel = within(await screen.findByLabelText('Session details'));
   await waitFor(() => expect(pushGlobalEvent).toBeDefined());
   fireEvent.change(await contextPanel.findByLabelText('Access group'), { target: { value: clientGroup.id } });
   act(() => {
@@ -2080,7 +2080,7 @@ it('does not let a delayed access response regress a newer first-page session sn
   });
   render(<App />);
 
-  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  const contextPanel = within(await screen.findByLabelText('Session details'));
   fireEvent.change(await contextPanel.findByLabelText('Access group'), { target: { value: clientGroup.id } });
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
   await act(async () => {
@@ -2155,17 +2155,19 @@ it('shows an organization-visible session owner group name for non-members', asy
   });
   render(<App />);
 
-  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  const contextPanel = within(await screen.findByLabelText('Session details'));
   expect(await contextPanel.findByText('Client access')).toBeInTheDocument();
   expect(contextPanel.queryByText(clientGroupId)).not.toBeInTheDocument();
 });
 
-it('persists the mobile context panel after refresh', async () => {
+it('persists the mobile session details panel after refresh', async () => {
   mockApi();
 
   const rendered = render(<App />);
   await screen.findByRole('heading', { name: 'Existing session' });
-  const contextSummary = (await screen.findAllByText('Context')).find((element) => element.tagName === 'SUMMARY');
+  const contextSummary = (await screen.findAllByText('Session details')).find(
+    (element) => element.tagName === 'SUMMARY',
+  );
   expect(contextSummary).toBeDefined();
 
   const contextDetails = contextSummary!.closest('details')!;
@@ -2177,7 +2179,9 @@ it('persists the mobile context panel after refresh', async () => {
   render(<App />);
 
   await screen.findByRole('heading', { name: 'Existing session' });
-  const restoredSummary = (await screen.findAllByText('Context')).find((element) => element.tagName === 'SUMMARY');
+  const restoredSummary = (await screen.findAllByText('Session details')).find(
+    (element) => element.tagName === 'SUMMARY',
+  );
   expect(restoredSummary?.closest('details')).toHaveAttribute('open');
 });
 
@@ -4986,7 +4990,7 @@ it('shows session lineage and labels deputy-authored messages', async () => {
   render(<App />);
 
   expect(await screen.findByText('Deputy message 1')).toBeInTheDocument();
-  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  const contextPanel = within(await screen.findByLabelText('Session details'));
   expect(contextPanel.getByText('Session lineage')).toBeInTheDocument();
   expect(contextPanel.getByText('Children (1)')).toBeInTheDocument();
   fireEvent.click(contextPanel.getByRole('button', { name: /Child investigation/ }));
@@ -4994,7 +4998,7 @@ it('shows session lineage and labels deputy-authored messages', async () => {
   await waitFor(() => expect(sessionStorage.getItem('deputies-selected-session-id')).toBe(childSession.id));
 });
 
-it('shows a selected session parent in context when filters exclude it from the sidebar', async () => {
+it('shows a selected session parent in details when filters exclude it from the sidebar', async () => {
   const childSession = {
     ...session,
     id: '00000000-0000-4000-8000-000000000302',
@@ -5014,7 +5018,7 @@ it('shows a selected session parent in context when filters exclude it from the 
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Child investigation' })).toBeInTheDocument();
-  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  const contextPanel = within(await screen.findByLabelText('Session details'));
   fireEvent.click(await contextPanel.findByRole('button', { name: /Existing session/ }));
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
   const sidebar = within(screen.getByRole('heading', { name: 'Sessions' }).closest('aside')!);
@@ -5220,7 +5224,7 @@ it('shows callback delivery status and replays failed callbacks', async () => {
   });
   render(<App />);
 
-  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  const contextPanel = within(await screen.findByLabelText('Session details'));
   fireEvent.click(await contextPanel.findByLabelText('http callback failed'));
   expect(contextPanel.getByText('Type: Completion reply')).toBeVisible();
   expect(contextPanel.getByText('Last error: HTTP callback returned 500')).toBeVisible();
