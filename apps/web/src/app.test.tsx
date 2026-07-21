@@ -378,6 +378,7 @@ it('guards revision changes from a dirty environment editor', async () => {
   render(<App />);
 
   const name = await screen.findByLabelText('Name');
+  await waitFor(() => expect(name).toHaveValue('Production'));
   fireEvent.change(name, { target: { value: 'Unsaved environment' } });
   await screen.findByText('Unsaved changes');
   fireEvent.click(screen.getByLabelText('Revision'));

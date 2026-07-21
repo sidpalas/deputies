@@ -318,8 +318,10 @@ export class WorkerService {
     const steeringInterval = setInterval(pollSteering, 500);
     pollCancellation();
 
+    let result: RunnerResult | null | undefined;
+    let runError: unknown;
     try {
-      const result = await this.runClaimedMessage(claimed, abort.signal, (handler) => {
+      result = await this.runClaimedMessage(claimed, abort.signal, (handler) => {
         steeringHandler = handler;
         pollSteering();
         return async () => {
@@ -328,16 +330,22 @@ export class WorkerService {
         };
       });
       await steeringPoll;
-      if (steeringError !== undefined) throw steeringError;
-      return result;
+    } catch (error: unknown) {
+      runError = error;
     } finally {
       steeringStopped = true;
       clearInterval(heartbeat);
       clearInterval(cancellationPoll);
       clearInterval(steeringInterval);
       await steeringPoll;
-      if (steeringError !== undefined) throw steeringError;
     }
+    const error = steeringError ?? runError;
+    if (error !== undefined) {
+      throw error instanceof Error
+        ? error
+        : new Error(typeof error === 'string' ? error : 'Worker run failed', { cause: error });
+    }
+    return result ?? null;
   }
 
   private async runClaimedMessage(
