@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { App } from './app.js';
-import { listEvents, type ReasoningLevel } from './api.js';
+import { listEvents, listIncrementalEvents, type ReasoningLevel } from './api.js';
 import { request } from './api-request.js';
 
 const { codeToHtmlMock } = vi.hoisted(() => ({
@@ -81,6 +81,7 @@ type MockApiOptions = {
   sessionsNextCursor?: string | null;
   onListSessionsRequest?: (request: { count: number; url: URL }) => Response | Promise<Response> | undefined;
   onGetSessionRequest?: (sessionId: string) => Response | Promise<Response> | undefined;
+  onUpdateAccessRequest?: (body: Record<string, unknown>) => Response | Promise<Response>;
   onStarSessionRequest?: (request: { starred: boolean }) => Response | Promise<Response> | undefined;
   sessionDetailStatusById?: Record<string, number>;
   searchResults?: unknown[];
@@ -92,11 +93,13 @@ type MockApiOptions = {
     displayStatusTooltip?: string;
     directChildCount?: number;
     ownerGroupName?: string;
+    queuePausedAt?: string;
     sandbox?: Record<string, unknown>;
   };
   onCancelRun?: () => void;
   onRetryMessage?: (messageId: string) => void;
   onReplayCallback?: (callbackId: string) => void;
+  onMessageSubmitRequest?: (request: { count: number; body: Record<string, unknown> }) => Response | Promise<Response>;
   onStreamOpen?: (push: StreamEventPusher) => void;
   onGlobalStreamOpen?: (push: StreamEventPusher, close: () => void) => void;
   onGlobalStreamRequest?: (url: URL, count: number) => Response | Promise<Response> | void;
@@ -110,6 +113,7 @@ type MockApiOptions = {
   hangArchive?: boolean;
   archiveStatus?: number;
   hangMessagesForSessions?: string[];
+  hangIncrementalEventsForSessions?: string[];
   hangArtifacts?: boolean;
   hangSessions?: boolean;
   hangUnarchive?: boolean;
@@ -131,6 +135,13 @@ type MockApiOptions = {
     sessionId: string;
   }) => Response | Promise<Response> | undefined;
   onListServicesRequest?: (count: number) => Response | Promise<Response> | undefined;
+  workspaceToolResponse?: {
+    tool: { id: 'ide' | 'diff'; label: string };
+    service: { port: number; url: string; status?: 'available' | 'unavailable' | 'unknown' };
+    session: typeof session & {
+      sandbox?: { id: string; provider: string; providerSandboxId: string; status: string; updatedAt: string };
+    };
+  };
   archivedSkillIds?: string[];
   onSnippetMutationRequest?: (request: { path: string; method: string; body: unknown }) => Response | Promise<Response>;
   archivedSessionIds?: string[];
@@ -182,6 +193,24 @@ it('pages session event replay in the API client', async () => {
     `/sessions/${session.id}/events?limit=1000`,
     `/sessions/${session.id}/events?limit=1000&after=2`,
   ]);
+});
+
+it('bounds incremental session event reconciliation to one page', async () => {
+  const requests: string[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+    requests.push(`${url.pathname}${url.search}`);
+    return jsonResponse({
+      events: [eventFixture({ sequence: 8, type: 'message_completed', payload: { sequence: 1 } })],
+      cursor: 8,
+      hasMore: true,
+    });
+  });
+
+  const events = await listIncrementalEvents(session.id, 'secret', 7);
+
+  expect(events.map((event) => event.sequence)).toEqual([8]);
+  expect(requests).toEqual([`/sessions/${session.id}/events?limit=1000&after=7`]);
 });
 
 it('stops API client event paging when a hasMore page has no events', async () => {
@@ -954,7 +983,10 @@ it('shows fast streamed responses for newly-created sessions before detail refre
 });
 
 it('backfills fast responses for newly-created sessions when the global stream misses them', async () => {
+  const requests: string[] = [];
+  let createdIncrementalRequests = 0;
   mockApi({
+    requests,
     messagesBySession: {
       '00000000-0000-4000-8000-000000000102': [
         {
@@ -970,6 +1002,14 @@ it('backfills fast responses for newly-created sessions when the global stream m
     eventsBySession: {
       '00000000-0000-4000-8000-000000000102': [
         {
+          id: 9,
+          sessionId: '00000000-0000-4000-8000-000000000102',
+          sequence: 1,
+          type: 'session_created',
+          payload: { title: 'start work' },
+          createdAt: '2026-05-05T12:01:00.000Z',
+        },
+        {
           id: 10,
           sessionId: '00000000-0000-4000-8000-000000000102',
           sequence: 2,
@@ -980,10 +1020,42 @@ it('backfills fast responses for newly-created sessions when the global stream m
         },
       ],
     },
+    onListEventsRequest: ({ sessionId, url }) => {
+      if (sessionId !== '00000000-0000-4000-8000-000000000102' || !url.searchParams.has('after')) return;
+      createdIncrementalRequests += 1;
+      if (createdIncrementalRequests > 1) {
+        return jsonResponse({ events: [], cursor: 2, hasMore: false });
+      }
+      return jsonResponse({
+        events: [
+          {
+            id: 9,
+            sessionId,
+            sequence: 1,
+            type: 'session_created',
+            payload: { title: 'start work' },
+            createdAt: '2026-05-05T12:01:00.000Z',
+          },
+          {
+            id: 10,
+            sessionId,
+            sequence: 2,
+            type: 'agent_response_final',
+            messageId: '00000000-0000-4000-8000-000000000101',
+            payload: { text: 'missed fast provider response' },
+            createdAt: '2026-05-05T12:02:00.000Z',
+          },
+        ],
+        cursor: 2,
+        hasMore: true,
+      });
+    },
   });
   render(<App />);
 
-  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  const newSessionButton = await screen.findByRole('button', { name: 'New session' });
+  requests.length = 0;
+  fireEvent.click(newSessionButton);
   fireEvent.change(screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...'), {
     target: { value: 'start work' },
   });
@@ -991,6 +1063,15 @@ it('backfills fast responses for newly-created sessions when the global stream m
 
   expect(await screen.findAllByText('start work')).not.toHaveLength(0);
   await waitFor(() => expect(screen.getByText('missed fast provider response')).toBeInTheDocument());
+  const createdSessionPath = '/sessions/00000000-0000-4000-8000-000000000102';
+  expect(
+    requests.some((request) => request.startsWith(`GET ${createdSessionPath}/events?`) && request.includes('after=')),
+  ).toBe(true);
+  for (const resource of ['artifacts', 'services', 'external-resources', 'callbacks']) {
+    expect(requests.filter((request) => request === `GET ${createdSessionPath}/${resource}`)).toHaveLength(1);
+  }
+  expect(requests.filter((request) => request === 'GET /sessions?limit=50')).toHaveLength(0);
+  expect(createdIncrementalRequests).toBe(1);
 });
 
 it('aborts newly-created session backfill when signing out', async () => {
@@ -1000,7 +1081,7 @@ it('aborts newly-created session backfill when signing out', async () => {
     abortedRequests,
     authMode: 'session',
     currentUser: user,
-    hangMessagesForSessions: [newSessionId],
+    hangIncrementalEventsForSessions: [newSessionId],
   });
   render(<App />);
 
@@ -1013,8 +1094,215 @@ it('aborts newly-created session backfill when signing out', async () => {
   expect(await screen.findAllByText('start work')).not.toHaveLength(0);
   fireEvent.click(screen.getAllByRole('button', { name: 'Sign out' })[0]!);
 
-  await waitFor(() => expect(abortedRequests).toContain(`GET /sessions/${newSessionId}/messages`));
+  await waitFor(() => expect(abortedRequests).toContain(`GET /sessions/${newSessionId}/events`));
   expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+});
+
+it('performs one incremental submission fallback and then reconciles only messages and summary', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: string[] = [];
+  const incrementalAfterValues: string[] = [];
+  mockApi({
+    requests,
+    onListEventsRequest: ({ url }) => {
+      const after = url.searchParams.get('after');
+      if (after === null) return undefined;
+      incrementalAfterValues.push(after);
+      return incrementalAfterValues.length === 1
+        ? jsonResponse({
+            events: [eventFixture({ sequence: 1, type: 'run_started', payload: {} })],
+            cursor: 1,
+            hasMore: true,
+          })
+        : jsonResponse({ events: [], cursor: 1, hasMore: false });
+    },
+  });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  requests.length = 0;
+  fireEvent.change(composer, { target: { value: 'fallback please' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  await waitFor(() => expect(requests).toContain(`POST /sessions/${session.id}/messages`));
+  await act(() => vi.advanceTimersByTimeAsync(1_000));
+  await waitFor(() => expect(incrementalAfterValues).toHaveLength(1));
+  await act(() => vi.advanceTimersByTimeAsync(125));
+
+  expect(requests.filter((request) => request.includes(`/sessions/${session.id}/events?`))).toHaveLength(1);
+  expect(requests.filter((request) => request === `GET /sessions/${session.id}/messages`)).toHaveLength(1);
+  expect(requests.filter((request) => request === `GET /sessions/${session.id}`)).toHaveLength(1);
+  expect(requests.filter((request) => request === 'GET /sessions?limit=50')).toHaveLength(0);
+  expect(detailResourceRequests(requests)).toEqual([`GET /sessions/${session.id}/messages`]);
+});
+
+it('cancels submission fallback when the matching message_created event arrives', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: string[] = [];
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    requests,
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+  requests.length = 0;
+  fireEvent.change(composer, { target: { value: 'streamed creation' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  await waitFor(() => expect(requests).toContain(`POST /sessions/${session.id}/messages`));
+  act(() => {
+    pushGlobalEvent?.(
+      eventFixture({
+        id: 20,
+        sequence: 1,
+        type: 'message_created',
+        messageId: '00000000-0000-4000-8000-000000000101',
+        payload: { sequence: 1, source: null },
+      }),
+    );
+  });
+  await act(() => vi.advanceTimersByTimeAsync(1_000));
+
+  expect(requests.filter((request) => request.includes(`/sessions/${session.id}/events?`))).toHaveLength(0);
+});
+
+it('recognizes a matching message_created event that arrives before the submission response', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const submitResponse = deferred<Response>();
+  const requests: string[] = [];
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  mockApi({
+    requests,
+    onMessageSubmitRequest: () => submitResponse.promise,
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+  requests.length = 0;
+  fireEvent.change(composer, { target: { value: 'event before response' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  await waitFor(() => expect(requests).toContain(`POST /sessions/${session.id}/messages`));
+  act(() => {
+    pushGlobalEvent?.(
+      eventFixture({
+        id: 21,
+        sequence: 1,
+        type: 'message_created',
+        messageId: '00000000-0000-4000-8000-000000000101',
+        payload: { sequence: 1, source: null },
+      }),
+    );
+  });
+  await act(async () => {
+    submitResponse.resolve(
+      jsonResponse({
+        message: messageFixture({
+          id: '00000000-0000-4000-8000-000000000101',
+          sequence: 1,
+          status: 'pending',
+          prompt: 'event before response',
+        }),
+      }),
+    );
+    await submitResponse.promise;
+  });
+  await act(() => vi.advanceTimersByTimeAsync(1_000));
+
+  expect(requests.filter((request) => request.includes(`/sessions/${session.id}/events?`))).toHaveLength(0);
+});
+
+it('retains missing-event fallbacks for two rapid successful submissions', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: string[] = [];
+  mockApi({ requests });
+  render(<App />);
+
+  let composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  requests.length = 0;
+  fireEvent.change(composer, { target: { value: 'first fallback' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: 'second fallback' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  await waitFor(() =>
+    expect(requests.filter((request) => request === `POST /sessions/${session.id}/messages`)).toHaveLength(2),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(1_000));
+
+  await waitFor(() =>
+    expect(requests.filter((request) => request.includes(`/sessions/${session.id}/events?`))).toHaveLength(2),
+  );
+});
+
+it('ignores a late submission fallback response after selection changes', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const fallbackEvents = deferred<Response>();
+  const requests: string[] = [];
+  const secondSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000099',
+    title: 'Fallback target changed',
+  };
+  let fallbackStarted = false;
+  mockApi({
+    requests,
+    sessions: [session, secondSession],
+    onListEventsRequest: ({ sessionId, url }) => {
+      if (sessionId === session.id && url.searchParams.has('after')) {
+        fallbackStarted = true;
+        return fallbackEvents.promise;
+      }
+      return undefined;
+    },
+  });
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: 'stale fallback' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  await act(() => vi.advanceTimersByTimeAsync(1_000));
+  await waitFor(() => expect(fallbackStarted).toBe(true));
+  fireEvent.click(screen.getByRole('button', { name: /Fallback target changed/ }));
+  requests.length = 0;
+
+  await act(async () => {
+    fallbackEvents.resolve(jsonResponse({ events: [], cursor: 0, hasMore: false }));
+    await fallbackEvents.promise;
+  });
+  await act(() => vi.advanceTimersByTimeAsync(125));
+
+  expect(requests).not.toContain(`GET /sessions/${session.id}/messages`);
+  expect(requests).not.toContain(`GET /sessions/${session.id}`);
+});
+
+it('aborts an in-flight submission fallback when the app unmounts', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const abortedRequests: string[] = [];
+  const requests: string[] = [];
+  mockApi({
+    abortedRequests,
+    requests,
+    hangIncrementalEventsForSessions: [session.id],
+  });
+  const view = render(<App />);
+
+  const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: 'unmounted fallback' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  await act(() => vi.advanceTimersByTimeAsync(1_000));
+  await waitFor(() =>
+    expect(requests.some((request) => request.includes(`/sessions/${session.id}/events?`))).toBe(true),
+  );
+  view.unmount();
+
+  await waitFor(() => expect(abortedRequests).toContain(`GET /sessions/${session.id}/events`));
 });
 
 it('confirms before signing out with dirty snippet changes', async () => {
@@ -1708,6 +1996,110 @@ it('saves session access group when selected', async () => {
   await waitFor(() => expect(accessUpdates).toEqual([{ ownerGroupId: clientGroup.id }]));
 });
 
+it('does not let a delayed access mutation response regress a newer selected-session summary', async () => {
+  const accessResponse = deferred<Response>();
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  const clientGroup = {
+    ...group,
+    id: '00000000-0000-4000-8000-000000000019',
+    name: 'New owner',
+  };
+  const newerSession = {
+    ...session,
+    title: 'Newer authoritative title',
+    updatedAt: '2026-05-05T12:05:00.000Z',
+  };
+  mockApi({
+    authMode: 'session',
+    currentUser: user,
+    groups: [group, clientGroup],
+    onUpdateAccessRequest: () => accessResponse.promise,
+    onGetSessionRequest: () => jsonResponse({ session: newerSession }),
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+
+  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+  fireEvent.change(await contextPanel.findByLabelText('Access group'), { target: { value: clientGroup.id } });
+  act(() => {
+    pushGlobalEvent?.(
+      eventFixture({
+        id: 22,
+        sequence: 1,
+        type: 'session_updated',
+        payload: { title: newerSession.title },
+      }),
+    );
+  });
+  expect(await screen.findByRole('heading', { name: newerSession.title })).toBeInTheDocument();
+
+  await act(async () => {
+    accessResponse.resolve(
+      jsonResponse({
+        session: {
+          ...session,
+          ownerGroupId: clientGroup.id,
+          title: 'Stale access response title',
+          updatedAt: '2026-05-05T12:03:00.000Z',
+        },
+      }),
+    );
+    await accessResponse.promise;
+  });
+
+  expect(screen.getByRole('heading', { name: newerSession.title })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Stale access response title' })).not.toBeInTheDocument();
+});
+
+it('does not let a delayed access response regress a newer first-page session snapshot', async () => {
+  const accessResponse = deferred<Response>();
+  const refreshedPage = deferred<Response>();
+  const clientGroup = {
+    ...group,
+    id: '00000000-0000-4000-8000-000000000019',
+    name: 'New owner',
+  };
+  const newerSession = {
+    ...session,
+    title: 'Newer first-page title',
+    updatedAt: '2026-05-05T12:05:00.000Z',
+  };
+  mockApi({
+    authMode: 'session',
+    currentUser: user,
+    groups: [group, clientGroup],
+    onUpdateAccessRequest: () => accessResponse.promise,
+    onListSessionsRequest: ({ count }) => (count === 2 ? refreshedPage.promise : undefined),
+    onGetSessionRequest: () => jsonResponse({ session: newerSession }),
+  });
+  render(<App />);
+
+  const contextPanel = within(await screen.findByLabelText('Desktop context'));
+  fireEvent.change(await contextPanel.findByLabelText('Access group'), { target: { value: clientGroup.id } });
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await act(async () => {
+    refreshedPage.resolve(jsonResponse({ sessions: [newerSession], nextCursor: null }));
+    await refreshedPage.promise;
+    accessResponse.resolve(
+      jsonResponse({
+        session: {
+          ...session,
+          ownerGroupId: clientGroup.id,
+          title: 'Stale access response title',
+          updatedAt: '2026-05-05T12:03:00.000Z',
+        },
+      }),
+    );
+    await accessResponse.promise;
+  });
+
+  expect(await screen.findByRole('heading', { name: newerSession.title })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Stale access response title' })).not.toBeInTheDocument();
+});
+
 it('shows an organization-visible session owner group name for non-members', async () => {
   const clientGroupId = '00000000-0000-4000-8000-000000000011';
   mockApi({
@@ -2313,6 +2705,7 @@ it('coalesces simultaneous wake, visibility, and online recovery signals', async
   const requests: string[] = [];
   let streamRequestCount = 0;
   let sessionsRequestCount = 0;
+  let incrementalEventRequests = 0;
   mockApi({
     requests,
     events: [eventFixture({ sequence: 4, type: 'run_started', payload: {} })],
@@ -2324,14 +2717,17 @@ it('coalesces simultaneous wake, visibility, and online recovery signals', async
       streamRequestCount = count;
       return undefined;
     },
-    onListEventsRequest: ({ url }) =>
-      url.searchParams.has('after')
+    onListEventsRequest: ({ url }) => {
+      if (!url.searchParams.has('after')) return undefined;
+      incrementalEventRequests += 1;
+      return incrementalEventRequests === 1
         ? jsonResponse({
             events: [eventFixture({ sequence: 5, type: 'message_updated', payload: { sequence: 1 } })],
             cursor: 5,
-            hasMore: false,
+            hasMore: true,
           })
-        : undefined,
+        : jsonResponse({ events: [], cursor: 5, hasMore: false });
+    },
   });
   render(<App />);
 
@@ -2363,6 +2759,7 @@ it('coalesces simultaneous wake, visibility, and online recovery signals', async
   expect(requests.filter((request) => request === 'GET /sessions?limit=50')).toHaveLength(1);
   expect(requests.filter((request) => request === `GET /sessions/${session.id}/messages`)).toHaveLength(1);
   expect(detailResourceRequests(requests)).toEqual([`GET /sessions/${session.id}/messages`]);
+  expect(incrementalEventRequests).toBe(1);
 });
 
 it('waits for a successful stream reopen before recovering after repeated reconnect failures', async () => {
@@ -2903,9 +3300,81 @@ it('does not let a stale services response repopulate services after sandbox sto
   expect(screen.queryAllByText(':3000')).toHaveLength(0);
 });
 
+it('preserves displaced services reconciliation after applying a workspace-tool response', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const staleServices = deferred<Response>();
+  let pushGlobalEvent: StreamEventPusher | undefined;
+  let servicesRequestCount = 0;
+  const toolService = { port: 3000, url: 'https://tool.example', status: 'available' as const };
+  const authoritativeService = { port: 4000, url: 'https://authoritative.example', status: 'available' as const };
+  const sandbox = {
+    id: '00000000-0000-4000-8000-000000000501',
+    provider: 'fake',
+    providerSandboxId: 'sandbox-1',
+    status: 'running',
+    updatedAt: session.updatedAt,
+  };
+  mockApi({
+    sessionOverride: { sandbox },
+    workspaceToolResponse: {
+      tool: { id: 'ide', label: 'VS Code' },
+      service: toolService,
+      session: { ...session, sandbox },
+    },
+    onListServicesRequest: (count) => {
+      servicesRequestCount = count;
+      if (count === 2) return staleServices.promise;
+      if (count === 3) return jsonResponse({ services: [authoritativeService] });
+      return undefined;
+    },
+    onGlobalStreamOpen: (push) => {
+      pushGlobalEvent = push;
+    },
+  });
+  const toolTab = {
+    document: document.implementation.createHTMLDocument(''),
+    location: { href: '' },
+    opener: window,
+    close: vi.fn(),
+  } as unknown as Window;
+  vi.spyOn(window, 'open').mockReturnValue(toolTab);
+  render(<App />);
+
+  await screen.findByRole('log', { name: 'Session messages' });
+  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
+  act(() => {
+    pushGlobalEvent?.(
+      eventFixture({
+        id: 23,
+        sequence: 1,
+        type: 'session_updated',
+        payload: { context: { services: [] } },
+      }),
+    );
+  });
+  await act(() => vi.advanceTimersByTimeAsync(125));
+  await waitFor(() => expect(servicesRequestCount).toBe(2));
+
+  const header = screen.getByRole('heading', { name: 'Existing session' }).closest('section')!;
+  fireEvent.click(within(header).getByRole('button', { name: 'Session actions' }));
+  fireEvent.click(within(header).getByRole('menuitem', { name: /VS Code/ }));
+  await waitFor(() => expect(toolTab.location.href).toBe(toolService.url));
+  await act(async () => {
+    staleServices.resolve(jsonResponse({ services: [{ port: 2000, url: 'https://stale.example' }] }));
+    await staleServices.promise;
+  });
+  await act(() => vi.advanceTimersByTimeAsync(0));
+
+  await waitFor(() => expect(servicesRequestCount).toBe(3));
+  expect(await screen.findAllByText(':4000')).not.toHaveLength(0);
+  expect(screen.queryAllByText(':2000')).toHaveLength(0);
+});
+
 it('shows and calls cancel task on the active message', async () => {
   let cancelled = false;
+  const requests: string[] = [];
   mockApi({
+    requests,
     sessionOverride: { status: 'active' },
     messages: [
       {
@@ -2924,9 +3393,38 @@ it('shows and calls cancel task on the active message', async () => {
   render(<App />);
 
   const messageCard = await screen.findByRole('article', { name: 'Message 1' });
+  requests.length = 0;
   fireEvent.click(within(messageCard).getByRole('button', { name: 'Cancel task' }));
 
   await waitFor(() => expect(cancelled).toBe(true));
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}`));
+  expect(requests.filter((request) => request === 'GET /sessions?limit=50')).toHaveLength(0);
+});
+
+it('applies queue pause and resume Session responses without broad reconciliation', async () => {
+  const requests: string[] = [];
+  mockApi({
+    requests,
+    messages: [
+      messageFixture({
+        id: '00000000-0000-4000-8000-000000000102',
+        sequence: 1,
+        status: 'pending',
+        prompt: 'edit queued work',
+      }),
+    ],
+  });
+  render(<App />);
+
+  const messageCard = await screen.findByRole('article', { name: 'Message 1' });
+  requests.length = 0;
+  fireEvent.click(within(messageCard).getByRole('button', { name: 'Edit' }));
+  await waitFor(() => expect(requests).toContain(`POST /sessions/${session.id}/queue/pause`));
+  fireEvent.click(within(messageCard).getByRole('button', { name: 'Cancel' }));
+  await waitFor(() => expect(requests).toContain(`POST /sessions/${session.id}/queue/resume`));
+
+  expect(requests.filter((request) => request.startsWith('GET /sessions'))).toHaveLength(0);
+  expect(detailResourceRequests(requests)).toEqual([]);
 });
 
 it('shows cancelling state on the active message cancel action', async () => {
@@ -4588,6 +5086,7 @@ function mockApi(options: MockApiOptions = {}) {
   let servicesRequestCount = 0;
   let eventsRequestCount = 0;
   let globalStreamRequestCount = 0;
+  let messageSubmitCount = 0;
   let skills = options.skills;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
@@ -5018,6 +5517,8 @@ function mockApi(options: MockApiOptions = {}) {
     if (url.pathname === `/sessions/${currentSession.id}/access` && method === 'PATCH') {
       const body = JSON.parse(String(init?.body)) as Partial<typeof session>;
       options.accessUpdates?.push(body);
+      const customResponse = options.onUpdateAccessRequest?.(body);
+      if (customResponse) return customResponse;
       currentSession = { ...currentSession, ...body };
       return jsonResponse({ session: currentSession });
     }
@@ -5032,14 +5533,17 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === `/sessions/${currentSession.id}/messages` && method === 'POST') {
-      const body = JSON.parse(String(init?.body)) as { prompt: string };
+      const body = JSON.parse(String(init?.body)) as { prompt: string } & Record<string, unknown>;
+      messageSubmitCount += 1;
       if (options.messageSubmitError) {
         return jsonResponse(options.messageSubmitError.body, options.messageSubmitError.status);
       }
       options.submittedPrompts?.push(body.prompt);
       options.submittedMessageBodies?.push(body);
+      const customResponse = options.onMessageSubmitRequest?.({ count: messageSubmitCount, body });
+      if (customResponse) return customResponse;
       const message = {
-        id: '00000000-0000-4000-8000-000000000101',
+        id: `00000000-0000-4000-8000-${String(100 + messageSubmitCount).padStart(12, '0')}`,
         sessionId: currentSession.id,
         sequence: 1,
         status: 'pending',
@@ -5077,9 +5581,27 @@ function mockApi(options: MockApiOptions = {}) {
       return jsonResponse({ messages: messages.map((message) => ({ ...(message as object), status: 'cancelling' })) });
     }
 
+    if (url.pathname === `/sessions/${currentSession.id}/queue/pause` && method === 'POST') {
+      currentSession = {
+        ...currentSession,
+        queuePausedAt: '2026-05-05T12:03:00.000Z',
+        updatedAt: '2026-05-05T12:03:00.000Z',
+      };
+      return jsonResponse({ session: currentSession });
+    }
+
+    if (url.pathname === `/sessions/${currentSession.id}/queue/resume` && method === 'POST') {
+      const { queuePausedAt: _queuePausedAt, ...resumedSession } = currentSession;
+      currentSession = { ...resumedSession, updatedAt: '2026-05-05T12:04:00.000Z' };
+      return jsonResponse({ session: currentSession });
+    }
+
     if (url.pathname.match(/^\/sessions\/[^/]+\/events$/)) {
       const sessionId = url.pathname.split('/')[2]!;
       eventsRequestCount += 1;
+      if (url.searchParams.has('after') && options.hangIncrementalEventsForSessions?.includes(sessionId)) {
+        return hangingResponse(init, () => options.abortedRequests?.push(`${method} ${url.pathname}`));
+      }
       const customResponse = options.onListEventsRequest?.({ count: eventsRequestCount, sessionId, url });
       if (customResponse) return customResponse;
       return jsonResponse({
@@ -5100,6 +5622,12 @@ function mockApi(options: MockApiOptions = {}) {
       const customResponse = options.onListServicesRequest?.(servicesRequestCount);
       if (customResponse) return customResponse;
       return jsonResponse({ services: options.services ?? [] });
+    }
+
+    if (url.pathname.match(/^\/sessions\/[^/]+\/workspace-tools\/(ide|diff)\/open$/) && method === 'POST') {
+      return options.workspaceToolResponse
+        ? jsonResponse(options.workspaceToolResponse)
+        : jsonResponse({ error: 'not_found', message: 'Workspace tool unavailable' }, 404);
     }
 
     if (url.pathname.match(/^\/sessions\/[^/]+\/external-resources$/)) {

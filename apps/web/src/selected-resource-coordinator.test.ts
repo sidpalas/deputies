@@ -145,6 +145,28 @@ describe('SelectedResourceCoordinator', () => {
     request.resolve([]);
   });
 
+  it('can preserve displaced reconciliation after applying a direct entity response', async () => {
+    const firstRequest = deferred<unknown>();
+    const load = vi
+      .fn<(resource: DetailResource, sessionId: string) => Promise<unknown>>()
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockResolvedValueOnce(['authoritative services']);
+    const apply = vi.fn();
+    const coordinator = createCoordinator(load, apply);
+
+    coordinator.invalidate(context, resources('services'));
+    await vi.advanceTimersByTimeAsync(125);
+    const displaced = coordinator.supersede(context, resources('services'));
+    coordinator.invalidate(context, displaced);
+    firstRequest.resolve(['stale services']);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(apply).toHaveBeenCalledOnce();
+    expect(apply).toHaveBeenCalledWith('services', ['authoritative services'], context);
+  });
+
   it('does not postpone a ready resource when only an in-flight resource is invalidated', async () => {
     const messagesRequest = deferred<unknown>();
     const load = vi.fn((resource: DetailResource) =>

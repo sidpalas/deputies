@@ -1284,6 +1284,17 @@ export async function listEvents(
   }
 }
 
+export async function listIncrementalEvents(
+  sessionId: string,
+  token: string,
+  after: number,
+  options: RequestOptions = {},
+): Promise<AgentEvent[]> {
+  const params = new URLSearchParams({ limit: String(sessionEventPageLimit), after: String(after) });
+  const body = await request<AgentEventPage>(`/sessions/${sessionId}/events?${params}`, { token, ...options });
+  return body.events;
+}
+
 export async function listArtifacts(
   sessionId: string,
   token: string,

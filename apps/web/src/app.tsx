@@ -33,6 +33,7 @@ import {
   listCallbacks,
   listEnvironments,
   listEvents,
+  listIncrementalEvents,
   listGroups,
   listSessionTags,
   listExternalResources,
@@ -234,8 +235,9 @@ type NavigationState = {
 };
 
 const activeProgressBatchDelayMs = 100;
-const createdSessionBackfillAttempts = 20;
-const createdSessionBackfillDelayMs = 250;
+const createdSessionBackfillAttempts = 10;
+const createdSessionBackfillDelayMs = 500;
+const submissionEventFallbackDelayMs = 875;
 const sessionListPageSize = 50;
 const sessionSearchPageSize = 20;
 const selectedDetailResources: DetailResource[] = [
@@ -490,6 +492,7 @@ export function App() {
   } = navigation;
   const { messages, events, activeProgress, artifacts, services, externalResources, callbacks } = sessionDetail;
   const eventCursor = useRef(0);
+  const mountedRef = useRef(false);
   const appliedSelectedEventSequencesRef = useRef(new Set<number>());
   const globalEventCursor = useRef(0);
   const wasPageHiddenRef = useRef(!isPageVisible());
@@ -543,6 +546,7 @@ export function App() {
   supplementalSelectedSessionRef.current = supplementalSelectedSession;
   const sessionMutationVersionRef = useRef(new Map<string, number>());
   const sessionSummaryMutationVersionRef = useRef(new Map<string, number>());
+  const sessionSummaryApplicationVersionRef = useRef(new Map<string, number>());
   const sessionSearchSummaryEpochRef = useRef(0);
   const handleApiErrorRef = useRef<(error: unknown) => void>(() => undefined);
   const selectedResourceCoordinatorRef = useRef<SelectedResourceCoordinator | null>(null);
@@ -572,6 +576,7 @@ export function App() {
   }
   function isSelectedResourceContextCurrent(context: SelectedResourceContext): boolean {
     return (
+      mountedRef.current &&
       selectedSessionIdRef.current === context.sessionId &&
       sessionSummaryAuthorityEpochRef.current === context.authorityEpoch &&
       sessionSelectionVersionRef.current === context.selectionVersion
@@ -603,9 +608,22 @@ export function App() {
   function satisfySelectedSnapshotDisplacement(resources: ReadonlySet<DetailResource>) {
     for (const resource of resources) selectedSnapshotDisplacementRef.current.resources.delete(resource);
   }
-  function supersedeSelectedResources(context: SelectedResourceContext, resources: ReadonlySet<DetailResource>) {
-    selectedResourceCoordinatorRef.current?.supersede(context, resources);
+  function supersedeSelectedResources(
+    context: SelectedResourceContext,
+    resources: ReadonlySet<DetailResource>,
+  ): ReadonlySet<DetailResource> {
+    const displaced = selectedResourceCoordinatorRef.current?.supersede(context, resources) ?? new Set();
     satisfySelectedSnapshotDisplacement(resources);
+    return displaced;
+  }
+  function applySelectedResourceMutation(
+    context: SelectedResourceContext,
+    resources: ReadonlySet<DetailResource>,
+    update: (current: SessionDetailState) => SessionDetailState,
+  ) {
+    const displaced = supersedeSelectedResources(context, resources);
+    setSessionDetail(update);
+    selectedResourceCoordinatorRef.current?.invalidate(context, displaced);
   }
   function selectedResourceVersionIsCurrent(
     context: SelectedResourceContext,
@@ -642,6 +660,18 @@ export function App() {
   const activeProgressTimerRef = useRef<number | null>(null);
   const queuedActiveProgressRef = useRef<AgentEvent[]>([]);
   const createdSessionBackfillAbortRef = useRef<AbortController | null>(null);
+  const observedMessageCreatedIdsRef = useRef(new Set<string>());
+  const submissionFallbacksRef = useRef(
+    new Map<
+      string,
+      {
+        context: SelectedResourceContext;
+        messageId: string;
+        after: number;
+        abort: AbortController;
+      }
+    >(),
+  );
   const initialResourceDeepLinkRef = useRef(hasResourceSearchParam());
   const initialAutomationDeepLinkRef = useRef(new URLSearchParams(window.location.search).has('automation'));
 
@@ -948,6 +978,8 @@ export function App() {
   }
 
   function resetAuthBoundSessionState() {
+    abortSubmissionFallback();
+    abortCreatedSessionBackfill();
     resetIncrementalRecovery();
     sessionSummaryAuthorityEpochRef.current += 1;
     sessionDetailLoadGenerationRef.current += 1;
@@ -974,6 +1006,7 @@ export function App() {
     sessionStatusMutationPendingRef.current.clear();
     canonicalSessionMutationPendingRef.current.clear();
     sessionSummaryRefreshQueuedRef.current.clear();
+    sessionSummaryApplicationVersionRef.current.clear();
     invalidateChildSessionRequests();
     setSessions([]);
     setSessionSearchResults([]);
@@ -1184,6 +1217,10 @@ export function App() {
             setSessionSearchRefreshVersion((current) => current + 1);
             return;
           }
+          markAcceptedSessionSummaries(
+            page.results.map((result) => result.session),
+            summaryVersions,
+          );
           setSessionSearchResults(page.results);
           setSessions((current) =>
             mergeSessionSummariesByVersion(
@@ -1387,10 +1424,15 @@ export function App() {
   }, [selectedSessionId, detailLoadedSessionId]);
 
   useLayoutEffect(() => {
+    mountedRef.current = true;
     const coordinator = createSelectedResourceCoordinator();
     selectedResourceCoordinatorRef.current = coordinator;
     coordinator.setContext(selectedResourceContext(selectedSessionIdRef.current));
     return () => {
+      mountedRef.current = false;
+      abortSubmissionFallback();
+      abortCreatedSessionBackfill();
+      resetIncrementalRecovery();
       coordinator.dispose();
       if (selectedResourceCoordinatorRef.current === coordinator) selectedResourceCoordinatorRef.current = null;
     };
@@ -1660,6 +1702,14 @@ export function App() {
 
   function applySynchronizedSessionEvent(event: AgentEvent, reconcilePresentation: boolean) {
     const activeSessionId = selectedSessionIdRef.current;
+    if (event.type === 'message_created' && event.messageId && event.sessionId === activeSessionId) {
+      observedMessageCreatedIdsRef.current.add(event.messageId);
+      const fallback = submissionFallbacksRef.current.get(event.messageId);
+      if (fallback?.context.sessionId === event.sessionId && fallback.messageId === event.messageId) {
+        fallback.abort.abort();
+        submissionFallbacksRef.current.delete(event.messageId);
+      }
+    }
     const selectedEventAlreadyApplied =
       event.sessionId === activeSessionId && appliedSelectedEventSequencesRef.current.has(event.sequence);
     if (event.sessionId === activeSessionId && !selectedEventAlreadyApplied) {
@@ -1693,11 +1743,11 @@ export function App() {
         });
       }
       if (eventPlan.directActions.length > 0) {
-        supersedeSelectedResources(
+        applySelectedResourceMutation(
           selectedResourceContext(activeSessionId),
           directActionResources(eventPlan.directActions),
+          (current) => applyDirectSessionActions(current, eventPlan.directActions),
         );
-        setSessionDetail((current) => applyDirectSessionActions(current, eventPlan.directActions));
       }
       if (eventPlan.detailResources.size > 0) {
         selectedResourceCoordinatorRef.current?.invalidate(
@@ -1824,7 +1874,9 @@ export function App() {
         }
 
         const after = eventCursor.current;
-        const recoveredEvents = await listEvents(sessionId, tokenRef.current, after, { signal: abort.signal });
+        const recoveredEvents = await listIncrementalEvents(sessionId, tokenRef.current, after, {
+          signal: abort.signal,
+        });
         if (!incrementalRecoveryIsCurrent(generation, authorityEpoch, context) || abort.signal.aborted) return;
         for (const event of recoveredEvents) applySynchronizedSessionEvent(event, false);
       } catch (err) {
@@ -1852,7 +1904,12 @@ export function App() {
     createdSessionBackfillAbortRef.current = null;
   }
 
-  function waitForCreatedSessionBackfillDelay(signal: AbortSignal): Promise<void> {
+  function abortSubmissionFallback() {
+    for (const fallback of submissionFallbacksRef.current.values()) fallback.abort.abort();
+    submissionFallbacksRef.current.clear();
+  }
+
+  function waitForSynchronizationDelay(delayMs: number, signal: AbortSignal): Promise<void> {
     if (signal.aborted) return Promise.resolve();
     return new Promise((resolve) => {
       let timeout: number | undefined;
@@ -1861,9 +1918,64 @@ export function App() {
         signal.removeEventListener('abort', finish);
         resolve();
       };
-      timeout = window.setTimeout(finish, createdSessionBackfillDelayMs);
+      timeout = window.setTimeout(finish, delayMs);
       signal.addEventListener('abort', finish, { once: true });
     });
+  }
+
+  function reconcileSelectedMessagesAndSummaryOnce(context: SelectedResourceContext) {
+    if (!isSelectedResourceContextCurrent(context)) return;
+    selectedResourceCoordinatorRef.current?.invalidate(context, new Set<DetailResource>(['messages']));
+    markSessionSummaryChanged(context.sessionId);
+    void refreshLoadedSessionSummary(context.sessionId);
+  }
+
+  function startSubmissionEventFallback(context: SelectedResourceContext, messageId: string, after: number) {
+    if (observedMessageCreatedIdsRef.current.has(messageId) || !isSelectedResourceContextCurrent(context)) return;
+    const fallback = { context, messageId, after, abort: new AbortController() };
+    submissionFallbacksRef.current.set(messageId, fallback);
+
+    void (async () => {
+      try {
+        await waitForSynchronizationDelay(submissionEventFallbackDelayMs, fallback.abort.signal);
+        if (
+          fallback.abort.signal.aborted ||
+          submissionFallbacksRef.current.get(messageId) !== fallback ||
+          !isSelectedResourceContextCurrent(context) ||
+          observedMessageCreatedIdsRef.current.has(messageId)
+        ) {
+          return;
+        }
+
+        try {
+          const recoveredEvents = await listIncrementalEvents(context.sessionId, tokenRef.current, after, {
+            signal: fallback.abort.signal,
+          });
+          if (
+            fallback.abort.signal.aborted ||
+            submissionFallbacksRef.current.get(messageId) !== fallback ||
+            !isSelectedResourceContextCurrent(context)
+          ) {
+            return;
+          }
+          for (const event of recoveredEvents) applySynchronizedSessionEvent(event, true);
+        } catch {
+          if (fallback.abort.signal.aborted) return;
+        }
+
+        if (
+          submissionFallbacksRef.current.get(messageId) === fallback &&
+          isSelectedResourceContextCurrent(context) &&
+          !observedMessageCreatedIdsRef.current.has(messageId)
+        ) {
+          reconcileSelectedMessagesAndSummaryOnce(context);
+        }
+      } finally {
+        if (submissionFallbacksRef.current.get(messageId) === fallback) {
+          submissionFallbacksRef.current.delete(messageId);
+        }
+      }
+    })();
   }
 
   function scheduleSessionsRefresh(delayMs = 300) {
@@ -1880,6 +1992,19 @@ export function App() {
       sessionId,
       (sessionSummaryMutationVersionRef.current.get(sessionId) ?? 0) + 1,
     );
+  }
+
+  function markSessionSummaryApplied(sessionId: string) {
+    sessionSummaryApplicationVersionRef.current.set(
+      sessionId,
+      (sessionSummaryApplicationVersionRef.current.get(sessionId) ?? 0) + 1,
+    );
+  }
+
+  function markAcceptedSessionSummaries(sessions: Session[], versions: Map<string, number>) {
+    for (const session of sessions) {
+      if (sessionSummaryVersionIsCurrent(versions, session.id)) markSessionSummaryApplied(session.id);
+    }
   }
 
   function captureSessionSummaryVersions(): Map<string, number> {
@@ -2002,6 +2127,10 @@ export function App() {
       if (!selectedSummaryChanged) {
         setSupplementalSelectedSession(filtersActive && selected && !selectedWasRemoved ? selected : null);
       }
+      markAcceptedSessionSummaries(
+        selected ? [...page.sessions, selected] : page.sessions,
+        summaryMutationVersionsAtStart,
+      );
       invalidateChildSessionRequests();
       setSessions((current) => {
         const incoming = selected && !filtersActive ? [...page.sessions, selected] : page.sessions;
@@ -2127,6 +2256,7 @@ export function App() {
         ...sessionFilterRequestOptions(filters),
       });
       if (sessionsRefreshRequestRef.current !== requestId) return;
+      markAcceptedSessionSummaries(page.sessions, summaryVersions);
       setSessions((current) => mergeSessionSummariesByVersion(current, page.sessions, summaryVersions));
       reconcileChangedSessionSummaries(page.sessions, summaryVersions);
       setSessionOrderIds((current) => [
@@ -2160,6 +2290,7 @@ export function App() {
         ...sessionFilterRequestOptions(filters),
       });
       if (childSessionRequestEpochRef.current !== requestEpoch) return;
+      markAcceptedSessionSummaries(page.sessions, summaryVersions);
       setSessions((current) => mergeSessionSummariesByVersion(current, page.sessions, summaryVersions));
       reconcileChangedSessionSummaries(page.sessions, summaryVersions);
       setSessionOrderIds((current) => [
@@ -2203,6 +2334,7 @@ export function App() {
         ...(reset || !cursor ? {} : { cursor }),
       });
       if (archivedSessionsRequestRef.current !== requestId) return;
+      markAcceptedSessionSummaries(page.sessions, summaryVersions);
       setSessions((current) => mergeSessionSummariesByVersion(current, page.sessions, summaryVersions));
       reconcileChangedSessionSummaries(page.sessions, summaryVersions);
       setSessionOrderIds((current) => [
@@ -2246,6 +2378,10 @@ export function App() {
         setSessionSearchRefreshVersion((current) => current + 1);
         return;
       }
+      markAcceptedSessionSummaries(
+        page.results.map((result) => result.session),
+        summaryVersions,
+      );
       setSessionSearchResults((current) => mergeSessionSearchResultsById(current, page.results));
       setSessions((current) =>
         mergeSessionSummariesByVersion(
@@ -2366,16 +2502,36 @@ export function App() {
     }
   }
 
-  async function backfillCreatedSessionUntilSettled(sessionId: string, messageId: string, signal: AbortSignal) {
+  async function backfillCreatedSessionUntilSettled(
+    context: SelectedResourceContext,
+    messageId: string,
+    signal: AbortSignal,
+  ) {
     for (let attempt = 0; attempt < createdSessionBackfillAttempts; attempt += 1) {
-      if (signal.aborted || selectedSessionIdRef.current !== sessionId) return;
-      const loaded = await loadAndApplySessionDetail(sessionId, false, signal);
-      if (signal.aborted) return;
-      const message = loaded?.messages.find((candidate) => candidate.id === messageId);
-      if (message && isTerminalMessageStatus(message.status)) return;
-      if (loaded?.events.some((event) => isTerminalMessageEvent(event, messageId))) return;
-      await waitForCreatedSessionBackfillDelay(signal);
+      if (signal.aborted || !isSelectedResourceContextCurrent(context)) return;
+      try {
+        const recoveredEvents = await listIncrementalEvents(context.sessionId, tokenRef.current, eventCursor.current, {
+          signal,
+        });
+        if (signal.aborted || !isSelectedResourceContextCurrent(context)) return;
+        let reconcileSummary = false;
+        for (const event of recoveredEvents) {
+          applySynchronizedSessionEvent(event, false);
+          if (planSessionEvent(event).sessionEffect === 'summary') reconcileSummary = true;
+        }
+        if (reconcileSummary) {
+          markSessionSummaryChanged(context.sessionId);
+          void refreshLoadedSessionSummary(context.sessionId);
+        }
+        if (recoveredEvents.some((event) => isTerminalMessageEvent(event, messageId))) return;
+      } catch {
+        if (signal.aborted || !isSelectedResourceContextCurrent(context)) return;
+      }
+      if (messagesRef.current.some((message) => message.id === messageId && isTerminalMessageStatus(message.status)))
+        return;
+      await waitForSynchronizationDelay(createdSessionBackfillDelayMs, signal);
     }
+    if (!signal.aborted) reconcileSelectedMessagesAndSummaryOnce(context);
   }
 
   async function refreshSessionDetailWithMilestones(sessionId: string, trigger: BrowserMilestoneTrigger) {
@@ -2646,7 +2802,7 @@ export function App() {
       setDetailLoadedSessionId(session.id);
       const backfillAbort = new AbortController();
       createdSessionBackfillAbortRef.current = backfillAbort;
-      backfillCreatedSessionUntilSettled(session.id, message.id, backfillAbort.signal)
+      backfillCreatedSessionUntilSettled(selectedResourceContext(session.id), message.id, backfillAbort.signal)
         .catch(() => undefined)
         .finally(() => {
           if (createdSessionBackfillAbortRef.current === backfillAbort) createdSessionBackfillAbortRef.current = null;
@@ -2699,6 +2855,7 @@ export function App() {
     )
       return false;
     const context = selectedResourceContext(selectedSessionId);
+    const fallbackAfter = eventCursor.current;
     sendMessageInFlightRef.current = true;
     setError('');
     skillsWorkspace.actions.setSessionError('');
@@ -2728,8 +2885,11 @@ export function App() {
         ...(input.skills.length ? { skills: input.skills, skillRefs: input.skillRefs } : {}),
       });
       if (!isSelectedResourceContextCurrent(context) || message.sessionId !== context.sessionId) return false;
-      supersedeSelectedResources(context, new Set<DetailResource>(['messages']));
-      setSessionDetail((current) => ({ ...current, messages: upsertById(current.messages, message) }));
+      applySelectedResourceMutation(context, new Set<DetailResource>(['messages']), (current) => ({
+        ...current,
+        messages: upsertById(current.messages, message),
+      }));
+      startSubmissionEventFallback(context, message.id, fallbackAfter);
       const currentSession = sessionsRef.current.find((session) => session.id === selectedSessionId);
       if (currentSession) {
         const sessionContext = mergeDisplaySessionContext(
@@ -2955,11 +3115,14 @@ export function App() {
   async function startEditingMessage(message: Message) {
     if (!canWriteSelectedSession || !selectedSessionId || message.status !== 'pending') return;
     const context = selectedResourceContext(selectedSessionId);
+    const summaryVersion = sessionSummaryMutationVersionRef.current.get(selectedSessionId) ?? 0;
+    const summaryApplicationVersion = sessionSummaryApplicationVersionRef.current.get(selectedSessionId) ?? 0;
+    const summaryAtStart = loadedSessionSummary(selectedSessionId);
     setError('');
     try {
       const session = await pauseQueue({ sessionId: selectedSessionId, token });
       if (!isSelectedResourceContextCurrent(context) || session.id !== context.sessionId) return;
-      applySessionListUpdate(session);
+      applySessionMutationResponse(session, context, summaryVersion, summaryApplicationVersion, summaryAtStart);
       setEditingMessageId(message.id);
       setMessageDraft(message.prompt);
     } catch (err) {
@@ -2970,12 +3133,15 @@ export function App() {
   async function finishEditingMessage(resume: boolean) {
     if (!canWriteSelectedSession || !selectedSessionId || !editingMessageId) return;
     const context = selectedResourceContext(selectedSessionId);
+    const summaryVersion = sessionSummaryMutationVersionRef.current.get(selectedSessionId) ?? 0;
+    const summaryApplicationVersion = sessionSummaryApplicationVersionRef.current.get(selectedSessionId) ?? 0;
+    const summaryAtStart = loadedSessionSummary(selectedSessionId);
     setError('');
     try {
       if (resume) {
         const session = await resumeQueue({ sessionId: selectedSessionId, token });
         if (!isSelectedResourceContextCurrent(context) || session.id !== context.sessionId) return;
-        applySessionListUpdate(session);
+        applySessionMutationResponse(session, context, summaryVersion, summaryApplicationVersion, summaryAtStart);
       }
       setEditingMessageId('');
       setMessageDraft('');
@@ -2999,8 +3165,7 @@ export function App() {
         token,
       });
       if (!isSelectedResourceContextCurrent(context) || message.sessionId !== context.sessionId) return;
-      supersedeSelectedResources(context, new Set<DetailResource>(['messages']));
-      setSessionDetail((current) => ({
+      applySelectedResourceMutation(context, new Set<DetailResource>(['messages']), (current) => ({
         ...current,
         messages: current.messages.map((candidate) => (candidate.id === message.id ? message : candidate)),
       }));
@@ -3017,8 +3182,7 @@ export function App() {
     try {
       const message = await cancelMessage({ sessionId: selectedSessionId, messageId, token });
       if (!isSelectedResourceContextCurrent(context) || message.sessionId !== context.sessionId) return;
-      supersedeSelectedResources(context, new Set<DetailResource>(['messages']));
-      setSessionDetail((current) => ({
+      applySelectedResourceMutation(context, new Set<DetailResource>(['messages']), (current) => ({
         ...current,
         messages: current.messages.map((candidate) => (candidate.id === message.id ? message : candidate)),
       }));
@@ -3039,8 +3203,7 @@ export function App() {
         if (!isSelectedResourceContextCurrent(context) || message.sessionId !== context.sessionId) return;
         retriedMessages.push(message);
       }
-      supersedeSelectedResources(context, new Set<DetailResource>(['messages']));
-      setSessionDetail((current) => ({
+      applySelectedResourceMutation(context, new Set<DetailResource>(['messages']), (current) => ({
         ...current,
         messages: retriedMessages.reduce(upsertById, current.messages),
       }));
@@ -3066,7 +3229,8 @@ export function App() {
         ),
       }));
       selectedResourceCoordinatorRef.current?.invalidate(context, new Set<DetailResource>(['messages']));
-      await refreshSessions();
+      markSessionSummaryChanged(context.sessionId);
+      await refreshLoadedSessionSummary(context.sessionId);
     } catch (err) {
       if (isSelectedResourceContextCurrent(context)) handleApiError(err);
     }
@@ -3096,9 +3260,11 @@ export function App() {
   }
 
   function clearSessionDetail() {
+    abortSubmissionFallback();
     clearQueuedActiveProgress();
     messagesRef.current = [];
     appliedSelectedEventSequencesRef.current.clear();
+    observedMessageCreatedIdsRef.current.clear();
     detailLoadedSessionIdRef.current = '';
     setSessionDetail(emptySessionDetail());
   }
@@ -3556,13 +3722,18 @@ export function App() {
 
   async function handleUpdateSessionAccess(input: { ownerGroupId: string }): Promise<boolean> {
     if (!selectedSession || !canManageSelectedSessionAccess) return false;
+    const context = selectedResourceContext(selectedSession.id);
+    const summaryVersion = sessionSummaryMutationVersionRef.current.get(selectedSession.id) ?? 0;
+    const summaryApplicationVersion = sessionSummaryApplicationVersionRef.current.get(selectedSession.id) ?? 0;
+    const summaryAtStart = loadedSessionSummary(selectedSession.id);
     setError('');
     try {
       const session = await updateSessionAccess({ sessionId: selectedSession.id, token, ...input });
-      applySessionListUpdate(session);
+      if (!isSelectedResourceContextCurrent(context) || session.id !== context.sessionId) return false;
+      applySessionMutationResponse(session, context, summaryVersion, summaryApplicationVersion, summaryAtStart);
       return true;
     } catch (err) {
-      handleApiError(err);
+      if (isSelectedResourceContextCurrent(context)) handleApiError(err);
       return false;
     }
   }
@@ -3832,6 +4003,7 @@ export function App() {
 
   function applySessionListUpdate(session: Session, options: { forceKeep?: boolean; supplementalOnly?: boolean } = {}) {
     markSessionSummaryChanged(session.id);
+    markSessionSummaryApplied(session.id);
     const isSupplementalSelection =
       !sessionsRef.current.some((candidate) => candidate.id === session.id) &&
       (options.supplementalOnly ||
@@ -3861,6 +4033,38 @@ export function App() {
     });
   }
 
+  function applySessionMutationResponse(
+    session: Session,
+    context: SelectedResourceContext,
+    summaryVersion: number,
+    summaryApplicationVersion: number,
+    summaryAtStart: Session | null,
+  ): boolean {
+    if (!isSelectedResourceContextCurrent(context) || session.id !== context.sessionId) return false;
+    const current = loadedSessionSummary(session.id);
+    const applicationChanged =
+      (sessionSummaryApplicationVersionRef.current.get(session.id) ?? 0) !== summaryApplicationVersion;
+    if (applicationChanged) {
+      void refreshLoadedSessionSummary(session.id, true);
+      return false;
+    }
+    const summaryChanged =
+      (sessionSummaryMutationVersionRef.current.get(session.id) ?? 0) !== summaryVersion || current !== summaryAtStart;
+    if (summaryChanged && (!current || !sessionUpdatedAfter(session, current))) {
+      void refreshLoadedSessionSummary(session.id, true);
+      return false;
+    }
+    applySessionListUpdate(session);
+    return true;
+  }
+
+  function loadedSessionSummary(sessionId: string): Session | null {
+    return (
+      sessionsRef.current.find((candidate) => candidate.id === sessionId) ??
+      (supplementalSelectedSessionRef.current?.id === sessionId ? supplementalSelectedSessionRef.current : null)
+    );
+  }
+
   async function handleReplayCallback(callbackId: string) {
     if (!canWriteSelectedSession || !selectedSessionId) return;
     const context = selectedResourceContext(selectedSessionId);
@@ -3868,8 +4072,7 @@ export function App() {
     try {
       const callback = await replayCallback({ sessionId: selectedSessionId, callbackId, token });
       if (!isSelectedResourceContextCurrent(context) || callback.sessionId !== context.sessionId) return;
-      supersedeSelectedResources(context, new Set<DetailResource>(['callbacks']));
-      setSessionDetail((current) => ({
+      applySelectedResourceMutation(context, new Set<DetailResource>(['callbacks']), (current) => ({
         ...current,
         callbacks: upsertById(current.callbacks, callback),
       }));
@@ -3886,6 +4089,8 @@ export function App() {
       await extendSandbox({ sessionId: selectedSessionId, token, seconds: 600, ...(port ? { port } : {}) });
       if (!isSelectedResourceContextCurrent(context)) return;
       selectedResourceCoordinatorRef.current?.invalidate(context, new Set<DetailResource>(['services']));
+      markSessionSummaryChanged(context.sessionId);
+      void refreshLoadedSessionSummary(context.sessionId);
     } catch (err) {
       if (isSelectedResourceContextCurrent(context)) handleApiError(err);
     }
@@ -3894,6 +4099,9 @@ export function App() {
   async function handleOpenWorkspaceTool(toolId: WorkspaceToolId) {
     if (!canWriteSelectedSession || !selectedSessionId) return;
     const context = selectedResourceContext(selectedSessionId);
+    const summaryVersion = sessionSummaryMutationVersionRef.current.get(selectedSessionId) ?? 0;
+    const summaryApplicationVersion = sessionSummaryApplicationVersionRef.current.get(selectedSessionId) ?? 0;
+    const summaryAtStart = loadedSessionSummary(selectedSessionId);
     setError('');
     const opened = window.open('about:blank', '_blank');
     writeWorkspaceToolTabMessage(
@@ -3903,14 +4111,15 @@ export function App() {
     );
     try {
       const result = await openWorkspaceTool({ sessionId: selectedSessionId, toolId, token });
-      applySessionListUpdate(result.session);
-      if (isSelectedResourceContextCurrent(context) && result.session.id === context.sessionId) {
-        supersedeSelectedResources(context, new Set<DetailResource>(['services']));
-        setSessionDetail((current) => ({
-          ...current,
-          services: [result.service, ...current.services.filter((service) => service.port !== result.service.port)],
-        }));
+      if (!isSelectedResourceContextCurrent(context) || result.session.id !== context.sessionId) {
+        opened?.close();
+        return;
       }
+      applySessionMutationResponse(result.session, context, summaryVersion, summaryApplicationVersion, summaryAtStart);
+      applySelectedResourceMutation(context, new Set<DetailResource>(['services']), (current) => ({
+        ...current,
+        services: [result.service, ...current.services.filter((service) => service.port !== result.service.port)],
+      }));
       if (opened) {
         opened.opener = null;
         opened.location.href = result.service.url;
@@ -4628,6 +4837,12 @@ function fireAndForget<Args extends unknown[]>(handler: (...args: Args) => Promi
   return (...args) => {
     void handler(...args);
   };
+}
+
+function sessionUpdatedAfter(candidate: Session, current: Session): boolean {
+  const candidateTime = Date.parse(candidate.updatedAt);
+  const currentTime = Date.parse(current.updatedAt);
+  return Number.isFinite(candidateTime) && Number.isFinite(currentTime) && candidateTime > currentTime;
 }
 
 function mergeSessionsById(current: Session[], incoming: Session[]): Session[] {
