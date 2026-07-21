@@ -321,6 +321,18 @@ export class MemoryStore implements AppStore {
       .sort((a, b) => a.user.username.localeCompare(b.user.username));
   }
 
+  async listGroupMembersForGroups(groupIds: string[]): Promise<GroupMemberWithUserRecord[]> {
+    const selectedGroupIds = new Set(groupIds);
+    return [...this.groupMembers.values()]
+      .filter((member) => selectedGroupIds.has(member.groupId))
+      .map((member) => {
+        const user = this.authUsers.get(member.userId);
+        if (!user) throw new Error(`Auth user does not exist: ${member.userId}`);
+        return { ...member, user };
+      })
+      .sort((a, b) => a.user.username.localeCompare(b.user.username));
+  }
+
   async listUserGroupMemberships(userId: string): Promise<GroupMemberRecord[]> {
     return [...this.groupMembers.values()].filter((member) => member.userId === userId);
   }

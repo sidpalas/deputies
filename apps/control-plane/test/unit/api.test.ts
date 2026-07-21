@@ -531,6 +531,89 @@ describe('core API', () => {
     await expect(demotedStaticLogin.json()).resolves.toMatchObject({ user: { username: 'dev', role: 'super_admin' } });
   });
 
+  it('lists users for all managed groups with one batched membership lookup', async () => {
+    await closeServer(server);
+    store = new MemoryStore();
+    services = createServices(store);
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_SESSION_SECRET: 'test-secret',
+        AUTH_STATIC_USERNAME: 'static-admin',
+        AUTH_STATIC_PASSWORD: 'password',
+      }),
+      services,
+    );
+    baseUrl = await listen(server);
+
+    const now = new Date();
+    const users = await Promise.all(
+      [
+        ['00000000-0000-4000-8000-000000000231', 'manager'],
+        ['00000000-0000-4000-8000-000000000232', 'zebra'],
+        ['00000000-0000-4000-8000-000000000233', 'alpha'],
+        ['00000000-0000-4000-8000-000000000234', 'outsider'],
+      ].map(([userId, username]) =>
+        store.upsertAuthUserForAccount({
+          userId: userId!,
+          accountId: userId!.replace(/.$/, '9'),
+          provider: 'group-manager-list',
+          providerAccountId: username!,
+          username: username!,
+          role: 'user',
+          profile: {},
+          now,
+        }),
+      ),
+    );
+    const groupIds = ['00000000-0000-4000-8000-000000000241', '00000000-0000-4000-8000-000000000242'];
+    for (const [index, groupId] of groupIds.entries()) {
+      await store.createGroup({
+        id: groupId,
+        name: `Managed group ${index + 1}`,
+        defaultVisibility: 'group',
+        defaultWritePolicy: 'group_members',
+        automationCreateRequiredRole: 'member',
+        createdAt: now,
+        updatedAt: now,
+      });
+      await store.upsertGroupMember({
+        groupId,
+        userId: users[0]!.id,
+        role: 'admin',
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    for (const [groupId, user] of [
+      [groupIds[0]!, users[1]!],
+      [groupIds[0]!, users[2]!],
+      [groupIds[1]!, users[2]!],
+    ] as const) {
+      await store.upsertGroupMember({ groupId, userId: user.id, role: 'member', createdAt: now, updatedAt: now });
+    }
+    await store.createAuthSession({
+      id: 'group-manager-session',
+      userId: users[0]!.id,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    const batchedLookup = vi.spyOn(store, 'listGroupMembersForGroups');
+    const singleGroupLookup = vi.spyOn(store, 'listGroupMembers');
+
+    const response = await fetch(`${baseUrl}/users`, {
+      headers: { cookie: `${sessionCookieName}=group-manager-session` },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      users: [{ username: 'alpha' }, { username: 'manager' }, { username: 'zebra' }],
+    });
+    expect(batchedLookup).toHaveBeenCalledOnce();
+    expect(batchedLookup).toHaveBeenCalledWith(groupIds);
+    expect(singleGroupLookup).not.toHaveBeenCalled();
+  });
+
   it('supports GitHub OAuth login with admin users', async () => {
     await closeServer(server);
     store = new MemoryStore();

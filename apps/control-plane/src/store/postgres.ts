@@ -574,6 +574,29 @@ export class PostgresStore implements AppStore {
     return result.rows.map(toGroupMemberWithUser);
   }
 
+  async listGroupMembersForGroups(groupIds: string[]): Promise<GroupMemberWithUserRecord[]> {
+    if (groupIds.length === 0) return [];
+    const result = await this.pool.query<GroupMemberWithUserRow>(
+      `SELECT m.group_id,
+              m.user_id,
+              m.role,
+              m.created_at,
+              m.updated_at,
+              u.username,
+              u.role AS user_role,
+              u.display_name,
+              u.avatar_url,
+              u.created_at AS user_created_at,
+              u.updated_at AS user_updated_at
+       FROM group_members m
+       JOIN auth_users u ON u.id = m.user_id
+       WHERE m.group_id = ANY($1::uuid[])
+       ORDER BY u.username ASC`,
+      [groupIds],
+    );
+    return result.rows.map(toGroupMemberWithUser);
+  }
+
   async listUserGroupMemberships(userId: string): Promise<GroupMemberRecord[]> {
     const result = await this.pool.query<GroupMemberRow>(
       `SELECT group_id, user_id, role, created_at, updated_at

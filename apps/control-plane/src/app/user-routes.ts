@@ -66,10 +66,8 @@ async function visibleUsersForGroupManager(
     .filter((membership) => membership.role === 'admin')
     .map((membership) => membership.groupId);
   const users = new Map<string, AuthUserRecord>();
-  for (const groupId of managedGroupIds) {
-    for (const member of await store.listGroupMembers(groupId)) {
-      users.set(member.user.id, member.user);
-    }
+  for (const member of await store.listGroupMembersForGroups(managedGroupIds)) {
+    users.set(member.user.id, member.user);
   }
 
   return [...users.values()]

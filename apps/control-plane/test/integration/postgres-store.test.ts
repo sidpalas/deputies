@@ -31,6 +31,76 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   defineSnippetsStoreContract(() => store);
   defineSkillsStoreContract(() => store);
 
+  it('lists memberships across groups with joined users in one batch', async () => {
+    const now = new Date('2026-07-21T00:00:00.000Z');
+    const groupId = '00000000-0000-4000-8000-000000000131';
+    const outsiderGroupId = '00000000-0000-4000-8000-000000000134';
+    for (const [id, name] of [
+      [groupId, 'Batched member listing'],
+      [outsiderGroupId, 'Unrequested member listing'],
+    ] as const) {
+      await store.createGroup({
+        id,
+        name,
+        defaultVisibility: 'group',
+        defaultWritePolicy: 'group_members',
+        automationCreateRequiredRole: 'member',
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    const user = await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000132',
+      accountId: '00000000-0000-4000-8000-000000000133',
+      provider: 'batched-member-listing',
+      providerAccountId: 'shared-member',
+      username: 'shared-member',
+      role: 'user',
+      profile: {},
+      displayName: 'Shared Member',
+      now,
+    });
+    const outsider = await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000135',
+      accountId: '00000000-0000-4000-8000-000000000136',
+      provider: 'batched-member-listing',
+      providerAccountId: 'outsider',
+      username: 'outsider',
+      role: 'user',
+      profile: {},
+      now,
+    });
+    for (const selectedGroupId of [defaultGroupId, groupId]) {
+      await store.upsertGroupMember({
+        groupId: selectedGroupId,
+        userId: user.id,
+        role: 'member',
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    await store.upsertGroupMember({
+      groupId: outsiderGroupId,
+      userId: outsider.id,
+      role: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const listed = await store.listGroupMembersForGroups([defaultGroupId, defaultGroupId, groupId]);
+    expect(listed.map((member) => [member.groupId, member.userId]).sort()).toEqual(
+      [
+        [defaultGroupId, user.id],
+        [groupId, user.id],
+      ].sort(),
+    );
+    expect(listed.map((member) => member.user)).toEqual([
+      expect.objectContaining({ id: user.id, username: 'shared-member', displayName: 'Shared Member' }),
+      expect.objectContaining({ id: user.id, username: 'shared-member', displayName: 'Shared Member' }),
+    ]);
+    await expect(store.listGroupMembersForGroups([])).resolves.toEqual([]);
+  });
+
   it('rechecks persisted invocation authors against live Postgres membership and role state', async () => {
     const services = createServices(store);
     const now = new Date('2026-07-16T01:00:00.000Z');

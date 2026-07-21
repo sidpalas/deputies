@@ -91,6 +91,7 @@ const storeMethods = [
   'listEnvironmentRevisions',
   'listEvents',
   'listGroupMembers',
+  'listGroupMembersForGroups',
   'listGroups',
   'listChildSessions',
   'listIdleSandboxes',

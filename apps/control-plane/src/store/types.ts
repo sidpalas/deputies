@@ -1130,6 +1130,7 @@ export interface GroupStore {
   deleteGroupMember(input: { groupId: string; userId: string }): Promise<void>;
   getGroupMember(input: { groupId: string; userId: string }): Promise<GroupMemberRecord | null>;
   listGroupMembers(groupId: string): Promise<GroupMemberWithUserRecord[]>;
+  listGroupMembersForGroups(groupIds: string[]): Promise<GroupMemberWithUserRecord[]>;
   listUserGroupMemberships(userId: string): Promise<GroupMemberRecord[]>;
 }
 
