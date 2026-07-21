@@ -8,7 +8,12 @@ import {
   type RequestAuthorization,
 } from '../auth/authorization.js';
 import type { AppConfig } from '../config/index.js';
-import { StoreConflictError, type EnvironmentShareMode, type EnvironmentWithDetailsRecord } from '../store/types.js';
+import {
+  StoreConflictError,
+  type EnvironmentShareMode,
+  type EnvironmentWithDetailsRecord,
+  type GroupRecord,
+} from '../store/types.js';
 import { writeError } from './http-error.js';
 import { optionalString, readJsonBody } from './request.js';
 import type { AppServices, AppVariables } from './server.js';
@@ -24,9 +29,12 @@ export function registerEnvironmentRoutes(
     const environments = (await services.environments.list()).filter((environment) =>
       canReadEnvironment(auth, environment),
     );
+    const ownerGroups = new Map((await services.store.listGroups()).map((group) => [group.id, group]));
     return c.json({
       environments: await Promise.all(
-        environments.map((environment) => serializeEnvironment(services, auth, environment)),
+        environments.map((environment) =>
+          serializeEnvironment(services, auth, environment, ownerGroups.get(environment.ownerGroupId) ?? null),
+        ),
       ),
     });
   });
@@ -159,8 +167,10 @@ async function serializeEnvironment(
   services: AppServices,
   auth: RequestAuthorization,
   environment: EnvironmentWithDetailsRecord,
+  prefetchedOwnerGroup?: GroupRecord | null,
 ) {
-  const ownerGroup = await services.store.getGroup(environment.ownerGroupId);
+  const ownerGroup =
+    prefetchedOwnerGroup === undefined ? await services.store.getGroup(environment.ownerGroupId) : prefetchedOwnerGroup;
   return {
     id: environment.id,
     name: environment.name,

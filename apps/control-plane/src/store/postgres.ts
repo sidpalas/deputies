@@ -1598,13 +1598,40 @@ export class PostgresStore implements AppStore {
        FROM environments
        ORDER BY updated_at DESC, created_at DESC`,
     );
-    return Promise.all(
-      result.rows.map(async (row) => ({
-        ...toEnvironment(row),
-        repositories: await this.listEnvironmentRepositories(row.id),
-        sharedGroupIds: await this.listEnvironmentSharedGroupIds(row.id),
-      })),
+    if (!result.rows.length) return [];
+    const environmentIds = result.rows.map((row) => row.id);
+    const repositoryResult = await this.pool.query<EnvironmentRepositoryRow & { environment_id: string }>(
+      `SELECT r.*, e.id AS environment_id
+       FROM environment_revision_repositories r
+       JOIN environments e ON e.current_revision_id = r.revision_id
+       WHERE e.id = ANY($1::uuid[])
+       ORDER BY e.id ASC, r.position ASC`,
+      [environmentIds],
     );
+    const shareResult = await this.pool.query<{ environment_id: string; group_id: string }>(
+      `SELECT environment_id, group_id
+       FROM environment_group_shares
+       WHERE environment_id = ANY($1::uuid[])
+       ORDER BY environment_id ASC, group_id ASC`,
+      [environmentIds],
+    );
+    const repositoriesByEnvironment = new Map<string, EnvironmentRepositoryRow[]>();
+    for (const row of repositoryResult.rows) {
+      const repositories = repositoriesByEnvironment.get(row.environment_id) ?? [];
+      repositories.push(row);
+      repositoriesByEnvironment.set(row.environment_id, repositories);
+    }
+    const sharesByEnvironment = new Map<string, string[]>();
+    for (const row of shareResult.rows) {
+      const groupIds = sharesByEnvironment.get(row.environment_id) ?? [];
+      groupIds.push(row.group_id);
+      sharesByEnvironment.set(row.environment_id, groupIds);
+    }
+    return result.rows.map((row) => ({
+      ...toEnvironment(row),
+      repositories: (repositoriesByEnvironment.get(row.id) ?? []).map(toEnvironmentRepository),
+      sharedGroupIds: sharesByEnvironment.get(row.id) ?? [],
+    }));
   }
 
   async getEnvironmentRevision(id: string): Promise<EnvironmentRevisionRecord | null> {
@@ -1625,9 +1652,34 @@ export class PostgresStore implements AppStore {
        ORDER BY revision_number DESC`,
       [environmentId],
     );
-    return Promise.all(
-      result.rows.map(async (row) =>
-        toEnvironmentRevision(row, await this.listEnvironmentRevisionRepositories(row.id)),
+    if (!result.rows.length) return [];
+    const repositoryResult = await this.pool.query<EnvironmentRepositoryRow>(
+      `SELECT ${environmentRepositorySelectColumns}
+       FROM environment_revision_repositories
+       WHERE revision_id = ANY($1::uuid[])
+       ORDER BY revision_id ASC, position ASC`,
+      [result.rows.map((row) => row.id)],
+    );
+    const repositoriesByRevision = new Map<string, EnvironmentRepositoryRow[]>();
+    for (const row of repositoryResult.rows) {
+      const repositories = repositoriesByRevision.get(row.revision_id) ?? [];
+      repositories.push(row);
+      repositoriesByRevision.set(row.revision_id, repositories);
+    }
+    return result.rows.map((row) =>
+      toEnvironmentRevision(
+        row,
+        (repositoriesByRevision.get(row.id) ?? []).map((repositoryRow) => {
+          const repository = toEnvironmentRepository(repositoryRow);
+          return {
+            provider: repository.provider,
+            owner: repository.owner,
+            repo: repository.repo,
+            primary: repository.isPrimary,
+            position: repository.position,
+            ...(repository.branch ? { branch: repository.branch } : {}),
+          };
+        }),
       ),
     );
   }
