@@ -55,7 +55,21 @@ export function startSessionSearchIndexer(options: SessionSearchIndexerOptions):
 
 async function searchDocsForEvents(store: AppStore, events: EventRecord[]): Promise<SessionSearchDocInput[]> {
   const docs: SessionSearchDocInput[] = [];
-  const messagesBySession = new Map<string, Promise<MessageRecord[]>>();
+  const messageIds = [
+    ...new Set(
+      events
+        .filter((event) => event.type === 'message_created' || event.type === 'message_updated')
+        .flatMap((event) => (event.messageId ? [event.messageId] : [])),
+    ),
+  ];
+  const messagesBySession = new Map<string, Map<string, MessageRecord>>();
+  if (messageIds.length) {
+    for (const message of await store.getMessagesByIds(messageIds)) {
+      const messagesById = messagesBySession.get(message.sessionId) ?? new Map<string, MessageRecord>();
+      if (!messagesById.has(message.id)) messagesById.set(message.id, message);
+      messagesBySession.set(message.sessionId, messagesById);
+    }
+  }
   for (const event of events) {
     if (event.type === 'session_created' || event.type === 'session_updated') {
       const title = trimIndexedContent(typeof event.payload.title === 'string' ? event.payload.title : '');
@@ -71,9 +85,7 @@ async function searchDocsForEvents(store: AppStore, events: EventRecord[]): Prom
     }
 
     if ((event.type === 'message_created' || event.type === 'message_updated') && event.messageId) {
-      const messagesPromise = messagesBySession.get(event.sessionId) ?? store.getMessages(event.sessionId);
-      messagesBySession.set(event.sessionId, messagesPromise);
-      const message = (await messagesPromise).find((candidate) => candidate.id === event.messageId);
+      const message = messagesBySession.get(event.sessionId)?.get(event.messageId);
       if (!message) continue;
       docs.push({
         sessionId: event.sessionId,

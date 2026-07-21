@@ -72,6 +72,7 @@ const storeMethods = [
   'getLatestSandboxForSession',
   'getMessage',
   'getMessages',
+  'getMessagesByIds',
   'getSessionMessageSummary',
   'getSessionTranscript',
   'getRun',

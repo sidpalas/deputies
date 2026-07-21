@@ -919,6 +919,97 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     ).not.toContain(session.id);
   });
 
+  it('batch-loads affected messages while preserving search doc behavior and ordering', async () => {
+    const services = createServices(store);
+    const firstSession = await services.sessions.create({ title: 'First batch session' });
+    const firstMessage = await services.messages.enqueue({
+      sessionId: firstSession.id,
+      prompt: 'oldbatched prompt',
+      source: 'test',
+    });
+    const secondSession = await services.sessions.create({ title: 'Second batch session' });
+    const secondMessage = await services.messages.enqueue({
+      sessionId: secondSession.id,
+      prompt: 'secondbatched prompt',
+      source: 'test',
+    });
+    await services.messages.updatePending({
+      sessionId: firstSession.id,
+      messageId: firstMessage.id,
+      prompt: 'firstbatched updated prompt',
+    });
+
+    const getMessages = vi.spyOn(store, 'getMessages');
+    const getMessagesByIds = vi.spyOn(store, 'getMessagesByIds');
+    const upsertSearchDocs = vi.spyOn(store, 'upsertSessionSearchDocs');
+
+    await runSessionSearchIndexerOnce({ store, events: services.events });
+
+    expect(getMessages).not.toHaveBeenCalled();
+    expect(getMessagesByIds).toHaveBeenCalledOnce();
+    expect(getMessagesByIds).toHaveBeenCalledWith([firstMessage.id, secondMessage.id]);
+    expect(upsertSearchDocs).toHaveBeenCalledWith([
+      expect.objectContaining({ sessionId: firstSession.id, kind: 'title', sourceId: firstSession.id }),
+      expect.objectContaining({
+        sessionId: firstSession.id,
+        kind: 'prompt',
+        sourceId: firstMessage.id,
+        content: 'firstbatched updated prompt',
+      }),
+      expect.objectContaining({ sessionId: secondSession.id, kind: 'title', sourceId: secondSession.id }),
+      expect.objectContaining({
+        sessionId: secondSession.id,
+        kind: 'prompt',
+        sourceId: secondMessage.id,
+        content: 'secondbatched prompt',
+      }),
+    ]);
+    expect(
+      (await store.searchSessions('fake', { query: 'firstbatched', limit: 10 })).items.map(
+        (item) => item.item.session.id,
+      ),
+    ).toEqual([firstSession.id]);
+    expect(
+      (await store.searchSessions('fake', { query: 'oldbatched', limit: 10 })).items.map(
+        (item) => item.item.session.id,
+      ),
+    ).not.toContain(firstSession.id);
+  });
+
+  it('loads multiple message IDs with one Postgres query and skips empty batches', async () => {
+    const services = createServices(store);
+    const firstSession = await services.sessions.create({ title: 'First query batch session' });
+    const firstMessage = await services.messages.enqueue({
+      sessionId: firstSession.id,
+      prompt: 'first query batch prompt',
+    });
+    const secondSession = await services.sessions.create({ title: 'Second query batch session' });
+    const secondMessage = await services.messages.enqueue({
+      sessionId: secondSession.id,
+      prompt: 'second query batch prompt',
+    });
+    const batchPool = new Pool({ connectionString: databaseUrl });
+    const batchStore = new PostgresStore(batchPool);
+    const query = vi.spyOn(batchPool, 'query');
+
+    try {
+      await expect(batchStore.getMessagesByIds([firstMessage.id, secondMessage.id])).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: firstMessage.id, sessionId: firstSession.id }),
+          expect.objectContaining({ id: secondMessage.id, sessionId: secondSession.id }),
+        ]),
+      );
+      expect(query).toHaveBeenCalledOnce();
+      expect(query.mock.calls[0]?.[0]).toContain('WHERE id = ANY($1::uuid[])');
+
+      query.mockClear();
+      await expect(batchStore.getMessagesByIds([])).resolves.toEqual([]);
+      expect(query).not.toHaveBeenCalled();
+    } finally {
+      await batchStore.close();
+    }
+  });
+
   it('reindexes edited prompts from message update events', async () => {
     const services = createServices(store);
     const session = await services.sessions.create({ title: 'Prompt edit search' });

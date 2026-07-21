@@ -901,6 +901,7 @@ export interface MessageStore {
   createMessage(record: CreateMessageRecord): Promise<MessageRecord>;
   getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null>;
   getMessages(sessionId: string): Promise<MessageRecord[]>;
+  getMessagesByIds(messageIds: string[]): Promise<MessageRecord[]>;
   getSessionMessageSummary(sessionId: string): Promise<SessionMessageSummary>;
   getSessionTranscript(input: SessionTranscriptOptions): Promise<SessionTranscriptPage>;
   updatePendingMessage(input: {

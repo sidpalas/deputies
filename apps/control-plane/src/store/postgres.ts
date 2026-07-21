@@ -2316,6 +2316,18 @@ export class PostgresStore implements AppStore {
     return result.rows.map(toMessage);
   }
 
+  async getMessagesByIds(messageIds: string[]): Promise<MessageRecord[]> {
+    if (!messageIds.length) return [];
+    const result = await this.pool.query<MessageRow>(
+      `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at
+       FROM messages
+       WHERE id = ANY($1::uuid[])`,
+      [messageIds],
+    );
+
+    return result.rows.map(toMessage);
+  }
+
   async getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null> {
     const result = await this.pool.query<MessageRow>(
       `SELECT id, session_id, sequence, status, prompt, author_user_id, author_name, source, context, created_at

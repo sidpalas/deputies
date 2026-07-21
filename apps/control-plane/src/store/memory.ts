@@ -1170,6 +1170,18 @@ export class MemoryStore implements AppStore {
     return [...(this.messages.get(sessionId) ?? [])];
   }
 
+  async getMessagesByIds(messageIds: string[]): Promise<MessageRecord[]> {
+    if (!messageIds.length) return [];
+    const requestedIds = new Set(messageIds);
+    const matchingMessages: MessageRecord[] = [];
+    for (const messages of this.messages.values()) {
+      for (const message of messages) {
+        if (requestedIds.has(message.id)) matchingMessages.push(message);
+      }
+    }
+    return matchingMessages;
+  }
+
   async getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null> {
     return this.messages.get(input.sessionId)?.find((message) => message.id === input.messageId) ?? null;
   }
