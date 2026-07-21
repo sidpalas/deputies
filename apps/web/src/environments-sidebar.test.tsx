@@ -117,6 +117,107 @@ it('marks environment edits as unsaved without displacing the archive action', a
   expect(confirm).toHaveBeenCalledWith('Discard unsaved changes and archive this environment?');
 });
 
+it('preserves unsaved environment edits when groups refresh', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    jsonResponse({ revisions: [environmentRevision('revision-2', 2, 'widget')] }),
+  );
+  const props = environmentPanelProps();
+  const { rerender } = render(<EnvironmentsPanel {...props} />);
+
+  expect(await screen.findByLabelText('Revision')).toHaveTextContent('Revision 2');
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Unsaved environment' } });
+  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+  rerender(<EnvironmentsPanel {...props} groups={[{ ...group, name: 'Platform engineering' }]} />);
+
+  expect(screen.getByLabelText('Name')).toHaveValue('Unsaved environment');
+  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Platform engineering');
+  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+});
+
+it('preserves new environment edits while replacing an unavailable owner group', () => {
+  const secondaryGroup = { ...group, id: 'group-2', name: 'Security' };
+  const props = environmentPanelProps();
+  const { rerender } = render(
+    <EnvironmentsPanel {...props} environments={[]} selectedEnvironmentId="" groups={[group, secondaryGroup]} />,
+  );
+
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Unsaved environment' } });
+  fireEvent.click(screen.getByRole('radio', { name: 'Specific groups' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Security' }));
+  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Platform');
+
+  rerender(<EnvironmentsPanel {...props} environments={[]} selectedEnvironmentId="" groups={[secondaryGroup]} />);
+
+  expect(screen.getByLabelText('Name')).toHaveValue('Unsaved environment');
+  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Security');
+  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+  rerender(
+    <EnvironmentsPanel {...props} environments={[]} selectedEnvironmentId="" groups={[secondaryGroup, group]} />,
+  );
+  fireEvent.click(screen.getByLabelText('Owner group'));
+  fireEvent.click(screen.getByRole('option', { name: 'Platform' }));
+  expect(screen.getByRole('checkbox', { name: 'Security' })).not.toBeChecked();
+});
+
+it('initializes a new environment owner when groups load without marking the form dirty', () => {
+  const props = environmentPanelProps();
+  const onDirtyChange = vi.fn();
+  const { rerender } = render(
+    <EnvironmentsPanel
+      {...props}
+      environments={[]}
+      selectedEnvironmentId=""
+      groups={[]}
+      onDirtyChange={onDirtyChange}
+    />,
+  );
+
+  rerender(
+    <EnvironmentsPanel
+      {...props}
+      environments={[]}
+      selectedEnvironmentId=""
+      groups={[group]}
+      onDirtyChange={onDirtyChange}
+    />,
+  );
+
+  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Platform');
+  expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+  expect(onDirtyChange).not.toHaveBeenCalledWith(true);
+});
+
+it('keeps a clean new environment on its current owner when groups reorder', () => {
+  const secondaryGroup = { ...group, id: 'group-2', name: 'Security' };
+  const props = environmentPanelProps();
+  const onDirtyChange = vi.fn();
+  const { rerender } = render(
+    <EnvironmentsPanel
+      {...props}
+      environments={[]}
+      selectedEnvironmentId=""
+      groups={[group, secondaryGroup]}
+      onDirtyChange={onDirtyChange}
+    />,
+  );
+
+  rerender(
+    <EnvironmentsPanel
+      {...props}
+      environments={[]}
+      selectedEnvironmentId=""
+      groups={[secondaryGroup, group]}
+      onDirtyChange={onDirtyChange}
+    />,
+  );
+
+  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Platform');
+  expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+  expect(onDirtyChange).not.toHaveBeenCalledWith(true);
+});
+
 it('shows historical repositories with current access fields and makes the whole editor read-only', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     jsonResponse({

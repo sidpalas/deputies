@@ -98,7 +98,9 @@ export function EnvironmentsPanel(props: {
   if (!selected) displayedForm = emptyForm(props.groups);
   else if (viewedRevision) displayedForm = formFromEnvironmentRevision(selected, viewedRevision);
   else displayedForm = formFromEnvironment(selected);
-  const baselineForm = displayedForm;
+  const baselineForm = props.selectedEnvironmentId
+    ? displayedForm
+    : { ...displayedForm, ownerGroupId: form.ownerGroupId };
   const dirty = environmentFormChanged(form, baselineForm);
   const saveDisabled = !canEdit || saving || !complete || !dirty;
   useEditorDirty(dirty, props.onDirtyChange);
@@ -106,19 +108,17 @@ export function EnvironmentsPanel(props: {
   useEffect(() => {
     setForm(displayedForm);
     setFormError('');
-  }, [
-    props.selectedEnvironmentId,
-    selected?.id,
-    selected?.currentRevisionId,
-    selected?.updatedAt,
-    viewedRevision?.id,
-    props.groups,
-  ]);
+  }, [props.selectedEnvironmentId, selected?.id, selected?.currentRevisionId, selected?.updatedAt, viewedRevision?.id]);
 
   useEffect(() => {
     setForm((current) => {
-      if (current.ownerGroupId || !manageableGroups[0]) return current;
-      return { ...current, ownerGroupId: manageableGroups[0].id };
+      if (current.id || manageableGroups.some((group) => group.id === current.ownerGroupId)) return current;
+      const ownerGroupId = manageableGroups[0]?.id ?? '';
+      return {
+        ...current,
+        ownerGroupId,
+        sharedGroupIds: current.sharedGroupIds.filter((groupId) => groupId !== ownerGroupId),
+      };
     });
   }, [manageableGroups]);
 
