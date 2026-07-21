@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
+import { Pool } from 'pg';
 import { createServices } from '../../src/app/server.js';
 import { normalizeAppendInput } from '../../src/events/service.js';
 import {
@@ -318,6 +318,149 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       environmentId: environment.id,
       environmentRevisionId: environment.currentRevisionId,
     });
+  });
+
+  it('batch-lists environments with isolated repositories and shares in stable order', async () => {
+    const emptyPool = new Pool({ connectionString: databaseUrl });
+    const emptyStore = new PostgresStore(emptyPool);
+    const emptyQueries = vi.spyOn(emptyPool, 'query');
+    try {
+      await expect(emptyStore.listEnvironments()).resolves.toEqual([]);
+      expect(emptyQueries).toHaveBeenCalledTimes(1);
+    } finally {
+      await emptyStore.close();
+    }
+
+    const services = createServices(store);
+    const now = new Date('2026-07-20T12:00:00.000Z');
+    const sharedGroup = await store.createGroup({
+      id: '00000000-0000-4000-8000-000000000501',
+      name: 'Environment share target',
+      defaultVisibility: 'group',
+      defaultWritePolicy: 'group_members',
+      automationCreateRequiredRole: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const first = await services.environments.create({
+      name: 'First batched environment',
+      ownerGroupId: defaultGroupId,
+      shareMode: 'selected_groups',
+      sharedGroupIds: [sharedGroup.id],
+      repositories: [
+        { provider: 'github', owner: 'acme', repo: 'first-api', primary: true },
+        { provider: 'github', owner: 'acme', repo: 'first-web', branch: 'release', primary: false },
+      ],
+      actor: { type: 'system' },
+    });
+    const second = await services.environments.create({
+      name: 'Second batched environment',
+      ownerGroupId: defaultGroupId,
+      repositories: [{ provider: 'github', owner: 'other', repo: 'second', primary: true }],
+      actor: { type: 'system' },
+    });
+    await pool.query('UPDATE environments SET created_at = $2, updated_at = $2 WHERE id = $1', [
+      first.id,
+      new Date('2026-07-20T12:00:01.000Z'),
+    ]);
+    await pool.query('UPDATE environments SET created_at = $2, updated_at = $2 WHERE id = $1', [
+      second.id,
+      new Date('2026-07-20T12:00:02.000Z'),
+    ]);
+
+    const countedPool = new Pool({ connectionString: databaseUrl });
+    const countedStore = new PostgresStore(countedPool);
+    const queries = vi.spyOn(countedPool, 'query');
+    try {
+      const environments = await countedStore.listEnvironments();
+
+      expect(queries).toHaveBeenCalledTimes(3);
+      expect(environments.map((environment) => environment.id)).toEqual([second.id, first.id]);
+      expect(environments).toMatchObject([
+        {
+          id: second.id,
+          repositories: [{ owner: 'other', repo: 'second', isPrimary: true, position: 0 }],
+          sharedGroupIds: [],
+        },
+        {
+          id: first.id,
+          repositories: [
+            { owner: 'acme', repo: 'first-api', isPrimary: true, position: 0 },
+            { owner: 'acme', repo: 'first-web', branch: 'release', isPrimary: false, position: 1 },
+          ],
+          sharedGroupIds: [sharedGroup.id],
+        },
+      ]);
+    } finally {
+      await countedStore.close();
+    }
+  });
+
+  it('batch-groups repositories onto ordered environment revisions', async () => {
+    const emptyPool = new Pool({ connectionString: databaseUrl });
+    const emptyStore = new PostgresStore(emptyPool);
+    const emptyQueries = vi.spyOn(emptyPool, 'query');
+    try {
+      await expect(emptyStore.listEnvironmentRevisions(randomUUID())).resolves.toEqual([]);
+      expect(emptyQueries).toHaveBeenCalledTimes(1);
+    } finally {
+      await emptyStore.close();
+    }
+
+    const services = createServices(store);
+    const environment = await services.environments.create({
+      name: 'Batched revisions',
+      ownerGroupId: defaultGroupId,
+      repositories: [
+        { provider: 'github', owner: 'acme', repo: 'original-primary', primary: true },
+        { provider: 'github', owner: 'acme', repo: 'original-secondary', branch: 'v1', primary: false },
+      ],
+      actor: { type: 'system' },
+    });
+    await services.environments.update({
+      id: environment.id,
+      repositories: [{ provider: 'github', owner: 'beta', repo: 'middle', primary: true }],
+      actor: { type: 'system' },
+    });
+    const latest = await services.environments.update({
+      id: environment.id,
+      repositories: [
+        { provider: 'github', owner: 'gamma', repo: 'latest-worker', primary: false },
+        { provider: 'github', owner: 'gamma', repo: 'latest-primary', branch: 'main', primary: true },
+      ],
+      actor: { type: 'system' },
+    });
+
+    const countedPool = new Pool({ connectionString: databaseUrl });
+    const countedStore = new PostgresStore(countedPool);
+    const queries = vi.spyOn(countedPool, 'query');
+    try {
+      const revisions = await countedStore.listEnvironmentRevisions(environment.id);
+
+      expect(queries).toHaveBeenCalledTimes(2);
+      expect(revisions.map((revision) => revision.revisionNumber)).toEqual([3, 2, 1]);
+      expect(revisions).toMatchObject([
+        {
+          id: latest.currentRevisionId,
+          repositories: [
+            { owner: 'gamma', repo: 'latest-worker', primary: false, position: 0 },
+            { owner: 'gamma', repo: 'latest-primary', branch: 'main', primary: true, position: 1 },
+          ],
+        },
+        {
+          repositories: [{ owner: 'beta', repo: 'middle', primary: true, position: 0 }],
+        },
+        {
+          id: environment.currentRevisionId,
+          repositories: [
+            { owner: 'acme', repo: 'original-primary', primary: true, position: 0 },
+            { owner: 'acme', repo: 'original-secondary', branch: 'v1', primary: false, position: 1 },
+          ],
+        },
+      ]);
+    } finally {
+      await countedStore.close();
+    }
   });
 
   it('persists Pi session data opaquely', async () => {

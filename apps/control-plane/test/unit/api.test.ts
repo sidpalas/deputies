@@ -769,6 +769,149 @@ describe('core API', () => {
     });
   });
 
+  it('serializes only authorized environments with batched owner-group resolution', async () => {
+    await closeServer(server);
+    store = new MemoryStore();
+    services = createServices(store);
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_SESSION_SECRET: 'test-secret',
+        AUTH_STATIC_USERNAME: 'admin',
+        AUTH_STATIC_PASSWORD: 'password',
+      }),
+      services,
+    );
+    baseUrl = await listen(server);
+
+    const now = new Date();
+    const user = await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000120',
+      accountId: '00000000-0000-4000-8000-000000000121',
+      provider: 'test',
+      providerAccountId: 'environment-reader',
+      username: 'environment-reader',
+      role: 'user',
+      profile: {},
+      now,
+    });
+    await store.createAuthSession({
+      id: 'environment-reader-session',
+      userId: user.id,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    const groups = await Promise.all(
+      [
+        ['00000000-0000-4000-8000-000000000122', 'Reader group'],
+        ['00000000-0000-4000-8000-000000000123', 'Shared owner'],
+        ['00000000-0000-4000-8000-000000000124', 'Organization owner'],
+        ['00000000-0000-4000-8000-000000000125', 'Hidden owner'],
+      ].map(([id, name]) =>
+        store.createGroup({
+          id: id!,
+          name: name!,
+          defaultVisibility: 'group',
+          defaultWritePolicy: 'group_members',
+          automationCreateRequiredRole: 'member',
+          createdAt: now,
+          updatedAt: now,
+        }),
+      ),
+    );
+    const [readerGroup, sharedOwner, organizationOwner, hiddenOwner] = groups as [
+      (typeof groups)[number],
+      (typeof groups)[number],
+      (typeof groups)[number],
+      (typeof groups)[number],
+    ];
+    await store.upsertGroupMember({
+      groupId: readerGroup.id,
+      userId: user.id,
+      role: 'member',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const owned = await services.environments.create({
+      name: 'Owned private',
+      ownerGroupId: readerGroup.id,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'owned', branch: 'release', primary: true }],
+      actor: { type: 'system' },
+    });
+    const shared = await services.environments.create({
+      name: 'Selected share',
+      ownerGroupId: sharedOwner.id,
+      shareMode: 'selected_groups',
+      sharedGroupIds: [readerGroup.id],
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'shared', primary: true }],
+      actor: { type: 'system' },
+    });
+    const organization = await services.environments.create({
+      name: 'All groups',
+      ownerGroupId: organizationOwner.id,
+      shareMode: 'all_groups',
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'organization', primary: true }],
+      actor: { type: 'system' },
+    });
+    await services.environments.create({
+      name: 'Hidden private',
+      ownerGroupId: hiddenOwner.id,
+      repositories: [{ provider: 'github', owner: 'acme', repo: 'hidden', primary: true }],
+      actor: { type: 'system' },
+    });
+
+    const listGroups = vi.spyOn(store, 'listGroups');
+    const getGroup = vi.spyOn(store, 'getGroup');
+    const response = await fetch(`${baseUrl}/environments`, {
+      headers: { cookie: 'dev_deputies_session=environment-reader-session' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { environments: Array<Record<string, unknown>> };
+    expect(body.environments).toHaveLength(3);
+    expect(body.environments.map((environment) => environment.id)).toEqual(
+      expect.arrayContaining([owned.id, shared.id, organization.id]),
+    );
+    expect(body.environments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: owned.id,
+          ownerGroupName: readerGroup.name,
+          shareMode: 'private',
+          sharedGroupIds: [],
+          canManage: false,
+          repositories: [
+            expect.objectContaining({
+              owner: 'acme',
+              repo: 'owned',
+              branch: 'release',
+              primary: true,
+              position: 0,
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          id: shared.id,
+          ownerGroupName: sharedOwner.name,
+          sharedGroupIds: [readerGroup.id],
+          canManage: false,
+        }),
+        expect.objectContaining({
+          id: organization.id,
+          ownerGroupName: organizationOwner.name,
+          shareMode: 'all_groups',
+          canManage: false,
+        }),
+      ]),
+    );
+    expect(body.environments).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'Hidden private' })]),
+    );
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    expect(getGroup).toHaveBeenCalledTimes(1);
+    expect(getGroup).toHaveBeenCalledWith(readerGroup.id);
+  });
+
   it('allows PATCH session title updates through CORS preflight', async () => {
     const response = await fetch(`${baseUrl}/sessions/00000000-0000-4000-8000-000000000001`, {
       method: 'OPTIONS',
