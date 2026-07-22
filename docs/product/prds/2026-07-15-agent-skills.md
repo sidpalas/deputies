@@ -25,7 +25,7 @@ Before this work, Deputies sessions ran with Pi's skill loading disabled (`noSki
 - Multi-file skill bundles (supporting scripts, references, templates). V1 stores a single markdown document per managed skill. Repo-sourced skills may reference sibling files in their repo since those already exist in the sandbox, but Deputies does not manage those files.
 - Saved prompts / prompt templates. A saved prompt is inserted as the user's message text rather than loaded as agent instructions. It is a related feature that should reuse the same ownership and sharing model, but it is out of scope for v1. The `auto_load=false` + manual invocation path covers the nearest use cases in the meantime.
 - Ownerless organization-level skills (skills owned by no group, super-admin managed). All-groups sharing of a group-owned skill covers the "global skill" need while keeping every skill's management anchored to one group.
-- Demoting a group skill to personal, and moving skills between groups. Archiving covers retirement; group-to-group moves can follow the session-move precedent (admin in both groups) if needed later.
+- Demoting a group skill to personal, and moving skills between groups. Archiving covers retirement; immutable session ownership provides no group-to-group move precedent, so any future skill move requires its own explicit ownership model.
 - Selecting arbitrary historical revisions for new messages or pinning skills in automation configuration. Clients can invoke only the current managed revision; the server persists that revision on the message.
 - Skill marketplaces, importing skills from external registries, or skill evals.
 

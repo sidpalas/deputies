@@ -9,6 +9,7 @@ import type {
   GroupMemberRecord,
   GroupRecord,
   GroupRole,
+  ExplicitNotepadMetadata,
   SessionRecord,
   SkillRecord,
 } from '../store/types.js';
@@ -71,6 +72,26 @@ export function canWriteSession(auth: RequestAuthorization, session: SessionReco
   const role = groupRole(auth, session.ownerGroupId);
   if (role === 'admin') return true;
   return session.writePolicy === 'group_members' && role === 'member';
+}
+
+export function canReadNotepad(auth: RequestAuthorization, notepad: ExplicitNotepadMetadata): boolean {
+  if (auth.bypass || isSuperAdmin(auth) || notepad.visibility === 'organization') return true;
+  return Boolean(groupRole(auth, notepad.ownerGroupId));
+}
+
+export function canWriteNotepad(auth: RequestAuthorization, notepad: ExplicitNotepadMetadata): boolean {
+  if (auth.bypass || isSuperAdmin(auth)) return true;
+  const role = groupRole(auth, notepad.ownerGroupId);
+  if (role === 'admin') return true;
+  if (notepad.writePolicy === 'group_members') return role === 'member';
+  return notepad.createdByUserId === auth.user.id && notepad.writePolicy === 'creator_only';
+}
+
+export function canManageNotepad(
+  auth: RequestAuthorization,
+  notepad: Pick<ExplicitNotepadMetadata, 'ownerGroupId'>,
+): boolean {
+  return canManageGroup(auth, notepad.ownerGroupId);
 }
 
 export function canCreateSessionInGroup(auth: RequestAuthorization, groupId: string): boolean {
@@ -163,11 +184,6 @@ export function canManageEnvironment(auth: RequestAuthorization, environment: En
 export function canManageGroup(auth: RequestAuthorization, groupId: string): boolean {
   if (auth.bypass || isSuperAdmin(auth)) return true;
   return groupRole(auth, groupId) === 'admin';
-}
-
-export function canMoveSession(auth: RequestAuthorization, session: SessionRecord, targetGroupId: string): boolean {
-  if (auth.bypass || isSuperAdmin(auth)) return true;
-  return groupRole(auth, session.ownerGroupId) === 'admin' && groupRole(auth, targetGroupId) === 'admin';
 }
 
 export function canManageAllGroups(auth: RequestAuthorization): boolean {

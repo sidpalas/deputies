@@ -14,7 +14,6 @@ import {
   canManageAllGroups,
   canManageGroup,
   canManageSkill,
-  canMoveSession,
   canReadSkill,
   canReadSession,
   canWriteSession,
@@ -129,21 +128,6 @@ describe('authorization rules', () => {
     expect(canWriteSession(otherAuth, creatorOnlySession)).toBe(false);
   });
 
-  it('requires admin access in both groups to move a session', () => {
-    const dualAdmin = authFor(user('dual-admin'), [member('admin'), member('admin', 'dual-admin', otherGroupId)]);
-    const sourceOnlyAdmin = authFor(user('source-admin'), [member('admin')]);
-    const targetOnlyAdmin = authFor(user('target-admin'), [member('admin', 'target-admin', otherGroupId)]);
-    const sourceMemberTargetAdmin = authFor(user('member-admin'), [
-      member('member'),
-      member('admin', 'member-admin', otherGroupId),
-    ]);
-
-    expect(canMoveSession(dualAdmin, session(), otherGroupId)).toBe(true);
-    expect(canMoveSession(sourceOnlyAdmin, session(), otherGroupId)).toBe(false);
-    expect(canMoveSession(targetOnlyAdmin, session(), otherGroupId)).toBe(false);
-    expect(canMoveSession(sourceMemberTargetAdmin, session(), otherGroupId)).toBe(false);
-  });
-
   it('allows bypass authorization to perform group-scoped operations', () => {
     const auth: RequestAuthorization = { bypass: true, user: null, memberships: [] };
 
@@ -152,7 +136,6 @@ describe('authorization rules', () => {
     expect(canCreateSessionInGroup(auth, otherGroupId)).toBe(true);
     expect(canManageGroup(auth, otherGroupId)).toBe(true);
     expect(canManageAllGroups(auth)).toBe(true);
-    expect(canMoveSession(auth, session(), otherGroupId)).toBe(true);
   });
 
   it('lets super admins bypass group-scoped restrictions', () => {
@@ -162,7 +145,6 @@ describe('authorization rules', () => {
     expect(canWriteSession(auth, session({ writePolicy: 'creator_only' }))).toBe(true);
     expect(canCreateSessionInGroup(auth, otherGroupId)).toBe(true);
     expect(canManageGroup(auth, otherGroupId)).toBe(true);
-    expect(canMoveSession(auth, session(), otherGroupId)).toBe(true);
   });
 });
 

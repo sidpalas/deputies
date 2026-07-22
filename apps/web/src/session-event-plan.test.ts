@@ -16,6 +16,8 @@ const noEffects = [
   'agent_response_final',
   'tool_started',
   'tool_finished',
+  'notepad_changed',
+  'notepad_associations_changed',
 ];
 
 const cases: Array<{

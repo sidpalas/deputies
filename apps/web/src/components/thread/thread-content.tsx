@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react';
-import type { AnchorHTMLAttributes, MouseEvent, ReactNode, ToggleEvent } from 'react';
+import type { AnchorHTMLAttributes, MouseEvent, ReactNode, RefObject, ToggleEvent } from 'react';
 import { ChevronDown, Download, ExternalLink, Play, RotateCcw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -269,7 +269,7 @@ function markdownNodeText(children: ReactNode): string {
   return '';
 }
 
-const MarkdownText = memo(function MarkdownText(props: { text: string }) {
+export const MarkdownText = memo(function MarkdownText(props: { text: string }) {
   const highlightCode = true;
   return (
     <ReactMarkdown
@@ -381,6 +381,7 @@ function humanizeEventName(value: string): string {
 
 export function MobileContextPanel(props: {
   accessPanel?: ReactNode;
+  notepadsHostRef?: RefObject<HTMLDivElement | null>;
   lineage?: SessionLineage | undefined;
   canWriteSession: boolean;
   environment: ContextEnvironment | null;
@@ -416,6 +417,7 @@ export function MobileContextPanel(props: {
 
 export function DesktopContextPanel(props: {
   accessPanel?: ReactNode;
+  notepadsHostRef?: RefObject<HTMLDivElement | null>;
   lineage?: SessionLineage | undefined;
   canWriteSession: boolean;
   environment: ContextEnvironment | null;
@@ -442,6 +444,7 @@ export function DesktopContextPanel(props: {
 
 function ContextPanelContent(props: {
   accessPanel?: ReactNode;
+  notepadsHostRef?: RefObject<HTMLDivElement | null>;
   lineage?: SessionLineage | undefined;
   canWriteSession: boolean;
   environment: ContextEnvironment | null;
@@ -458,7 +461,6 @@ function ContextPanelContent(props: {
   return (
     <div className="p-4 pt-0 xl:p-0 xl:pt-0">
       {props.accessPanel ? <div className="mt-3 border-b border-border pb-3">{props.accessPanel}</div> : null}
-      {props.lineage ? <SessionLineageSection lineage={props.lineage} /> : null}
       <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
         <strong className="block font-medium text-foreground">Codebase</strong>
         {props.environment ? (
@@ -486,6 +488,12 @@ function ContextPanelContent(props: {
           <span className="mt-1 block">No codebase selected.</span>
         )}
       </div>
+      {props.notepadsHostRef ? (
+        <div className="border-b border-border pb-3">
+          <div ref={props.notepadsHostRef} />
+        </div>
+      ) : null}
+      {props.lineage ? <SessionLineageSection lineage={props.lineage} /> : null}
       <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
         <strong className="block font-medium text-foreground">Live services</strong>
         <span>

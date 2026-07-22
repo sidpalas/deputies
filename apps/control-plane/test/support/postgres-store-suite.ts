@@ -12,7 +12,7 @@ export type PostgresStoreSuiteContext = {
 };
 
 const truncateTables =
-  'TRUNCATE pi_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, session_search_docs, search_index_cursor, events, runs, messages, session_sequence_counters, webhook_sources, automation_invocations, automations, skill_group_shares, skills, environment_activity, environment_group_shares, environment_revision_repositories, environment_revisions, environments, sessions RESTART IDENTITY CASCADE';
+  'TRUNCATE notepad_activity, session_notepad_capabilities, notepad_associations, notepad_revisions, explicit_notepads, session_notepads, pi_sessions, callback_deliveries, artifacts, integration_deliveries, external_threads, sandboxes, session_search_docs, search_index_cursor, events, runs, messages, session_sequence_counters, webhook_sources, automation_invocations, automations, skill_group_shares, skills, environment_activity, environment_group_shares, environment_revision_repositories, environment_revisions, environments, sessions RESTART IDENTITY CASCADE';
 
 export function setupPostgresStoreSuite(suiteName: string, assign: (context: PostgresStoreSuiteContext) => void): void {
   let databaseUrl = '';

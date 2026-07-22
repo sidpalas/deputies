@@ -77,6 +77,8 @@ export function planSessionEvent(event: AgentEvent): SessionEventPlan {
     case 'agent_response_final':
     case 'tool_started':
     case 'tool_finished':
+    case 'notepad_changed':
+    case 'notepad_associations_changed':
     default:
       return plan([]);
   }

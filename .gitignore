@@ -11,6 +11,7 @@ playwright-report/
 test-results/
 .amp/in/
 .amp/out/
+.amp/portals/
 .env
 .env.*
 !.env.example

@@ -41,6 +41,14 @@ import type {
   IntegrationDeliveryRecord,
   ListAutomationInvocationsOptions,
   MessageRecord,
+  ExplicitNotepadRecord,
+  SessionNotepadRecord,
+  NotepadRevisionRecord,
+  NotepadAssociationRecord,
+  SessionNotepadCapabilityRecord,
+  NotepadActivityRecord,
+  NotepadActor,
+  NotepadMutationKind,
   RecoveredRun,
   RunRecord,
   SandboxRecord,
@@ -164,6 +172,865 @@ export class PostgresStore implements AppStore {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  async getSessionNotepad(sessionId: string): Promise<SessionNotepadRecord | null> {
+    const r = await this.pool.query('SELECT * FROM session_notepads WHERE session_id=$1', [sessionId]);
+    return r.rows[0] ? toSessionNotepad(r.rows[0]) : null;
+  }
+  async readCoordinatedSessionNotepad(
+    actorSessionId: string,
+    targetSessionId: string,
+    expectedGrantorUserId: string,
+  ): Promise<SessionNotepadRecord> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.requirePgCoordinationAuthority(client, actorSessionId, targetSessionId, expectedGrantorUserId);
+      const session = (await client.query('SELECT created_at FROM sessions WHERE id=$1', [targetSessionId])).rows[0];
+      const row = (
+        await client.query('SELECT * FROM session_notepads WHERE session_id=$1 FOR SHARE', [targetSessionId])
+      ).rows[0];
+      const result = row
+        ? toSessionNotepad(row)
+        : {
+            sessionId: targetSessionId,
+            revision: 0,
+            content: '',
+            sizeBytes: 0,
+            createdAt: session.created_at,
+            updatedAt: session.created_at,
+          };
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async mutateSessionNotepad(input: {
+    sessionId: string;
+    content?: string;
+    append?: string;
+    expectedRevision?: number;
+    actor: NotepadActor;
+    expectedCoordinationGrantorUserId?: string;
+    mutationKind: NotepadMutationKind;
+    now: Date;
+  }): Promise<SessionNotepadRecord> {
+    return this.mutatePgNotepad('session', input.sessionId, input) as Promise<SessionNotepadRecord>;
+  }
+  async restoreSessionNotepadRevision(input: {
+    sessionId: string;
+    revision: number;
+    expectedRevision: number;
+    actor: NotepadActor;
+    expectedCoordinationGrantorUserId?: string;
+    now: Date;
+  }): Promise<SessionNotepadRecord> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      if (input.actor.kind === 'agent' && input.actor.sessionId !== input.sessionId)
+        await this.requirePgCoordinationAuthority(
+          client,
+          input.actor.sessionId,
+          input.sessionId,
+          input.expectedCoordinationGrantorUserId,
+        );
+      else await this.lockLiveSessions(client, [input.sessionId]);
+      const old = (
+        await client.query('SELECT * FROM session_notepads WHERE session_id=$1 FOR UPDATE', [input.sessionId])
+      ).rows[0];
+      if ((old?.revision ?? 0) !== input.expectedRevision)
+        throw new StoreConflictError('stale_revision', 'Stale notepad revision');
+      const target = (
+        await client.query(
+          "SELECT content,size_bytes FROM notepad_revisions WHERE notepad_kind='session' AND notepad_id=$1 AND revision=$2",
+          [input.sessionId, input.revision],
+        )
+      ).rows[0];
+      if (!target) throw new StoreConflictError('not_found', 'Revision not found');
+      const revision = (old?.revision ?? 0) + 1;
+      const row = (
+        await client.query(
+          'UPDATE session_notepads SET content=$2,size_bytes=$3,revision=$4,updated_at=$5 WHERE session_id=$1 RETURNING *',
+          [input.sessionId, target.content, target.size_bytes, revision, input.now],
+        )
+      ).rows[0];
+      await client.query(
+        `INSERT INTO notepad_revisions(notepad_kind,notepad_id,revision,content,size_bytes,actor,mutation_kind,created_at) VALUES('session',$1,$2,$3,$4,$5,'restore',$6)`,
+        [input.sessionId, revision, target.content, target.size_bytes, input.actor, input.now],
+      );
+      await client.query('COMMIT');
+      return toSessionNotepad(row);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async createExplicitNotepad(input: {
+    record: ExplicitNotepadRecord;
+    actor: NotepadActor;
+    activityId: string;
+    initialAssociation?: NotepadAssociationRecord;
+    associationActivityId?: string;
+  }): Promise<ExplicitNotepadRecord> {
+    const n = input.record;
+    if (Boolean(input.initialAssociation) !== Boolean(input.associationActivityId))
+      throw new StoreConflictError('not_found', 'Initial association and activity ID are required together');
+    if (input.initialAssociation?.notepadId !== undefined && input.initialAssociation.notepadId !== n.id)
+      throw new StoreConflictError('not_found', 'Initial association must reference the created Notepad');
+    const sizeBytes = Buffer.byteLength(n.content, 'utf8');
+    if (n.sizeBytes !== sizeBytes)
+      throw new StoreConflictError('invalid_notepad_size', 'Notepad size does not match UTF-8 content');
+    if (sizeBytes > 256 * 1024) throw new StoreConflictError('notepad_too_large', 'Notepad exceeds 256 KiB');
+    const expectedRevision = n.content ? 1 : 0;
+    if (n.revision !== expectedRevision)
+      throw new StoreConflictError('invalid_notepad_revision', 'Initial Notepad revision does not match its content');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Group is always locked before Sessions/Notepads. This serializes
+      // creation with group archival without reversing the Notepad write lock order.
+      const group = await client.query('SELECT archived_at FROM groups WHERE id=$1 FOR UPDATE', [n.ownerGroupId]);
+      if (!group.rows[0]) throw new StoreConflictError('not_found', 'Group not found');
+      if (group.rows[0].archived_at)
+        throw new StoreConflictError('archived_group', 'Cannot create notepads in an archived group');
+      await this.lockLiveSessions(client, [
+        ...(input.actor.kind === 'agent' ? [input.actor.sessionId] : []),
+        ...(input.initialAssociation ? [input.initialAssociation.sessionId] : []),
+      ]);
+      if (input.initialAssociation) {
+        const session = await client.query('SELECT owner_group_id,status FROM sessions WHERE id=$1', [
+          input.initialAssociation.sessionId,
+        ]);
+        if (!session.rows[0] || session.rows[0].owner_group_id !== n.ownerGroupId)
+          throw new StoreConflictError('not_found', 'Notepad and Session must belong to the same group');
+        if (session.rows[0].status === 'archived')
+          throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+      }
+      const r = await client.query(
+        `INSERT INTO explicit_notepads(id,title,owner_group_id,visibility,write_policy,revision,content,size_bytes,created_by_user_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [
+          n.id,
+          n.title,
+          n.ownerGroupId,
+          n.visibility,
+          n.writePolicy,
+          n.revision,
+          n.content,
+          sizeBytes,
+          n.createdByUserId ?? null,
+          n.createdAt,
+          n.updatedAt,
+        ],
+      );
+      if (n.revision === 1) {
+        await client.query(
+          `INSERT INTO notepad_revisions(notepad_kind,notepad_id,revision,content,size_bytes,actor,mutation_kind,created_at) VALUES('explicit',$1,1,$2,$3,$4,'replace',$5)`,
+          [n.id, n.content, sizeBytes, input.actor, n.createdAt],
+        );
+      }
+      await this.insertNotepadActivity(
+        client,
+        input.activityId,
+        n.id,
+        input.actor,
+        'created',
+        { title: n.title, ownerGroupId: n.ownerGroupId, visibility: n.visibility, writePolicy: n.writePolicy },
+        n.createdAt,
+      );
+      if (input.initialAssociation) {
+        const a = input.initialAssociation;
+        await client.query(
+          'INSERT INTO notepad_associations(notepad_id,session_id,created_by_user_id,created_at) VALUES($1,$2,$3,$4)',
+          [n.id, a.sessionId, a.createdByUserId ?? null, a.createdAt],
+        );
+        await this.insertNotepadActivity(
+          client,
+          input.associationActivityId!,
+          n.id,
+          input.actor,
+          'association_granted',
+          { sessionId: a.sessionId },
+          a.createdAt,
+        );
+      }
+      await client.query('COMMIT');
+      return toExplicitNotepad(r.rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async getExplicitNotepad(id: string): Promise<ExplicitNotepadRecord | null> {
+    const r = await this.pool.query('SELECT * FROM explicit_notepads WHERE id=$1', [id]);
+    return r.rows[0] ? toExplicitNotepad(r.rows[0]) : null;
+  }
+  async getExplicitNotepadMetadata(id: string) {
+    const r = await this.pool.query(
+      'SELECT id,title,owner_group_id,visibility,write_policy,revision,size_bytes,created_by_user_id,created_at,updated_at FROM explicit_notepads WHERE id=$1',
+      [id],
+    );
+    return r.rows[0] ? toExplicitMetadata(r.rows[0]) : null;
+  }
+  async listExplicitNotepads(input: {
+    groupId?: string;
+    authorizedGroupIds?: string[];
+    limit: number;
+    offset: number;
+    includeDormant?: boolean;
+  }) {
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (input.groupId) {
+      values.push(input.groupId);
+      conditions.push(`n.owner_group_id=$${values.length}`);
+    }
+    if (input.authorizedGroupIds !== undefined) {
+      values.push(input.authorizedGroupIds);
+      conditions.push(`(n.visibility='organization' OR n.owner_group_id=ANY($${values.length}::uuid[]))`);
+    }
+    if (!input.includeDormant)
+      conditions.push(
+        "EXISTS (SELECT 1 FROM notepad_associations a JOIN sessions s ON s.id=a.session_id WHERE a.notepad_id=n.id AND s.status<>'archived')",
+      );
+    values.push(input.limit + 1, input.offset);
+    const r = await this.pool.query(
+      `SELECT n.id,n.title,n.owner_group_id,n.visibility,n.write_policy,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at FROM explicit_notepads n ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY n.updated_at DESC,n.id ASC LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values,
+    );
+    return sqlPage(r.rows.map(toExplicitMetadata), input.limit, input.offset);
+  }
+  async searchExplicitNotepads(input: {
+    groupId: string;
+    authorizedGroupIds?: string[];
+    query: string;
+    limit: number;
+  }) {
+    const literal = input.query.replace(/[\\%_]/g, '\\$&');
+    const visibility =
+      input.authorizedGroupIds === undefined
+        ? { sql: '', values: [] }
+        : {
+            sql: " AND (n.visibility='organization' OR n.owner_group_id=ANY($5::uuid[]))",
+            values: [input.authorizedGroupIds],
+          };
+    const r = await this.pool.query(
+      `SELECT n.id,n.title,n.owner_group_id,n.visibility,n.write_policy,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at,
+        substring(n.content FROM greatest(1, strpos(lower(n.content),lower($3))-80) FOR 240) AS snippet
+       FROM explicit_notepads n WHERE n.owner_group_id=$1${visibility.sql}
+         AND EXISTS (SELECT 1 FROM notepad_associations a JOIN sessions s ON s.id=a.session_id WHERE a.notepad_id=n.id AND s.status<>'archived')
+         AND (n.title ILIKE $2 ESCAPE '\\' OR n.content ILIKE $2 ESCAPE '\\') ORDER BY n.updated_at DESC,n.id ASC LIMIT $4`,
+      [input.groupId, `%${literal}%`, input.query, input.limit, ...visibility.values],
+    );
+    return r.rows.map((row) => ({ ...toExplicitMetadata(row), snippet: row.snippet }));
+  }
+  async searchExplicitNotepadsWithCapability(input: {
+    actorSessionId: string;
+    expectedGrantorUserId: string;
+    groupId: string;
+    query: string;
+    limit: number;
+  }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.requirePgExplicitSearchAuthority(
+        client,
+        input.actorSessionId,
+        input.expectedGrantorUserId,
+        input.groupId,
+      );
+      const literal = input.query.replace(/[\\%_]/g, '\\$&');
+      const r = await client.query(
+        `SELECT n.id,n.title,n.owner_group_id,n.visibility,n.write_policy,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at,
+          substring(n.content FROM greatest(1, strpos(lower(n.content),lower($3))-80) FOR 240) AS snippet
+         FROM explicit_notepads n WHERE n.owner_group_id=$1
+           AND EXISTS (SELECT 1 FROM notepad_associations a JOIN sessions s ON s.id=a.session_id WHERE a.notepad_id=n.id AND s.status<>'archived')
+           AND (n.title ILIKE $2 ESCAPE '\\' OR n.content ILIKE $2 ESCAPE '\\') ORDER BY n.updated_at DESC,n.id ASC LIMIT $4`,
+        [input.groupId, `%${literal}%`, input.query, input.limit],
+      );
+      await client.query('COMMIT');
+      return r.rows.map((row) => ({ ...toExplicitMetadata(row), snippet: row.snippet }));
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async readExplicitNotepadWithCapability(input: {
+    actorSessionId: string;
+    expectedGrantorUserId: string;
+    notepadId: string;
+  }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const discovered = (
+        await client.query('SELECT owner_group_id FROM explicit_notepads WHERE id=$1', [input.notepadId])
+      ).rows[0];
+      if (!discovered) throw new StoreConflictError('not_found', 'Notepad access denied');
+      await this.requirePgExplicitSearchAuthority(
+        client,
+        input.actorSessionId,
+        input.expectedGrantorUserId,
+        discovered.owner_group_id,
+      );
+      // Do not lock the Notepad after locking the acting Session: association
+      // mutations lock those rows in the opposite order. MVCC gives this read
+      // a coherent snapshot while the authority locks prevent revocation.
+      const row = (await client.query('SELECT * FROM explicit_notepads WHERE id=$1', [input.notepadId])).rows[0];
+      if (!row) throw new StoreConflictError('not_found', 'Notepad access denied');
+      await client.query('COMMIT');
+      return toExplicitNotepad(row);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async updateExplicitNotepadMetadata(input: {
+    id: string;
+    ownerGroupId: string;
+    title?: string;
+    visibility?: ExplicitNotepadRecord['visibility'];
+    writePolicy?: ExplicitNotepadRecord['writePolicy'];
+    actor: NotepadActor;
+    activityId: string;
+    now: Date;
+  }): Promise<ExplicitNotepadRecord> {
+    return this.withExplicitNotepadLock(input.id, async (client, old) => {
+      await this.lockLiveSessions(client, input.actor.kind === 'agent' ? [input.actor.sessionId] : []);
+      await this.requirePgExplicitWriteAuthority(client, input.id, input.actor);
+      if (old.owner_group_id !== input.ownerGroupId) throw new StoreConflictError('not_found', 'Notepad not found');
+      const r = await client.query(
+        `UPDATE explicit_notepads SET title=COALESCE($2,title),visibility=COALESCE($3,visibility),write_policy=COALESCE($4,write_policy),updated_at=$5 WHERE id=$1 RETURNING *`,
+        [input.id, input.title ?? null, input.visibility ?? null, input.writePolicy ?? null, input.now],
+      );
+      const n = toExplicitNotepad(r.rows[0]);
+      await this.insertNotepadActivity(
+        client,
+        input.activityId,
+        input.id,
+        input.actor,
+        'metadata_changed',
+        { title: n.title, visibility: n.visibility, writePolicy: n.writePolicy },
+        input.now,
+      );
+      return n;
+    });
+  }
+  async mutateExplicitNotepad(input: {
+    id: string;
+    content?: string;
+    append?: string;
+    expectedRevision?: number;
+    actor: NotepadActor;
+    associatedAuthority?: import('./types.js').AssociatedNotepadAuthority;
+    mutationKind: NotepadMutationKind;
+    now: Date;
+  }): Promise<ExplicitNotepadRecord> {
+    return this.mutatePgNotepad('explicit', input.id, input) as Promise<ExplicitNotepadRecord>;
+  }
+  async restoreExplicitNotepadRevision(input: {
+    id: string;
+    revision: number;
+    expectedRevision: number;
+    actor: NotepadActor;
+    associatedAuthority?: import('./types.js').AssociatedNotepadAuthority;
+    activityId: string;
+    now: Date;
+  }): Promise<ExplicitNotepadRecord> {
+    return this.withExplicitNotepadLock(input.id, async (client, old) => {
+      if (input.associatedAuthority)
+        await this.requirePgAssociatedAuthority(client, input.id, input.associatedAuthority);
+      await this.lockLiveSessions(client, input.actor.kind === 'agent' ? [input.actor.sessionId] : []);
+      await this.requirePgExplicitWriteAuthority(client, input.id, input.actor);
+      if (old.revision !== input.expectedRevision)
+        throw new StoreConflictError('stale_revision', 'Stale notepad revision');
+      const target = (
+        await client.query(
+          "SELECT content,size_bytes FROM notepad_revisions WHERE notepad_kind='explicit' AND notepad_id=$1 AND revision=$2",
+          [input.id, input.revision],
+        )
+      ).rows[0];
+      if (!target) throw new StoreConflictError('not_found', 'Revision not found');
+      const revision = old.revision + 1;
+      const row = (
+        await client.query(
+          'UPDATE explicit_notepads SET content=$2,size_bytes=$3,revision=$4,updated_at=$5 WHERE id=$1 RETURNING *',
+          [input.id, target.content, target.size_bytes, revision, input.now],
+        )
+      ).rows[0];
+      await client.query(
+        `INSERT INTO notepad_revisions(notepad_kind,notepad_id,revision,content,size_bytes,actor,mutation_kind,created_at) VALUES('explicit',$1,$2,$3,$4,$5,'restore',$6)`,
+        [input.id, revision, target.content, target.size_bytes, input.actor, input.now],
+      );
+      await this.insertNotepadActivity(
+        client,
+        input.activityId,
+        input.id,
+        input.actor,
+        'revision_restored',
+        { revision: input.revision },
+        input.now,
+      );
+      return toExplicitNotepad(row);
+    });
+  }
+  async listNotepadRevisions(kind: 'session' | 'explicit', id: string, limit: number, beforeRevision: number) {
+    const rows = (
+      await this.pool.query(
+        'SELECT notepad_kind,notepad_id,revision,size_bytes,actor,mutation_kind,created_at FROM notepad_revisions WHERE notepad_kind=$1 AND notepad_id=$2 AND ($3=0 OR revision<$3) ORDER BY revision DESC LIMIT $4',
+        [kind, id, beforeRevision, limit + 1],
+      )
+    ).rows.map(toNotepadRevisionMetadata);
+    const items = rows.slice(0, limit);
+    const hasMore = rows.length > limit;
+    return { items, hasMore, nextCursor: hasMore ? String(items.at(-1)!.revision) : null };
+  }
+  async getNotepadRevision(kind: 'session' | 'explicit', id: string, revision: number) {
+    const row = (
+      await this.pool.query('SELECT * FROM notepad_revisions WHERE notepad_kind=$1 AND notepad_id=$2 AND revision=$3', [
+        kind,
+        id,
+        revision,
+      ])
+    ).rows[0];
+    return row ? toNotepadRevision(row) : null;
+  }
+  async putNotepadAssociation(input: {
+    record: NotepadAssociationRecord;
+    actor: NotepadActor;
+    activityId: string;
+  }): Promise<NotepadAssociationRecord> {
+    const a = input.record;
+    return this.withExplicitNotepadLock(a.notepadId, async (client, notepad) => {
+      // Global lock order for lifecycle commands: Explicit Notepad, then Session.
+      await this.lockLiveSessions(client, [
+        a.sessionId,
+        ...(input.actor.kind === 'agent' ? [input.actor.sessionId] : []),
+      ]);
+      await this.requirePgExplicitWriteAuthority(client, a.notepadId, input.actor);
+      const session = (await client.query('SELECT owner_group_id,status FROM sessions WHERE id=$1', [a.sessionId]))
+        .rows[0];
+      if (!session || session.owner_group_id !== notepad.owner_group_id)
+        throw new StoreConflictError('not_found', 'Notepad and Session must belong to the same group');
+      if (session.status === 'archived')
+        throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+      const existed =
+        (
+          await client.query('SELECT 1 FROM notepad_associations WHERE notepad_id=$1 AND session_id=$2', [
+            a.notepadId,
+            a.sessionId,
+          ])
+        ).rowCount === 1;
+      const r = await client.query(
+        `INSERT INTO notepad_associations(notepad_id,session_id,created_by_user_id,created_at) VALUES($1,$2,$3,$4) ON CONFLICT(notepad_id,session_id) DO UPDATE SET created_by_user_id=excluded.created_by_user_id,created_at=excluded.created_at RETURNING *`,
+        [a.notepadId, a.sessionId, a.createdByUserId ?? null, a.createdAt],
+      );
+      await this.insertNotepadActivity(
+        client,
+        input.activityId,
+        a.notepadId,
+        input.actor,
+        existed ? 'association_changed' : 'association_granted',
+        { sessionId: a.sessionId },
+        a.createdAt,
+      );
+      return toAssociation(r.rows[0]);
+    });
+  }
+  async removeNotepadAssociation(input: {
+    notepadId: string;
+    sessionId: string;
+    actor: NotepadActor;
+    activityId: string;
+    now: Date;
+  }): Promise<boolean> {
+    return this.withExplicitNotepadLock(input.notepadId, async (client, _notepad) => {
+      await this.lockLiveSessions(client, [
+        input.sessionId,
+        ...(input.actor.kind === 'agent' ? [input.actor.sessionId] : []),
+      ]);
+      await this.requirePgExplicitWriteAuthority(client, input.notepadId, input.actor);
+      const session = (await client.query('SELECT status FROM sessions WHERE id=$1', [input.sessionId])).rows[0];
+      if (!session) throw new StoreConflictError('not_found', 'Session not found');
+      if (session.status === 'archived')
+        throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+      const removed =
+        (
+          await client.query('DELETE FROM notepad_associations WHERE notepad_id=$1 AND session_id=$2', [
+            input.notepadId,
+            input.sessionId,
+          ])
+        ).rowCount === 1;
+      if (removed)
+        await this.insertNotepadActivity(
+          client,
+          input.activityId,
+          input.notepadId,
+          input.actor,
+          'association_revoked',
+          { sessionId: input.sessionId },
+          input.now,
+        );
+      return removed;
+    });
+  }
+  async listNotepadAssociations(id: string, limit: number, offset: number) {
+    const rows = (
+      await this.pool.query(
+        'SELECT * FROM notepad_associations WHERE notepad_id=$1 ORDER BY created_at ASC,session_id ASC LIMIT $2 OFFSET $3',
+        [id, limit + 1, offset],
+      )
+    ).rows.map(toAssociation);
+    return sqlPage(rows, limit, offset);
+  }
+  async listNotepadAssociationSessionIdsAfter(notepadId: string, afterSessionId: string | null, limit: number) {
+    return (
+      await this.pool.query(
+        `SELECT session_id FROM notepad_associations
+         WHERE notepad_id=$1 AND ($2::uuid IS NULL OR session_id>$2) ORDER BY session_id ASC LIMIT $3`,
+        [notepadId, afterSessionId, limit],
+      )
+    ).rows.map((row) => row.session_id as string);
+  }
+  async getNotepadAssociation(notepadId: string, sessionId: string) {
+    const row = (
+      await this.pool.query('SELECT * FROM notepad_associations WHERE notepad_id=$1 AND session_id=$2', [
+        notepadId,
+        sessionId,
+      ])
+    ).rows[0];
+    return row ? toAssociation(row) : null;
+  }
+  async listSessionNotepadAssociations(id: string, limit: number, offset: number) {
+    const rows = (
+      await this.pool.query(
+        `SELECT a.*,n.title,n.owner_group_id,n.visibility,n.write_policy,n.revision,n.size_bytes,
+          n.created_by_user_id,n.created_at AS notepad_created_at,n.updated_at
+         FROM notepad_associations a JOIN explicit_notepads n ON n.id=a.notepad_id
+         WHERE a.session_id=$1 ORDER BY a.created_at ASC,a.notepad_id ASC LIMIT $2 OFFSET $3`,
+        [id, limit + 1, offset],
+      )
+    ).rows.map((row) => ({
+      ...toAssociation(row),
+      notepad: toExplicitMetadata({ ...row, created_at: row.notepad_created_at, id: row.notepad_id }),
+    }));
+    return sqlPage(rows, limit, offset);
+  }
+  async putSessionNotepadCapability(c: SessionNotepadCapabilityRecord): Promise<SessionNotepadCapabilityRecord> {
+    return this.withLiveSessionLock(c.sessionId, async (client) => {
+      const r = await client.query(
+        `INSERT INTO session_notepad_capabilities(session_id,kind,granted_by_user_id,created_at) VALUES($1,$2,$3,$4) ON CONFLICT(session_id,kind) DO UPDATE SET granted_by_user_id=excluded.granted_by_user_id,created_at=excluded.created_at RETURNING *`,
+        [c.sessionId, c.kind, c.grantedByUserId, c.createdAt],
+      );
+      return toCapability(r.rows[0]);
+    });
+  }
+  async removeSessionNotepadCapability(
+    s: string,
+    k: SessionNotepadCapabilityRecord['kind'],
+    expected?: string,
+  ): Promise<boolean> {
+    return this.withLiveSessionLock(
+      s,
+      async (client) =>
+        (
+          await client.query(
+            `DELETE FROM session_notepad_capabilities WHERE session_id=$1 AND kind=$2${expected ? ' AND granted_by_user_id=$3' : ''}`,
+            expected ? [s, k, expected] : [s, k],
+          )
+        ).rowCount === 1,
+    );
+  }
+  async listSessionNotepadCapabilities(s: string): Promise<SessionNotepadCapabilityRecord[]> {
+    return (
+      await this.pool.query(
+        'SELECT * FROM session_notepad_capabilities WHERE session_id=$1 ORDER BY created_at ASC,kind ASC',
+        [s],
+      )
+    ).rows.map(toCapability);
+  }
+  private async insertNotepadActivity(
+    client: PoolClient,
+    id: string,
+    notepadId: string,
+    actor: NotepadActor,
+    kind: NotepadActivityRecord['kind'],
+    metadata: Record<string, unknown>,
+    createdAt: Date,
+  ): Promise<void> {
+    await client.query(
+      'INSERT INTO notepad_activity(id,notepad_id,actor,kind,metadata,created_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
+      [id, notepadId, actor, kind, metadata, createdAt],
+    );
+  }
+  async listNotepadActivity(id: string, limit: number, offset: number) {
+    const rows = (
+      await this.pool.query(
+        'SELECT * FROM notepad_activity WHERE notepad_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3',
+        [id, limit + 1, offset],
+      )
+    ).rows.map(toNotepadActivity);
+    return sqlPage(rows, limit, offset);
+  }
+
+  private async withExplicitNotepadLock<T>(
+    id: string,
+    operation: (client: PoolClient, row: ExplicitNotepadRow) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const row = (await client.query('SELECT * FROM explicit_notepads WHERE id=$1 FOR UPDATE', [id])).rows[0];
+      if (!row) throw new StoreConflictError('not_found', 'Notepad not found');
+      const result = await operation(client, row);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async lockLiveSessions(client: PoolClient, ids: string[]) {
+    for (const id of [...new Set(ids)].sort()) {
+      const row = (await client.query('SELECT status FROM sessions WHERE id=$1 FOR UPDATE', [id])).rows[0];
+      if (!row) throw new StoreConflictError('not_found', 'Session not found');
+      if (row.status === 'archived')
+        throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    }
+  }
+
+  private async requirePgExplicitWriteAuthority(client: PoolClient, notepadId: string, actor: NotepadActor) {
+    if (actor.kind !== 'agent') return;
+    const association = await client.query('SELECT 1 FROM notepad_associations WHERE notepad_id=$1 AND session_id=$2', [
+      notepadId,
+      actor.sessionId,
+    ]);
+    if (association.rowCount !== 1) throw new StoreConflictError('not_found', 'Notepad association is required');
+  }
+  private async requirePgAssociatedAuthority(
+    client: PoolClient,
+    notepadId: string,
+    authority: import('./types.js').AssociatedNotepadAuthority,
+  ) {
+    const discovered = (
+      await client.query('SELECT owner_group_id FROM sessions WHERE id=$1', [authority.associatedSessionId])
+    ).rows[0];
+    if (!discovered) throw new StoreConflictError('not_found', 'Associated Session authority is no longer valid');
+    const group = (
+      await client.query('SELECT archived_at FROM groups WHERE id=$1 FOR SHARE', [discovered.owner_group_id])
+    ).rows[0];
+    const user = (await client.query('SELECT role FROM auth_users WHERE id=$1 FOR SHARE', [authority.expectedUserId]))
+      .rows[0];
+    const membership = (
+      await client.query('SELECT role FROM group_members WHERE group_id=$1 AND user_id=$2 FOR SHARE', [
+        discovered.owner_group_id,
+        authority.expectedUserId,
+      ])
+    ).rows[0];
+    await this.lockLiveSessions(client, [authority.associatedSessionId]);
+    const session = (
+      await client.query('SELECT owner_group_id,created_by_user_id,write_policy,status FROM sessions WHERE id=$1', [
+        authority.associatedSessionId,
+      ])
+    ).rows[0];
+    const association = await client.query(
+      'SELECT 1 FROM notepad_associations WHERE notepad_id=$1 AND session_id=$2 FOR SHARE',
+      [notepadId, authority.associatedSessionId],
+    );
+    const authorized =
+      user?.role === 'super_admin' ||
+      (session?.write_policy === 'creator_only' && session?.created_by_user_id === authority.expectedUserId) ||
+      (!group?.archived_at &&
+        (membership?.role === 'admin' || (session?.write_policy === 'group_members' && membership?.role === 'member')));
+    if (!session || session.owner_group_id !== discovered.owner_group_id || association.rowCount !== 1 || !authorized)
+      throw new StoreConflictError('not_found', 'Associated Session authority is no longer valid');
+  }
+  private async requirePgExplicitSearchAuthority(
+    client: PoolClient,
+    actorSessionId: string,
+    userId: string,
+    groupId: string,
+  ) {
+    const group = (await client.query('SELECT archived_at FROM groups WHERE id=$1 FOR SHARE', [groupId])).rows[0];
+    const user = (await client.query('SELECT role FROM auth_users WHERE id=$1 FOR SHARE', [userId])).rows[0];
+    const membership = (
+      await client.query('SELECT role FROM group_members WHERE group_id=$1 AND user_id=$2 FOR SHARE', [groupId, userId])
+    ).rows[0];
+    await this.lockLiveSessions(client, [actorSessionId]);
+    const actor = (await client.query('SELECT owner_group_id FROM sessions WHERE id=$1', [actorSessionId])).rows[0];
+    const grant = (
+      await client.query(
+        "SELECT granted_by_user_id FROM session_notepad_capabilities WHERE session_id=$1 AND kind='explicit_search' FOR SHARE",
+        [actorSessionId],
+      )
+    ).rows[0];
+    if (
+      !group ||
+      !user ||
+      actor?.owner_group_id !== groupId ||
+      grant?.granted_by_user_id !== userId ||
+      (user.role !== 'super_admin' && (group.archived_at || !membership || membership.role === 'viewer'))
+    )
+      throw new StoreConflictError('not_found', 'Notepad access denied');
+  }
+
+  private async requirePgCoordinationAuthority(
+    client: PoolClient,
+    actorSessionId: string,
+    targetSessionId: string,
+    expectedGrantorUserId?: string,
+  ) {
+    if (!expectedGrantorUserId)
+      throw new StoreConflictError('not_found', 'Session Notepad coordination capability is required');
+    // Coordination mutations share this global authority lock order with the
+    // corresponding UPDATE/DELETE operations: group -> auth user -> existing
+    // membership -> sorted Sessions -> capability -> Notepad. The target is
+    // first read only to discover the group; every authority value is re-read
+    // after its row has been locked.
+    const discovered = (await client.query('SELECT owner_group_id FROM sessions WHERE id=$1', [targetSessionId]))
+      .rows[0];
+    if (!discovered) throw new StoreConflictError('not_found', 'Session not found');
+    const group = (
+      await client.query('SELECT archived_at FROM groups WHERE id=$1 FOR SHARE', [discovered.owner_group_id])
+    ).rows[0];
+    const user = (await client.query('SELECT role FROM auth_users WHERE id=$1 FOR SHARE', [expectedGrantorUserId]))
+      .rows[0];
+    const membership = (
+      await client.query('SELECT role FROM group_members WHERE group_id=$1 AND user_id=$2 FOR SHARE', [
+        discovered.owner_group_id,
+        expectedGrantorUserId,
+      ])
+    ).rows[0];
+    await this.lockLiveSessions(client, [actorSessionId, targetSessionId]);
+    const sessions = await client.query(
+      'SELECT id,owner_group_id,created_by_user_id,write_policy,status FROM sessions WHERE id=ANY($1::uuid[])',
+      [[actorSessionId, targetSessionId]],
+    );
+    const actor = sessions.rows.find((candidate) => candidate.id === actorSessionId);
+    const target = sessions.rows.find((candidate) => candidate.id === targetSessionId);
+    const capability = (
+      await client.query(
+        "SELECT granted_by_user_id FROM session_notepad_capabilities WHERE session_id=$1 AND kind='session_notepad_coordination' FOR SHARE",
+        [actorSessionId],
+      )
+    ).rows[0];
+    const sameGroup =
+      actor?.owner_group_id === target?.owner_group_id && target?.owner_group_id === discovered.owner_group_id;
+    const authorized =
+      user?.role === 'super_admin' ||
+      (target?.write_policy === 'creator_only' && target?.created_by_user_id === expectedGrantorUserId) ||
+      (!group?.archived_at &&
+        (membership?.role === 'admin' || (target?.write_policy === 'group_members' && membership?.role === 'member')));
+    if (!sameGroup || capability?.granted_by_user_id !== expectedGrantorUserId || !authorized)
+      throw new StoreConflictError('not_found', 'Coordination grantor is no longer authorized');
+  }
+
+  private async withLiveSessionLock<T>(id: string, operation: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.lockLiveSessions(client, [id]);
+      const result = await operation(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async mutatePgNotepad(
+    kind: 'session' | 'explicit',
+    id: string,
+    input: {
+      content?: string;
+      append?: string;
+      expectedRevision?: number;
+      actor: NotepadActor;
+      expectedCoordinationGrantorUserId?: string;
+      associatedAuthority?: import('./types.js').AssociatedNotepadAuthority;
+      mutationKind: NotepadMutationKind;
+      now: Date;
+    },
+  ): Promise<SessionNotepadRecord | ExplicitNotepadRecord> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      if (kind === 'session') {
+        if (input.actor.kind === 'agent' && input.actor.sessionId !== id) {
+          await this.requirePgCoordinationAuthority(
+            client,
+            input.actor.sessionId,
+            id,
+            input.expectedCoordinationGrantorUserId,
+          );
+        } else await this.lockLiveSessions(client, [id]);
+        const session = await client.query('SELECT status FROM sessions WHERE id=$1', [id]);
+        if (!session.rows[0]) throw new StoreConflictError('not_found', 'Notepad not found');
+        if (session.rows[0].status === 'archived')
+          throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+      }
+      const table = kind === 'session' ? 'session_notepads' : 'explicit_notepads';
+      const key = kind === 'session' ? 'session_id' : 'id';
+      const old = (await client.query(`SELECT * FROM ${table} WHERE ${key}=$1 FOR UPDATE`, [id])).rows[0];
+      if (kind === 'explicit')
+        await this.lockLiveSessions(client, input.actor.kind === 'agent' ? [input.actor.sessionId] : []);
+      if (kind === 'explicit' && input.associatedAuthority)
+        await this.requirePgAssociatedAuthority(client, id, input.associatedAuthority);
+      if (kind === 'explicit') await this.requirePgExplicitWriteAuthority(client, id, input.actor);
+      if (kind === 'explicit' && !old) throw new StoreConflictError('not_found', 'Notepad not found');
+      const revision = old?.revision ?? 0;
+      if (input.append === undefined && input.expectedRevision !== revision)
+        throw new StoreConflictError('stale_revision', 'Stale notepad revision');
+      const content = input.append === undefined ? (input.content ?? '') : `${old?.content ?? ''}${input.append}`;
+      const size = Buffer.byteLength(content, 'utf8');
+      if (size > 256 * 1024) throw new StoreConflictError('notepad_too_large', 'Notepad exceeds 256 KiB');
+      let row;
+      if (old)
+        row = (
+          await client.query(
+            `UPDATE ${table} SET content=$2,size_bytes=$3,revision=revision+1,updated_at=$4 WHERE ${key}=$1 RETURNING *`,
+            [id, content, size, input.now],
+          )
+        ).rows[0];
+      else
+        row = (
+          await client.query(
+            `INSERT INTO session_notepads(session_id,revision,content,size_bytes,created_at,updated_at) VALUES($1,1,$2,$3,$4,$4) RETURNING *`,
+            [id, content, size, input.now],
+          )
+        ).rows[0];
+      await client.query(
+        `INSERT INTO notepad_revisions(notepad_kind,notepad_id,revision,content,size_bytes,actor,mutation_kind,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [kind, id, revision + 1, content, size, input.actor, input.mutationKind, input.now],
+      );
+      await client.query('COMMIT');
+      return kind === 'session' ? toSessionNotepad(row) : toExplicitNotepad(row);
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   async createSnippet(record: CreateSnippetRecord): Promise<SnippetRecord> {
@@ -1140,12 +2007,11 @@ export class PostgresStore implements AppStore {
             updated_at = $6,
              parent_session_id = $7,
              spawn_depth = $8,
-             owner_group_id = $9,
-             visibility = $10,
-             write_policy = $11,
-             created_by_user_id = $12,
-             last_activity_at = $13,
-             tags = $14
+             visibility = $9,
+             write_policy = $10,
+             created_by_user_id = $11,
+             last_activity_at = $12,
+             tags = $13
         WHERE id = $1
         RETURNING ${sessionSelectColumns}`,
       [
@@ -1157,7 +2023,6 @@ export class PostgresStore implements AppStore {
         record.updatedAt,
         record.parentSessionId ?? null,
         record.spawnDepth,
-        record.ownerGroupId,
         record.visibility,
         record.writePolicy,
         record.createdByUserId ?? null,
@@ -1194,19 +2059,18 @@ export class PostgresStore implements AppStore {
     return this.transaction(async (client) => {
       const updated = await client.query<SessionRow>(
         `UPDATE sessions
-         SET status = CASE WHEN last_activity_at > $13 THEN status ELSE $2 END,
+         SET status = CASE WHEN last_activity_at > $12 THEN status ELSE $2 END,
              title = $3,
-              context = CASE WHEN last_activity_at > $13 THEN context ELSE $4 END,
+              context = CASE WHEN last_activity_at > $12 THEN context ELSE $4 END,
               created_at = $5,
               updated_at = $6,
                parent_session_id = $7,
                spawn_depth = $8,
-               owner_group_id = $9,
-               visibility = $10,
-               write_policy = $11,
-               created_by_user_id = $12,
-               last_activity_at = GREATEST(last_activity_at, $13),
-               tags = CASE WHEN $15 THEN tags ELSE $14 END
+               visibility = $9,
+               write_policy = $10,
+               created_by_user_id = $11,
+               last_activity_at = GREATEST(last_activity_at, $12),
+               tags = CASE WHEN $14 THEN tags ELSE $13 END
             WHERE id = $1
            RETURNING ${sessionSelectColumns}`,
         [
@@ -1218,7 +2082,6 @@ export class PostgresStore implements AppStore {
           record.updatedAt,
           record.parentSessionId ?? null,
           record.spawnDepth,
-          record.ownerGroupId,
           record.visibility,
           record.writePolicy,
           record.createdByUserId ?? null,
@@ -1270,10 +2133,9 @@ export class PostgresStore implements AppStore {
          SET title = CASE WHEN $3 THEN $4 ELSE title END,
              updated_at = $2,
              tags = CASE WHEN $5 THEN $6::text[] ELSE tags END,
-             owner_group_id = CASE WHEN $7 THEN $8::uuid ELSE owner_group_id END,
-             visibility = CASE WHEN $9 THEN $10::text ELSE visibility END,
-             write_policy = CASE WHEN $11 THEN $12::text ELSE write_policy END
-         WHERE id = $1 AND (NOT $13 OR status <> 'archived')
+             visibility = CASE WHEN $7 THEN $8::text ELSE visibility END,
+             write_policy = CASE WHEN $9 THEN $10::text ELSE write_policy END
+         WHERE id = $1 AND (NOT $11 OR status <> 'archived')
          RETURNING ${sessionSelectColumns}`,
         [
           input.id,
@@ -1282,8 +2144,6 @@ export class PostgresStore implements AppStore {
           input.title ?? null,
           input.tags !== undefined,
           input.tags ?? [],
-          input.ownerGroupId !== undefined,
-          input.ownerGroupId ?? null,
           input.visibility !== undefined,
           input.visibility ?? null,
           input.writePolicy !== undefined,
@@ -4061,4 +4921,149 @@ function throwSnippetConflict(error: unknown): never {
     throw new StoreConflictError('snippet_name_exists', 'An active snippet with this name already exists');
   }
   throw error;
+}
+
+type SessionNotepadRow = {
+  session_id: string;
+  revision: number;
+  content: string;
+  size_bytes: number;
+  created_at: Date;
+  updated_at: Date;
+};
+type ExplicitNotepadRow = Omit<SessionNotepadRow, 'session_id'> & {
+  id: string;
+  title: string;
+  owner_group_id: string;
+  visibility: ExplicitNotepadRecord['visibility'];
+  write_policy: ExplicitNotepadRecord['writePolicy'];
+  created_by_user_id: string | null;
+};
+type NotepadRevisionRow = {
+  notepad_kind: NotepadRevisionRecord['notepadKind'];
+  notepad_id: string;
+  revision: number;
+  content: string;
+  size_bytes: number;
+  actor: unknown;
+  mutation_kind: NotepadMutationKind;
+  created_at: Date;
+};
+type NotepadAssociationRow = {
+  notepad_id: string;
+  session_id: string;
+  created_by_user_id: string | null;
+  created_at: Date;
+};
+type NotepadCapabilityRow = {
+  session_id: string;
+  kind: SessionNotepadCapabilityRecord['kind'];
+  granted_by_user_id: string;
+  created_at: Date;
+};
+
+function toSessionNotepad(r: SessionNotepadRow): SessionNotepadRecord {
+  return {
+    sessionId: r.session_id,
+    revision: r.revision,
+    content: r.content,
+    sizeBytes: r.size_bytes,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+function toExplicitNotepad(r: ExplicitNotepadRow): ExplicitNotepadRecord {
+  return {
+    id: r.id,
+    title: r.title,
+    ownerGroupId: r.owner_group_id,
+    visibility: r.visibility,
+    writePolicy: r.write_policy,
+    revision: r.revision,
+    content: r.content,
+    sizeBytes: r.size_bytes,
+    ...(r.created_by_user_id ? { createdByUserId: r.created_by_user_id } : {}),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+function toExplicitMetadata(r: Omit<ExplicitNotepadRow, 'content'>) {
+  return {
+    id: r.id,
+    title: r.title,
+    ownerGroupId: r.owner_group_id,
+    visibility: r.visibility,
+    writePolicy: r.write_policy,
+    revision: r.revision,
+    sizeBytes: r.size_bytes,
+    ...(r.created_by_user_id ? { createdByUserId: r.created_by_user_id } : {}),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+function toNotepadRevision(r: NotepadRevisionRow): NotepadRevisionRecord {
+  return {
+    notepadKind: r.notepad_kind,
+    notepadId: r.notepad_id,
+    revision: r.revision,
+    content: r.content,
+    sizeBytes: r.size_bytes,
+    actor: parseNotepadActor(r.actor),
+    mutationKind: r.mutation_kind,
+    createdAt: r.created_at,
+  };
+}
+function toNotepadRevisionMetadata(r: Omit<NotepadRevisionRow, 'content'>) {
+  return {
+    notepadKind: r.notepad_kind,
+    notepadId: r.notepad_id,
+    revision: r.revision,
+    sizeBytes: r.size_bytes,
+    actor: parseNotepadActor(r.actor),
+    mutationKind: r.mutation_kind,
+    createdAt: r.created_at,
+  };
+}
+function toAssociation(r: NotepadAssociationRow): NotepadAssociationRecord {
+  return {
+    notepadId: r.notepad_id,
+    sessionId: r.session_id,
+    ...(r.created_by_user_id ? { createdByUserId: r.created_by_user_id } : {}),
+    createdAt: r.created_at,
+  };
+}
+function toCapability(r: NotepadCapabilityRow): SessionNotepadCapabilityRecord {
+  return { sessionId: r.session_id, kind: r.kind, grantedByUserId: r.granted_by_user_id, createdAt: r.created_at };
+}
+function toNotepadActivity(r: {
+  id: string;
+  notepad_id: string;
+  actor: unknown;
+  kind: NotepadActivityRecord['kind'];
+  metadata: Record<string, unknown>;
+  created_at: Date;
+}): NotepadActivityRecord {
+  return {
+    id: r.id,
+    notepadId: r.notepad_id,
+    actor: parseNotepadActor(r.actor),
+    kind: r.kind,
+    metadata: r.metadata,
+    createdAt: r.created_at,
+  };
+}
+
+function parseNotepadActor(value: unknown): NotepadActor {
+  if (!value || typeof value !== 'object' || !('kind' in value)) throw new Error('Invalid notepad revision actor');
+  const actor = value as Record<string, unknown>;
+  if (actor.kind === 'system') return { kind: 'system' };
+  if (actor.kind === 'human' && typeof actor.userId === 'string') return { kind: 'human', userId: actor.userId };
+  if (actor.kind === 'agent' && typeof actor.sessionId === 'string' && typeof actor.runId === 'string')
+    return { kind: 'agent', sessionId: actor.sessionId, runId: actor.runId };
+  throw new Error('Invalid notepad revision actor');
+}
+
+function sqlPage<T>(rows: T[], limit: number, offset: number) {
+  const hasMore = rows.length > limit;
+  return { items: rows.slice(0, limit), hasMore, nextCursor: hasMore ? String(offset + limit) : null };
 }

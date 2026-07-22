@@ -26,6 +26,8 @@ const globalEventTypes = new Set<NormalizedEventType>([
   'run_cancelled',
   'artifact_created',
   'external_resource_created',
+  'notepad_changed',
+  'notepad_associations_changed',
   'callback_failed',
 ]);
 

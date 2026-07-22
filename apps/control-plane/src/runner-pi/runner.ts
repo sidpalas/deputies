@@ -49,6 +49,7 @@ import { startSandboxService } from '../sandbox/service-process.js';
 import { PI_SESSION_DATA_VERSION, type PiSessionData, type PiSessionStore } from './session-store.js';
 import { createPiArtifactToolDefinition } from './artifact-tool.js';
 import { createPiDeputyToolDefinition } from './deputy-tool.js';
+import { createPiNotepadToolDefinition } from './notepad-tool.js';
 import { createPiGitToolDefinition } from './git-tool.js';
 import { createPiGitHubCliToolDefinition } from './github-cli-tool.js';
 import { createPiMcpToolDefinitions } from './mcp-tools.js';
@@ -65,6 +66,7 @@ import { closeMcpConnections, logMcpUnavailable, mcpUnavailableNote } from '../m
 import type { McpConnection, McpRuntimeOptions } from '../mcp/types.js';
 import type { WebSearchToolServices } from '../web-search/tool.js';
 import type { DeputyToolBaseServices } from '../sessions/deputy-tool.js';
+import type { NotepadToolBaseServices } from '../notepads/tool.js';
 import { sessionTitleFromGeneratedResponse } from '../sessions/service.js';
 import {
   createPiSubagentToolDefinition,
@@ -108,6 +110,7 @@ export type PiRunnerOptions = {
   webSearch?: WebSearchToolServices;
   mcp?: McpRuntimeOptions & { connect?: typeof connectMcpServer };
   deputy?: DeputyToolBaseServices;
+  notepad?: NotepadToolBaseServices;
   skills?: PiSkillsProvider;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
 };
@@ -615,6 +618,19 @@ function createPiToolSet(
         messageId: input.messageId,
         runState: context.deputyRunState,
         ...(input.shouldPersist ? { shouldPersist: input.shouldPersist } : {}),
+      }),
+    );
+  }
+
+  // Pi subagents do not have their own durable Session principal, so this is
+  // deliberately available only to the top-level durable run.
+  if (options.notepad && context.subagentDepth === 0) {
+    customTools.push(
+      createPiNotepadToolDefinition({
+        ...options.notepad,
+        sessionId: input.sessionId,
+        runId: input.runId,
+        messageId: input.messageId,
       }),
     );
   }

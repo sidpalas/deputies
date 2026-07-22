@@ -8,6 +8,30 @@ Deputies is a background coding-agent service that creates and runs agent sessio
 A group-owned unit of agent work that remains within its creation group for its lifetime. Group viewers can read it, while group members and agents can control its ordered messages, replayable events, artifacts, and current work state.
 _Avoid_: Conversation, chat, task
 
+**Notepad**:
+A durable, mutable document for human and agent working notes. A notepad is either a session-local Session Notepad or an independently durable Explicit Notepad.
+_Avoid_: Scratchpad, notebook, session note
+
+**Session Notepad**:
+A session-local notepad used by exactly one session as its default working document. It follows that session's access and lifecycle, cannot be associated with another session, and may be edited externally only through human session-write authority or explicitly delegated meta-agent authority.
+_Avoid_: Primary notepad, default notepad, shared notepad
+
+**Explicit Notepad**:
+An access-group-owned notepad created for independent or cross-session work. It has an independent lifecycle and may be associated with multiple sessions owned by the same access group. Through an association it inherits that session's read and write access; standalone access uses its own policy.
+_Avoid_: Primary notepad, global notepad
+
+**Notepad Association**:
+The relationship that makes an Explicit Notepad available through a session. Readers and writers inherit the associated session's respective access, and a participating agent may associate it with another session in the same access group.
+_Avoid_: Notepad ownership, child-session share
+
+**Broad Notepad Discovery**:
+An explicitly delegated session capability that lets a meta-agent find and read visible Explicit Notepads beyond those associated with its session. Ordinary session agents discover only associated notepads.
+_Avoid_: Global notepad access, automatic notepad search
+
+**Session Notepad Coordination**:
+An explicitly delegated meta-agent capability to read and write other sessions' Session Notepads under the live session-write authority of the human who granted it.
+_Avoid_: Global session-notepad access, agent admin
+
 **Session Detail Ready**:
 The operator-visible state where a selected session has rendered its ordered messages, replayable events, and metadata for artifacts displayed inline with those messages or runs. It should feel instant to an operator: p95 under 250 ms and p50 under 100 ms for normal session history, while artifact content, external resources, callback deliveries, and sandbox service discovery may still be loading.
 _Avoid_: Thread-ready, fully loaded

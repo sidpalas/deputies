@@ -56,14 +56,12 @@ Every session has these access fields:
 
 | Field                | Values                          | Behavior                                                                                                                                                         |
 | -------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `owner_group_id`     | Access group ID                 | The group that owns the session. Write and group-only read checks use this group.                                                                                |
+| `owner_group_id`     | Access group ID                 | The group that permanently owns the session. Write and group-only read checks use this group.                                                                    |
 | `visibility`         | `group`, `organization`         | `group` restricts read access to members of the owning group. `organization` lets any signed-in user read the session.                                           |
 | `write_policy`       | `group_members`, `creator_only` | `group_members` lets members and admins of the owning group write. `creator_only` lets the session creator write; group admins and super admins can still write. |
 | `created_by_user_id` | User ID                         | Used for `creator_only` write access.                                                                                                                            |
 
-Admins can edit a session's access settings. Moving a session to another group requires admin access in both the current group and target group, unless the user is a super admin.
-
-When a session is moved to a different group, it inherits the target group's default visibility and write policy unless the request explicitly sets different values.
+Admins can edit a session's visibility and write policy. Session ownership is immutable: a session cannot move to another group after creation.
 
 ## Group Defaults
 
@@ -113,7 +111,6 @@ Super admins can:
 - Manage all groups and memberships.
 - Promote or remove other super admins.
 - Read and write all sessions.
-- Move sessions between active groups.
 
 Static session auth creates/restores the configured static user as a super admin. GitHub session auth restores users listed in `AUTH_GITHUB_ADMIN_USERS` as super admins on login. Keep at least one value in `AUTH_GITHUB_ADMIN_USERS` for recovery in GitHub-auth deployments.
 
@@ -158,13 +155,12 @@ Archiving a group:
 - Prevents new sessions from being created in that group.
 - Prevents new automations from being created in that group.
 - Prevents new group skills from being created in that group or personal skills from being promoted into it.
-- Prevents sessions from being moved into that group.
 - Suspends owned automation invocations without changing automation enabled state.
 - Stops skills owned by that group from loading or being invoked, including through cross-group shares, without changing each skill's enabled state.
-- Does not archive, delete, or move existing sessions.
+- Does not archive or delete existing sessions.
 - Does not remove existing group memberships.
 
-Existing sessions owned by an archived group keep their access behavior. Unarchiving the group makes it available for new sessions, moves, owned automation invocations, and owned skills again.
+Existing sessions owned by an archived group keep their access behavior. Unarchiving the group makes it available for new sessions, owned automation invocations, and owned skills again.
 
 ## Names And Uniqueness
 

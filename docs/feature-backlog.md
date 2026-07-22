@@ -35,6 +35,14 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Setup/install hook observability beyond `repository_ready`.
 - OpenAI Codex OAuth refresh hardening for deployed workers: static base64 auth variables can become stale when refresh tokens rotate; durable refresh state likely needs a writable auth file/volume or refresh-token-specific secret flow; avoid naive whole-run retry on 401 because agent/tool side effects may duplicate.
 
+## Meta Agents
+
+- Human-facing controls to grant and revoke the existing Broad Notepad Discovery and Session Notepad Coordination capabilities for a Session, with clear descriptions of the grantor, access-group boundary, live authority checks, and read-versus-write effects.
+- A meta-agent overview showing capability-enabled Sessions, their associated Explicit Notepads, recent coordination activity, and the human authority each capability currently exercises.
+- An explicit workflow for a meta-agent to request or establish an association after discovering an Explicit Notepad, without turning broad read discovery into implicit write access.
+- Access-group policy controls for who may create meta-agent grants, which capabilities may be granted, and whether grants require an administrator, while preserving the current human-granted and revocable trust model.
+- System-administrator diagnostics for tracing effective Notepad access across meta-agent capabilities, Session policies, Explicit Notepad associations, and revoked or stale grants.
+
 ## Automations
 
 - Automatic stale session archival when associated GitHub PRs are closed; direct-to-main workflows can already archive their current or child sessions through the `deputies` control tool.

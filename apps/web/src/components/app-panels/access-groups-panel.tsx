@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { SelectHTMLAttributes, SyntheticEvent } from 'react';
 import {
   Archive,
@@ -740,69 +740,20 @@ function ReadOnlyGroupPanel(props: { currentUser: AuthUser | null; group: Group 
   );
 }
 
-export function SessionAccessPanel(props: {
-  canManageAccess: boolean;
-  groups: Group[];
-  session: Session;
-  onUpdateAccess: (input: { ownerGroupId: string }) => Promise<boolean>;
-}) {
-  const [ownerGroupId, setOwnerGroupId] = useState(props.session.ownerGroupId);
-  const [saving, setSaving] = useState(false);
+export function SessionAccessPanel(props: { groups: Group[]; session: Session }) {
   const ownerGroup = props.groups.find((group) => group.id === props.session.ownerGroupId);
   const ownerGroupName = ownerGroup
     ? groupDisplayName(ownerGroup)
     : (props.session.ownerGroupName ?? 'Unknown access group');
-  const editableGroups = props.groups.filter(
-    (group) => group.id === props.session.ownerGroupId || (group.canManage && !group.archivedAt),
-  );
-
-  useEffect(() => {
-    setOwnerGroupId(props.session.ownerGroupId);
-  }, [props.session.id, props.session.ownerGroupId]);
-
-  async function handleOwnerGroupChange(nextOwnerGroupId: string) {
-    if (!props.canManageAccess || saving || nextOwnerGroupId === props.session.ownerGroupId) {
-      setOwnerGroupId(nextOwnerGroupId);
-      return;
-    }
-
-    setOwnerGroupId(nextOwnerGroupId);
-    setSaving(true);
-    try {
-      const saved = await props.onUpdateAccess({ ownerGroupId: nextOwnerGroupId });
-      if (!saved) setOwnerGroupId(props.session.ownerGroupId);
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
     <div className="grid gap-2 text-xs text-muted-foreground">
       <div className="grid gap-2">
         <label className="grid gap-1">
           <span className="font-medium text-foreground">Access group</span>
-          {props.canManageAccess ? (
-            <SelectWithCaret
-              className="h-8 min-w-0 pl-2 text-sm text-foreground"
-              value={ownerGroupId}
-              onChange={(event) => {
-                void handleOwnerGroupChange(event.target.value);
-              }}
-              disabled={saving}
-            >
-              {editableGroups.map((group) => (
-                <option key={group.id} value={group.id} disabled={!group.canManage || Boolean(group.archivedAt)}>
-                  {groupDisplayName(group)}
-                </option>
-              ))}
-            </SelectWithCaret>
-          ) : (
-            <span className="rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground">
-              {ownerGroupName}
-            </span>
-          )}
+          <span className="rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground">
+            {ownerGroupName}
+          </span>
         </label>
-        {saving ? <p className="text-xs text-muted-foreground">Saving...</p> : null}
       </div>
     </div>
   );
