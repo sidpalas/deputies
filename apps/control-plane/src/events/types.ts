@@ -116,6 +116,8 @@ export type NormalizedEventPayloadMap = {
   tool_finished: ToolFinishedPayload;
   artifact_created: { artifact: ArtifactPayload };
   external_resource_created: { resource: ExternalResourcePayload };
+  notepad_changed: { notepadKind: 'session' | 'explicit'; notepadId: string; revision: number };
+  notepad_associations_changed: EmptyEventPayload;
   run_completed: { runner: string; model?: string; usage?: ModelUsagePayload };
   run_failed: { error: string; recovered?: true };
   run_cancel_requested: { sequences: number[]; batchSize: number };
@@ -251,6 +253,8 @@ export type NormalizedEventType =
   | 'tool_finished'
   | 'artifact_created'
   | 'external_resource_created'
+  | 'notepad_changed'
+  | 'notepad_associations_changed'
   | 'run_completed'
   | 'run_failed'
   | 'run_cancel_requested'

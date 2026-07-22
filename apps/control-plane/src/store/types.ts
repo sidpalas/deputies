@@ -102,6 +102,12 @@ export class StoreConflictError extends Error {
       | 'skill_archived'
       | 'snippet_name_exists'
       | 'session_archived'
+      | 'not_found'
+      | 'notepad_exists'
+      | 'stale_revision'
+      | 'invalid_notepad_size'
+      | 'invalid_notepad_revision'
+      | 'notepad_too_large'
       | 'archived_group',
     message: string,
     readonly details: Record<string, unknown> = {},
@@ -151,6 +157,79 @@ export type SessionRecord = {
   queuePausedAt?: Date;
   createdByUserId?: string;
   context?: Record<string, unknown>;
+};
+
+export type NotepadActor =
+  | { kind: 'human'; userId: string }
+  | { kind: 'agent'; sessionId: string; runId: string }
+  | { kind: 'system' };
+export const notepadRevisionRetentionLimit = 50;
+export type NotepadMutationKind = 'replace' | 'patch' | 'append' | 'restore';
+export type ExplicitNotepadRecord = {
+  id: string;
+  title: string;
+  ownerGroupId: string;
+  visibility: SessionVisibility;
+  writePolicy: SessionWritePolicy;
+  revision: number;
+  content: string;
+  sizeBytes: number;
+  createdByUserId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+export type SessionNotepadRecord = {
+  sessionId: string;
+  revision: number;
+  content: string;
+  sizeBytes: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
+export type NotepadRevisionRecord = {
+  notepadKind: 'session' | 'explicit';
+  notepadId: string;
+  revision: number;
+  content: string;
+  sizeBytes: number;
+  actor: NotepadActor;
+  mutationKind: NotepadMutationKind;
+  createdAt: Date;
+};
+export type NotepadRevisionMetadata = Omit<NotepadRevisionRecord, 'content'>;
+export type ExplicitNotepadMetadata = Omit<ExplicitNotepadRecord, 'content'>;
+export type ExplicitNotepadSearchResult = ExplicitNotepadMetadata & { snippet: string };
+export type NotepadPage<T> = { items: T[]; hasMore: boolean; nextCursor: string | null };
+export type NotepadAssociationRecord = {
+  notepadId: string;
+  sessionId: string;
+  createdByUserId?: string;
+  createdAt: Date;
+};
+export type AssociatedNotepadAuthority = { associatedSessionId: string; expectedUserId: string };
+export type InitialNotepadAssociation =
+  | { initialAssociation?: never; associationActivityId?: never }
+  | { initialAssociation: NotepadAssociationRecord; associationActivityId: string };
+export type SessionNotepadCapabilityRecord = {
+  sessionId: string;
+  kind: 'explicit_search' | 'session_notepad_coordination';
+  grantedByUserId: string;
+  createdAt: Date;
+};
+export type NotepadActivityKind =
+  | 'created'
+  | 'metadata_changed'
+  | 'revision_restored'
+  | 'association_granted'
+  | 'association_changed'
+  | 'association_revoked';
+export type NotepadActivityRecord = {
+  id: string;
+  notepadId: string;
+  actor: NotepadActor;
+  kind: NotepadActivityKind;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
 };
 
 export type MessageRecord = {
@@ -814,7 +893,6 @@ export type SessionMetadataUpdateInput = {
   requireNonArchived?: boolean;
   title?: string;
   tags?: string[];
-  ownerGroupId?: string;
   visibility?: SessionVisibility;
   writePolicy?: SessionWritePolicy;
 };
@@ -895,6 +973,143 @@ export interface SessionStore {
   }): Promise<SessionRecord | null>;
   pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord>;
   resumeSessionQueue(input: { sessionId: string }): Promise<SessionRecord>;
+}
+
+export interface NotepadStore {
+  getSessionNotepad(sessionId: string): Promise<SessionNotepadRecord | null>;
+  readCoordinatedSessionNotepad(
+    actorSessionId: string,
+    targetSessionId: string,
+    expectedGrantorUserId: string,
+  ): Promise<SessionNotepadRecord>;
+  mutateSessionNotepad(input: {
+    sessionId: string;
+    content?: string;
+    append?: string;
+    expectedRevision?: number;
+    actor: NotepadActor;
+    expectedCoordinationGrantorUserId?: string;
+    mutationKind: NotepadMutationKind;
+    now: Date;
+  }): Promise<SessionNotepadRecord>;
+  restoreSessionNotepadRevision(input: {
+    sessionId: string;
+    revision: number;
+    expectedRevision: number;
+    actor: NotepadActor;
+    expectedCoordinationGrantorUserId?: string;
+    now: Date;
+  }): Promise<SessionNotepadRecord>;
+  createExplicitNotepad(
+    input: {
+      record: ExplicitNotepadRecord;
+      actor: NotepadActor;
+      activityId: string;
+    } & InitialNotepadAssociation,
+  ): Promise<ExplicitNotepadRecord>;
+  getExplicitNotepad(id: string): Promise<ExplicitNotepadRecord | null>;
+  getExplicitNotepadMetadata(id: string): Promise<ExplicitNotepadMetadata | null>;
+  listExplicitNotepads(input: {
+    groupId?: string;
+    /** Undefined means all-visible (bypass/superadmin); an empty array means
+     * organization-visible records only. */
+    authorizedGroupIds?: string[];
+    limit: number;
+    offset: number;
+    includeDormant?: boolean;
+  }): Promise<NotepadPage<ExplicitNotepadMetadata>>;
+  searchExplicitNotepads(input: {
+    groupId: string;
+    /** Undefined means all-visible (bypass/superadmin); an empty array means
+     * organization-visible records only. */
+    authorizedGroupIds?: string[];
+    query: string;
+    limit: number;
+  }): Promise<ExplicitNotepadSearchResult[]>;
+  searchExplicitNotepadsWithCapability(input: {
+    actorSessionId: string;
+    expectedGrantorUserId: string;
+    groupId: string;
+    query: string;
+    limit: number;
+  }): Promise<ExplicitNotepadSearchResult[]>;
+  readExplicitNotepadWithCapability(input: {
+    actorSessionId: string;
+    expectedGrantorUserId: string;
+    notepadId: string;
+  }): Promise<ExplicitNotepadRecord>;
+  updateExplicitNotepadMetadata(input: {
+    id: string;
+    ownerGroupId: string;
+    title?: string;
+    visibility?: SessionVisibility;
+    writePolicy?: SessionWritePolicy;
+    actor: NotepadActor;
+    activityId: string;
+    now: Date;
+  }): Promise<ExplicitNotepadRecord>;
+  mutateExplicitNotepad(input: {
+    id: string;
+    content?: string;
+    append?: string;
+    expectedRevision?: number;
+    actor: NotepadActor;
+    associatedAuthority?: AssociatedNotepadAuthority;
+    mutationKind: NotepadMutationKind;
+    now: Date;
+  }): Promise<ExplicitNotepadRecord>;
+  restoreExplicitNotepadRevision(input: {
+    id: string;
+    revision: number;
+    expectedRevision: number;
+    actor: NotepadActor;
+    associatedAuthority?: AssociatedNotepadAuthority;
+    activityId: string;
+    now: Date;
+  }): Promise<ExplicitNotepadRecord>;
+  listNotepadRevisions(
+    kind: 'session' | 'explicit',
+    id: string,
+    limit: number,
+    beforeRevision: number,
+  ): Promise<NotepadPage<NotepadRevisionMetadata>>;
+  getNotepadRevision(kind: 'session' | 'explicit', id: string, revision: number): Promise<NotepadRevisionRecord | null>;
+  putNotepadAssociation(input: {
+    record: NotepadAssociationRecord;
+    actor: NotepadActor;
+    activityId: string;
+  }): Promise<NotepadAssociationRecord>;
+  removeNotepadAssociation(input: {
+    notepadId: string;
+    sessionId: string;
+    actor: NotepadActor;
+    activityId: string;
+    now: Date;
+  }): Promise<boolean>;
+  listNotepadAssociations(
+    notepadId: string,
+    limit: number,
+    offset: number,
+  ): Promise<NotepadPage<NotepadAssociationRecord>>;
+  listNotepadAssociationSessionIdsAfter(
+    notepadId: string,
+    afterSessionId: string | null,
+    limit: number,
+  ): Promise<string[]>;
+  getNotepadAssociation(notepadId: string, sessionId: string): Promise<NotepadAssociationRecord | null>;
+  listSessionNotepadAssociations(
+    sessionId: string,
+    limit: number,
+    offset: number,
+  ): Promise<NotepadPage<NotepadAssociationRecord & { notepad: ExplicitNotepadMetadata }>>;
+  putSessionNotepadCapability(record: SessionNotepadCapabilityRecord): Promise<SessionNotepadCapabilityRecord>;
+  removeSessionNotepadCapability(
+    sessionId: string,
+    kind: SessionNotepadCapabilityRecord['kind'],
+    expectedGrantedByUserId?: string,
+  ): Promise<boolean>;
+  listSessionNotepadCapabilities(sessionId: string): Promise<SessionNotepadCapabilityRecord[]>;
+  listNotepadActivity(notepadId: string, limit: number, offset: number): Promise<NotepadPage<NotepadActivityRecord>>;
 }
 
 export interface MessageStore {
@@ -1210,6 +1425,7 @@ export interface AppStore
     EnvironmentStore,
     SkillStore,
     SnippetStore,
+    NotepadStore,
     EventStore,
     AuthStore,
     GroupStore,

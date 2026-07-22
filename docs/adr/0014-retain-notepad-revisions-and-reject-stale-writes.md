@@ -1,0 +1,3 @@
+# Retain bounded notepad revisions and reject stale writes
+
+Every Notepad mutation creates an attributed, recoverable revision, and replacing or patching content requires the revision on which the edit was based so concurrent work cannot be silently overwritten. Atomic appends are serialized without an expected revision, and restoring historical content creates a new revision rather than rewriting history. The initial implementation retains the latest 50 full-content revisions per Notepad; older revisions are reaped atomically as new revisions are written. Revision history is audit-oriented and belongs in a separate history view rather than the default Notepad editor.

@@ -59,6 +59,70 @@ export type SessionPage = {
   nextCursor: string | null;
 };
 
+export type NotepadActor =
+  | { kind: 'human'; userId: string }
+  | { kind: 'agent'; sessionId: string; runId: string }
+  | { kind: 'system' };
+export type SessionNotepad = {
+  sessionId: string;
+  revision: number;
+  content: string;
+  sizeBytes: number;
+  createdAt: string;
+  updatedAt: string;
+};
+export type SessionNotepadMetadata = Omit<SessionNotepad, 'content'>;
+export type ExplicitNotepad = {
+  id: string;
+  title: string;
+  ownerGroupId: string;
+  visibility: SessionVisibility;
+  writePolicy: SessionWritePolicy;
+  revision: number;
+  content: string;
+  sizeBytes: number;
+  createdByUserId?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type ExplicitNotepadMetadata = Omit<ExplicitNotepad, 'content'>;
+export type NotepadRevision = {
+  notepadKind: 'session' | 'explicit';
+  notepadId: string;
+  revision: number;
+  sizeBytes: number;
+  actor: NotepadActor | { kind: NotepadActor['kind'] };
+  mutationKind: 'replace' | 'patch' | 'append' | 'restore';
+  createdAt: string;
+};
+export type NotepadRevisionWithContent = NotepadRevision & { content: string };
+export type NotepadRevisionPage = {
+  revisions: NotepadRevision[];
+  hasMore: boolean;
+  nextCursor: string | null;
+};
+export type NotepadAssociation = {
+  notepadId: string;
+  sessionId: string;
+  createdByUserId?: string;
+  createdAt?: string;
+};
+export type SessionNotepadAssociation = NotepadAssociation & {
+  notepad: ExplicitNotepadMetadata;
+  canWrite: boolean;
+};
+export type SessionNotepadAssociationPage = {
+  items: SessionNotepadAssociation[];
+  hasMore: boolean;
+  nextCursor: string | null;
+};
+export type SessionNotepadCapability = {
+  sessionId: string;
+  kind: 'explicit_search' | 'session_notepad_coordination';
+  grantedByUserId: string;
+  createdAt: string;
+};
+
 export type SessionSearchResult = {
   session: Session;
   snippet: string;
@@ -1109,23 +1173,163 @@ export async function setSessionStarred(input: {
   return body.starred;
 }
 
-export async function updateSessionAccess(input: {
+export async function getSessionNotepad(input: { sessionId: string; token: string; signal?: AbortSignal }) {
+  const body = await request<{ notepad: SessionNotepad }>(`/sessions/${input.sessionId}/notepad`, input);
+  return body.notepad;
+}
+export async function getSessionNotepadMetadata(input: { sessionId: string; token: string; signal?: AbortSignal }) {
+  const body = await request<{ notepad: SessionNotepadMetadata }>(
+    `/sessions/${input.sessionId}/notepad?metadata=true`,
+    input,
+  );
+  return body.notepad;
+}
+export async function replaceSessionNotepad(input: {
   sessionId: string;
-  ownerGroupId: string;
-  visibility?: SessionVisibility;
-  writePolicy?: SessionWritePolicy;
+  content: string;
+  expectedRevision: number;
   token: string;
-}): Promise<Session> {
-  const body = await request<{ session: Session }>(`/sessions/${input.sessionId}/access`, {
-    method: 'PATCH',
+}) {
+  const body = await request<{ notepad: SessionNotepad }>(`/sessions/${input.sessionId}/notepad`, {
+    method: 'PUT',
+    token: input.token,
+    body: { content: input.content, expectedRevision: input.expectedRevision },
+  });
+  return body.notepad;
+}
+export async function getSessionNotepadHistory(input: { sessionId: string; token: string; cursor?: string }) {
+  const query = input.cursor === undefined ? '' : `?cursor=${encodeURIComponent(input.cursor)}`;
+  return request<NotepadRevisionPage>(`/sessions/${input.sessionId}/notepad/history${query}`, {
+    token: input.token,
+  });
+}
+export async function getSessionNotepadRevision(input: { sessionId: string; revision: number; token: string }) {
+  const body = await request<{ revision: NotepadRevisionWithContent }>(
+    `/sessions/${input.sessionId}/notepad/history/${input.revision}`,
+    { token: input.token },
+  );
+  return body.revision;
+}
+export async function restoreSessionNotepad(input: {
+  sessionId: string;
+  revision: number;
+  expectedRevision: number;
+  token: string;
+}) {
+  const body = await request<{ notepad: SessionNotepad }>(
+    `/sessions/${input.sessionId}/notepad/restore/${input.revision}`,
+    { method: 'POST', token: input.token, body: { expectedRevision: input.expectedRevision } },
+  );
+  return body.notepad;
+}
+export async function listSessionNotepadAssociations(input: {
+  sessionId: string;
+  token: string;
+  cursor?: string;
+  signal?: AbortSignal;
+}) {
+  const query = input.cursor === undefined ? '' : `?cursor=${encodeURIComponent(input.cursor)}`;
+  const body = await request<{ associations: SessionNotepadAssociationPage }>(
+    `/sessions/${input.sessionId}/notepad-associations${query}`,
+    input,
+  );
+  return body.associations;
+}
+export async function createExplicitNotepad(input: {
+  title: string;
+  content?: string;
+  ownerGroupId: string;
+  initialWritableSessionId?: string;
+  token: string;
+}) {
+  const body = await request<{ notepad: ExplicitNotepad }>('/notepads', {
+    method: 'POST',
     token: input.token,
     body: {
+      title: input.title,
+      ...(input.content !== undefined ? { content: input.content } : {}),
       ownerGroupId: input.ownerGroupId,
-      ...(input.visibility ? { visibility: input.visibility } : {}),
-      ...(input.writePolicy ? { writePolicy: input.writePolicy } : {}),
+      ...(input.initialWritableSessionId ? { initialWritableSessionId: input.initialWritableSessionId } : {}),
     },
   });
-  return body.session;
+  return body.notepad;
+}
+export async function getExplicitNotepad(input: { id: string; token: string; associatedSessionId?: string }) {
+  const query = input.associatedSessionId ? `?sessionId=${encodeURIComponent(input.associatedSessionId)}` : '';
+  const body = await request<{ notepad: ExplicitNotepad }>(`/notepads/${input.id}${query}`, { token: input.token });
+  return body.notepad;
+}
+export async function replaceExplicitNotepad(input: {
+  id: string;
+  content: string;
+  expectedRevision: number;
+  token: string;
+  associatedSessionId?: string;
+}) {
+  const query = input.associatedSessionId ? `?sessionId=${encodeURIComponent(input.associatedSessionId)}` : '';
+  const body = await request<{ notepad: ExplicitNotepad }>(`/notepads/${input.id}/content${query}`, {
+    method: 'PUT',
+    token: input.token,
+    body: { content: input.content, expectedRevision: input.expectedRevision },
+  });
+  return body.notepad;
+}
+export async function getExplicitNotepadHistory(input: {
+  id: string;
+  token: string;
+  cursor?: string;
+  associatedSessionId?: string;
+}) {
+  const query = new URLSearchParams();
+  if (input.cursor !== undefined) query.set('cursor', input.cursor);
+  if (input.associatedSessionId) query.set('sessionId', input.associatedSessionId);
+  const suffix = query.size ? `?${query}` : '';
+  return request<NotepadRevisionPage>(`/notepads/${input.id}/history${suffix}`, { token: input.token });
+}
+export async function getExplicitNotepadRevision(input: {
+  id: string;
+  revision: number;
+  token: string;
+  associatedSessionId?: string;
+}) {
+  const query = input.associatedSessionId ? `?sessionId=${encodeURIComponent(input.associatedSessionId)}` : '';
+  const body = await request<{ revision: NotepadRevisionWithContent }>(
+    `/notepads/${input.id}/history/${input.revision}${query}`,
+    { token: input.token },
+  );
+  return body.revision;
+}
+export async function restoreExplicitNotepadRevision(input: {
+  id: string;
+  revision: number;
+  expectedRevision: number;
+  token: string;
+  associatedSessionId?: string;
+}) {
+  const query = input.associatedSessionId ? `?sessionId=${encodeURIComponent(input.associatedSessionId)}` : '';
+  const body = await request<{ notepad: ExplicitNotepad }>(
+    `/notepads/${input.id}/history/${input.revision}/restore${query}`,
+    {
+      method: 'POST',
+      token: input.token,
+      body: { expectedRevision: input.expectedRevision },
+    },
+  );
+  return body.notepad;
+}
+export async function grantNotepadAssociation(input: { id: string; sessionId: string; token: string }) {
+  const body = await request<{ association: NotepadAssociation }>(
+    `/notepads/${input.id}/associations/${input.sessionId}`,
+    { method: 'PUT', token: input.token },
+  );
+  return body.association;
+}
+export async function removeNotepadAssociation(input: { id: string; sessionId: string; token: string }) {
+  const body = await request<{ removed: boolean }>(`/notepads/${input.id}/associations/${input.sessionId}`, {
+    method: 'DELETE',
+    token: input.token,
+  });
+  return body.removed;
 }
 
 export async function archiveSession(input: { sessionId: string; token: string }): Promise<Session> {

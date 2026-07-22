@@ -20,7 +20,6 @@ export type UpdateSessionInput = {
   requireNonArchived?: boolean;
   title?: string;
   tags?: string[];
-  ownerGroupId?: string;
   visibility?: SessionVisibility;
   writePolicy?: SessionWritePolicy;
 };
@@ -118,7 +117,6 @@ export class SessionService {
         ...(input.requireNonArchived ? { requireNonArchived: true } : {}),
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.tags !== undefined ? { tags: input.tags } : {}),
-        ...(input.ownerGroupId !== undefined ? { ownerGroupId: input.ownerGroupId } : {}),
         ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
         ...(input.writePolicy !== undefined ? { writePolicy: input.writePolicy } : {}),
       });

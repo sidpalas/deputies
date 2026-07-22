@@ -60,6 +60,7 @@ export default defineConfig({
       '/groups': apiProxy,
       '/repositories': apiProxy,
       '/models': apiProxy,
+      '/notepads': apiProxy,
       '/setup': apiProxy,
       '/skills': apiProxy,
       '/snippets': apiProxy,

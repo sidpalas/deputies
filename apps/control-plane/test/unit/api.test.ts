@@ -288,6 +288,10 @@ describe('core API', () => {
     const invalidAuth = await postJson(`${baseUrl}/sessions`, { title: 'Private' }, 'wrong');
     expect(invalidAuth.status).toBe(401);
 
+    expect((await fetch(`${baseUrl}/notepads`)).status).toBe(401);
+    expect((await fetch(`${baseUrl}/notepads`, { headers: { authorization: 'Bearer wrong' } })).status).toBe(401);
+    expect((await fetch(`${baseUrl}/notepads`, { headers: { authorization: 'Bearer secret' } })).status).toBe(200);
+
     const validAuth = await postJson(`${baseUrl}/sessions`, { title: 'Private' }, 'secret');
     expect(validAuth.status).toBe(201);
     expectSessionResponse(await validAuth.json());
@@ -1038,8 +1042,8 @@ describe('core API', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ownerGroupId: archivedGroup.id }),
     });
-    expect(moveToArchivedGroup.status).toBe(409);
-    await expect(moveToArchivedGroup.json()).resolves.toMatchObject({ error: 'archived_group' });
+    expect(moveToArchivedGroup.status).toBe(400);
+    await expect(moveToArchivedGroup.json()).resolves.toMatchObject({ error: 'immutable_owner' });
   });
 
   it('rejects duplicate group names case-insensitively', async () => {
@@ -1119,6 +1123,19 @@ describe('core API', () => {
     expect(replayed.map((event) => event.type)).toEqual(['message_created']);
     expect(replayBody.cursor).toBe(2);
     expect(replayBody.hasMore).toBe(false);
+  });
+
+  it('rejects virtual revision zero as a Notepad history target', async () => {
+    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Notepad revisions' });
+    const { session } = (await createSession.json()) as { session: { id: string } };
+
+    const response = await fetch(`${baseUrl}/sessions/${session.id}/notepad/history/0`);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'invalid',
+      message: 'revision must be a positive integer',
+    });
   });
 
   it('records title-generation provenance only when message creation requests it', async () => {

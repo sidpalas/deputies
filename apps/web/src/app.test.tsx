@@ -64,6 +64,7 @@ type MockApiOptions = {
   artifacts?: unknown[];
   services?: unknown[];
   externalResources?: unknown[];
+  sessionNotepad?: Record<string, unknown>;
   groups?: unknown[];
   createdGroups?: unknown[];
   groupUpdates?: unknown[];
@@ -1980,7 +1981,7 @@ it('saves the group automation creation policy', async () => {
   expect(groupUpdates[0]).toMatchObject({ automationCreateRequiredRole: 'admin' });
 });
 
-it('saves session access group when selected', async () => {
+it('shows the session access group as immutable', async () => {
   const accessUpdates: unknown[] = [];
   const clientGroup = {
     ...group,
@@ -1991,117 +1992,20 @@ it('saves session access group when selected', async () => {
   render(<App />);
 
   const contextPanel = within(await screen.findByLabelText('Session details'));
-  const accessGroup = await contextPanel.findByLabelText('Access group');
-  expect(contextPanel.queryByRole('button', { name: 'Save group' })).not.toBeInTheDocument();
-
-  fireEvent.change(accessGroup, { target: { value: clientGroup.id } });
-
-  await waitFor(() => expect(accessGroup).toHaveValue(clientGroup.id));
-  await waitFor(() => expect(accessUpdates).toEqual([{ ownerGroupId: clientGroup.id }]));
+  expect(await contextPanel.findByText('Default group')).toBeInTheDocument();
+  expect(contextPanel.queryByLabelText('Access group')).not.toBeInTheDocument();
+  expect(accessUpdates).toEqual([]);
 });
 
-it('does not let a delayed access mutation response regress a newer selected-session summary', async () => {
-  const accessResponse = deferred<Response>();
-  let pushGlobalEvent: StreamEventPusher | undefined;
-  const clientGroup = {
-    ...group,
-    id: '00000000-0000-4000-8000-000000000019',
-    name: 'New owner',
-  };
-  const newerSession = {
-    ...session,
-    title: 'Newer authoritative title',
-    updatedAt: '2026-05-05T12:05:00.000Z',
-  };
-  mockApi({
-    authMode: 'session',
-    currentUser: user,
-    groups: [group, clientGroup],
-    onUpdateAccessRequest: () => accessResponse.promise,
-    onGetSessionRequest: () => jsonResponse({ session: newerSession }),
-    onGlobalStreamOpen: (push) => {
-      pushGlobalEvent = push;
-    },
-  });
+it('shows the codebase before Notepads in Session details', async () => {
+  mockApi();
   render(<App />);
 
-  const contextPanel = within(await screen.findByLabelText('Session details'));
-  await waitFor(() => expect(pushGlobalEvent).toBeDefined());
-  fireEvent.change(await contextPanel.findByLabelText('Access group'), { target: { value: clientGroup.id } });
-  act(() => {
-    pushGlobalEvent?.(
-      eventFixture({
-        id: 22,
-        sequence: 1,
-        type: 'session_updated',
-        payload: { title: newerSession.title },
-      }),
-    );
-  });
-  expect(await screen.findByRole('heading', { name: newerSession.title })).toBeInTheDocument();
-
-  await act(async () => {
-    accessResponse.resolve(
-      jsonResponse({
-        session: {
-          ...session,
-          ownerGroupId: clientGroup.id,
-          title: 'Stale access response title',
-          updatedAt: '2026-05-05T12:03:00.000Z',
-        },
-      }),
-    );
-    await accessResponse.promise;
-  });
-
-  expect(screen.getByRole('heading', { name: newerSession.title })).toBeInTheDocument();
-  expect(screen.queryByRole('heading', { name: 'Stale access response title' })).not.toBeInTheDocument();
-});
-
-it('does not let a delayed access response regress a newer first-page session snapshot', async () => {
-  const accessResponse = deferred<Response>();
-  const refreshedPage = deferred<Response>();
-  const clientGroup = {
-    ...group,
-    id: '00000000-0000-4000-8000-000000000019',
-    name: 'New owner',
-  };
-  const newerSession = {
-    ...session,
-    title: 'Newer first-page title',
-    updatedAt: '2026-05-05T12:05:00.000Z',
-  };
-  mockApi({
-    authMode: 'session',
-    currentUser: user,
-    groups: [group, clientGroup],
-    onUpdateAccessRequest: () => accessResponse.promise,
-    onListSessionsRequest: ({ count }) => (count === 2 ? refreshedPage.promise : undefined),
-    onGetSessionRequest: () => jsonResponse({ session: newerSession }),
-  });
-  render(<App />);
-
-  const contextPanel = within(await screen.findByLabelText('Session details'));
-  fireEvent.change(await contextPanel.findByLabelText('Access group'), { target: { value: clientGroup.id } });
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-  await act(async () => {
-    refreshedPage.resolve(jsonResponse({ sessions: [newerSession], nextCursor: null }));
-    await refreshedPage.promise;
-    accessResponse.resolve(
-      jsonResponse({
-        session: {
-          ...session,
-          ownerGroupId: clientGroup.id,
-          title: 'Stale access response title',
-          updatedAt: '2026-05-05T12:03:00.000Z',
-        },
-      }),
-    );
-    await accessResponse.promise;
-  });
-
-  expect(await screen.findByRole('heading', { name: newerSession.title })).toBeInTheDocument();
-  expect(screen.queryByRole('heading', { name: 'Stale access response title' })).not.toBeInTheDocument();
+  const notepads = await screen.findByRole('region', { name: 'Notepads' });
+  const contextPanel = notepads.closest('aside, details');
+  if (!(contextPanel instanceof HTMLElement)) throw new Error('Expected Notepads inside Session details');
+  const codebase = within(contextPanel).getByText('Codebase');
+  expect(codebase.compareDocumentPosition(notepads) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 it('does not let an older title mutation response overwrite a newer title', async () => {
@@ -4347,6 +4251,120 @@ it('opens only the global SSE stream for updates', async () => {
   expect(globalStreamOpenCount).toBe(1);
 });
 
+it('flags a realtime Notepad revision without fetching its contents', async () => {
+  let pushGlobalEvent: StreamEventPusher = () => undefined;
+  let globalStreamOpen = false;
+  const requests: string[] = [];
+  mockApi({
+    requests,
+    sessionNotepad: {
+      sessionId: session.id,
+      revision: 4,
+      content: 'Previously loaded',
+      sizeBytes: 17,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+    },
+    onGlobalStreamOpen: (push) => {
+      globalStreamOpen = true;
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+  const notepads = await screen.findByRole('region', { name: 'Notepads' });
+  expect(await within(notepads).findByText(/^Updated /)).toBeInTheDocument();
+  await waitFor(() => expect(globalStreamOpen).toBe(true));
+  const readsBeforeEvent = requests.filter((path) => path.endsWith('/notepad')).length;
+
+  act(() => {
+    pushGlobalEvent(
+      eventFixture({
+        id: 19,
+        sequence: 19,
+        type: 'notepad_changed',
+        payload: { notepadKind: 'session', notepadId: session.id, revision: 4.5 },
+      }),
+    );
+  });
+  expect(screen.queryByLabelText('Newer revision available')).not.toBeInTheDocument();
+
+  act(() => {
+    pushGlobalEvent(
+      eventFixture({
+        id: 20,
+        sequence: 20,
+        type: 'notepad_changed',
+        payload: { notepadKind: 'session', notepadId: session.id, revision: 5 },
+      }),
+    );
+  });
+
+  await screen.findByLabelText('Newer revision available');
+  expect(requests.filter((path) => path.endsWith('/notepad'))).toHaveLength(readsBeforeEvent);
+});
+
+it('records a Notepad revision found in a Session detail snapshot before realtime replay', async () => {
+  mockApi({
+    sessionNotepad: {
+      sessionId: session.id,
+      revision: 4,
+      content: 'Older content',
+      sizeBytes: 13,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+    },
+    eventsBySession: {
+      [session.id]: [
+        eventFixture({
+          id: 21,
+          sequence: 21,
+          type: 'notepad_changed',
+          payload: { notepadKind: 'session', notepadId: session.id, revision: 5 },
+        }),
+      ],
+    },
+  });
+  render(<App />);
+
+  await screen.findByLabelText('Newer revision available');
+});
+
+it('refreshes Notepad associations after a realtime association invalidation', async () => {
+  let pushGlobalEvent: StreamEventPusher = () => undefined;
+  let globalStreamOpen = false;
+  const requests: string[] = [];
+  mockApi({
+    requests,
+    onGlobalStreamOpen: (push) => {
+      globalStreamOpen = true;
+      pushGlobalEvent = push;
+    },
+  });
+  render(<App />);
+  await screen.findByRole('region', { name: 'Notepads' });
+  await waitFor(() => expect(globalStreamOpen).toBe(true));
+  const associationReadsBeforeEvent = requests.filter((path) => path.includes('/notepad-associations')).length;
+  const contentReadsBeforeEvent = requests.filter((path) => path.match(/\/notepads\/[^/]+$/)).length;
+
+  act(() => {
+    pushGlobalEvent(
+      eventFixture({
+        id: 22,
+        sequence: 22,
+        type: 'notepad_associations_changed',
+        payload: {},
+      }),
+    );
+  });
+
+  await waitFor(() =>
+    expect(requests.filter((path) => path.includes('/notepad-associations'))).toHaveLength(
+      associationReadsBeforeEvent + 1,
+    ),
+  );
+  expect(requests.filter((path) => path.match(/\/notepads\/[^/]+$/))).toHaveLength(contentReadsBeforeEvent);
+});
+
 it('surfaces realtime connection failures with a multiple-window hint', async () => {
   mockApi({ globalStreamStatus: 503 });
   render(<App />);
@@ -5934,6 +5952,28 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname.match(/^\/sessions\/[^/]+\/callbacks$/) && method === 'GET') {
       return jsonResponse({ callbacks });
+    }
+
+    const sessionNotepadMatch = url.pathname.match(/^\/sessions\/([^/]+)\/notepad$/);
+    if (sessionNotepadMatch && method === 'GET') {
+      const notepad = options.sessionNotepad ?? {
+        sessionId: sessionNotepadMatch[1],
+        revision: 0,
+        content: '',
+        sizeBytes: 0,
+        createdAt: currentSession.createdAt,
+        updatedAt: currentSession.createdAt,
+      };
+      return jsonResponse({
+        notepad:
+          url.searchParams.get('metadata') === 'true'
+            ? Object.fromEntries(Object.entries(notepad).filter(([key]) => key !== 'content'))
+            : notepad,
+      });
+    }
+
+    if (url.pathname.match(/^\/sessions\/[^/]+\/notepad-associations$/) && method === 'GET') {
+      return jsonResponse({ associations: { items: [], hasMore: false, nextCursor: null } });
     }
 
     const replayMatch = url.pathname.match(new RegExp(`^/sessions/${currentSession.id}/callbacks/([^/]+)/replay$`));

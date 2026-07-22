@@ -56,7 +56,6 @@ import {
   updateMessage,
   updateMessageSteering,
   updateSession,
-  updateSessionAccess,
   updateSessionTags,
   updateSnippet,
   type Automation,
@@ -108,7 +107,6 @@ import {
   canWriteSession,
   errorMessage,
   filterActiveProgressEvents,
-  groupCanManage,
   isWorkspaceToolPreflightError,
   modelUnavailableReason,
   nextAccessGroupName,
@@ -198,6 +196,7 @@ import {
   ThreadSidebar,
   type SidebarFooterProps,
 } from './components/app-panels.js';
+import { ResponsiveNotepadsPanel } from './components/app-panels/notepads-panel.js';
 import {
   environmentRepositoryKey,
   type EnvironmentBranchOverrides,
@@ -484,6 +483,8 @@ export function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [pageVisible, setPageVisible] = useState(isPageVisible);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(initialConnectionStatus);
+  const [notepadChangeRevisions, setNotepadChangeRevisions] = useState(new Map<string, number>());
+  const [notepadAssociationVersions, setNotepadAssociationVersions] = useState(new Map<string, number>());
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
   const {
@@ -516,6 +517,8 @@ export function App() {
   const [streamRestartGeneration, setStreamRestartGeneration] = useState(0);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
+  const mobileNotepadsHostRef = useRef<HTMLDivElement | null>(null);
+  const desktopNotepadsHostRef = useRef<HTMLDivElement | null>(null);
   const threadAutoFollowRef = useRef(true);
   const autoScrolledSessionId = useRef('');
   const selectedSessionIdRef = useRef(selectedSessionId);
@@ -851,13 +854,6 @@ export function App() {
     [sessions, canonicalRevealedSessionLineage, supplementalSelectedSession, selectedSessionId],
   );
   const canWriteSelectedSession = selectedSession ? userCanWriteSession(selectedSession) : canCreateThread;
-  const canManageSelectedSessionAccess = Boolean(
-    selectedSession &&
-    canCallApi &&
-    (!sessionAuthRequired ||
-      currentUser?.role === 'super_admin' ||
-      groupCanManage(groups, selectedSession.ownerGroupId)),
-  );
   const canViewSetup = canCallApi;
   const defaultSetupGuidePending = Boolean(
     canViewSetup &&
@@ -1802,7 +1798,38 @@ export function App() {
     };
   }, [pageVisible, canCallApi, sessionsLoaded, token, streamRestartGeneration]);
 
+  function recordNotepadChange(event: AgentEvent) {
+    if (event.type === 'notepad_associations_changed') {
+      setNotepadAssociationVersions((current) => {
+        if ((current.get(event.sessionId) ?? 0) >= event.sequence) return current;
+        const next = new Map(current);
+        next.set(event.sessionId, event.sequence);
+        return next;
+      });
+      return;
+    }
+    if (event.type !== 'notepad_changed') return;
+    const { notepadKind, notepadId, revision } = event.payload;
+    if (
+      (notepadKind !== 'session' && notepadKind !== 'explicit') ||
+      typeof notepadId !== 'string' ||
+      !notepadId ||
+      typeof revision !== 'number' ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    )
+      return;
+    const key = `${notepadKind}:${notepadId}`;
+    setNotepadChangeRevisions((current) => {
+      if ((current.get(key) ?? 0) >= revision) return current;
+      const next = new Map(current);
+      next.set(key, revision);
+      return next;
+    });
+  }
+
   function applySynchronizedSessionEvent(event: AgentEvent, reconcilePresentation: boolean) {
+    recordNotepadChange(event);
     const activeSessionId = selectedSessionIdRef.current;
     if (event.type === 'message_created' && event.messageId && event.sessionId === activeSessionId) {
       observedMessageCreatedIdsRef.current.add(event.messageId);
@@ -2824,7 +2851,10 @@ export function App() {
       if (signal?.aborted) return null;
       if (selectedSessionIdRef.current !== sessionId) return null;
       eventCursor.current = Math.max(eventCursor.current, loaded.events.at(-1)?.sequence ?? 0);
-      for (const event of loaded.events) appliedSelectedEventSequencesRef.current.add(event.sequence);
+      for (const event of loaded.events) {
+        recordNotepadChange(event);
+        appliedSelectedEventSequencesRef.current.add(event.sequence);
+      }
       setSessionDetail((current) => {
         const messages = selectedResourceVersionIsCurrent(context, resourceVersions, 'messages')
           ? loaded.messages
@@ -2933,7 +2963,10 @@ export function App() {
           return null;
         }
         eventCursor.current = Math.max(eventCursor.current, detail.events.at(-1)?.sequence ?? 0);
-        for (const event of detail.events) appliedSelectedEventSequencesRef.current.add(event.sequence);
+        for (const event of detail.events) {
+          recordNotepadChange(event);
+          appliedSelectedEventSequencesRef.current.add(event.sequence);
+        }
         setSessionDetail((current) => {
           const messages = selectedResourceVersionIsCurrent(context, resourceVersions, 'messages')
             ? detail.messages
@@ -4167,24 +4200,6 @@ export function App() {
     if (!isDesktopViewport()) setSidebarOpen(false);
   }
 
-  async function handleUpdateSessionAccess(input: { ownerGroupId: string }): Promise<boolean> {
-    if (!selectedSession || !canManageSelectedSessionAccess) return false;
-    const context = selectedResourceContext(selectedSession.id);
-    const summaryVersion = sessionSummaryMutationVersionRef.current.get(selectedSession.id) ?? 0;
-    const summaryApplicationVersion = sessionSummaryApplicationVersionRef.current.get(selectedSession.id) ?? 0;
-    const summaryAtStart = loadedSessionSummary(selectedSession.id);
-    setError('');
-    try {
-      const session = await updateSessionAccess({ sessionId: selectedSession.id, token, ...input });
-      if (!isSelectedResourceContextCurrent(context) || session.id !== context.sessionId) return false;
-      applySessionMutationResponse(session, context, summaryVersion, summaryApplicationVersion, summaryAtStart);
-      return true;
-    } catch (err) {
-      if (isSelectedResourceContextCurrent(context)) handleApiError(err);
-      return false;
-    }
-  }
-
   async function refreshSetupStatus() {
     if (!canViewSetup || setupStatusLoading) return;
     setSetupStatusLoading(true);
@@ -5149,14 +5164,8 @@ export function App() {
                             ) : (
                               <>
                                 <MobileContextPanel
-                                  accessPanel={
-                                    <SessionAccessPanel
-                                      canManageAccess={canManageSelectedSessionAccess}
-                                      groups={groups}
-                                      session={selectedSession}
-                                      onUpdateAccess={handleUpdateSessionAccess}
-                                    />
-                                  }
+                                  accessPanel={<SessionAccessPanel groups={groups} session={selectedSession} />}
+                                  notepadsHostRef={mobileNotepadsHostRef}
                                   lineage={selectedSessionLineage}
                                   environment={selectedSessionEnvironment}
                                   repository={selectedRepository}
@@ -5265,14 +5274,8 @@ export function App() {
                       </section>
                       {selectedSessionDetailLoading ? null : (
                         <DesktopContextPanel
-                          accessPanel={
-                            <SessionAccessPanel
-                              canManageAccess={canManageSelectedSessionAccess}
-                              groups={groups}
-                              session={selectedSession}
-                              onUpdateAccess={handleUpdateSessionAccess}
-                            />
-                          }
+                          accessPanel={<SessionAccessPanel groups={groups} session={selectedSession} />}
+                          notepadsHostRef={desktopNotepadsHostRef}
                           lineage={selectedSessionLineage}
                           environment={selectedSessionEnvironment}
                           repository={selectedRepository}
@@ -5284,6 +5287,18 @@ export function App() {
                           canWriteSession={canWriteSelectedSession}
                           onExtendSandbox={fireAndForget(handleExtendSandbox)}
                           onReplayCallback={fireAndForget(handleReplayCallback)}
+                        />
+                      )}
+                      {selectedSessionDetailLoading ? null : (
+                        <ResponsiveNotepadsPanel
+                          key={selectedSession.id}
+                          session={selectedSession}
+                          token={token}
+                          canWrite={canWriteSelectedSession}
+                          changeRevisions={notepadChangeRevisions}
+                          associationVersion={notepadAssociationVersions.get(selectedSession.id) ?? 0}
+                          mobileHost={mobileNotepadsHostRef}
+                          desktopHost={desktopNotepadsHostRef}
                         />
                       )}
                     </div>

@@ -13,6 +13,16 @@ import {
   restoreSnippet,
   updateMessageSteering,
   updateSnippet,
+  createExplicitNotepad,
+  getExplicitNotepadHistory,
+  getExplicitNotepadRevision,
+  getSessionNotepad,
+  replaceSessionNotepad,
+  replaceExplicitNotepad,
+  restoreExplicitNotepadRevision,
+  grantNotepadAssociation,
+  listSessionNotepadAssociations,
+  removeNotepadAssociation,
 } from './api.js';
 
 describe('message API requests', () => {
@@ -33,6 +43,92 @@ describe('message API requests', () => {
     );
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('PATCH');
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({ steering: true });
+  });
+});
+
+describe('Notepad API requests', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('uses the core session and explicit routes, methods, and revision bodies', async () => {
+    const notepad = { id: 'pad-1', content: '', revision: 0 };
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(JSON.stringify({ notepad, association: {}, removed: true })));
+    await getSessionNotepad({ sessionId: 'session-1', token: 'token' });
+    await replaceSessionNotepad({ sessionId: 'session-1', content: 'session', expectedRevision: 2, token: 'token' });
+    await createExplicitNotepad({
+      title: 'Notes',
+      content: 'Initial notes',
+      ownerGroupId: 'group-1',
+      initialWritableSessionId: 'session-1',
+      token: 'token',
+    });
+    await replaceExplicitNotepad({ id: 'pad-1', content: 'explicit', expectedRevision: 3, token: 'token' });
+    await restoreExplicitNotepadRevision({ id: 'pad-1', revision: 1, expectedRevision: 4, token: 'token' });
+    await grantNotepadAssociation({ id: 'pad-1', sessionId: 'session-1', token: 'token' });
+    await removeNotepadAssociation({ id: 'pad-1', sessionId: 'session-1', token: 'token' });
+
+    const calls = fetchMock.mock.calls.map(([url, init]) => ({
+      path: new URL(String(url), window.location.href).pathname,
+      method: init?.method ?? 'GET',
+      body: init?.body ? JSON.parse(init.body as string) : undefined,
+    }));
+    expect(calls).toEqual([
+      { path: '/sessions/session-1/notepad', method: 'GET', body: undefined },
+      { path: '/sessions/session-1/notepad', method: 'PUT', body: { content: 'session', expectedRevision: 2 } },
+      {
+        path: '/notepads',
+        method: 'POST',
+        body: {
+          title: 'Notes',
+          content: 'Initial notes',
+          ownerGroupId: 'group-1',
+          initialWritableSessionId: 'session-1',
+        },
+      },
+      { path: '/notepads/pad-1/content', method: 'PUT', body: { content: 'explicit', expectedRevision: 3 } },
+      { path: '/notepads/pad-1/history/1/restore', method: 'POST', body: { expectedRevision: 4 } },
+      { path: '/notepads/pad-1/associations/session-1', method: 'PUT', body: undefined },
+      { path: '/notepads/pad-1/associations/session-1', method: 'DELETE', body: undefined },
+    ]);
+  });
+
+  it('returns the nested paginated Session association contract and sends its cursor', async () => {
+    const associations = { items: [{ restricted: true as const }], hasMore: true, nextCursor: '100' };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ associations })));
+
+    await expect(
+      listSessionNotepadAssociations({ sessionId: 'session-1', token: 'token', cursor: '50 / next' }),
+    ).resolves.toEqual(associations);
+    const url = new URL(String(fetchMock.mock.calls[0]![0]), window.location.href);
+    expect(url.pathname).toBe('/sessions/session-1/notepad-associations');
+    expect(url.searchParams.get('cursor')).toBe('50 / next');
+  });
+
+  it('sends associated Session context for Explicit Notepad revision operations', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ revisions: [], revision: {}, notepad: {} }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+
+    await getExplicitNotepadHistory({ id: 'pad-1', token: 'token', cursor: '4', associatedSessionId: 'session-1' });
+    await getExplicitNotepadRevision({ id: 'pad-1', revision: 3, token: 'token', associatedSessionId: 'session-1' });
+    await restoreExplicitNotepadRevision({
+      id: 'pad-1',
+      revision: 3,
+      expectedRevision: 4,
+      token: 'token',
+      associatedSessionId: 'session-1',
+    });
+
+    const urls = fetchMock.mock.calls.map(([url]) => new URL(String(url), window.location.href));
+    expect(urls.map((url) => `${url.pathname}${url.search}`)).toEqual([
+      '/notepads/pad-1/history?cursor=4&sessionId=session-1',
+      '/notepads/pad-1/history/3?sessionId=session-1',
+      '/notepads/pad-1/history/3/restore?sessionId=session-1',
+    ]);
   });
 });
 

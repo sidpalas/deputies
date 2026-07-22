@@ -1,6 +1,6 @@
 import type { NormalizedEvent } from '../events/types.js';
 import { MemorySkillStore } from './memory-skills.js';
-import { defaultGroupId, StoreConflictError } from './types.js';
+import { defaultGroupId, notepadRevisionRetentionLimit, StoreConflictError } from './types.js';
 import type {
   AppStore,
   AgentSessionListOptions,
@@ -41,6 +41,14 @@ import type {
   ClaimedMessageBatch,
   ListAutomationInvocationsOptions,
   MessageRecord,
+  ExplicitNotepadRecord,
+  SessionNotepadRecord,
+  NotepadRevisionRecord,
+  NotepadAssociationRecord,
+  SessionNotepadCapabilityRecord,
+  NotepadActivityRecord,
+  NotepadActor,
+  NotepadMutationKind,
   RecoveredRun,
   RunRecord,
   SandboxRecord,
@@ -124,13 +132,621 @@ export class MemoryStore implements AppStore {
   private readonly sessionSearchDocs = new Map<string, SessionSearchDocInput>();
   private readonly sessionStars = new Map<string, Set<string>>();
   private readonly snippets = new Map<string, SnippetRecord>();
+  private readonly sessionNotepads = new Map<string, SessionNotepadRecord>();
+  private readonly explicitNotepads = new Map<string, ExplicitNotepadRecord>();
+  private readonly notepadRevisions = new Map<string, NotepadRevisionRecord[]>();
+  private readonly notepadAssociations = new Map<string, NotepadAssociationRecord>();
+  private readonly notepadCapabilities = new Map<string, SessionNotepadCapabilityRecord>();
+  private readonly notepadActivity = new Map<string, NotepadActivityRecord[]>();
   private searchIndexCursor = 0;
+
+  async getSessionNotepad(sessionId: string): Promise<SessionNotepadRecord | null> {
+    const value = this.sessionNotepads.get(sessionId);
+    return value ? structuredClone(value) : null;
+  }
+
+  async readCoordinatedSessionNotepad(
+    actorSessionId: string,
+    targetSessionId: string,
+    expectedGrantorUserId: string,
+  ): Promise<SessionNotepadRecord> {
+    const target = this.sessions.get(targetSessionId);
+    if (!target) throw new StoreConflictError('not_found', 'Session not found');
+    this.assertLiveSession(actorSessionId);
+    this.assertLiveSession(targetSessionId);
+    this.assertMemoryCoordinationAuthority(actorSessionId, target, expectedGrantorUserId);
+    const value = this.sessionNotepads.get(targetSessionId) ?? {
+      sessionId: targetSessionId,
+      revision: 0,
+      content: '',
+      sizeBytes: 0,
+      createdAt: target.createdAt,
+      updatedAt: target.createdAt,
+    };
+    return structuredClone(value);
+  }
+
+  async mutateSessionNotepad(input: {
+    sessionId: string;
+    content?: string;
+    append?: string;
+    expectedRevision?: number;
+    actor: NotepadActor;
+    expectedCoordinationGrantorUserId?: string;
+    mutationKind: NotepadMutationKind;
+    now: Date;
+  }): Promise<SessionNotepadRecord> {
+    this.assertLiveNotepadActor(input.actor);
+    const session = this.sessions.get(input.sessionId);
+    if (!session) throw new StoreConflictError('not_found', 'Session not found');
+    if (session.status === 'archived')
+      throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    if (input.actor.kind === 'agent' && input.actor.sessionId !== input.sessionId)
+      this.assertMemoryCoordinationAuthority(input.actor.sessionId, session, input.expectedCoordinationGrantorUserId);
+    const old = this.sessionNotepads.get(input.sessionId);
+    return this.mutateMemoryNotepad('session', input.sessionId, old, input, (value) =>
+      this.sessionNotepads.set(input.sessionId, value as SessionNotepadRecord),
+    ) as SessionNotepadRecord;
+  }
+  async restoreSessionNotepadRevision(input: {
+    sessionId: string;
+    revision: number;
+    expectedRevision: number;
+    actor: NotepadActor;
+    expectedCoordinationGrantorUserId?: string;
+    now: Date;
+  }): Promise<SessionNotepadRecord> {
+    this.assertLiveNotepadActor(input.actor);
+    const session = this.sessions.get(input.sessionId);
+    if (!session) throw new StoreConflictError('not_found', 'Session not found');
+    if (session.status === 'archived')
+      throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    if (input.actor.kind === 'agent' && input.actor.sessionId !== input.sessionId)
+      this.assertMemoryCoordinationAuthority(input.actor.sessionId, session, input.expectedCoordinationGrantorUserId);
+    const old = this.sessionNotepads.get(input.sessionId);
+    if ((old?.revision ?? 0) !== input.expectedRevision)
+      throw new StoreConflictError('stale_revision', 'Stale notepad revision');
+    const target = (this.notepadRevisions.get(`session:${input.sessionId}`) ?? []).find(
+      (record) => record.revision === input.revision,
+    );
+    if (!target) throw new StoreConflictError('not_found', 'Revision not found');
+    return this.mutateMemoryNotepad(
+      'session',
+      input.sessionId,
+      old,
+      {
+        content: target.content,
+        expectedRevision: input.expectedRevision,
+        actor: input.actor,
+        mutationKind: 'restore',
+        now: input.now,
+      },
+      (value) => this.sessionNotepads.set(input.sessionId, value as SessionNotepadRecord),
+    ) as SessionNotepadRecord;
+  }
+
+  async createExplicitNotepad(input: {
+    record: ExplicitNotepadRecord;
+    actor: NotepadActor;
+    activityId: string;
+    initialAssociation?: NotepadAssociationRecord;
+    associationActivityId?: string;
+  }): Promise<ExplicitNotepadRecord> {
+    this.assertLiveNotepadActor(input.actor);
+    const { record } = input;
+    const group = this.groups.get(record.ownerGroupId);
+    if (!group) throw new StoreConflictError('not_found', 'Group not found');
+    if (group.archivedAt) throw new StoreConflictError('archived_group', 'Cannot create notepads in an archived group');
+    if (this.explicitNotepads.has(record.id)) throw new StoreConflictError('notepad_exists', 'Notepad exists');
+    if (Boolean(input.initialAssociation) !== Boolean(input.associationActivityId))
+      throw new StoreConflictError('not_found', 'Initial association and activity ID are required together');
+    if (input.initialAssociation) {
+      if (input.initialAssociation.notepadId !== record.id)
+        throw new StoreConflictError('not_found', 'Initial association must reference the created Notepad');
+      const session = this.sessions.get(input.initialAssociation.sessionId);
+      if (!session || session.ownerGroupId !== record.ownerGroupId)
+        throw new StoreConflictError('not_found', 'Notepad and Session must belong to the same group');
+      if (session.status === 'archived')
+        throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    }
+    const sizeBytes = Buffer.byteLength(record.content, 'utf8');
+    if (record.sizeBytes !== sizeBytes)
+      throw new StoreConflictError('invalid_notepad_size', 'Notepad size does not match UTF-8 content');
+    if (sizeBytes > 256 * 1024) throw new StoreConflictError('notepad_too_large', 'Notepad exceeds 256 KiB');
+    const expectedRevision = record.content ? 1 : 0;
+    if (record.revision !== expectedRevision)
+      throw new StoreConflictError('invalid_notepad_revision', 'Initial Notepad revision does not match its content');
+    this.explicitNotepads.set(record.id, structuredClone({ ...record, sizeBytes }));
+    if (record.revision === 1) {
+      this.notepadRevisions.set(`explicit:${record.id}`, [
+        structuredClone({
+          notepadKind: 'explicit',
+          notepadId: record.id,
+          revision: 1,
+          content: record.content,
+          sizeBytes,
+          actor: input.actor,
+          mutationKind: 'replace',
+          createdAt: record.createdAt,
+        }),
+      ]);
+    }
+    this.addMemoryActivity(
+      record.id,
+      input.activityId,
+      input.actor,
+      'created',
+      {
+        title: record.title,
+        ownerGroupId: record.ownerGroupId,
+        visibility: record.visibility,
+        writePolicy: record.writePolicy,
+      },
+      record.createdAt,
+    );
+    if (input.initialAssociation) {
+      this.notepadAssociations.set(
+        `${record.id}:${input.initialAssociation.sessionId}`,
+        structuredClone(input.initialAssociation),
+      );
+      this.addMemoryActivity(
+        record.id,
+        input.associationActivityId!,
+        input.actor,
+        'association_granted',
+        { sessionId: input.initialAssociation.sessionId },
+        input.initialAssociation.createdAt,
+      );
+    }
+    return structuredClone({ ...record, sizeBytes });
+  }
+  async getExplicitNotepad(id: string): Promise<ExplicitNotepadRecord | null> {
+    const value = this.explicitNotepads.get(id);
+    return value ? structuredClone(value) : null;
+  }
+  async getExplicitNotepadMetadata(id: string) {
+    const value = this.explicitNotepads.get(id);
+    if (!value) return null;
+    const { content: _content, ...metadata } = value;
+    return structuredClone(metadata);
+  }
+  async listExplicitNotepads(input: {
+    groupId?: string;
+    authorizedGroupIds?: string[];
+    limit: number;
+    offset: number;
+    includeDormant?: boolean;
+  }) {
+    const all = [...this.explicitNotepads.values()]
+      .filter(
+        (n) =>
+          (!input.groupId || n.ownerGroupId === input.groupId) &&
+          (input.authorizedGroupIds === undefined ||
+            n.visibility === 'organization' ||
+            input.authorizedGroupIds.includes(n.ownerGroupId)) &&
+          (input.includeDormant || this.hasLiveNotepadAssociation(n.id)),
+      )
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || a.id.localeCompare(b.id));
+    return memoryPage(
+      all.map(({ content: _content, ...n }) => structuredClone(n)),
+      input.offset,
+      input.limit,
+    );
+  }
+  async searchExplicitNotepads(input: {
+    groupId: string;
+    authorizedGroupIds?: string[];
+    query: string;
+    limit: number;
+  }) {
+    const q = input.query.toLowerCase();
+    return [...this.explicitNotepads.values()]
+      .filter(
+        (n) =>
+          n.ownerGroupId === input.groupId &&
+          (input.authorizedGroupIds === undefined ||
+            n.visibility === 'organization' ||
+            input.authorizedGroupIds.includes(n.ownerGroupId)) &&
+          this.hasLiveNotepadAssociation(n.id) &&
+          `${n.title}\n${n.content}`.toLowerCase().includes(q),
+      )
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || a.id.localeCompare(b.id))
+      .slice(0, input.limit)
+      .map(({ content, ...n }) => ({ ...structuredClone(n), snippet: notepadSnippet(content, input.query) }));
+  }
+  async searchExplicitNotepadsWithCapability(input: {
+    actorSessionId: string;
+    expectedGrantorUserId: string;
+    groupId: string;
+    query: string;
+    limit: number;
+  }) {
+    this.assertMemoryExplicitSearchAuthority(input.actorSessionId, input.expectedGrantorUserId, input.groupId);
+    return this.searchExplicitNotepads({ groupId: input.groupId, query: input.query, limit: input.limit });
+  }
+  async readExplicitNotepadWithCapability(input: {
+    actorSessionId: string;
+    expectedGrantorUserId: string;
+    notepadId: string;
+  }) {
+    const notepad = this.explicitNotepads.get(input.notepadId);
+    const actor = this.sessions.get(input.actorSessionId);
+    if (!notepad || !actor || actor.ownerGroupId !== notepad.ownerGroupId)
+      throw new StoreConflictError('not_found', 'Notepad access denied');
+    this.assertMemoryExplicitSearchAuthority(input.actorSessionId, input.expectedGrantorUserId, notepad.ownerGroupId);
+    return structuredClone(notepad);
+  }
+  async updateExplicitNotepadMetadata(input: {
+    id: string;
+    ownerGroupId: string;
+    title?: string;
+    visibility?: ExplicitNotepadRecord['visibility'];
+    writePolicy?: ExplicitNotepadRecord['writePolicy'];
+    actor: NotepadActor;
+    activityId: string;
+    now: Date;
+  }): Promise<ExplicitNotepadRecord> {
+    this.assertLiveNotepadActor(input.actor);
+    this.assertMemoryExplicitWriteAuthority(input.id, input.actor);
+    const existing = this.explicitNotepads.get(input.id);
+    if (!existing || existing.ownerGroupId !== input.ownerGroupId)
+      throw new StoreConflictError('not_found', 'Notepad not found');
+    const updated = {
+      ...existing,
+      ...(input.title === undefined ? {} : { title: input.title }),
+      ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
+      ...(input.writePolicy === undefined ? {} : { writePolicy: input.writePolicy }),
+      updatedAt: input.now,
+    };
+    this.explicitNotepads.set(input.id, structuredClone(updated));
+    this.addMemoryActivity(
+      input.id,
+      input.activityId,
+      input.actor,
+      'metadata_changed',
+      { title: updated.title, visibility: updated.visibility, writePolicy: updated.writePolicy },
+      input.now,
+    );
+    return structuredClone(updated);
+  }
+  async mutateExplicitNotepad(input: {
+    id: string;
+    content?: string;
+    append?: string;
+    expectedRevision?: number;
+    actor: NotepadActor;
+    associatedAuthority?: import('./types.js').AssociatedNotepadAuthority;
+    mutationKind: NotepadMutationKind;
+    now: Date;
+  }): Promise<ExplicitNotepadRecord> {
+    this.assertLiveNotepadActor(input.actor);
+    this.assertMemoryExplicitWriteAuthority(input.id, input.actor);
+    if (input.associatedAuthority) this.assertMemoryAssociatedAuthority(input.id, input.associatedAuthority);
+    const old = this.explicitNotepads.get(input.id);
+    if (!old) throw new StoreConflictError('not_found', 'Notepad not found');
+    return this.mutateMemoryNotepad('explicit', input.id, old, input, (v) =>
+      this.explicitNotepads.set(input.id, v as ExplicitNotepadRecord),
+    ) as ExplicitNotepadRecord;
+  }
+  async restoreExplicitNotepadRevision(input: {
+    id: string;
+    revision: number;
+    expectedRevision: number;
+    actor: NotepadActor;
+    associatedAuthority?: import('./types.js').AssociatedNotepadAuthority;
+    activityId: string;
+    now: Date;
+  }): Promise<ExplicitNotepadRecord> {
+    this.assertLiveNotepadActor(input.actor);
+    this.assertMemoryExplicitWriteAuthority(input.id, input.actor);
+    if (input.associatedAuthority) this.assertMemoryAssociatedAuthority(input.id, input.associatedAuthority);
+    const old = this.explicitNotepads.get(input.id);
+    if (!old) throw new StoreConflictError('not_found', 'Notepad not found');
+    if (old.revision !== input.expectedRevision)
+      throw new StoreConflictError('stale_revision', 'Stale notepad revision');
+    const target = (this.notepadRevisions.get(`explicit:${input.id}`) ?? []).find((r) => r.revision === input.revision);
+    if (!target) throw new StoreConflictError('not_found', 'Revision not found');
+    const result = this.mutateMemoryNotepad(
+      'explicit',
+      input.id,
+      old,
+      {
+        content: target.content,
+        expectedRevision: input.expectedRevision,
+        actor: input.actor,
+        mutationKind: 'restore',
+        now: input.now,
+      },
+      (v) => this.explicitNotepads.set(input.id, v as ExplicitNotepadRecord),
+    ) as ExplicitNotepadRecord;
+    this.addMemoryActivity(
+      input.id,
+      input.activityId,
+      input.actor,
+      'revision_restored',
+      { revision: input.revision },
+      input.now,
+    );
+    return structuredClone(result);
+  }
+  async listNotepadRevisions(kind: 'session' | 'explicit', id: string, limit: number, beforeRevision: number) {
+    const records = [...(this.notepadRevisions.get(`${kind}:${id}`) ?? [])]
+      .filter((record) => beforeRevision === 0 || record.revision < beforeRevision)
+      .sort((a, b) => b.revision - a.revision)
+      .map(({ content: _content, ...r }) => r);
+    const items = structuredClone(records.slice(0, limit));
+    const hasMore = records.length > limit;
+    return { items, hasMore, nextCursor: hasMore ? String(items.at(-1)!.revision) : null };
+  }
+  async getNotepadRevision(kind: 'session' | 'explicit', id: string, revision: number) {
+    return structuredClone(
+      (this.notepadRevisions.get(`${kind}:${id}`) ?? []).find((r) => r.revision === revision) ?? null,
+    );
+  }
+  async putNotepadAssociation(input: {
+    record: NotepadAssociationRecord;
+    actor: NotepadActor;
+    activityId: string;
+  }): Promise<NotepadAssociationRecord> {
+    this.assertLiveNotepadActor(input.actor);
+    this.assertMemoryExplicitWriteAuthority(input.record.notepadId, input.actor);
+    const { record } = input;
+    const notepad = this.explicitNotepads.get(record.notepadId);
+    const session = this.sessions.get(record.sessionId);
+    if (!notepad || !session || notepad.ownerGroupId !== session.ownerGroupId)
+      throw new StoreConflictError('not_found', 'Notepad and Session must belong to the same group');
+    if (session.status === 'archived')
+      throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    const existed = this.notepadAssociations.has(`${record.notepadId}:${record.sessionId}`);
+    this.notepadAssociations.set(`${record.notepadId}:${record.sessionId}`, structuredClone(record));
+    this.addMemoryActivity(
+      record.notepadId,
+      input.activityId,
+      input.actor,
+      existed ? 'association_changed' : 'association_granted',
+      { sessionId: record.sessionId },
+      record.createdAt,
+    );
+    return structuredClone(record);
+  }
+  async removeNotepadAssociation(input: {
+    notepadId: string;
+    sessionId: string;
+    actor: NotepadActor;
+    activityId: string;
+    now: Date;
+  }): Promise<boolean> {
+    this.assertLiveNotepadActor(input.actor);
+    this.assertMemoryExplicitWriteAuthority(input.notepadId, input.actor);
+    const notepad = this.explicitNotepads.get(input.notepadId);
+    const session = this.sessions.get(input.sessionId);
+    if (!notepad || !session) throw new StoreConflictError('not_found', 'Notepad or Session not found');
+    if (session.status === 'archived')
+      throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    const removed = this.notepadAssociations.delete(`${input.notepadId}:${input.sessionId}`);
+    if (removed)
+      this.addMemoryActivity(
+        input.notepadId,
+        input.activityId,
+        input.actor,
+        'association_revoked',
+        { sessionId: input.sessionId },
+        input.now,
+      );
+    return removed;
+  }
+  async listNotepadAssociations(notepadId: string, limit: number, offset: number) {
+    const all = [...this.notepadAssociations.values()]
+      .filter((a) => a.notepadId === notepadId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.sessionId.localeCompare(b.sessionId))
+      .map((a) => structuredClone(a));
+    return memoryPage(all, offset, limit);
+  }
+  async listNotepadAssociationSessionIdsAfter(notepadId: string, afterSessionId: string | null, limit: number) {
+    return [...this.notepadAssociations.values()]
+      .filter(
+        (association) =>
+          association.notepadId === notepadId && (afterSessionId === null || association.sessionId > afterSessionId),
+      )
+      .map((association) => association.sessionId)
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, limit);
+  }
+  async getNotepadAssociation(notepadId: string, sessionId: string) {
+    const value = this.notepadAssociations.get(`${notepadId}:${sessionId}`);
+    return value ? structuredClone(value) : null;
+  }
+  async listSessionNotepadAssociations(sessionId: string, limit: number, offset: number) {
+    const all = [...this.notepadAssociations.values()]
+      .filter((a) => a.sessionId === sessionId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.notepadId.localeCompare(b.notepadId))
+      .flatMap((a) => {
+        const n = this.explicitNotepads.get(a.notepadId);
+        if (!n) return [];
+        const { content: _content, ...notepad } = n;
+        return [{ ...structuredClone(a), notepad: structuredClone(notepad) }];
+      });
+    return memoryPage(all, offset, limit);
+  }
+  async putSessionNotepadCapability(record: SessionNotepadCapabilityRecord): Promise<SessionNotepadCapabilityRecord> {
+    this.assertLiveSession(record.sessionId);
+    this.notepadCapabilities.set(`${record.sessionId}:${record.kind}`, structuredClone(record));
+    return structuredClone(record);
+  }
+  async removeSessionNotepadCapability(
+    sessionId: string,
+    kind: SessionNotepadCapabilityRecord['kind'],
+    expectedGrantedByUserId?: string,
+  ): Promise<boolean> {
+    this.assertLiveSession(sessionId);
+    const existing = this.notepadCapabilities.get(`${sessionId}:${kind}`);
+    if (expectedGrantedByUserId && existing?.grantedByUserId !== expectedGrantedByUserId) return false;
+    return this.notepadCapabilities.delete(`${sessionId}:${kind}`);
+  }
+  async listSessionNotepadCapabilities(sessionId: string): Promise<SessionNotepadCapabilityRecord[]> {
+    return [...this.notepadCapabilities.values()]
+      .filter((c) => c.sessionId === sessionId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.kind.localeCompare(b.kind))
+      .map((c) => structuredClone(c));
+  }
+  private addMemoryActivity(
+    notepadId: string,
+    id: string,
+    actor: NotepadActor,
+    kind: NotepadActivityRecord['kind'],
+    metadata: Record<string, unknown>,
+    createdAt: Date,
+  ) {
+    const record = structuredClone({ id, notepadId, actor, kind, metadata, createdAt });
+    const records = this.notepadActivity.get(record.notepadId) ?? [];
+    records.push(record);
+    this.notepadActivity.set(record.notepadId, records);
+  }
+  private assertLiveNotepadActor(actor: NotepadActor) {
+    if (actor.kind === 'agent') this.assertLiveSession(actor.sessionId);
+  }
+  private assertMemoryExplicitWriteAuthority(notepadId: string, actor: NotepadActor) {
+    if (actor.kind === 'agent' && !this.notepadAssociations.has(`${notepadId}:${actor.sessionId}`))
+      throw new StoreConflictError('not_found', 'Notepad association is required');
+  }
+  private assertMemoryAssociatedAuthority(
+    notepadId: string,
+    authority: import('./types.js').AssociatedNotepadAuthority,
+  ) {
+    const session = this.sessions.get(authority.associatedSessionId);
+    if (!session || session.status === 'archived' || !this.notepadAssociations.has(`${notepadId}:${session.id}`))
+      throw new StoreConflictError('not_found', 'Associated Session authority is no longer valid');
+    if (!this.memoryUserCanWriteSession(authority.expectedUserId, session))
+      throw new StoreConflictError('not_found', 'Associated Session authority is no longer valid');
+  }
+  private assertMemoryExplicitSearchAuthority(actorSessionId: string, userId: string, groupId: string) {
+    const actor = this.sessions.get(actorSessionId);
+    const grant = this.notepadCapabilities.get(`${actorSessionId}:explicit_search`);
+    const user = this.authUsers.get(userId);
+    const group = this.groups.get(groupId);
+    const membership = this.groupMembers.get(`${groupId}:${userId}`);
+    if (
+      !actor ||
+      actor.status === 'archived' ||
+      actor.ownerGroupId !== groupId ||
+      grant?.grantedByUserId !== userId ||
+      !user ||
+      (!(user.role === 'super_admin') && (group?.archivedAt || !membership || membership.role === 'viewer'))
+    )
+      throw new StoreConflictError('not_found', 'Notepad access denied');
+  }
+  private memoryUserCanWriteSession(userId: string, session: SessionRecord) {
+    const user = this.authUsers.get(userId);
+    const group = this.groups.get(session.ownerGroupId);
+    const membership = this.groupMembers.get(`${session.ownerGroupId}:${userId}`);
+    return Boolean(
+      user &&
+      (user.role === 'super_admin' ||
+        (session.writePolicy === 'creator_only' && session.createdByUserId === userId) ||
+        (!group?.archivedAt &&
+          (membership?.role === 'admin' ||
+            (session.writePolicy === 'group_members' && membership?.role === 'member')))),
+    );
+  }
+  private assertMemoryCoordinationAuthority(
+    actorSessionId: string,
+    target: SessionRecord,
+    expectedGrantorUserId?: string,
+  ) {
+    const actor = this.sessions.get(actorSessionId);
+    const capability = this.notepadCapabilities.get(`${actorSessionId}:session_notepad_coordination`);
+    if (
+      !actor ||
+      actor.ownerGroupId !== target.ownerGroupId ||
+      !expectedGrantorUserId ||
+      capability?.grantedByUserId !== expectedGrantorUserId
+    )
+      throw new StoreConflictError('not_found', 'Session Notepad coordination capability is required');
+    const user = this.authUsers.get(expectedGrantorUserId);
+    const group = this.groups.get(target.ownerGroupId);
+    const membership = this.groupMembers.get(`${target.ownerGroupId}:${expectedGrantorUserId}`);
+    const authorized =
+      user?.role === 'super_admin' ||
+      (target.writePolicy === 'creator_only' && target.createdByUserId === expectedGrantorUserId) ||
+      (!group?.archivedAt &&
+        (membership?.role === 'admin' || (target.writePolicy === 'group_members' && membership?.role === 'member')));
+    if (!user || !authorized) throw new StoreConflictError('not_found', 'Coordination grantor is no longer authorized');
+  }
+  private assertLiveSession(sessionId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new StoreConflictError('not_found', 'Session not found');
+    if (session.status === 'archived')
+      throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+  }
+  private hasLiveNotepadAssociation(notepadId: string) {
+    for (const association of this.notepadAssociations.values()) {
+      if (association.notepadId !== notepadId) continue;
+      const session = this.sessions.get(association.sessionId);
+      if (session && session.status !== 'archived') return true;
+    }
+    return false;
+  }
+  async listNotepadActivity(notepadId: string, limit: number, offset: number) {
+    const all = structuredClone(this.notepadActivity.get(notepadId) ?? []).sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id),
+    );
+    return memoryPage(all, offset, limit);
+  }
+
+  private mutateMemoryNotepad(
+    kind: 'session' | 'explicit',
+    id: string,
+    old: SessionNotepadRecord | ExplicitNotepadRecord | undefined,
+    input: {
+      content?: string;
+      append?: string;
+      expectedRevision?: number;
+      actor: NotepadActor;
+      mutationKind: NotepadMutationKind;
+      now: Date;
+    },
+    save: (value: SessionNotepadRecord | ExplicitNotepadRecord) => void,
+  ): SessionNotepadRecord | ExplicitNotepadRecord {
+    const revision = old?.revision ?? 0;
+    if (input.append === undefined && input.expectedRevision !== revision)
+      throw new StoreConflictError('stale_revision', 'Stale notepad revision');
+    const content = input.append !== undefined ? `${old?.content ?? ''}${input.append}` : (input.content ?? '');
+    if (Buffer.byteLength(content, 'utf8') > 256 * 1024)
+      throw new StoreConflictError('notepad_too_large', 'Notepad exceeds 256 KiB');
+    const value = structuredClone({
+      ...(old ?? (kind === 'session' ? { sessionId: id } : { id })),
+      content,
+      sizeBytes: Buffer.byteLength(content, 'utf8'),
+      revision: revision + 1,
+      createdAt: old?.createdAt ?? input.now,
+      updatedAt: input.now,
+    }) as SessionNotepadRecord | ExplicitNotepadRecord;
+    save(value);
+    const key = `${kind}:${id}`;
+    const revisions = this.notepadRevisions.get(key) ?? [];
+    revisions.push(
+      structuredClone({
+        notepadKind: kind,
+        notepadId: id,
+        revision: value.revision,
+        content,
+        sizeBytes: value.sizeBytes,
+        actor: input.actor,
+        mutationKind: input.mutationKind,
+        createdAt: input.now,
+      }),
+    );
+    if (revisions.length > notepadRevisionRetentionLimit)
+      revisions.splice(0, revisions.length - notepadRevisionRetentionLimit);
+    this.notepadRevisions.set(key, revisions);
+    return structuredClone(value);
+  }
 
   async createSnippet(record: CreateSnippetRecord): Promise<SnippetRecord> {
     if (!this.authUsers.has(record.ownerUserId)) throw new Error(`User does not exist: ${record.ownerUserId}`);
     this.assertSnippetName(record.ownerUserId, record.name);
     this.snippets.set(record.id, { ...record });
-    return { ...record };
+    return structuredClone(record);
   }
 
   async getSnippetForUser(id: string, ownerUserId: string): Promise<SnippetRecord | null> {
@@ -337,14 +953,18 @@ export class MemoryStore implements AppStore {
     return [...this.groupMembers.values()].filter((member) => member.userId === userId);
   }
 
+  private setSession(id: string, session: SessionRecord): void {
+    this.sessions.set(id, cloneSession(session));
+  }
+
   async createSession(record: CreateSessionRecord): Promise<SessionRecord> {
     if (this.sessions.has(record.id)) {
       throw new Error(`Session already exists: ${record.id}`);
     }
 
     const session = withSessionDefaults(record);
-    this.sessions.set(record.id, session);
-    return session;
+    this.setSession(record.id, session);
+    return cloneSession(session);
   }
 
   async createSessionWithFirstMessage(
@@ -355,7 +975,7 @@ export class MemoryStore implements AppStore {
     if (existing) {
       const message = this.messages.get(input.session.id)?.[0];
       if (!message) throw new Error(`First message does not exist for session: ${input.session.id}`);
-      return { session: existing, message, events: [], created: false };
+      return { session: cloneSession(existing), message, events: [], created: false };
     }
 
     if (input.parentChildLimit) {
@@ -378,7 +998,7 @@ export class MemoryStore implements AppStore {
       status: 'pending',
       steering: input.message.steering ?? false,
     };
-    this.sessions.set(session.id, session);
+    this.setSession(session.id, session);
     this.messages.set(session.id, [message]);
 
     const events = [
@@ -391,15 +1011,16 @@ export class MemoryStore implements AppStore {
       }),
     ];
     if (input.parentSpawnedEvent) events.push(await this.appendEventWithNextSequence(input.parentSpawnedEvent));
-    return { session, message, events, created: true };
+    return { session: cloneSession(session), message, events, created: true };
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
-    return this.sessions.get(id) ?? null;
+    const session = this.sessions.get(id);
+    return session ? cloneSession(session) : null;
   }
 
   async listSessions(): Promise<SessionRecord[]> {
-    return [...this.sessions.values()].sort(compareSessionsNewestFirst);
+    return [...this.sessions.values()].sort(compareSessionsNewestFirst).map(cloneSession);
   }
 
   async listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]> {
@@ -431,14 +1052,14 @@ export class MemoryStore implements AppStore {
     return {
       items: await Promise.all(
         page.map(async (session) => ({
-          session,
+          session: cloneSession(session),
           sandbox: await this.getLatestSandboxForSession(session.id, provider),
           directChildCount: matchingSessions.filter((child) => child.parentSessionId === session.id).length,
         })),
       ),
       nextCursor:
         sessions.length > options.limit && last
-          ? { lastActivityAt: last.lastActivityAt, createdAt: last.createdAt, id: last.id }
+          ? structuredClone({ lastActivityAt: last.lastActivityAt, createdAt: last.createdAt, id: last.id })
           : null,
     };
   }
@@ -462,7 +1083,10 @@ export class MemoryStore implements AppStore {
     return {
       items: await Promise.all(
         page.map(async ({ session, match }) => ({
-          item: { session, sandbox: await this.getLatestSandboxForSession(session.id, provider) },
+          item: {
+            session: cloneSession(session),
+            sandbox: await this.getLatestSandboxForSession(session.id, provider),
+          },
           snippet: match.snippet,
           matchKind: match.kind,
           score: match.score,
@@ -520,18 +1144,20 @@ export class MemoryStore implements AppStore {
       throw new Error(`Session does not exist: ${record.id}`);
     }
 
-    this.sessions.set(record.id, record);
-    return record;
+    const existing = this.sessions.get(record.id)!;
+    const updated = cloneSession({ ...record, ownerGroupId: existing.ownerGroupId });
+    this.setSession(record.id, updated);
+    return cloneSession(updated);
   }
 
   async updateSessionContext(input: SessionContextUpdateInput): Promise<SessionRecord> {
     const existing = this.sessions.get(input.id);
     if (!existing) throw new Error(`Session does not exist: ${input.id}`);
     const session: SessionRecord = { ...existing, updatedAt: input.updatedAt };
-    if (input.context !== undefined) session.context = input.context;
+    if (input.context !== undefined) session.context = structuredClone(input.context);
     else delete session.context;
-    this.sessions.set(input.id, session);
-    return session;
+    this.setSession(input.id, session);
+    return cloneSession(session);
   }
 
   async updateSessionWithEvent(
@@ -542,6 +1168,7 @@ export class MemoryStore implements AppStore {
     const current = this.sessions.get(record.id);
     const newerActivity = current && current.lastActivityAt > record.lastActivityAt;
     const next: SessionRecord = { ...record };
+    if (current) next.ownerGroupId = current.ownerGroupId;
     if (newerActivity) {
       next.status = current.status;
       next.lastActivityAt = current.lastActivityAt;
@@ -550,7 +1177,7 @@ export class MemoryStore implements AppStore {
     }
     if (options?.preserveTags) next.tags = current?.tags ?? record.tags;
     const session = this.updateSessionSync(next);
-    return { session, event: this.appendEventWithNextSequenceSync(event) };
+    return { session: cloneSession(session), event: this.appendEventWithNextSequenceSync(event) };
   }
 
   async updateSessionMetadataWithEvent(
@@ -565,10 +1192,9 @@ export class MemoryStore implements AppStore {
     const session: SessionRecord = { ...existing, updatedAt: input.updatedAt };
     if (input.title !== undefined) session.title = input.title;
     if (input.tags !== undefined) session.tags = input.tags;
-    if (input.ownerGroupId !== undefined) session.ownerGroupId = input.ownerGroupId;
     if (input.visibility !== undefined) session.visibility = input.visibility;
     if (input.writePolicy !== undefined) session.writePolicy = input.writePolicy;
-    this.sessions.set(input.id, session);
+    this.setSession(input.id, session);
 
     const event = this.appendEventWithNextSequenceSync({
       sessionId: session.id,
@@ -582,7 +1208,7 @@ export class MemoryStore implements AppStore {
       },
       createdAt: input.updatedAt,
     });
-    return { session, event };
+    return { session: cloneSession(session), event };
   }
 
   async updateSessionTitleIfCurrent(
@@ -603,7 +1229,7 @@ export class MemoryStore implements AppStore {
     const existing = this.sessions.get(input.id);
     if (!existing || existing.status === 'archived' || existing.title !== input.expectedTitle) return null;
     const session = { ...existing, title: input.title, updatedAt: input.updatedAt };
-    this.sessions.set(input.id, session);
+    this.setSession(input.id, session);
     const event = this.appendEventWithNextSequenceSync({
       sessionId: session.id,
       type: 'session_updated',
@@ -615,7 +1241,7 @@ export class MemoryStore implements AppStore {
       },
       createdAt: input.updatedAt,
     });
-    return { session, event };
+    return { session: cloneSession(session), event };
   }
 
   async archiveSession(input: { sessionId: string; archivedAt: Date }): Promise<{
@@ -625,7 +1251,7 @@ export class MemoryStore implements AppStore {
   }> {
     const existing = this.sessions.get(input.sessionId);
     if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
-    if (existing.status === 'archived') return { session: existing, cancelledMessages: [], events: [] };
+    if (existing.status === 'archived') return { session: cloneSession(existing), cancelledMessages: [], events: [] };
 
     const sessionMessages = this.messages.get(input.sessionId) ?? [];
     const cancelledMessages: MessageRecord[] = [];
@@ -642,7 +1268,7 @@ export class MemoryStore implements AppStore {
       updatedAt: input.archivedAt,
       lastActivityAt: input.archivedAt,
     };
-    this.sessions.set(input.sessionId, session);
+    this.setSession(input.sessionId, session);
     const events: EventRecord[] = [];
     for (const message of cancelledMessages) {
       events.push(
@@ -663,7 +1289,7 @@ export class MemoryStore implements AppStore {
         createdAt: input.archivedAt,
       }),
     );
-    return { session, cancelledMessages, events };
+    return { session: cloneSession(session), cancelledMessages, events };
   }
 
   async unarchiveSession(input: { sessionId: string; unarchivedAt: Date }): Promise<{
@@ -672,21 +1298,21 @@ export class MemoryStore implements AppStore {
   }> {
     const existing = this.sessions.get(input.sessionId);
     if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
-    if (existing.status !== 'archived') return { session: existing, events: [] };
+    if (existing.status !== 'archived') return { session: cloneSession(existing), events: [] };
     const session: SessionRecord = {
       ...existing,
       status: 'idle',
       updatedAt: input.unarchivedAt,
       lastActivityAt: input.unarchivedAt,
     };
-    this.sessions.set(input.sessionId, session);
+    this.setSession(input.sessionId, session);
     const event = this.appendEventWithNextSequenceSync({
       sessionId: session.id,
       type: 'session_unarchived',
       payload: {},
       createdAt: input.unarchivedAt,
     });
-    return { session, events: [event] };
+    return { session: cloneSession(session), events: [event] };
   }
 
   async updateSessionForRun(input: {
@@ -710,9 +1336,9 @@ export class MemoryStore implements AppStore {
     }
     const existing = this.sessions.get(input.id);
     if (!existing) throw new Error(`Session does not exist: ${input.id}`);
-    const updated = { ...existing, context: input.context, updatedAt: input.updatedAt };
-    this.sessions.set(input.id, updated);
-    return updated;
+    const updated = { ...existing, context: structuredClone(input.context), updatedAt: input.updatedAt };
+    this.setSession(input.id, updated);
+    return cloneSession(updated);
   }
 
   async pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord> {
@@ -724,8 +1350,8 @@ export class MemoryStore implements AppStore {
       updatedAt: input.pausedAt,
       lastActivityAt: input.pausedAt,
     };
-    this.sessions.set(input.sessionId, updated);
-    return updated;
+    this.setSession(input.sessionId, updated);
+    return cloneSession(updated);
   }
 
   async resumeSessionQueue(input: { sessionId: string }): Promise<SessionRecord> {
@@ -733,8 +1359,8 @@ export class MemoryStore implements AppStore {
     if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
     const now = new Date();
     const { queuePausedAt: _queuePausedAt, ...updated } = { ...existing, updatedAt: now, lastActivityAt: now };
-    this.sessions.set(input.sessionId, updated);
-    return updated;
+    this.setSession(input.sessionId, updated);
+    return cloneSession(updated);
   }
 
   async createSkill(record: CreateSkillRecord): Promise<SkillRecord> {
@@ -1142,7 +1768,8 @@ export class MemoryStore implements AppStore {
         const session = this.sessions.get(candidate.sessionId!);
         return session?.status === 'queued' || session?.status === 'active';
       });
-    return invocation?.sessionId ? (this.sessions.get(invocation.sessionId) ?? null) : null;
+    const session = invocation?.sessionId ? this.sessions.get(invocation.sessionId) : undefined;
+    return session ? cloneSession(session) : null;
   }
 
   async listAutomationInvocations(
@@ -1169,7 +1796,7 @@ export class MemoryStore implements AppStore {
     if (record.status === 'pending') {
       const session = this.sessions.get(record.sessionId);
       if (!session) throw new Error(`Session does not exist: ${record.sessionId}`);
-      this.sessions.set(record.sessionId, {
+      this.setSession(record.sessionId, {
         ...session,
         status: session.status === 'archived' ? 'archived' : session.status === 'active' ? 'active' : 'queued',
         updatedAt: record.createdAt,
@@ -1364,7 +1991,7 @@ export class MemoryStore implements AppStore {
 
       const session = this.sessions.get(sessionId);
       if (!session) throw new Error(`Session does not exist: ${sessionId}`);
-      this.sessions.set(sessionId, { ...session, status: 'active', updatedAt: input.now, lastActivityAt: input.now });
+      this.setSession(sessionId, { ...session, status: 'active', updatedAt: input.now, lastActivityAt: input.now });
 
       const run: RunRecord = {
         id: input.runId,
@@ -1532,7 +2159,7 @@ export class MemoryStore implements AppStore {
 
       const session = this.sessions.get(run.sessionId);
       if (session) {
-        this.sessions.set(run.sessionId, {
+        this.setSession(run.sessionId, {
           ...session,
           status:
             session.status === 'archived'
@@ -1607,7 +2234,7 @@ export class MemoryStore implements AppStore {
     this.runs.set(run.id, cancellingRun);
     const session = this.sessions.get(input.sessionId);
     if (session) {
-      this.sessions.set(input.sessionId, {
+      this.setSession(input.sessionId, {
         ...session,
         status: session.status === 'archived' ? 'archived' : 'active',
         updatedAt: input.requestedAt,
@@ -2124,7 +2751,7 @@ export class MemoryStore implements AppStore {
     const session = this.sessions.get(run.sessionId);
     if (!session) throw new Error(`Session does not exist: ${run.sessionId}`);
     const hasPendingMessages = sessionMessages.some((message) => message.status === 'pending');
-    this.sessions.set(run.sessionId, {
+    this.setSession(run.sessionId, {
       ...session,
       status:
         session.status === 'archived'
@@ -2164,7 +2791,7 @@ export class MemoryStore implements AppStore {
     const session = this.sessions.get(sessionId);
     if (!session || session.status === 'archived' || session.status === 'active') return;
     const hasPendingMessages = (this.messages.get(sessionId) ?? []).some((message) => message.status === 'pending');
-    this.sessions.set(sessionId, {
+    this.setSession(sessionId, {
       ...session,
       status: hasPendingMessages ? 'queued' : 'idle',
       updatedAt,
@@ -2261,6 +2888,17 @@ function deterministicJsonEqual(left: unknown, right: unknown): boolean {
 
 function authAccountKey(provider: string, providerAccountId: string): string {
   return `${provider}:${providerAccountId}`;
+}
+
+function memoryPage<T>(records: T[], offset: number, limit: number) {
+  const items = records.slice(offset, offset + limit);
+  const hasMore = offset + items.length < records.length;
+  return { items, hasMore, nextCursor: hasMore ? String(offset + items.length) : null };
+}
+
+function notepadSnippet(content: string, query: string) {
+  const match = content.toLowerCase().indexOf(query.toLowerCase());
+  return content.slice(Math.max(0, match - 80), Math.max(0, match - 80) + 240);
 }
 
 function memoryEnvironmentAvailableToGroup(environment: EnvironmentWithDetailsRecord, groupId: string): boolean {
@@ -2496,4 +3134,8 @@ function withSessionDefaults(record: CreateSessionRecord): SessionRecord {
     lastActivityAt: record.lastActivityAt ?? record.updatedAt,
     tags: [...(record.tags ?? [])],
   };
+}
+
+function cloneSession(session: SessionRecord): SessionRecord {
+  return structuredClone(session);
 }

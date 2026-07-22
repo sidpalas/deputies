@@ -11,7 +11,6 @@ import {
   canCreateSessionInGroup,
   canInvokeSkillInSession,
   canManageGroup,
-  canMoveSession,
   canReadSession,
   canUseEnvironmentInGroup,
   canWriteSession,
@@ -36,9 +35,11 @@ import { type GitHubReactionSender } from '../integrations/github/reaction-sende
 import { MessageService, MessageServiceError } from '../messages/service.js';
 import { SandboxCleanupService, SandboxKeepaliveService, SandboxLifecycleService } from '../sandbox/service.js';
 import { SnippetService } from '../snippets/service.js';
+import { NotepadService } from '../notepads/service.js';
 import { sandboxRuntimeId } from '../sandbox/runtime.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import { registerSnippetRoutes } from './snippet-routes.js';
+import { registerNotepadRoutes } from './notepad-routes.js';
 import { readServices } from '../sessions/services.js';
 import { SessionService, SessionServiceError } from '../sessions/service.js';
 import { SkillService } from '../skills/service.js';
@@ -123,6 +124,7 @@ export type AppServices = {
   automations: AutomationService;
   skills: SkillService;
   snippets: SnippetService;
+  notepads: NotepadService;
   artifacts: ArtifactService;
   externalResources: ExternalResourceService;
   genericWebhooks: GenericWebhookService;
@@ -156,6 +158,7 @@ export function createServices(
   const automations = new AutomationService(store, sessions, messages, environments);
   const skills = new SkillService(store);
   const snippets = new SnippetService(store);
+  const notepads = new NotepadService(store, events);
   const services: AppServices = {
     store,
     events,
@@ -165,6 +168,7 @@ export function createServices(
     automations,
     skills,
     snippets,
+    notepads,
     artifacts: new ArtifactService(store, events, options.artifactObjectStorage),
     externalResources: new ExternalResourceService(store, events),
     genericWebhooks: new GenericWebhookService(store, sessions, messages, skills, {
@@ -235,6 +239,8 @@ export function createApp(config: AppConfig, services = createServices()) {
   }
   app.use('/snippets/*', apiAuthMiddleware(config, services.store));
   app.use('/snippets', apiAuthMiddleware(config, services.store));
+  app.use('/notepads/*', apiAuthMiddleware(config, services.store));
+  app.use('/notepads', apiAuthMiddleware(config, services.store));
   app.use('/environments/*', apiAuthMiddleware(config, services.store));
   app.use('/environments', apiAuthMiddleware(config, services.store));
   app.use('/repositories/*', apiAuthMiddleware(config, services.store));
@@ -411,6 +417,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   registerEnvironmentRoutes(app, config, services);
   registerSkillRoutes(app, config, services);
   registerSnippetRoutes(app, config, services);
+  registerNotepadRoutes(app, config, services);
   registerTelemetryRoutes(app, config);
 
   registerRepositoryRoutes(app, config, services);
@@ -528,26 +535,18 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const nextOwnerGroupId = optionalString(body.ownerGroupId) ?? session.ownerGroupId;
-    const nextGroup = await services.store.getGroup(nextOwnerGroupId);
-    if (!nextGroup) return writeError(c, 404, 'not_found', 'Group not found');
-    const groupChanged = nextOwnerGroupId !== session.ownerGroupId;
-    if (groupChanged && nextGroup.archivedAt) {
-      return writeError(c, 409, 'archived_group', 'Cannot move sessions to an archived group');
+    if (body.ownerGroupId !== undefined) return writeError(c, 400, 'immutable_owner', 'Session ownership is immutable');
+    if (!canManageGroup(auth, session.ownerGroupId)) {
+      return writeError(c, 403, 'forbidden', 'Group admin access required');
     }
-    let visibility: SessionVisibility | null = groupChanged ? nextGroup.defaultVisibility : session.visibility;
-    let writePolicy: SessionWritePolicy | null = groupChanged ? nextGroup.defaultWritePolicy : session.writePolicy;
+    let visibility: SessionVisibility | null = session.visibility;
+    let writePolicy: SessionWritePolicy | null = session.writePolicy;
     if (body.visibility !== undefined) visibility = parseSessionVisibility(body.visibility);
     if (body.writePolicy !== undefined) writePolicy = parseSessionWritePolicy(body.writePolicy);
     if (!visibility) return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
     if (!writePolicy) return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
-    if (!canMoveSession(auth, session, nextOwnerGroupId)) {
-      return writeError(c, 403, 'forbidden', 'Group admin access is required for both groups');
-    }
-
     const updated = await services.sessions.update({
       id: session.id,
-      ownerGroupId: nextOwnerGroupId,
       visibility,
       writePolicy,
     });

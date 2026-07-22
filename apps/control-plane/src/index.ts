@@ -56,6 +56,7 @@ import { instrumentStore } from './telemetry/store.js';
 import type { WebSearchToolServices } from './web-search/tool.js';
 import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from './worker/service.js';
 import type { DeputyToolBaseServices } from './sessions/deputy-tool.js';
+import type { NotepadToolBaseServices } from './notepads/tool.js';
 
 const config = loadConfig(process.env);
 const telemetry = startTelemetry({ runMode: config.runMode });
@@ -409,6 +410,7 @@ async function createRunner(): Promise<Runner> {
     };
   }
   if (deputy) piOptions.deputy = deputy;
+  piOptions.notepad = createNotepadToolServices();
   if (config.skillsEnabled) {
     piOptions.skills = {
       repoScanEnabled: config.repoSkillsEnabled,
@@ -466,6 +468,10 @@ function createDeputyToolServices(): DeputyToolBaseServices | undefined {
     maxChildrenPerSession: config.deputyMaxChildrenPerSession,
     maxSpawnsPerRun: config.deputyMaxSpawnsPerRun,
   };
+}
+
+function createNotepadToolServices(): NotepadToolBaseServices {
+  return { store: services.store, notepads: services.notepads };
 }
 
 function createWebSearchServices(): WebSearchToolServices | undefined {

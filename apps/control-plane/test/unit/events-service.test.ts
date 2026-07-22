@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { EventService } from '../../src/events/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
@@ -26,5 +26,22 @@ describe('EventService', () => {
       },
     });
     expect(JSON.stringify(event.payload)).not.toContain('\u0000');
+  });
+
+  it('delivers Notepad association invalidations through the default global feed', async () => {
+    const events = new EventService(new MemoryStore());
+    const subscriber = vi.fn();
+    events.subscribeAll(subscriber);
+
+    const event = await events.append({
+      sessionId: 'session-1',
+      type: 'notepad_associations_changed',
+      payload: {},
+    });
+
+    expect(subscriber).toHaveBeenCalledWith(expect.objectContaining({ id: event.id, payload: {} }));
+    await expect(events.listAll()).resolves.toEqual([
+      expect.objectContaining({ id: event.id, type: 'notepad_associations_changed', payload: {} }),
+    ]);
   });
 });
