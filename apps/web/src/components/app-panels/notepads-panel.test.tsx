@@ -328,7 +328,7 @@ it('moves one responsive editor between viewport hosts without losing its draft'
           media: '(min-width: 1280px)',
           onchange: null,
           addEventListener: (_type: 'change', listener: (event: MediaQueryListEvent) => void) => {
-            changeListener = listener as (event: MediaQueryListEvent) => void;
+            changeListener = listener;
           },
           removeEventListener: vi.fn(),
           addListener: vi.fn(),
@@ -380,7 +380,7 @@ it('moves one responsive editor between viewport hosts without losing its draft'
   expect(desktopTextarea).toHaveFocus();
   expect([desktopTextarea.selectionStart, desktopTextarea.selectionEnd]).toEqual([6, 14]);
 
-  const mobileDetails = screen.getByTestId('mobile-details') as HTMLDetailsElement;
+  const mobileDetails = screen.getByTestId<HTMLDetailsElement>('mobile-details');
   mobileDetails.open = false;
   desktop = false;
   changeListener?.({ matches: false } as MediaQueryListEvent);

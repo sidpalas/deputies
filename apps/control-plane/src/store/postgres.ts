@@ -658,7 +658,7 @@ export class PostgresStore implements AppStore {
     activityId: string;
     now: Date;
   }): Promise<boolean> {
-    return this.withExplicitNotepadLock(input.notepadId, async (client, notepad) => {
+    return this.withExplicitNotepadLock(input.notepadId, async (client, _notepad) => {
       await this.lockLiveSessions(client, [
         input.sessionId,
         ...(input.actor.kind === 'agent' ? [input.actor.sessionId] : []),

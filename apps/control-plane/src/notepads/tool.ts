@@ -394,22 +394,6 @@ async function grantorAuth(store: AppStore, userId: string): Promise<RequestAuth
   const memberships = all.filter((_, i) => groups[i] && !groups[i].archivedAt);
   return { bypass: false, user, memberships };
 }
-async function explicitSearchGrantorAuth(
-  store: AppStore,
-  grant: { grantedByUserId: string } | undefined,
-  groupId: string,
-) {
-  if (!grant) throw new Error('Explicit Notepad search capability is required');
-  const auth = await grantorAuth(store, grant.grantedByUserId).catch(() => denied());
-  if (
-    auth.user!.role !== 'super_admin' &&
-    !auth.memberships.some(
-      (membership) => membership.groupId === groupId && (membership.role === 'member' || membership.role === 'admin'),
-    )
-  )
-    denied();
-  return auth;
-}
 async function requiredSession(store: AppStore, id: string) {
   const s = await store.getSession(id);
   if (!s) throw new Error('Session not found');
