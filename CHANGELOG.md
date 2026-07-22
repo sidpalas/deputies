@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.22.0](https://github.com/sidpalas/deputies/compare/v0.21.0...v0.22.0) (2026-07-22)
+
+
+### Features
+
+* add durable notepads feature ([#105](https://github.com/sidpalas/deputies/issues/105)) ([2b72cbc](https://github.com/sidpalas/deputies/commit/2b72cbcd6d85042d40c0b679a2bf8351f23ff70d))
+* add opt-in message steering ([b0fbdc9](https://github.com/sidpalas/deputies/commit/b0fbdc972349bba117908755537969946571a4b3))
+* synchronize selected session resources ([7fb79cc](https://github.com/sidpalas/deputies/commit/7fb79ccc1ee05b7f4c61c36a49f2f52b04594d85))
+* **web:** complete session state synchronization ([40d0b3a](https://github.com/sidpalas/deputies/commit/40d0b3a554c800ad6a9d5d603efb44135927285a))
+* **web:** group starred sessions in sidebar ([24ee446](https://github.com/sidpalas/deputies/commit/24ee4468c08d099c2ad579826277026b43af5e6e))
+* **www:** expand static product demo ([4d4df94](https://github.com/sidpalas/deputies/commit/4d4df9451004e8a1380a11cac0cff1474bac13c8))
+
+
+### Bug Fixes
+
+* keep composer pickers visible on mobile ([2373288](https://github.com/sidpalas/deputies/commit/2373288457fc4031b388eb68faa7aa35999cb0d6))
+* make sandbox checks use provisioned tools ([94b9375](https://github.com/sidpalas/deputies/commit/94b937546a08df420c13333892ed108ff69d39fe))
+* restore main CI checks ([ee29c27](https://github.com/sidpalas/deputies/commit/ee29c279ab742d29595072d388d594a9280d7d08))
+* reuse existing sandbox postgres ([e2ef7db](https://github.com/sidpalas/deputies/commit/e2ef7db911f1c8257a8508eb83906344cfcbfc18))
+* **web:** complete session index synchronization ([2e0203b](https://github.com/sidpalas/deputies/commit/2e0203be7c7e47448c3a7aeddfbf0e2fe6a70966))
+* **web:** preserve environment edits across group refreshes ([d54598c](https://github.com/sidpalas/deputies/commit/d54598cb51ac22d838049e2e52d0b6ad4556c88f))
+* **web:** rename context panel to session details ([5a0f0b9](https://github.com/sidpalas/deputies/commit/5a0f0b97e810c951c42f9db93142f006c8542a37))
+* **web:** unify session reconnect and resume recovery ([274f859](https://github.com/sidpalas/deputies/commit/274f8598c23660dc22f16baa71d25f056b0dde70))
+
+
+### Chores
+
+* remove generated Amp artifacts ([fa04952](https://github.com/sidpalas/deputies/commit/fa0495263b09bb296e6a19485435f9ed16ae718e))
+
+
+### Documentation
+
+* define organization access model ([b2b6de1](https://github.com/sidpalas/deputies/commit/b2b6de15a008666929e0ed9d242a453af166b2bf))
+* plan session state synchronization ([dd3b0cd](https://github.com/sidpalas/deputies/commit/dd3b0cd308f376798fb543ede3bfeb2bbc8388ae))
+* remove completed plans ([c6f8cb2](https://github.com/sidpalas/deputies/commit/c6f8cb29ffc69a259dd220bbdea84641b7a7969c))
+
+
+### Performance Improvements
+
+* batch environment relation queries ([edf4394](https://github.com/sidpalas/deputies/commit/edf4394f97b1583ba46938c854ee52f6a46ebe2e))
+* batch group-admin user membership lookup ([9507d58](https://github.com/sidpalas/deputies/commit/9507d5889835f67cdc78dfa9eac4a0586403485a))
+* batch search index message reads ([f2d06ba](https://github.com/sidpalas/deputies/commit/f2d06ba122dc6ebe391c3143a45862726c09e4b2))
+* batch skill owner group lookups ([536f225](https://github.com/sidpalas/deputies/commit/536f225604afbef5daa2ae140826aace29f8c39f))
+
+
+### Tests
+
+* cover environment batching regressions ([a1f699f](https://github.com/sidpalas/deputies/commit/a1f699f1cc39aec5a787dbac811831b367a337fb))
+
 ## [0.21.0](https://github.com/sidpalas/deputies/compare/v0.20.0...v0.21.0) (2026-07-20)
 
 
