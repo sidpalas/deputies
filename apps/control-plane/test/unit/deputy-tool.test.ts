@@ -275,6 +275,9 @@ describe('deputies tool', () => {
     await expect(
       executeDeputyTool(services, { action: 'send_message', sessionId: peerId, prompt: 'coordinate' }),
     ).resolves.toMatchObject({ ok: true, message: expect.objectContaining({ sequence: 1, source: 'deputy' }) });
+    await expect(store.getMessages(peerId)).resolves.toEqual([
+      expect.objectContaining({ context: { sourceSessionId: parentId } }),
+    ]);
 
     await store.updateSession({ ...(await store.getSession(childId))!, status: 'archived' });
     await expect(

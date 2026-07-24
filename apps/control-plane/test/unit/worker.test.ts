@@ -497,7 +497,11 @@ describe('WorkerService', () => {
     await expect(worker.processNext()).resolves.toBe(true);
     const parentMessages = await services.messages.list(parent.id);
     expect(parentMessages).toHaveLength(1);
-    expect(parentMessages[0]).toMatchObject({ source: 'deputy', status: 'pending' });
+    expect(parentMessages[0]).toMatchObject({
+      source: 'deputy',
+      status: 'pending',
+      context: { sourceSessionId: child.id },
+    });
     expect(parentMessages[0]!.prompt).toContain('This is an informational notification, not a request to take action');
     expect(parentMessages[0]!.prompt).toContain(`sessionId: "${child.id}"`);
     expect(parentMessages[0]!.prompt).not.toContain('<child-session-final-response>');

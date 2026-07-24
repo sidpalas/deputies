@@ -1781,9 +1781,10 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     });
     expect(delivery.status).toBe('pending');
 
-    await store.claimDueCallbackDeliveries({ now, limit: 1 });
+    const [claim] = await store.claimDueCallbackDeliveries({ now, limit: 1 });
     const sent = await store.markCallbackDeliverySent({
       id: delivery.id,
+      claimToken: claim!.claimToken!,
       deliveredAt: new Date(now.getTime() + 1_000),
     });
     expect(sent).toMatchObject({ status: 'sent', attempts: 1 });
@@ -1809,8 +1810,14 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       nextAttemptAt: now,
       maxAttempts: 1,
     });
-    await store.claimDueCallbackDeliveries({ now, limit: 1 });
-    await store.markCallbackDeliveryFailed({ id: delivery.id, failedAt: now, error: 'down', terminal: true });
+    const [claim] = await store.claimDueCallbackDeliveries({ now, limit: 1 });
+    await store.markCallbackDeliveryFailed({
+      id: delivery.id,
+      claimToken: claim!.claimToken!,
+      failedAt: now,
+      error: 'down',
+      terminal: true,
+    });
 
     const replay = await store.requestCallbackReplay({
       sessionId: session.id,

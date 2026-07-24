@@ -1,6 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { Pool, type PoolClient, type PoolConfig } from 'pg';
+import { createHash } from 'node:crypto';
+import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 import type { NormalizedEvent } from '../events/types.js';
+import {
+  nextOccurrence,
+  occurrenceInstantsBetween,
+  type NormalizedSchedule,
+} from '../scheduled-follow-ups/recurrence.js';
 import { PostgresSkillStore } from './postgres/skills.js';
 import { StoreConflictError } from './types.js';
 import type {
@@ -76,6 +82,14 @@ import type {
   UpdateSnippetRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
+  CreateScheduledFollowUpRecordInput,
+  ScheduledFollowUpActivationResult,
+  ScheduledFollowUpClaim,
+  ScheduledFollowUpMutationResult,
+  ScheduledFollowUpOccurrenceCursor,
+  ScheduledFollowUpOccurrenceRecord,
+  ScheduledFollowUpRecord,
+  UpdateScheduledFollowUpRecordInput,
 } from './types.js';
 import { SecretCipher } from './encrypted-secrets.js';
 import {
@@ -159,7 +173,7 @@ export class PostgresStore implements AppStore {
     this.coordinationPool =
       typeof databaseUrl === 'string'
         ? new Pool({ connectionString: databaseUrl })
-        : new Pool(Object.defineProperties({}, Object.getOwnPropertyDescriptors(databaseUrl.options)) as PoolConfig);
+        : new Pool(Object.defineProperties({}, Object.getOwnPropertyDescriptors(databaseUrl.options)));
     this.skillStore = new PostgresSkillStore(this.pool);
     if (options.sandboxSecretEncryptionKey)
       this.secretCipher = new SecretCipher(options.sandboxSecretEncryptionKey, 'sandbox-secrets');
@@ -1312,7 +1326,7 @@ export class PostgresStore implements AppStore {
           throw new StoreConflictError('not_found', 'Spawned session not found');
         }
         const message = await client.query<MessageRow>(
-          `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
+          `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at
            FROM messages
            WHERE session_id = $1
            ORDER BY sequence ASC
@@ -1393,7 +1407,7 @@ export class PostgresStore implements AppStore {
       const messageResult = await client.query<MessageRow>(
         `INSERT INTO messages (id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at)
          VALUES ($1, $2, 1, 'pending', $3, $4, $5, $6, $7, $8, $9)
-         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at`,
         [
           input.message.id,
           input.session.id,
@@ -2084,11 +2098,19 @@ export class PostgresStore implements AppStore {
         return { session: toSession(existingRow), cancelledMessages: [], events: [] };
       }
 
+      const cancelledFollowUps = await client.query<{ id: string }>(
+        `UPDATE scheduled_follow_ups SET status = 'cancelled', next_due_at = NULL,
+           scheduler_lock_owner = NULL, scheduler_locked_until = NULL,
+           cancelled_at = $2, updated_at = $2, definition_revision = definition_revision + 1
+         WHERE session_id = $1 AND status = 'active' RETURNING id`,
+        [input.sessionId, input.archivedAt],
+      );
+
       const cancelled = await client.query<MessageRow>(
         `UPDATE messages
          SET status = 'cancelled'
          WHERE session_id = $1 AND status = 'pending'
-         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at`,
         [input.sessionId],
       );
 
@@ -2104,6 +2126,16 @@ export class PostgresStore implements AppStore {
       if (!row) throw new Error(`Session does not exist: ${input.sessionId}`);
       const cancelledMessages = cancelled.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence);
       const events: EventRecord[] = [];
+      for (const followUp of cancelledFollowUps.rows) {
+        events.push(
+          await insertLifecycleEvent(client, {
+            sessionId: input.sessionId,
+            type: 'scheduled_follow_up_cancelled',
+            payload: { followUpId: followUp.id },
+            createdAt: input.archivedAt,
+          }),
+        );
+      }
       for (const message of cancelledMessages) {
         events.push(
           await insertLifecycleEvent(client, {
@@ -2957,9 +2989,9 @@ export class PostgresStore implements AppStore {
         throw new StoreConflictError('session_archived', 'Cannot enqueue messages to an archived session');
       }
       const result = await client.query<MessageRow>(
-        `INSERT INTO messages (id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+        `INSERT INTO messages (id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at`,
         [
           record.id,
           record.sessionId,
@@ -2971,6 +3003,8 @@ export class PostgresStore implements AppStore {
           record.authorName ?? null,
           record.source ?? null,
           record.context ?? null,
+          record.scheduledFollowUpId ?? null,
+          record.scheduledFollowUpOccurrenceId ?? null,
           record.createdAt,
         ],
       );
@@ -2996,7 +3030,7 @@ export class PostgresStore implements AppStore {
 
   async getMessages(sessionId: string): Promise<MessageRecord[]> {
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
+      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at
        FROM messages
        WHERE session_id = $1
        ORDER BY sequence ASC`,
@@ -3009,7 +3043,7 @@ export class PostgresStore implements AppStore {
   async getMessagesByIds(messageIds: string[]): Promise<MessageRecord[]> {
     if (!messageIds.length) return [];
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
+      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at
        FROM messages
        WHERE id = ANY($1::uuid[])`,
       [messageIds],
@@ -3020,7 +3054,7 @@ export class PostgresStore implements AppStore {
 
   async getMessage(input: { sessionId: string; messageId: string }): Promise<MessageRecord | null> {
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
+      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at
        FROM messages
        WHERE session_id = $1 AND id = $2`,
       [input.sessionId, input.messageId],
@@ -3035,7 +3069,7 @@ export class PostgresStore implements AppStore {
         [sessionId],
       ),
       this.pool.query<MessageRow>(
-        `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
+        `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at
          FROM messages
          WHERE session_id = $1
          ORDER BY sequence DESC
@@ -3052,7 +3086,7 @@ export class PostgresStore implements AppStore {
   async getSessionTranscript(input: SessionTranscriptOptions): Promise<SessionTranscriptPage> {
     const requested = input.limit + 1;
     const messageResult = await this.pool.query<MessageRow>(
-      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
+      `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at
        FROM messages
        WHERE session_id = $1
          AND ($2::bigint IS NULL OR sequence < $2)
@@ -3096,8 +3130,8 @@ export class PostgresStore implements AppStore {
        SET prompt = CASE WHEN $3::boolean THEN $4::text ELSE prompt END,
            context = CASE WHEN $5::boolean THEN $6::jsonb ELSE context END,
            steering = CASE WHEN $7::boolean THEN $8::boolean ELSE steering END
-       WHERE session_id = $1 AND id = $2 AND status = 'pending'
-       RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+       WHERE session_id = $1 AND id = $2 AND status = 'pending' AND scheduled_follow_up_id IS NULL
+       RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at`,
       [
         input.sessionId,
         input.messageId,
@@ -3112,6 +3146,39 @@ export class PostgresStore implements AppStore {
     return result.rows[0] ? toMessage(result.rows[0]) : null;
   }
 
+  async retryScheduledMessage(input: {
+    sessionId: string;
+    messageId: string;
+    retriedAt: Date;
+  }): Promise<MessageRecord | null> {
+    return this.transaction(async (client) => {
+      const session = await client.query<{ status: string }>('SELECT status FROM sessions WHERE id=$1 FOR UPDATE', [
+        input.sessionId,
+      ]);
+      if (session.rows[0]?.status === 'archived') return null;
+      const result = await client.query<MessageRow>(
+        `UPDATE messages m SET status='pending'
+         WHERE m.session_id=$1 AND m.id=$2 AND m.status='failed' AND m.scheduled_follow_up_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM messages newer
+             WHERE newer.session_id=m.session_id
+               AND newer.scheduled_follow_up_id=m.scheduled_follow_up_id
+               AND newer.id<>m.id
+               AND newer.status IN ('pending','processing','cancelling')
+           )
+         RETURNING m.id,m.session_id,m.sequence,m.status,m.prompt,m.steering,m.author_user_id,m.author_name,m.source,m.context,m.scheduled_follow_up_id,m.scheduled_follow_up_occurrence_id,m.created_at`,
+        [input.sessionId, input.messageId],
+      );
+      if (!result.rows[0]) return null;
+      await client.query(
+        `UPDATE sessions SET status=CASE WHEN status='active' THEN 'active' ELSE 'queued' END,
+           updated_at=$2,last_activity_at=$2 WHERE id=$1`,
+        [input.sessionId, input.retriedAt],
+      );
+      return toMessage(result.rows[0]);
+    });
+  }
+
   async cancelPendingMessage(input: {
     sessionId: string;
     messageId: string;
@@ -3122,7 +3189,7 @@ export class PostgresStore implements AppStore {
 
       const result = await client.query<MessageRow>(
         `UPDATE messages SET status = 'cancelled' WHERE session_id = $1 AND id = $2 AND status = 'pending'
-         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at`,
         [input.sessionId, input.messageId],
       );
       if (!result.rows[0]) return null;
@@ -3207,7 +3274,7 @@ export class PostgresStore implements AppStore {
            ORDER BY m.sequence
            FOR UPDATE
          )
-         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+         RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at`,
         [runRow.session_id, runRow.metadata.executionSignature ?? null],
       );
       const messages = result.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence);
@@ -3255,12 +3322,22 @@ export class PostgresStore implements AppStore {
       const sessionId = candidate.rows[0]?.session_id;
       if (!sessionId) return null;
 
+      const boundary = await client.query<{ sequence: number; scheduled_follow_up_id: string | null }>(
+        `SELECT sequence, scheduled_follow_up_id FROM messages
+         WHERE session_id = $1 AND status = 'pending' ORDER BY sequence LIMIT 1`,
+        [sessionId],
+      );
+      const first = boundary.rows[0];
+      if (!first) return null;
       const updatedMessages = await client.query<MessageRow>(
         `UPDATE messages
          SET status = 'processing'
          WHERE session_id = $1 AND status = 'pending'
-          RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
-        [sessionId],
+           AND ($2::boolean OR scheduled_follow_up_id IS NULL)
+           AND ($2::boolean OR sequence < COALESCE((SELECT min(sequence) FROM messages WHERE session_id = $1 AND status = 'pending' AND scheduled_follow_up_id IS NOT NULL), 2147483647))
+           AND (NOT $2::boolean OR sequence = $3)
+          RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at`,
+        [sessionId, first.scheduled_follow_up_id !== null, first.sequence],
       );
       const messages = updatedMessages.rows.map(toMessage).sort((a, b) => a.sequence - b.sequence);
       const firstMessage = messages[0];
@@ -3317,7 +3394,7 @@ export class PostgresStore implements AppStore {
       const row = result.rows[0];
       if (!row) return null;
       const messageResult = await client.query<MessageRow>(
-        `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
+        `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at
          FROM messages WHERE id = ANY($1::uuid[]) ORDER BY sequence`,
         [getRunMessageIds(toRun(row))],
       );
@@ -3341,7 +3418,7 @@ export class PostgresStore implements AppStore {
       const row = result.rows[0];
       if (!row) return null;
       const messages = await client.query<MessageRow>(
-        `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
+        `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at
          FROM messages WHERE id = ANY($1::uuid[]) ORDER BY sequence`,
         [getRunMessageIds(toRun(row))],
       );
@@ -3430,7 +3507,7 @@ export class PostgresStore implements AppStore {
           `UPDATE messages
            SET status = 'pending'
           WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
-            RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+            RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at`,
           [messageIds],
         );
 
@@ -3472,8 +3549,16 @@ export class PostgresStore implements AppStore {
     leaseOwner: string;
     failedAt: Date;
     error: string;
+    callbackDelivery?: CreateCallbackDeliveryRecord;
   }): Promise<ClaimedMessageBatch | null> {
-    return this.finishRunBatch(input.runId, input.leaseOwner, 'failed', input.failedAt, input.error);
+    return this.finishRunBatch(
+      input.runId,
+      input.leaseOwner,
+      'failed',
+      input.failedAt,
+      input.error,
+      input.callbackDelivery,
+    );
   }
 
   async requestRunCancellation(input: {
@@ -3506,7 +3591,7 @@ export class PostgresStore implements AppStore {
         `UPDATE messages
          SET status = 'cancelling'
          WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
-          RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+          RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at`,
         [messageIds],
       );
 
@@ -3814,7 +3899,14 @@ export class PostgresStore implements AppStore {
   }
 
   async createCallbackDelivery(record: CreateCallbackDeliveryRecord): Promise<CallbackDeliveryRecord> {
-    const result = await this.pool.query<CallbackDeliveryRow>(
+    return this.insertCallbackDelivery(this.pool, record);
+  }
+
+  private async insertCallbackDelivery(
+    client: Pick<PoolClient, 'query'>,
+    record: CreateCallbackDeliveryRecord,
+  ): Promise<CallbackDeliveryRecord> {
+    const result = await client.query<CallbackDeliveryRow>(
       `INSERT INTO callback_deliveries (id, session_id, run_id, message_id, target_type, target, status, event_type, payload, created_at, updated_at, next_attempt_at, max_attempts)
        VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11, $12)
        ON CONFLICT (id) DO UPDATE SET id = callback_deliveries.id
@@ -3873,22 +3965,26 @@ export class PostgresStore implements AppStore {
 
       const claimed = await client.query<CallbackDeliveryRow>(
         `UPDATE callback_deliveries
-         SET status = 'sending', attempts = attempts + 1, last_attempt_at = $2, updated_at = $2
+         SET status = 'sending', attempts = attempts + 1, last_attempt_at = $2, updated_at = $2, claim_token = gen_random_uuid()
          WHERE id = ANY($1::uuid[])
-         RETURNING id, session_id, run_id, message_id, target_type, target, status, event_type, payload, attempts, max_attempts, last_error, created_at, updated_at, next_attempt_at, last_attempt_at, delivered_at`,
+         RETURNING id, session_id, run_id, message_id, target_type, target, status, event_type, payload, attempts, max_attempts, last_error, created_at, updated_at, next_attempt_at, last_attempt_at, delivered_at, claim_token`,
         [due.rows.map((row) => row.id), input.now],
       );
       return claimed.rows.map(toCallbackDelivery);
     });
   }
 
-  async markCallbackDeliverySent(input: { id: string; deliveredAt: Date }): Promise<CallbackDeliveryRecord> {
+  async markCallbackDeliverySent(input: {
+    id: string;
+    claimToken: string;
+    deliveredAt: Date;
+  }): Promise<CallbackDeliveryRecord> {
     const result = await this.pool.query<CallbackDeliveryRow>(
       `UPDATE callback_deliveries
-       SET status = 'sent', delivered_at = $2, updated_at = $2, next_attempt_at = NULL, last_error = NULL
-       WHERE id = $1
+       SET status = 'sent', delivered_at = $2, updated_at = $2, next_attempt_at = NULL, last_error = NULL, claim_token = NULL
+       WHERE id = $1 AND claim_token = $3
          RETURNING id, session_id, run_id, message_id, target_type, target, status, event_type, payload, attempts, max_attempts, last_error, created_at, updated_at, next_attempt_at, last_attempt_at, delivered_at`,
-      [input.id, input.deliveredAt],
+      [input.id, input.deliveredAt, input.claimToken],
     );
     if (!result.rows[0]) throw new Error(`Callback delivery does not exist: ${input.id}`);
     return toCallbackDelivery(result.rows[0]);
@@ -3896,6 +3992,7 @@ export class PostgresStore implements AppStore {
 
   async markCallbackDeliveryFailed(input: {
     id: string;
+    claimToken: string;
     failedAt: Date;
     error: string;
     terminal: boolean;
@@ -3903,10 +4000,17 @@ export class PostgresStore implements AppStore {
   }): Promise<CallbackDeliveryRecord> {
     const result = await this.pool.query<CallbackDeliveryRow>(
       `UPDATE callback_deliveries
-       SET status = $2, last_error = $3, updated_at = $4, next_attempt_at = $5
-       WHERE id = $1
+       SET status = $2, last_error = $3, updated_at = $4, next_attempt_at = $5, claim_token = NULL
+       WHERE id = $1 AND claim_token = $6
        RETURNING id, session_id, run_id, message_id, target_type, target, status, event_type, payload, attempts, max_attempts, last_error, created_at, updated_at, next_attempt_at, last_attempt_at, delivered_at`,
-      [input.id, input.terminal ? 'failed' : 'pending', input.error, input.failedAt, input.nextAttemptAt ?? null],
+      [
+        input.id,
+        input.terminal ? 'failed' : 'pending',
+        input.error,
+        input.failedAt,
+        input.nextAttemptAt ?? null,
+        input.claimToken,
+      ],
     );
     if (!result.rows[0]) throw new Error(`Callback delivery does not exist: ${input.id}`);
     return toCallbackDelivery(result.rows[0]);
@@ -4152,6 +4256,556 @@ export class PostgresStore implements AppStore {
     return row ? toExternalThread(row) : null;
   }
 
+  async getExternalThreadsForSession(sessionId: string): Promise<ExternalThreadRecord[]> {
+    const result = await this.pool.query<ExternalThreadRow>(
+      `SELECT id, source, external_id, session_id, metadata, created_at, updated_at
+       FROM external_threads WHERE session_id = $1 ORDER BY created_at, id`,
+      [sessionId],
+    );
+    return result.rows.map(toExternalThread);
+  }
+
+  async createScheduledFollowUp(input: CreateScheduledFollowUpRecordInput): Promise<ScheduledFollowUpMutationResult> {
+    return this.transaction(async (client) => {
+      if (input.createdByRunId)
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [input.createdByRunId]);
+      const session = await client.query<{ status: string }>('SELECT status FROM sessions WHERE id=$1 FOR UPDATE', [
+        input.sessionId,
+      ]);
+      if (!session.rows[0]) throw new StoreConflictError('not_found', 'Session not found');
+      if (session.rows[0].status === 'archived')
+        throw new StoreConflictError('session_archived', 'Session is archived');
+      if (input.createdByRunId && input.idempotencyKey) {
+        const replay = await client.query(
+          'SELECT * FROM scheduled_follow_ups WHERE created_by_run_id=$1 AND idempotency_key=$2',
+          [input.createdByRunId, input.idempotencyKey],
+        );
+        if (replay.rows[0]) return { followUp: toScheduledFollowUp(replay.rows[0]), events: [], idempotent: true };
+      }
+      const counts = await client.query<{ active: string; run: string }>(
+        `SELECT count(*) FILTER(WHERE session_id=$1 AND status='active') active,count(*) FILTER(WHERE created_by_run_id=$2 AND status='active') run FROM scheduled_follow_ups`,
+        [input.sessionId, input.createdByRunId ?? null],
+      );
+      if (Number(counts.rows[0]!.active) >= 25)
+        throw new StoreConflictError('scheduled_follow_up_active_limit', 'Session has 25 active scheduled follow-ups');
+      if (input.createdByRunId && input.maxNewForRun !== undefined && Number(counts.rows[0]!.run) >= input.maxNewForRun)
+        throw new StoreConflictError(
+          'scheduled_follow_up_run_limit',
+          `Run has ${input.maxNewForRun} active scheduled follow-ups`,
+        );
+      const r = await client.query(
+        `INSERT INTO scheduled_follow_ups(id,session_id,status,schedule_kind,prompt,context_overrides,run_at,dtstart_local,timezone,rrule,ends_at,max_occurrences,next_due_at,created_by_user_id,created_by_session_id,created_by_run_id,created_by_message_id,idempotency_key,created_at,updated_at) VALUES($1,$2,'active',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
+        [
+          input.id,
+          input.sessionId,
+          input.scheduleKind,
+          input.prompt,
+          input.contextOverrides ?? null,
+          input.runAt ?? null,
+          input.dtstartLocal ?? null,
+          input.timezone ?? null,
+          input.rrule ?? null,
+          input.endsAt ?? null,
+          input.maxOccurrences ?? null,
+          input.nextDueAt,
+          input.createdByUserId ?? null,
+          input.createdBySessionId ?? null,
+          input.createdByRunId ?? null,
+          input.createdByMessageId ?? null,
+          input.idempotencyKey ?? null,
+          input.createdAt,
+          input.updatedAt,
+        ],
+      );
+      const event = await insertLifecycleEvent(client, {
+        sessionId: input.sessionId,
+        type: 'scheduled_follow_up_created',
+        payload: { followUpId: input.id, nextDueAt: input.nextDueAt?.toISOString() ?? null },
+        createdAt: input.createdAt,
+      });
+      return { followUp: toScheduledFollowUp(r.rows[0]), events: [event] };
+    });
+  }
+  async getScheduledFollowUp(id: string): Promise<ScheduledFollowUpRecord | null> {
+    const r = await this.pool.query('SELECT * FROM scheduled_follow_ups WHERE id=$1', [id]);
+    return r.rows[0] ? toScheduledFollowUp(r.rows[0]) : null;
+  }
+  async getScheduledFollowUpByCreatorKey(
+    createdByRunId: string,
+    idempotencyKey: string,
+  ): Promise<ScheduledFollowUpRecord | null> {
+    const r = await this.pool.query(
+      'SELECT * FROM scheduled_follow_ups WHERE created_by_run_id=$1 AND idempotency_key=$2',
+      [createdByRunId, idempotencyKey],
+    );
+    return r.rows[0] ? toScheduledFollowUp(r.rows[0]) : null;
+  }
+  async listScheduledFollowUps(input: {
+    sessionId: string;
+    limit: number;
+    before?: { createdAt: Date; id: string };
+  }): Promise<ScheduledFollowUpRecord[]> {
+    const r = await this.pool.query(
+      `SELECT * FROM scheduled_follow_ups WHERE session_id=$1 AND ($3::timestamptz IS NULL OR (created_at,id)<($3,$4)) ORDER BY created_at DESC,id DESC LIMIT $2`,
+      [input.sessionId, input.limit, input.before?.createdAt ?? null, input.before?.id ?? null],
+    );
+    return r.rows.map(toScheduledFollowUp);
+  }
+  async updateScheduledFollowUp(input: UpdateScheduledFollowUpRecordInput): Promise<ScheduledFollowUpMutationResult> {
+    return this.transaction(async (c) => {
+      await c.query('SELECT id FROM sessions WHERE id=$1 FOR UPDATE', [input.sessionId]);
+      const current = await c.query(
+        `SELECT f.*,
+           (SELECT count(*)::int FROM scheduled_follow_up_occurrences o WHERE o.scheduled_follow_up_id=f.id) consumed,
+           (SELECT max(scheduled_at) FROM scheduled_follow_up_occurrences o WHERE o.scheduled_follow_up_id=f.id) latest_scheduled_at
+         FROM scheduled_follow_ups f WHERE f.id=$1 AND f.session_id=$2 FOR UPDATE`,
+        [input.id, input.sessionId],
+      );
+      if (
+        !current.rows[0] ||
+        current.rows[0].status !== 'active' ||
+        current.rows[0].definition_revision !== input.expectedRevision
+      )
+        throw new StoreConflictError('stale_revision', 'Scheduled follow-up changed');
+      const consumed = Number(current.rows[0].consumed);
+      if (input.normalizedSchedule.kind === 'recurring' && input.normalizedSchedule.maxOccurrences <= consumed)
+        throw new StoreConflictError('stale_revision', 'Updated maximum is not greater than consumed occurrences');
+      const latest = current.rows[0].latest_scheduled_at as Date | null;
+      const cutover = new Date(Math.max(input.updatedAt.getTime(), latest?.getTime() ?? 0));
+      const nextDueAt = nextOccurrence(input.normalizedSchedule, cutover);
+      if (!nextDueAt) throw new StoreConflictError('stale_revision', 'Updated schedule has no future occurrence');
+      const r = await c.query(
+        `UPDATE scheduled_follow_ups SET prompt=COALESCE($4,prompt),context_overrides=CASE WHEN $5::boolean THEN $6 ELSE context_overrides END,schedule_kind=COALESCE($7,schedule_kind),run_at=$8,dtstart_local=$9,timezone=$10,rrule=$11,ends_at=$12,max_occurrences=$13,next_due_at=$14,definition_revision=definition_revision+1,scheduler_lock_owner=NULL,scheduler_locked_until=NULL,updated_at=$15 WHERE id=$1 AND session_id=$2 AND definition_revision=$3 AND status='active' RETURNING *`,
+        [
+          input.id,
+          input.sessionId,
+          input.expectedRevision,
+          input.prompt ?? null,
+          input.contextOverrides !== undefined,
+          input.contextOverrides ?? null,
+          input.scheduleKind ?? null,
+          input.runAt ?? null,
+          input.dtstartLocal ?? null,
+          input.timezone ?? null,
+          input.rrule ?? null,
+          input.endsAt ?? null,
+          input.maxOccurrences ?? null,
+          nextDueAt,
+          input.updatedAt,
+        ],
+      );
+      if (!r.rows[0]) throw new StoreConflictError('stale_revision', 'Scheduled follow-up changed');
+      const f = toScheduledFollowUp(r.rows[0]);
+      const e = await insertLifecycleEvent(c, {
+        sessionId: input.sessionId,
+        type: 'scheduled_follow_up_updated',
+        payload: { followUpId: f.id, revision: f.definitionRevision, nextDueAt: f.nextDueAt?.toISOString() ?? null },
+        createdAt: input.updatedAt,
+      });
+      return { followUp: f, events: [e] };
+    });
+  }
+  async cancelScheduledFollowUp(input: {
+    id: string;
+    sessionId: string;
+    expectedRevision: number;
+    now: Date;
+  }): Promise<ScheduledFollowUpMutationResult> {
+    return this.transaction(async (c) => {
+      await c.query('SELECT id FROM sessions WHERE id=$1 FOR UPDATE', [input.sessionId]);
+      const r = await c.query(
+        `UPDATE scheduled_follow_ups SET status='cancelled',next_due_at=NULL,scheduler_lock_owner=NULL,scheduler_locked_until=NULL,cancelled_at=$4,updated_at=$4,definition_revision=definition_revision+1 WHERE id=$1 AND session_id=$2 AND definition_revision=$3 AND status='active' RETURNING *`,
+        [input.id, input.sessionId, input.expectedRevision, input.now],
+      );
+      if (!r.rows[0]) throw new StoreConflictError('stale_revision', 'Scheduled follow-up changed');
+      const cancelled = await c.query<MessageRow>(
+        `UPDATE messages SET status='cancelled' WHERE scheduled_follow_up_id=$1 AND status='pending' RETURNING id,session_id,sequence,status,prompt,steering,author_user_id,author_name,source,context,scheduled_follow_up_id,scheduled_follow_up_occurrence_id,created_at`,
+        [input.id],
+      );
+      await c.query(
+        `UPDATE sessions SET status=CASE
+           WHEN status IN ('active','archived') THEN status
+           WHEN EXISTS (SELECT 1 FROM messages WHERE session_id=$1 AND status='pending') THEN 'queued'
+           ELSE 'idle'
+         END,updated_at=$2,last_activity_at=$2 WHERE id=$1`,
+        [input.sessionId, input.now],
+      );
+      const events: EventRecord[] = [];
+      for (const m of cancelled.rows)
+        events.push(
+          await insertLifecycleEvent(c, {
+            sessionId: input.sessionId,
+            messageId: m.id,
+            type: 'message_cancelled',
+            payload: { sequence: Number(m.sequence) },
+            createdAt: input.now,
+          }),
+        );
+      events.push(
+        await insertLifecycleEvent(c, {
+          sessionId: input.sessionId,
+          type: 'scheduled_follow_up_cancelled',
+          payload: { followUpId: input.id },
+          createdAt: input.now,
+        }),
+      );
+      return { followUp: toScheduledFollowUp(r.rows[0]), events };
+    });
+  }
+  async listScheduledFollowUpOccurrences(input: {
+    followUpId: string;
+    limit: number;
+    before?: ScheduledFollowUpOccurrenceCursor;
+  }): Promise<ScheduledFollowUpOccurrenceRecord[]> {
+    const r = await this.pool.query(
+      `SELECT * FROM scheduled_follow_up_occurrences WHERE scheduled_follow_up_id=$1 AND ($3::int IS NULL OR occurrence_number<$3) ORDER BY occurrence_number DESC LIMIT $2`,
+      [input.followUpId, input.limit, input.before?.occurrenceNumber ?? null],
+    );
+    return r.rows.map(toScheduledOccurrence);
+  }
+  async claimDueScheduledFollowUp(input: {
+    lockOwner: string;
+    now: Date;
+    lockedUntil: Date;
+  }): Promise<ScheduledFollowUpClaim | null> {
+    return this.transaction(async (c) => {
+      const r = await c.query(
+        `SELECT * FROM scheduled_follow_ups WHERE status='active' AND next_due_at<=$1 AND (scheduler_locked_until IS NULL OR scheduler_locked_until<=$1) ORDER BY next_due_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1`,
+        [input.now],
+      );
+      if (!r.rows[0]) return null;
+      const u = await c.query(
+        `UPDATE scheduled_follow_ups SET scheduler_lock_owner=$2,scheduler_locked_until=$3 WHERE id=$1 RETURNING *`,
+        [r.rows[0].id, input.lockOwner, input.lockedUntil],
+      );
+      const f = toScheduledFollowUp(u.rows[0]);
+      return { followUp: f, claimedRevision: f.definitionRevision };
+    });
+  }
+  async activateDueScheduledFollowUp(input: {
+    id: string;
+    lockOwner: string;
+    claimedRevision: number;
+    now: Date;
+    resolvedContext: import('./types.js').ScheduledFollowUpResolvedContext;
+    externalCallback?: { type: 'slack' | 'github'; target: Record<string, unknown> };
+    externalBindingError?: string;
+    expectedExternalThreadId?: string | null;
+  }): Promise<ScheduledFollowUpActivationResult | null> {
+    return this.transaction(async (client) => {
+      // Session mutations consistently take the session lock before the definition lock.
+      const located = await client.query<{ session_id: string }>(
+        'SELECT session_id FROM scheduled_follow_ups WHERE id=$1',
+        [input.id],
+      );
+      if (!located.rows[0]) return null;
+      const sessionResult = await client.query<SessionRow>(
+        `SELECT ${sessionSelectColumns} FROM sessions WHERE id=$1 FOR UPDATE`,
+        [located.rows[0].session_id],
+      );
+      if (!sessionResult.rows[0]) return null;
+      const definitionResult = await client.query('SELECT * FROM scheduled_follow_ups WHERE id=$1 FOR UPDATE', [
+        input.id,
+      ]);
+      if (!definitionResult.rows[0]) return null;
+      const followUp = toScheduledFollowUp(definitionResult.rows[0]);
+      const validClaim =
+        followUp.status === 'active' &&
+        followUp.schedulerLockOwner === input.lockOwner &&
+        !!followUp.schedulerLockedUntil &&
+        followUp.schedulerLockedUntil > input.now &&
+        followUp.definitionRevision === input.claimedRevision &&
+        !!followUp.nextDueAt &&
+        followUp.nextDueAt <= input.now;
+      if (!validClaim) return null;
+
+      const session = sessionResult.rows[0];
+      const events: EventRecord[] = [];
+      if (session.status === 'archived') {
+        const cancelled = await client.query<MessageRow>(
+          `UPDATE messages SET status='cancelled' WHERE scheduled_follow_up_id=$1 AND status='pending' RETURNING id,session_id,sequence,status,prompt,steering,author_user_id,author_name,source,context,scheduled_follow_up_id,scheduled_follow_up_occurrence_id,created_at`,
+          [input.id],
+        );
+        for (const message of cancelled.rows)
+          events.push(
+            await insertLifecycleEvent(client, {
+              sessionId: followUp.sessionId,
+              messageId: message.id,
+              type: 'message_cancelled',
+              payload: { sequence: Number(message.sequence) },
+              createdAt: input.now,
+            }),
+          );
+        const updated = await client.query(
+          `UPDATE scheduled_follow_ups SET status='cancelled',next_due_at=NULL,scheduler_lock_owner=NULL,scheduler_locked_until=NULL,cancelled_at=$2,updated_at=$2,definition_revision=definition_revision+1 WHERE id=$1 RETURNING *`,
+          [input.id, input.now],
+        );
+        events.push(
+          await insertLifecycleEvent(client, {
+            sessionId: followUp.sessionId,
+            type: 'scheduled_follow_up_cancelled',
+            payload: { followUpId: input.id },
+            createdAt: input.now,
+          }),
+        );
+        return { followUp: toScheduledFollowUp(updated.rows[0]), occurrences: [], events };
+      }
+
+      const priorResult = await client.query<{ count: string }>(
+        'SELECT count(*) FROM scheduled_follow_up_occurrences WHERE scheduled_follow_up_id=$1',
+        [input.id],
+      );
+      const priorCount = Number(priorResult.rows[0]!.count);
+      const max = Math.min(100, followUp.scheduleKind === 'once' ? 1 : (followUp.maxOccurrences ?? 100));
+      const schedule: NormalizedSchedule =
+        followUp.scheduleKind === 'once'
+          ? { kind: 'once', runAt: followUp.runAt! }
+          : {
+              kind: 'recurring',
+              dtstartLocal: followUp.dtstartLocal!,
+              timezone: followUp.timezone!,
+              rrule: followUp.rrule!,
+              maxOccurrences: max,
+              ...(followUp.endsAt ? { endsAt: followUp.endsAt } : {}),
+            };
+      const due = occurrenceInstantsBetween(
+        schedule,
+        new Date(followUp.nextDueAt!.getTime() - 1),
+        input.now,
+        max - priorCount,
+      );
+      if (!due.length) {
+        await client.query(
+          'UPDATE scheduled_follow_ups SET scheduler_lock_owner=NULL,scheduler_locked_until=NULL WHERE id=$1',
+          [input.id],
+        );
+        return null;
+      }
+
+      await client.query(
+        'SET CONSTRAINTS messages_scheduled_follow_up_occurrence_fk, scheduled_follow_up_occurrences_message_id_fkey DEFERRED',
+      );
+      const unfinished = await client.query(
+        "SELECT 1 FROM messages WHERE scheduled_follow_up_id=$1 AND status IN ('pending','processing','cancelling') LIMIT 1",
+        [input.id],
+      );
+      const binding = await client.query<{ id: string }>(
+        'SELECT id FROM external_threads WHERE session_id=$1 ORDER BY id',
+        [followUp.sessionId],
+      );
+      const expectedExternalThreadId = input.expectedExternalThreadId ?? null;
+      const bindingChanged =
+        binding.rows.length !== (expectedExternalThreadId ? 1 : 0) ||
+        (expectedExternalThreadId !== null && binding.rows[0]?.id !== expectedExternalThreadId);
+      let environmentChanged = false;
+      if (input.resolvedContext.status === 'valid') {
+        const environment = input.resolvedContext.overrides.environment as
+          | { id?: unknown; revisionId?: unknown }
+          | undefined;
+        if (typeof environment?.id === 'string' && typeof environment.revisionId === 'string') {
+          const current = await client.query<{ archived_at: Date | null; revision_exists: boolean }>(
+            `SELECT e.archived_at, EXISTS(SELECT 1 FROM environment_revisions r WHERE r.id=$2 AND r.environment_id=e.id) revision_exists
+             FROM environments e WHERE e.id=$1 FOR UPDATE`,
+            [environment.id, environment.revisionId],
+          );
+          environmentChanged = !current.rows[0] || !!current.rows[0].archived_at || !current.rows[0].revision_exists;
+        }
+      }
+      const occurrences: ScheduledFollowUpOccurrenceRecord[] = [];
+      let message: MessageRecord | undefined;
+      const { callback: _untrustedCallback, ...sessionContext } = session.context ?? {};
+      const sourceSession =
+        followUp.createdBySessionId && followUp.createdBySessionId !== followUp.sessionId
+          ? (
+              await client.query<{ id: string; title: string | null }>('SELECT id,title FROM sessions WHERE id=$1', [
+                followUp.createdBySessionId,
+              ])
+            ).rows[0]
+          : undefined;
+      for (let index = 0; index < due.length; index++) {
+        const scheduledAt = due[index]!;
+        const number = priorCount + index + 1;
+        const latest = index === due.length - 1;
+        const reason = !latest
+          ? 'missed_during_downtime'
+          : unfinished.rowCount
+            ? 'previous_message_unfinished'
+            : input.externalBindingError || bindingChanged
+              ? 'external_binding_invalid'
+              : environmentChanged
+                ? 'resource_unavailable'
+                : input.resolvedContext.status === 'invalid'
+                  ? input.resolvedContext.reason
+                  : undefined;
+        const outcome =
+          reason === 'external_binding_invalid' || reason === 'invalid_context' || reason === 'resource_unavailable'
+            ? 'pre_message_failed'
+            : reason
+              ? 'skipped'
+              : 'message_created';
+        const occurrenceId = stableUuid(`${followUp.id}:${number}:${scheduledAt.toISOString()}`);
+        const messageId = stableUuid(`${occurrenceId}:message`);
+        const effectiveContext = !reason
+          ? (() => {
+              const context = { ...sessionContext };
+              if (input.resolvedContext.status === 'valid') {
+                for (const key of input.resolvedContext.clear) delete context[key];
+                Object.assign(context, input.resolvedContext.overrides);
+              }
+              if (input.externalCallback) context.callback = input.externalCallback.target;
+              if (sourceSession) context.sourceSessionId = sourceSession.id;
+              return context;
+            })()
+          : undefined;
+        await client.query(
+          `INSERT INTO scheduled_follow_up_occurrences(id,scheduled_follow_up_id,occurrence_number,definition_revision,scheduled_at,activated_at,outcome,reason,error,message_id,effective_context) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [
+            occurrenceId,
+            followUp.id,
+            number,
+            followUp.definitionRevision,
+            scheduledAt,
+            input.now,
+            outcome,
+            reason ?? null,
+            reason === 'external_binding_invalid'
+              ? (input.externalBindingError ?? 'External thread binding changed during activation')
+              : environmentChanged
+                ? 'Environment became unavailable during activation'
+                : input.resolvedContext.status === 'invalid'
+                  ? input.resolvedContext.error
+                  : null,
+            outcome === 'message_created' ? messageId : null,
+            effectiveContext ?? null,
+          ],
+        );
+        if (outcome === 'pre_message_failed' && input.externalCallback) {
+          const callbackId = stableUuid(`${occurrenceId}:scheduled_follow_up_failed`);
+          await client.query(
+            `INSERT INTO callback_deliveries(id,session_id,run_id,message_id,target_type,target,status,event_type,payload,created_at,updated_at,next_attempt_at)
+             VALUES($1,$2,NULL,NULL,$3,$4,'pending','scheduled_follow_up_failed',$5,$6,$6,$6)
+             ON CONFLICT (id) DO NOTHING`,
+            [
+              callbackId,
+              followUp.sessionId,
+              input.externalCallback.type,
+              input.externalCallback.target,
+              {
+                event: 'scheduled_follow_up_failed',
+                sessionId: followUp.sessionId,
+                scheduledFollowUpId: followUp.id,
+                occurrenceId,
+                text: 'This scheduled follow-up could not be started.',
+                artifacts: [],
+              },
+              input.now,
+            ],
+          );
+        }
+        if (!reason) {
+          const nextSequence = await nextSequenceForClient(client, followUp.sessionId, 'messages');
+          const inserted = await client.query<MessageRow>(
+            `INSERT INTO messages(id,session_id,sequence,status,prompt,steering,author_name,source,context,scheduled_follow_up_id,scheduled_follow_up_occurrence_id,created_at) VALUES($1,$2,$3,'pending',$4,false,$5,'scheduled_follow_up',$6,$7,$8,$9) RETURNING id,session_id,sequence,status,prompt,steering,author_user_id,author_name,source,context,scheduled_follow_up_id,scheduled_follow_up_occurrence_id,created_at`,
+            [
+              messageId,
+              followUp.sessionId,
+              nextSequence,
+              followUp.prompt,
+              sourceSession ? `Deputy: ${sourceSession.title || sourceSession.id}` : null,
+              effectiveContext,
+              followUp.id,
+              occurrenceId,
+              input.now,
+            ],
+          );
+          message = toMessage(inserted.rows[0]!);
+          events.push(
+            await insertLifecycleEvent(client, {
+              sessionId: followUp.sessionId,
+              messageId,
+              type: 'message_created',
+              payload: { sequence: message.sequence, source: 'scheduled_follow_up' },
+              createdAt: input.now,
+            }),
+          );
+        }
+        events.push(
+          await insertLifecycleEvent(client, {
+            sessionId: followUp.sessionId,
+            ...(outcome === 'message_created' ? { messageId } : {}),
+            type:
+              outcome === 'message_created'
+                ? 'scheduled_follow_up_occurrence_created'
+                : outcome === 'skipped'
+                  ? 'scheduled_follow_up_occurrence_skipped'
+                  : 'scheduled_follow_up_occurrence_failed',
+            payload:
+              outcome === 'message_created'
+                ? {
+                    followUpId: followUp.id,
+                    occurrenceId,
+                    occurrenceNumber: number,
+                    scheduledAt: scheduledAt.toISOString(),
+                    messageId,
+                  }
+                : {
+                    followUpId: followUp.id,
+                    occurrenceId,
+                    occurrenceNumber: number,
+                    scheduledAt: scheduledAt.toISOString(),
+                    reason: reason!,
+                  },
+            createdAt: input.now,
+          } as NormalizedEvent),
+        );
+        occurrences.push({
+          id: occurrenceId,
+          scheduledFollowUpId: followUp.id,
+          occurrenceNumber: number,
+          definitionRevision: followUp.definitionRevision,
+          scheduledAt,
+          activatedAt: input.now,
+          outcome,
+          ...(reason ? { reason } : {}),
+          ...(reason === 'external_binding_invalid'
+            ? { error: input.externalBindingError! }
+            : input.resolvedContext.status === 'invalid' && reason === input.resolvedContext.reason
+              ? { error: input.resolvedContext.error }
+              : {}),
+          ...(outcome === 'message_created' ? { messageId, effectiveContext: effectiveContext! } : {}),
+        });
+      }
+      const last = due.at(-1)!;
+      const next = nextOccurrence(schedule, last);
+      const completed = !next || priorCount + occurrences.length >= max;
+      const updated = await client.query(
+        `UPDATE scheduled_follow_ups SET status=$2,next_due_at=$3,scheduler_lock_owner=NULL,scheduler_locked_until=NULL,completed_at=$4,updated_at=$5 WHERE id=$1 RETURNING *`,
+        [
+          followUp.id,
+          completed ? 'completed' : 'active',
+          completed ? null : next,
+          completed ? input.now : null,
+          input.now,
+        ],
+      );
+      if (completed)
+        events.push(
+          await insertLifecycleEvent(client, {
+            sessionId: followUp.sessionId,
+            type: 'scheduled_follow_up_completed',
+            payload: { followUpId: followUp.id },
+            createdAt: input.now,
+          }),
+        );
+      if (message)
+        await client.query(
+          `UPDATE sessions SET status=CASE WHEN status='active' THEN status ELSE 'queued' END,last_activity_at=$2,updated_at=$2 WHERE id=$1`,
+          [followUp.sessionId, input.now],
+        );
+      return { followUp: toScheduledFollowUp(updated.rows[0]), occurrences, ...(message ? { message } : {}), events };
+    });
+  }
+
   async createExternalThread(input: {
     id: string;
     source: string;
@@ -4160,15 +4814,18 @@ export class PostgresStore implements AppStore {
     metadata: Record<string, unknown>;
     now: Date;
   }): Promise<ExternalThreadRecord> {
-    const result = await this.pool.query<ExternalThreadRow>(
-      `INSERT INTO external_threads (id, source, external_id, session_id, metadata, created_at, updated_at)
+    return this.transaction(async (client) => {
+      await client.query('SELECT id FROM sessions WHERE id=$1 FOR UPDATE', [input.sessionId]);
+      const result = await client.query<ExternalThreadRow>(
+        `INSERT INTO external_threads (id, source, external_id, session_id, metadata, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $6)
        ON CONFLICT (source, external_id) DO UPDATE SET updated_at = external_threads.updated_at
        RETURNING id, source, external_id, session_id, metadata, created_at, updated_at`,
-      [input.id, input.source, input.externalId, input.sessionId, input.metadata, input.now],
-    );
+        [input.id, input.source, input.externalId, input.sessionId, input.metadata, input.now],
+      );
 
-    return toExternalThread(result.rows[0]!);
+      return toExternalThread(result.rows[0]!);
+    });
   }
 
   async createIntegrationDelivery(input: {
@@ -4230,16 +4887,7 @@ export class PostgresStore implements AppStore {
   }
 
   private async nextSequence(sessionId: string, kind: 'messages' | 'events'): Promise<number> {
-    const result = await this.pool.query<{ sequence: PgInteger }>(
-      `INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
-       VALUES ($1, $2, 2)
-       ON CONFLICT (session_id, kind)
-       DO UPDATE SET next_sequence = session_sequence_counters.next_sequence + 1
-       RETURNING next_sequence - 1 AS sequence`,
-      [sessionId, kind],
-    );
-
-    return Number(result.rows[0]!.sequence);
+    return nextSequenceForClient(this.pool, sessionId, kind);
   }
 
   private async eventFromNotification(payload: string): Promise<EventRecord | null> {
@@ -4277,6 +4925,7 @@ export class PostgresStore implements AppStore {
     status: 'completed' | 'failed' | 'cancelled',
     finishedAt: Date,
     error?: string,
+    callbackDelivery?: CreateCallbackDeliveryRecord,
   ): Promise<ClaimedMessageBatch | null> {
     return this.transaction(async (client) => {
       const runResult = await client.query<RunRow>(
@@ -4305,7 +4954,7 @@ export class PostgresStore implements AppStore {
         `UPDATE messages
          SET status = $2
           WHERE id = ANY($1::uuid[]) AND status IN ('processing', 'cancelling')
-            RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at`,
+            RETURNING id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, scheduled_follow_up_id, scheduled_follow_up_occurrence_id, created_at`,
         [messageIds, status],
       );
 
@@ -4348,6 +4997,8 @@ export class PostgresStore implements AppStore {
         }
       }
 
+      if (callbackDelivery) await this.insertCallbackDelivery(client, callbackDelivery);
+
       return { messages, run: toRun(run), events };
     });
   }
@@ -4377,26 +5028,33 @@ export class PostgresStore implements AppStore {
     if (!missing.length) return operation();
     if (held.size) throw new Error('Nested coordination leases must not expand their lock set');
     const client = await this.coordinationPool.connect();
-    let releaseError: Error | undefined;
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
     try {
       for (const key of missing) await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
-      return await this.heldCoordinationLocks.run(new Set([...held, ...missing]), operation);
-    } finally {
-      for (const key of missing.reverse()) {
-        try {
-          const unlocked = await client.query<{ unlocked: boolean }>(
-            'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked',
-            [key],
-          );
-          if (!unlocked.rows[0]?.unlocked) throw new Error(`Coordination lock was not held: ${key}`);
-        } catch (error) {
-          releaseError = error instanceof Error ? error : new Error(String(error));
-          break;
-        }
-      }
-      client.release(releaseError);
-      if (releaseError) throw releaseError;
+      outcome = {
+        ok: true,
+        value: await this.heldCoordinationLocks.run(new Set([...held, ...missing]), operation),
+      };
+    } catch (error) {
+      outcome = { ok: false, error };
     }
+    let releaseError: Error | undefined;
+    for (const key of missing.reverse()) {
+      try {
+        const unlocked = await client.query<{ unlocked: boolean }>(
+          'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked',
+          [key],
+        );
+        if (!unlocked.rows[0]?.unlocked) throw new Error(`Coordination lock was not held: ${key}`);
+      } catch (error) {
+        releaseError = error instanceof Error ? error : new Error(String(error));
+        break;
+      }
+    }
+    client.release(releaseError);
+    if (releaseError) throw releaseError;
+    if (!outcome.ok) throw outcome.error;
+    return outcome.value;
   }
 
   private async listEnvironmentRepositories(
@@ -4840,4 +5498,123 @@ function parseNotepadActor(value: unknown): NotepadActor {
 function sqlPage<T>(rows: T[], limit: number, offset: number) {
   const hasMore = rows.length > limit;
   return { items: rows.slice(0, limit), hasMore, nextCursor: hasMore ? String(offset + limit) : null };
+}
+
+type ScheduledFollowUpRow = QueryResultRow & {
+  id: string;
+  session_id: string;
+  status: ScheduledFollowUpRecord['status'];
+  schedule_kind: ScheduledFollowUpRecord['scheduleKind'];
+  prompt: string;
+  context_overrides: ScheduledFollowUpRecord['contextOverrides'] | null;
+  run_at: Date | null;
+  dtstart_local: Date | string | null;
+  timezone: string | null;
+  rrule: string | null;
+  ends_at: Date | null;
+  max_occurrences: number | null;
+  next_due_at: Date | null;
+  definition_revision: number;
+  scheduler_lock_owner: string | null;
+  scheduler_locked_until: Date | null;
+  created_by_user_id: string | null;
+  created_by_session_id: string | null;
+  created_by_run_id: string | null;
+  created_by_message_id: string | null;
+  idempotency_key: string | null;
+  created_at: Date;
+  updated_at: Date;
+  completed_at: Date | null;
+  cancelled_at: Date | null;
+};
+
+type ScheduledFollowUpOccurrenceRow = QueryResultRow & {
+  id: string;
+  scheduled_follow_up_id: string;
+  occurrence_number: number;
+  definition_revision: number;
+  scheduled_at: Date;
+  activated_at: Date;
+  outcome: ScheduledFollowUpOccurrenceRecord['outcome'];
+  reason: NonNullable<ScheduledFollowUpOccurrenceRecord['reason']> | null;
+  error: string | null;
+  message_id: string | null;
+  effective_context: ScheduledFollowUpOccurrenceRecord['effectiveContext'] | null;
+  delivery_metadata: ScheduledFollowUpOccurrenceRecord['deliveryMetadata'] | null;
+};
+
+function toScheduledFollowUp(r: ScheduledFollowUpRow): ScheduledFollowUpRecord {
+  return {
+    id: r.id,
+    sessionId: r.session_id,
+    status: r.status,
+    scheduleKind: r.schedule_kind,
+    prompt: r.prompt,
+    definitionRevision: r.definition_revision,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    ...(r.context_overrides ? { contextOverrides: r.context_overrides } : {}),
+    ...(r.run_at ? { runAt: r.run_at } : {}),
+    ...(r.dtstart_local
+      ? { dtstartLocal: typeof r.dtstart_local === 'string' ? r.dtstart_local : formatLocalTimestamp(r.dtstart_local) }
+      : {}),
+    ...(r.timezone ? { timezone: r.timezone } : {}),
+    ...(r.rrule ? { rrule: r.rrule } : {}),
+    ...(r.ends_at ? { endsAt: r.ends_at } : {}),
+    ...(r.max_occurrences ? { maxOccurrences: r.max_occurrences } : {}),
+    ...(r.next_due_at ? { nextDueAt: r.next_due_at } : {}),
+    ...(r.scheduler_lock_owner ? { schedulerLockOwner: r.scheduler_lock_owner } : {}),
+    ...(r.scheduler_locked_until ? { schedulerLockedUntil: r.scheduler_locked_until } : {}),
+    ...(r.created_by_user_id ? { createdByUserId: r.created_by_user_id } : {}),
+    ...(r.created_by_session_id ? { createdBySessionId: r.created_by_session_id } : {}),
+    ...(r.created_by_run_id ? { createdByRunId: r.created_by_run_id } : {}),
+    ...(r.created_by_message_id ? { createdByMessageId: r.created_by_message_id } : {}),
+    ...(r.idempotency_key ? { idempotencyKey: r.idempotency_key } : {}),
+    ...(r.completed_at ? { completedAt: r.completed_at } : {}),
+    ...(r.cancelled_at ? { cancelledAt: r.cancelled_at } : {}),
+  };
+}
+function toScheduledOccurrence(r: ScheduledFollowUpOccurrenceRow): ScheduledFollowUpOccurrenceRecord {
+  return {
+    id: r.id,
+    scheduledFollowUpId: r.scheduled_follow_up_id,
+    occurrenceNumber: r.occurrence_number,
+    definitionRevision: r.definition_revision,
+    scheduledAt: r.scheduled_at,
+    activatedAt: r.activated_at,
+    outcome: r.outcome,
+    ...(r.reason ? { reason: r.reason } : {}),
+    ...(r.error ? { error: r.error } : {}),
+    ...(r.message_id ? { messageId: r.message_id } : {}),
+    ...(r.effective_context ? { effectiveContext: r.effective_context } : {}),
+    ...(r.delivery_metadata ? { deliveryMetadata: r.delivery_metadata } : {}),
+  };
+}
+
+function formatLocalTimestamp(value: Date): string {
+  const part = (number: number) => String(number).padStart(2, '0');
+  return `${value.getFullYear()}-${part(value.getMonth() + 1)}-${part(value.getDate())}T${part(value.getHours())}:${part(value.getMinutes())}:${part(value.getSeconds())}`;
+}
+
+function stableUuid(value: string): string {
+  const hash = createHash('sha256').update(value).digest('hex').slice(0, 32).split('');
+  hash[12] = '5';
+  hash[16] = ((parseInt(hash[16]!, 16) & 3) | 8).toString(16);
+  return `${hash.slice(0, 8).join('')}-${hash.slice(8, 12).join('')}-${hash.slice(12, 16).join('')}-${hash.slice(16, 20).join('')}-${hash.slice(20).join('')}`;
+}
+
+async function nextSequenceForClient(
+  client: Pick<Pool | PoolClient, 'query'>,
+  sessionId: string,
+  kind: 'messages' | 'events',
+): Promise<number> {
+  const result = await client.query<{ sequence: PgInteger }>(
+    `INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
+     VALUES ($1, $2, 2)
+     ON CONFLICT (session_id, kind)
+     DO UPDATE SET next_sequence = session_sequence_counters.next_sequence + 1
+     RETURNING next_sequence - 1 AS sequence`,
+    [sessionId, kind],
+  );
+  return Number(result.rows[0]!.sequence);
 }

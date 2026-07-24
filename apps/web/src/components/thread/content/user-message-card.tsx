@@ -1,4 +1,4 @@
-import { RotateCcw, X } from 'lucide-react';
+import { ChevronsUp, Pencil, RotateCcw, X } from 'lucide-react';
 import type { Message } from '../../../api.js';
 import { cn } from '../../../lib/utils.js';
 import { Badge } from '../../ui/badge.js';
@@ -32,17 +32,31 @@ export function UserMessageCard(props: {
   steeringPending: boolean;
   openableManagedSkillIds?: ReadonlySet<string>;
   onOpenSkill?: (skillId: string, revisionId: string) => void;
+  onOpenSession?: (sessionId: string) => void;
   onRetryFailedMessages: (messageIds: string[]) => void;
   onSaveEdit: () => void;
 }) {
   const { message } = props;
+  const sourceSessionId =
+    typeof message.context?.sourceSessionId === 'string' ? message.context.sourceSessionId : undefined;
   return (
     <Card className="border-primary/50 bg-primary/10 p-3" role="article" aria-label={`Message ${message.sequence}`}>
-      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex min-w-0 items-center gap-2 overflow-hidden text-xs font-medium text-muted-foreground">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h3 className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-xs font-medium text-muted-foreground">
           <span className="min-w-0 truncate">
             {messageLabel(message)}
-            {message.authorName ? ` from ${message.authorName}` : ''}
+            {message.authorName ? ' from ' : ''}
+            {message.authorName && sourceSessionId && props.onOpenSession ? (
+              <button
+                className="underline decoration-muted-foreground/50 underline-offset-2 hover:text-foreground"
+                type="button"
+                onClick={() => props.onOpenSession?.(sourceSessionId)}
+              >
+                {message.authorName}
+              </button>
+            ) : (
+              message.authorName
+            )}
           </span>
           <InlineTimestamp value={message.createdAt} />
           <Badge className={cn('shrink-0', statusTextClass(message.status))}>{messageStatusLabel(message)}</Badge>
@@ -51,30 +65,36 @@ export function UserMessageCard(props: {
         {props.canWriteSession && message.status === 'pending' && props.editingMessageId !== message.id ? (
           <div className="flex gap-1">
             <Button
-              className="h-7 px-2"
+              className="h-7 w-7 p-0"
               variant={message.steering ? 'secondary' : 'ghost'}
-              size="sm"
+              size="icon"
               aria-pressed={message.steering}
-              title={
-                message.steering
-                  ? 'Cancel steering and leave this message in the ordinary queue.'
-                  : 'Send this message into the active turn ahead of ordinary queued messages.'
-              }
+              aria-label={message.steering ? 'Cancel steering' : 'Steer'}
+              title={message.steering ? 'Cancel steering' : 'Steer'}
               disabled={props.steeringPending}
               onClick={() => props.onToggleSteering(message)}
             >
-              {message.steering ? 'Cancel steering' : 'Steer'}
-            </Button>
-            <Button className="h-7 px-2" variant="ghost" size="sm" onClick={() => props.onEditMessage(message)}>
-              Edit
+              <ChevronsUp className="h-3.5 w-3.5" />
             </Button>
             <Button
-              className="h-7 px-2"
+              className="h-7 w-7 p-0"
               variant="ghost"
-              size="sm"
+              size="icon"
+              aria-label="Edit"
+              title="Edit"
+              onClick={() => props.onEditMessage(message)}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              className="h-7 w-7 p-0"
+              variant="ghost"
+              size="icon"
+              aria-label="Cancel"
+              title="Cancel"
               onClick={() => props.onCancelQueuedMessage(message.id)}
             >
-              Cancel
+              <X className="h-3.5 w-3.5" />
             </Button>
           </div>
         ) : null}
@@ -130,15 +150,16 @@ export function UserMessageCard(props: {
 export function CancelRunButton(props: { cancelling: boolean; onCancelRun: () => void }) {
   return (
     <Button
-      className="h-7 shrink-0 whitespace-nowrap px-2"
+      className="h-7 w-7 shrink-0 p-0"
       type="button"
       variant="secondary"
-      size="sm"
+      size="icon"
       onClick={props.onCancelRun}
       disabled={props.cancelling}
       aria-label={props.cancelling ? 'Cancelling...' : 'Cancel task'}
+      title={props.cancelling ? 'Cancelling…' : 'Cancel'}
     >
-      <X className="h-3.5 w-3.5 shrink-0" /> {props.cancelling ? 'Cancelling' : 'Cancel'}
+      <X className="h-3.5 w-3.5" />
     </Button>
   );
 }

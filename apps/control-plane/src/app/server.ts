@@ -33,6 +33,7 @@ import { MessageService, MessageServiceError } from '../messages/service.js';
 import { SandboxCleanupService, SandboxKeepaliveService, SandboxLifecycleService } from '../sandbox/service.js';
 import { SnippetService } from '../snippets/service.js';
 import { NotepadService } from '../notepads/service.js';
+import type { ExternalCallbackResolverConfig } from '../scheduled-follow-ups/external-callback-resolver.js';
 import { sandboxRuntimeId } from '../sandbox/runtime.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import { registerSnippetRoutes } from './snippet-routes.js';
@@ -52,6 +53,8 @@ import {
 } from '../store/types.js';
 import { registerAuthRoutes } from './auth-routes.js';
 import { registerAutomationRoutes } from './automation-routes.js';
+import { registerScheduledFollowUpRoutes } from './scheduled-follow-up-routes.js';
+import { ScheduledFollowUpService } from '../scheduled-follow-ups/service.js';
 import { registerEnvironmentRoutes } from './environment-routes.js';
 import { registerEventRoutes } from './event-routes.js';
 import { writeSessionEventStream } from './event-stream.js';
@@ -112,6 +115,7 @@ export type AppServices = {
   sessions: SessionService;
   messages: MessageService;
   automations: AutomationService;
+  scheduledFollowUps: ScheduledFollowUpService;
   skills: SkillService;
   snippets: SnippetService;
   notepads: NotepadService;
@@ -139,6 +143,12 @@ export function createServices(
     sandboxProvider?: SandboxProvider;
     artifactObjectStorage?: ArtifactObjectStorage;
     unsafeAllowLocalHttpCallbacks?: boolean;
+    scheduledFollowUpExternalResolver?: ExternalCallbackResolverConfig;
+    scheduledFollowUpContext?: {
+      modelConfig: { runnerModelDefault?: string; runnerModelChoices: string[] };
+      skillsEnabled: boolean;
+      repoSkillsEnabled: boolean;
+    };
   } = {},
 ): AppServices {
   const events = new EventService(store);
@@ -147,6 +157,7 @@ export function createServices(
   const environments = new EnvironmentService(store);
   const automations = new AutomationService(store, sessions, messages, environments);
   const skills = new SkillService(store);
+  const modelAvailability = new ModelAvailabilityService();
   const snippets = new SnippetService(store);
   const notepads = new NotepadService(store, events);
   const services: AppServices = {
@@ -156,6 +167,21 @@ export function createServices(
     sessions,
     messages,
     automations,
+    scheduledFollowUps: new ScheduledFollowUpService(
+      store,
+      events,
+      options.scheduledFollowUpExternalResolver,
+      options.scheduledFollowUpContext
+        ? { environments, skills, modelAvailability, ...options.scheduledFollowUpContext }
+        : {
+            environments,
+            skills,
+            modelConfig: { runnerModelChoices: [] },
+            modelAvailability,
+            skillsEnabled: true,
+            repoSkillsEnabled: true,
+          },
+    ),
     skills,
     snippets,
     notepads,
@@ -165,7 +191,7 @@ export function createServices(
       unsafeAllowLocalHttpCallbacks: Boolean(options.unsafeAllowLocalHttpCallbacks),
     }),
     callbacks: new CallbackService(store, events),
-    modelAvailability: new ModelAvailabilityService(),
+    modelAvailability,
   };
   if (options.sandboxProvider) {
     services.sandboxProvider = options.sandboxProvider;
@@ -195,7 +221,8 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (error instanceof HttpRequestError) {
       return writeError(c, error.statusCode, error.code, error.message);
     }
-    return writeError(c, 500, 'internal_error', error instanceof Error ? error.message : 'Unknown error');
+    console.error('Unhandled API error', { requestId: c.get('requestId'), error });
+    return writeError(c, 500, 'internal_error', 'An unexpected error occurred');
   });
 
   app.notFound((c) => c.json({ error: 'not_found', message: 'Route not found' }, 404));
@@ -374,6 +401,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   registerAutomationRoutes(app, config, services, {
     serializeSession: (session) => serializeSessionWithSandbox(config, services, session),
   });
+  registerScheduledFollowUpRoutes(app, config, services);
   registerEnvironmentRoutes(app, config, services);
   registerSkillRoutes(app, config, services);
   registerSnippetRoutes(app, config, services);
@@ -1139,26 +1167,23 @@ function sessionAuthorizationMiddleware(
       await next();
       return;
     }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId))
+      return writeError(c, 404, 'not_found', 'Session not found');
     const session = await services.sessions.get(sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
 
     const method = c.req.method.toUpperCase();
     const pathname = new URL(c.req.url).pathname;
     const isStarRoute = pathname === `/sessions/${sessionId}/star`;
-    const allowed =
-      unsafeMethods.has(method) && !isStarRoute ? canWriteSession(auth, session) : canReadSession(auth, session);
+    const isScheduledFollowUpPreview = pathname === `/sessions/${sessionId}/scheduled-follow-ups/preview`;
+    const requiresWrite = unsafeMethods.has(method) && !isStarRoute && !isScheduledFollowUpPreview;
+    const allowed = requiresWrite ? canWriteSession(auth, session) : canReadSession(auth, session);
     if (!allowed) {
       if (session.visibility === 'private') return writeError(c, 404, 'not_found', 'Session not found');
       return writeError(c, 403, 'forbidden', 'Session access is required');
     }
     c.set('authorizedSession', session);
-    if (
-      unsafeMethods.has(method) &&
-      !isStarRoute &&
-      session.visibility === 'private' &&
-      !auth.bypass &&
-      !c.get('privateWriteLeaseActive')
-    ) {
+    if (requiresWrite && session.visibility === 'private' && !auth.bypass && !c.get('privateWriteLeaseActive')) {
       try {
         c.set('privateWriteLeaseActive', true);
         await services.store.withPrivateSessionWriteLease(auth.user.id, session.id, next);

@@ -173,7 +173,7 @@ export function isRepositoryAllowed(repository: GitHubRepository, allowedReposit
   return allowedRepositories.some((pattern) => repositoryPatternMatches(pattern, key));
 }
 
-function repositoryPatternMatches(pattern: string, repositoryKey: string): boolean {
+export function repositoryPatternMatches(pattern: string, repositoryKey: string): boolean {
   const normalized = pattern.toLowerCase();
   if (normalized === repositoryKey) return true;
   if (!normalized.endsWith('/*')) return false;

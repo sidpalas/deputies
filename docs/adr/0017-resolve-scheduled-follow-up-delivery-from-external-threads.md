@@ -1,0 +1,3 @@
+# Resolve scheduled follow-up delivery from external threads
+
+When a scheduled follow-up belongs to a session bound to an external thread, its result is delivered back to that external thread. Deputies resolves a fresh trusted delivery target from the durable external-thread binding when creating the occurrence message rather than copying message-scoped callback data from an earlier integration message. The definition, occurrence, message, events, and callback records remain governed by the target session's tenant or private access boundary. If an occurrence fails before creating a message, Deputies records a session event and sends a concise failure notice to the external thread when that destination remains available.

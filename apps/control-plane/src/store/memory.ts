@@ -1,4 +1,10 @@
 import type { NormalizedEvent } from '../events/types.js';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  nextOccurrence,
+  occurrenceInstantsBetween,
+  type NormalizedSchedule,
+} from '../scheduled-follow-ups/recurrence.js';
 import { MemorySkillStore } from './memory-skills.js';
 import { notepadRevisionRetentionLimit, StoreConflictError } from './types.js';
 import type {
@@ -75,6 +81,14 @@ import type {
   UpdateSnippetRecord,
   UpsertAuthUserForAccountRecord,
   WebhookSourceRecord,
+  CreateScheduledFollowUpRecordInput,
+  ScheduledFollowUpActivationResult,
+  ScheduledFollowUpClaim,
+  ScheduledFollowUpMutationResult,
+  ScheduledFollowUpOccurrenceCursor,
+  ScheduledFollowUpOccurrenceRecord,
+  ScheduledFollowUpRecord,
+  UpdateScheduledFollowUpRecordInput,
 } from './types.js';
 
 const staleCallbackSendingMs = 15 * 60_000;
@@ -95,6 +109,8 @@ export class MemoryStore implements AppStore {
   private readonly externalResources = new Map<string, ExternalResourceRecord>();
   private readonly callbacks = new Map<string, CallbackDeliveryRecord>();
   private readonly automations = new Map<string, AutomationRecord>();
+  private readonly scheduledFollowUps = new Map<string, ScheduledFollowUpRecord>();
+  private readonly scheduledFollowUpOccurrences = new Map<string, ScheduledFollowUpOccurrenceRecord[]>();
   private readonly automationInvocations = new Map<string, AutomationInvocationRecord>();
   private readonly environments = new Map<string, EnvironmentWithDetailsRecord>();
   private readonly environmentRevisions = new Map<string, EnvironmentRevisionRecord>();
@@ -1227,6 +1243,19 @@ export class MemoryStore implements AppStore {
     if (existing.status === 'archived') return { session: cloneSession(existing), cancelledMessages: [], events: [] };
 
     const sessionMessages = this.messages.get(input.sessionId) ?? [];
+    for (const followUp of this.scheduledFollowUps.values()) {
+      if (followUp.sessionId === input.sessionId && followUp.status === 'active') {
+        this.scheduledFollowUps.set(followUp.id, {
+          ...followUp,
+          status: 'cancelled',
+          nextDueAt: undefined,
+          schedulerLockOwner: undefined,
+          schedulerLockedUntil: undefined,
+          cancelledAt: input.archivedAt,
+          updatedAt: input.archivedAt,
+        });
+      }
+    }
     const cancelledMessages: MessageRecord[] = [];
     for (const message of sessionMessages) {
       if (message.status !== 'pending') continue;
@@ -1243,6 +1272,18 @@ export class MemoryStore implements AppStore {
     };
     this.setSession(input.sessionId, session);
     const events: EventRecord[] = [];
+    for (const followUp of this.scheduledFollowUps.values()) {
+      if (followUp.sessionId === input.sessionId && followUp.cancelledAt?.getTime() === input.archivedAt.getTime()) {
+        events.push(
+          this.appendEventWithNextSequenceSync({
+            sessionId: input.sessionId,
+            type: 'scheduled_follow_up_cancelled',
+            payload: { followUpId: followUp.id },
+            createdAt: input.archivedAt,
+          }),
+        );
+      }
+    }
     for (const message of cancelledMessages) {
       events.push(
         this.appendEventWithNextSequenceSync({
@@ -1810,7 +1851,8 @@ export class MemoryStore implements AppStore {
   }): Promise<MessageRecord | null> {
     const sessionMessages = this.messages.get(input.sessionId) ?? [];
     const message = sessionMessages.find(
-      (candidate) => candidate.id === input.messageId && candidate.status === 'pending',
+      (candidate) =>
+        candidate.id === input.messageId && candidate.status === 'pending' && !candidate.scheduledFollowUpId,
     );
     if (!message) return null;
     const updated = {
@@ -1821,6 +1863,37 @@ export class MemoryStore implements AppStore {
     };
     sessionMessages[sessionMessages.indexOf(message)] = updated;
     return updated;
+  }
+
+  async retryScheduledMessage(input: {
+    sessionId: string;
+    messageId: string;
+    retriedAt: Date;
+  }): Promise<MessageRecord | null> {
+    const messages = this.messages.get(input.sessionId) ?? [];
+    const message = messages.find((candidate) => candidate.id === input.messageId);
+    if (!message?.scheduledFollowUpId || message.status !== 'failed') return null;
+    const session = this.sessions.get(input.sessionId);
+    if (session?.status === 'archived') return null;
+    if (
+      messages.some(
+        (candidate) =>
+          candidate.scheduledFollowUpId === message.scheduledFollowUpId &&
+          candidate.id !== message.id &&
+          ['pending', 'processing', 'cancelling'].includes(candidate.status),
+      )
+    )
+      return null;
+    message.status = 'pending';
+    if (session) {
+      this.setSession(input.sessionId, {
+        ...session,
+        status: session.status === 'active' ? 'active' : 'queued',
+        updatedAt: input.retriedAt,
+        lastActivityAt: input.retriedAt,
+      });
+    }
+    return structuredClone(message);
   }
 
   async cancelPendingMessage(input: {
@@ -1934,7 +2007,13 @@ export class MemoryStore implements AppStore {
         .sort((a, b) => a.sequence - b.sequence);
       if (!pendingMessages.length) continue;
 
-      const processingMessages = pendingMessages.map((message) => ({ ...message, status: 'processing' as const }));
+      const firstGeneratedId = pendingMessages.findIndex((message) => message.scheduledFollowUpId);
+      const claimable = pendingMessages[0]!.scheduledFollowUpId
+        ? pendingMessages.slice(0, 1)
+        : firstGeneratedId < 0
+          ? pendingMessages
+          : pendingMessages.slice(0, firstGeneratedId);
+      const processingMessages = claimable.map((message) => ({ ...message, status: 'processing' as const }));
       for (const message of processingMessages) {
         const existing = sessionMessages.find((candidate) => candidate.id === message.id)!;
         sessionMessages[sessionMessages.indexOf(existing)] = message;
@@ -2146,10 +2225,13 @@ export class MemoryStore implements AppStore {
     leaseOwner: string;
     failedAt: Date;
     error: string;
+    callbackDelivery?: CreateCallbackDeliveryRecord;
   }): Promise<ClaimedMessageBatch | null> {
+    if (input.callbackDelivery) this.assertCallbackDeliveryIdempotent(input.callbackDelivery);
     const claimed = this.finishRun(input.runId, input.leaseOwner, input.failedAt, 'failed');
     if (!claimed) return null;
     this.runs.set(input.runId, { ...claimed.run, error: input.error });
+    if (input.callbackDelivery) await this.createCallbackDelivery(input.callbackDelivery);
     return { ...claimed, run: this.runs.get(input.runId)! };
   }
 
@@ -2331,18 +2413,9 @@ export class MemoryStore implements AppStore {
   }
 
   async createCallbackDelivery(record: CreateCallbackDeliveryRecord): Promise<CallbackDeliveryRecord> {
+    this.assertCallbackDeliveryIdempotent(record);
     const existing = this.callbacks.get(record.id);
     if (existing) {
-      if (
-        existing.sessionId !== record.sessionId ||
-        existing.runId !== record.runId ||
-        existing.messageId !== record.messageId ||
-        existing.targetType !== record.targetType ||
-        existing.eventType !== record.eventType ||
-        JSON.stringify(existing.target) !== JSON.stringify(record.target) ||
-        JSON.stringify(existing.payload) !== JSON.stringify(record.payload)
-      )
-        throw new Error(`Callback idempotency mismatch: ${record.id}`);
       return existing;
     }
     const delivery: CallbackDeliveryRecord = {
@@ -2353,6 +2426,21 @@ export class MemoryStore implements AppStore {
     };
     this.callbacks.set(delivery.id, delivery);
     return delivery;
+  }
+
+  private assertCallbackDeliveryIdempotent(record: CreateCallbackDeliveryRecord): void {
+    const existing = this.callbacks.get(record.id);
+    if (
+      existing &&
+      (existing.sessionId !== record.sessionId ||
+        existing.runId !== record.runId ||
+        existing.messageId !== record.messageId ||
+        existing.targetType !== record.targetType ||
+        existing.eventType !== record.eventType ||
+        JSON.stringify(existing.target) !== JSON.stringify(record.target) ||
+        JSON.stringify(existing.payload) !== JSON.stringify(record.payload))
+    )
+      throw new Error(`Callback idempotency mismatch: ${record.id}`);
   }
 
   async listCallbackDeliveries(input: { sessionId: string; messageId?: string }): Promise<CallbackDeliveryRecord[]> {
@@ -2380,6 +2468,7 @@ export class MemoryStore implements AppStore {
         attempts: delivery.attempts + 1,
         lastAttemptAt: input.now,
         updatedAt: input.now,
+        claimToken: randomUUID(),
       };
       this.callbacks.set(delivery.id, updated);
       return updated;
@@ -2387,9 +2476,19 @@ export class MemoryStore implements AppStore {
     return claimed;
   }
 
-  async markCallbackDeliverySent(input: { id: string; deliveredAt: Date }): Promise<CallbackDeliveryRecord> {
+  async markCallbackDeliverySent(input: {
+    id: string;
+    claimToken: string;
+    deliveredAt: Date;
+  }): Promise<CallbackDeliveryRecord> {
     const existing = this.requireCallback(input.id);
-    const { nextAttemptAt: _nextAttemptAt, lastError: _lastError, ...withoutRetryState } = existing;
+    if (existing.claimToken !== input.claimToken) throw new Error(`Stale callback delivery claim: ${input.id}`);
+    const {
+      nextAttemptAt: _nextAttemptAt,
+      lastError: _lastError,
+      claimToken: _claimToken,
+      ...withoutRetryState
+    } = existing;
     const updated: CallbackDeliveryRecord = {
       ...withoutRetryState,
       status: 'sent',
@@ -2402,13 +2501,15 @@ export class MemoryStore implements AppStore {
 
   async markCallbackDeliveryFailed(input: {
     id: string;
+    claimToken: string;
     failedAt: Date;
     error: string;
     terminal: boolean;
     nextAttemptAt?: Date;
   }): Promise<CallbackDeliveryRecord> {
     const existing = this.requireCallback(input.id);
-    const { nextAttemptAt: _nextAttemptAt, ...withoutNextAttempt } = existing;
+    if (existing.claimToken !== input.claimToken) throw new Error(`Stale callback delivery claim: ${input.id}`);
+    const { nextAttemptAt: _nextAttemptAt, claimToken: _claimToken, ...withoutNextAttempt } = existing;
     const updated: CallbackDeliveryRecord = {
       ...withoutNextAttempt,
       status: input.terminal ? 'failed' : 'pending',
@@ -2565,6 +2666,436 @@ export class MemoryStore implements AppStore {
 
   async getExternalThread(source: string, externalId: string): Promise<ExternalThreadRecord | null> {
     return this.externalThreads.get(externalThreadKey(source, externalId)) ?? null;
+  }
+
+  async getExternalThreadsForSession(sessionId: string): Promise<ExternalThreadRecord[]> {
+    return [...this.externalThreads.values()]
+      .filter((thread) => thread.sessionId === sessionId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((thread) => structuredClone(thread));
+  }
+
+  async createScheduledFollowUp(input: CreateScheduledFollowUpRecordInput): Promise<ScheduledFollowUpMutationResult> {
+    const session = this.sessions.get(input.sessionId);
+    if (!session) throw new StoreConflictError('not_found', 'Session not found');
+    if (session.status === 'archived') throw new StoreConflictError('session_archived', 'Session is archived');
+    if (input.createdByRunId && input.idempotencyKey) {
+      const replay = [...this.scheduledFollowUps.values()].find(
+        (item) => item.createdByRunId === input.createdByRunId && item.idempotencyKey === input.idempotencyKey,
+      );
+      if (replay) return { followUp: structuredClone(replay), events: [], idempotent: true };
+    }
+    if (
+      [...this.scheduledFollowUps.values()].filter(
+        (item) => item.sessionId === input.sessionId && item.status === 'active',
+      ).length >= 25
+    )
+      throw new StoreConflictError('scheduled_follow_up_active_limit', 'Session has 25 active scheduled follow-ups');
+    if (
+      input.createdByRunId &&
+      input.maxNewForRun !== undefined &&
+      [...this.scheduledFollowUps.values()].filter(
+        (item) => item.createdByRunId === input.createdByRunId && item.status === 'active',
+      ).length >= input.maxNewForRun
+    )
+      throw new StoreConflictError(
+        'scheduled_follow_up_run_limit',
+        `Run has ${input.maxNewForRun} active scheduled follow-ups`,
+      );
+    const { maxNewForRun: _maxNewForRun, ...record } = input;
+    const followUp: ScheduledFollowUpRecord = { ...structuredClone(record), status: 'active', definitionRevision: 1 };
+    this.scheduledFollowUps.set(followUp.id, followUp);
+    const event = this.appendEventWithNextSequenceSync({
+      sessionId: input.sessionId,
+      type: 'scheduled_follow_up_created',
+      payload: { followUpId: followUp.id, nextDueAt: followUp.nextDueAt?.toISOString() ?? null },
+      createdAt: input.createdAt,
+    });
+    return { followUp: structuredClone(followUp), events: [event] };
+  }
+
+  async getScheduledFollowUp(id: string): Promise<ScheduledFollowUpRecord | null> {
+    return structuredClone(this.scheduledFollowUps.get(id) ?? null);
+  }
+
+  async getScheduledFollowUpByCreatorKey(
+    createdByRunId: string,
+    idempotencyKey: string,
+  ): Promise<ScheduledFollowUpRecord | null> {
+    const item = [...this.scheduledFollowUps.values()].find(
+      (candidate) => candidate.createdByRunId === createdByRunId && candidate.idempotencyKey === idempotencyKey,
+    );
+    return item ? structuredClone(item) : null;
+  }
+
+  async listScheduledFollowUps(input: {
+    sessionId: string;
+    limit: number;
+    before?: { createdAt: Date; id: string };
+  }): Promise<ScheduledFollowUpRecord[]> {
+    return [...this.scheduledFollowUps.values()]
+      .filter(
+        (item) =>
+          item.sessionId === input.sessionId &&
+          (!input.before ||
+            item.createdAt < input.before.createdAt ||
+            (item.createdAt.getTime() === input.before.createdAt.getTime() && item.id < input.before.id)),
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id))
+      .slice(0, input.limit)
+      .map((item) => structuredClone(item));
+  }
+
+  async updateScheduledFollowUp(input: UpdateScheduledFollowUpRecordInput): Promise<ScheduledFollowUpMutationResult> {
+    const session = this.sessions.get(input.sessionId);
+    const old = this.scheduledFollowUps.get(input.id);
+    if (!session || !old || old.sessionId !== input.sessionId)
+      throw new StoreConflictError('not_found', 'Scheduled follow-up not found');
+    if (session.status === 'archived') throw new StoreConflictError('session_archived', 'Session is archived');
+    if (old.status !== 'active' || old.definitionRevision !== input.expectedRevision)
+      throw new StoreConflictError('stale_revision', 'Scheduled follow-up changed');
+    const consumed = (this.scheduledFollowUpOccurrences.get(old.id) ?? []).length;
+    if (input.normalizedSchedule.kind === 'recurring' && input.normalizedSchedule.maxOccurrences <= consumed)
+      throw new StoreConflictError('stale_revision', 'Updated maximum is not greater than consumed occurrences');
+    const latestScheduledAt = (this.scheduledFollowUpOccurrences.get(old.id) ?? []).at(-1)?.scheduledAt;
+    const cutover = new Date(Math.max(input.updatedAt.getTime(), latestScheduledAt?.getTime() ?? 0));
+    const nextDueAt = nextOccurrence(input.normalizedSchedule, cutover);
+    if (!nextDueAt) throw new StoreConflictError('stale_revision', 'Updated schedule has no future occurrence');
+    const next = {
+      ...old,
+      ...definedFields(input),
+      contextOverrides: input.contextOverrides === null ? undefined : (input.contextOverrides ?? old.contextOverrides),
+      nextDueAt,
+      definitionRevision: old.definitionRevision + 1,
+      schedulerLockOwner: undefined,
+      schedulerLockedUntil: undefined,
+    } as ScheduledFollowUpRecord;
+    this.scheduledFollowUps.set(next.id, next);
+    const event = this.appendEventWithNextSequenceSync({
+      sessionId: next.sessionId,
+      type: 'scheduled_follow_up_updated',
+      payload: {
+        followUpId: next.id,
+        revision: next.definitionRevision,
+        nextDueAt: next.nextDueAt?.toISOString() ?? null,
+      },
+      createdAt: input.updatedAt,
+    });
+    return { followUp: structuredClone(next), events: [event] };
+  }
+
+  async cancelScheduledFollowUp(input: {
+    id: string;
+    sessionId: string;
+    expectedRevision: number;
+    now: Date;
+  }): Promise<ScheduledFollowUpMutationResult> {
+    const old = this.scheduledFollowUps.get(input.id);
+    if (!old || old.sessionId !== input.sessionId)
+      throw new StoreConflictError('not_found', 'Scheduled follow-up not found');
+    if (old.status !== 'active') throw new StoreConflictError('stale_revision', 'Scheduled follow-up changed');
+    if (old.definitionRevision !== input.expectedRevision)
+      throw new StoreConflictError('stale_revision', 'Scheduled follow-up changed');
+    const next: ScheduledFollowUpRecord = {
+      ...old,
+      status: 'cancelled',
+      nextDueAt: undefined,
+      schedulerLockOwner: undefined,
+      schedulerLockedUntil: undefined,
+      cancelledAt: input.now,
+      updatedAt: input.now,
+      definitionRevision: old.definitionRevision + 1,
+    };
+    this.scheduledFollowUps.set(next.id, next);
+    const events: EventRecord[] = [];
+    for (const message of this.messages.get(input.sessionId) ?? [])
+      if (message.scheduledFollowUpId === input.id && message.status === 'pending') {
+        message.status = 'cancelled';
+        events.push(
+          this.appendEventWithNextSequenceSync({
+            sessionId: input.sessionId,
+            messageId: message.id,
+            type: 'message_cancelled',
+            payload: { sequence: message.sequence },
+            createdAt: input.now,
+          }),
+        );
+      }
+    this.refreshQueuedSessionStatus(input.sessionId, input.now);
+    events.push(
+      this.appendEventWithNextSequenceSync({
+        sessionId: input.sessionId,
+        type: 'scheduled_follow_up_cancelled',
+        payload: { followUpId: input.id },
+        createdAt: input.now,
+      }),
+    );
+    return { followUp: structuredClone(next), events };
+  }
+
+  async listScheduledFollowUpOccurrences(input: {
+    followUpId: string;
+    limit: number;
+    before?: ScheduledFollowUpOccurrenceCursor;
+  }): Promise<ScheduledFollowUpOccurrenceRecord[]> {
+    return (this.scheduledFollowUpOccurrences.get(input.followUpId) ?? [])
+      .filter((item) => !input.before || item.occurrenceNumber < input.before.occurrenceNumber)
+      .sort((a, b) => b.occurrenceNumber - a.occurrenceNumber)
+      .slice(0, input.limit)
+      .map((item) => structuredClone(item));
+  }
+
+  async claimDueScheduledFollowUp(input: {
+    lockOwner: string;
+    now: Date;
+    lockedUntil: Date;
+  }): Promise<ScheduledFollowUpClaim | null> {
+    const item = [...this.scheduledFollowUps.values()]
+      .filter(
+        (f) =>
+          f.status === 'active' &&
+          f.nextDueAt &&
+          f.nextDueAt <= input.now &&
+          (!f.schedulerLockedUntil || f.schedulerLockedUntil <= input.now),
+      )
+      .sort((a, b) => a.nextDueAt!.getTime() - b.nextDueAt!.getTime())[0];
+    if (!item) return null;
+    item.schedulerLockOwner = input.lockOwner;
+    item.schedulerLockedUntil = input.lockedUntil;
+    return { followUp: structuredClone(item), claimedRevision: item.definitionRevision };
+  }
+
+  async activateDueScheduledFollowUp(input: {
+    id: string;
+    lockOwner: string;
+    claimedRevision: number;
+    now: Date;
+    resolvedContext: import('./types.js').ScheduledFollowUpResolvedContext;
+    externalCallback?: { type: 'slack' | 'github'; target: Record<string, unknown> };
+    externalBindingError?: string;
+    expectedExternalThreadId?: string | null;
+  }): Promise<ScheduledFollowUpActivationResult | null> {
+    const f = this.scheduledFollowUps.get(input.id);
+    const session = f ? this.sessions.get(f.sessionId) : undefined;
+    if (
+      !f ||
+      !session ||
+      f.status !== 'active' ||
+      f.definitionRevision !== input.claimedRevision ||
+      f.schedulerLockOwner !== input.lockOwner ||
+      !f.schedulerLockedUntil ||
+      f.schedulerLockedUntil <= input.now
+    )
+      return null;
+    if (session.status === 'archived') {
+      f.schedulerLockOwner = undefined;
+      f.schedulerLockedUntil = undefined;
+      return null;
+    }
+    const prior = this.scheduledFollowUpOccurrences.get(f.id) ?? [];
+    const max = f.scheduleKind === 'once' ? 1 : (f.maxOccurrences ?? 100);
+    const due = occurrenceInstantsBetween(
+      recordSchedule(f),
+      new Date(f.nextDueAt!.getTime() - 1),
+      input.now,
+      max - prior.length,
+    );
+    if (!due.length) {
+      f.schedulerLockOwner = undefined;
+      f.schedulerLockedUntil = undefined;
+      return null;
+    }
+    const events: EventRecord[] = [];
+    const made: ScheduledFollowUpOccurrenceRecord[] = [];
+    let message: MessageRecord | undefined;
+    const { callback: _untrustedCallback, ...sessionContext } = session.context ?? {};
+    const currentBindings = [...this.externalThreads.values()].filter((thread) => thread.sessionId === f.sessionId);
+    const expectedExternalThreadId = input.expectedExternalThreadId ?? null;
+    const bindingChanged =
+      currentBindings.length !== (expectedExternalThreadId ? 1 : 0) ||
+      (expectedExternalThreadId !== null && currentBindings[0]?.id !== expectedExternalThreadId);
+    let environmentChanged = false;
+    const sourceSession =
+      f.createdBySessionId && f.createdBySessionId !== f.sessionId
+        ? this.sessions.get(f.createdBySessionId)
+        : undefined;
+    if (input.resolvedContext.status === 'valid') {
+      const snapshot = input.resolvedContext.overrides.environment as
+        | { id?: unknown; revisionId?: unknown }
+        | undefined;
+      if (typeof snapshot?.id === 'string' && typeof snapshot.revisionId === 'string') {
+        const environment = this.environments.get(snapshot.id);
+        const revision = this.environmentRevisions.get(snapshot.revisionId);
+        environmentChanged = !environment || !!environment.archivedAt || revision?.environmentId !== snapshot.id;
+      }
+    }
+    for (let i = 0; i < due.length; i++) {
+      const number = prior.length + made.length + 1,
+        scheduledAt = due[i]!;
+      const latest = i === due.length - 1;
+      let reason: ScheduledFollowUpOccurrenceRecord['reason'] = latest ? undefined : 'missed_during_downtime';
+      if (
+        latest &&
+        (this.messages.get(f.sessionId) ?? []).some(
+          (m) => m.scheduledFollowUpId === f.id && ['pending', 'processing', 'cancelling'].includes(m.status),
+        )
+      )
+        reason = 'previous_message_unfinished';
+      if (latest && input.externalBindingError) reason = 'external_binding_invalid';
+      if (latest && bindingChanged) reason = 'external_binding_invalid';
+      if (latest && !reason && environmentChanged) reason = 'resource_unavailable';
+      if (latest && !reason && input.resolvedContext.status === 'invalid') reason = input.resolvedContext.reason;
+      const occurrenceId = stableUuid(`${f.id}:${number}:${scheduledAt.toISOString()}`),
+        messageId = stableUuid(`${occurrenceId}:message`);
+      const occurrence: ScheduledFollowUpOccurrenceRecord = {
+        id: occurrenceId,
+        scheduledFollowUpId: f.id,
+        occurrenceNumber: number,
+        definitionRevision: f.definitionRevision,
+        scheduledAt,
+        activatedAt: input.now,
+        outcome:
+          reason === 'external_binding_invalid' || reason === 'invalid_context' || reason === 'resource_unavailable'
+            ? 'pre_message_failed'
+            : reason
+              ? 'skipped'
+              : 'message_created',
+        ...(reason ? { reason } : {}),
+        ...(reason === 'external_binding_invalid'
+          ? { error: input.externalBindingError ?? 'External thread binding changed during activation' }
+          : input.resolvedContext.status === 'invalid' && reason === input.resolvedContext.reason
+            ? { error: input.resolvedContext.error }
+            : environmentChanged && reason === 'resource_unavailable'
+              ? { error: 'Environment became unavailable during activation' }
+              : {}),
+        ...(!reason
+          ? {
+              messageId,
+              effectiveContext: (() => {
+                const context = { ...sessionContext };
+                if (input.resolvedContext.status === 'valid') {
+                  for (const key of input.resolvedContext.clear) delete context[key];
+                  Object.assign(context, input.resolvedContext.overrides);
+                }
+                if (input.externalCallback) context.callback = input.externalCallback.target;
+                if (sourceSession) context.sourceSessionId = sourceSession.id;
+                return context;
+              })(),
+            }
+          : {}),
+      };
+      made.push(occurrence);
+      if (occurrence.outcome === 'pre_message_failed' && input.externalCallback) {
+        const callbackId = stableUuid(`${occurrenceId}:scheduled_follow_up_failed`);
+        if (!this.callbacks.has(callbackId)) {
+          this.callbacks.set(callbackId, {
+            id: callbackId,
+            sessionId: f.sessionId,
+            targetType: input.externalCallback.type,
+            target: structuredClone(input.externalCallback.target),
+            status: 'pending',
+            eventType: 'scheduled_follow_up_failed',
+            payload: {
+              event: 'scheduled_follow_up_failed',
+              sessionId: f.sessionId,
+              scheduledFollowUpId: f.id,
+              occurrenceId,
+              text: 'This scheduled follow-up could not be started.',
+              artifacts: [],
+            },
+            attempts: 0,
+            maxAttempts: 5,
+            createdAt: input.now,
+            updatedAt: input.now,
+            nextAttemptAt: input.now,
+          });
+        }
+      }
+      if (!reason) {
+        const list = this.messages.get(f.sessionId) ?? [];
+        const created: MessageRecord = {
+          id: messageId,
+          sessionId: f.sessionId,
+          sequence: Math.max(0, ...list.map((m) => m.sequence)) + 1,
+          status: 'pending',
+          prompt: f.prompt,
+          steering: false,
+          source: 'scheduled_follow_up',
+          ...(sourceSession ? { authorName: `Deputy: ${sourceSession.title || sourceSession.id}` } : {}),
+          ...(occurrence.effectiveContext ? { context: occurrence.effectiveContext } : {}),
+          scheduledFollowUpId: f.id,
+          scheduledFollowUpOccurrenceId: occurrenceId,
+          createdAt: input.now,
+        };
+        message = created;
+        list.push(created);
+        this.messages.set(f.sessionId, list);
+        this.refreshQueuedSessionStatus(f.sessionId, input.now);
+        events.push(
+          this.appendEventWithNextSequenceSync({
+            sessionId: f.sessionId,
+            messageId,
+            type: 'message_created',
+            payload: { sequence: created.sequence, source: created.source ?? null },
+            createdAt: input.now,
+          }),
+        );
+      }
+      events.push(
+        this.appendEventWithNextSequenceSync({
+          sessionId: f.sessionId,
+          messageId: occurrence.messageId,
+          type:
+            occurrence.outcome === 'message_created'
+              ? 'scheduled_follow_up_occurrence_created'
+              : occurrence.outcome === 'skipped'
+                ? 'scheduled_follow_up_occurrence_skipped'
+                : 'scheduled_follow_up_occurrence_failed',
+          payload:
+            occurrence.outcome === 'message_created'
+              ? {
+                  followUpId: f.id,
+                  occurrenceId,
+                  occurrenceNumber: number,
+                  scheduledAt: scheduledAt.toISOString(),
+                  messageId,
+                }
+              : {
+                  followUpId: f.id,
+                  occurrenceId,
+                  occurrenceNumber: number,
+                  scheduledAt: scheduledAt.toISOString(),
+                  reason: reason!,
+                },
+          createdAt: input.now,
+        } as NormalizedEvent),
+      );
+    }
+    this.scheduledFollowUpOccurrences.set(f.id, [...prior, ...made]);
+    const next = nextOccurrence(recordSchedule(f), due.at(-1)!);
+    f.nextDueAt = next ?? undefined;
+    f.schedulerLockOwner = undefined;
+    f.schedulerLockedUntil = undefined;
+    f.updatedAt = input.now;
+    if (!next || prior.length + made.length >= max) {
+      f.status = 'completed';
+      f.completedAt = input.now;
+      f.nextDueAt = undefined;
+      events.push(
+        this.appendEventWithNextSequenceSync({
+          sessionId: f.sessionId,
+          type: 'scheduled_follow_up_completed',
+          payload: { followUpId: f.id },
+          createdAt: input.now,
+        }),
+      );
+    }
+    return {
+      followUp: structuredClone(f),
+      occurrences: structuredClone(made),
+      ...(message ? { message: structuredClone(message) } : {}),
+      events,
+    };
   }
 
   async createExternalThread(input: {
@@ -3054,6 +3585,30 @@ function externalThreadKey(source: string, externalId: string): string {
 
 function deliveryKey(source: string, dedupeKey: string): string {
   return `${source}:${dedupeKey}`;
+}
+
+function definedFields(value: object): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([k, v]) => v !== undefined && !['id', 'sessionId', 'expectedRevision'].includes(k)),
+  );
+}
+function recordSchedule(f: ScheduledFollowUpRecord): NormalizedSchedule {
+  return f.scheduleKind === 'once'
+    ? { kind: 'once', runAt: f.runAt! }
+    : {
+        kind: 'recurring',
+        dtstartLocal: f.dtstartLocal!,
+        timezone: f.timezone!,
+        rrule: f.rrule!,
+        maxOccurrences: f.maxOccurrences!,
+        ...(f.endsAt ? { endsAt: f.endsAt } : {}),
+      };
+}
+function stableUuid(value: string): string {
+  const h = createHash('sha256').update(value).digest('hex').slice(0, 32).split('');
+  h[12] = '5';
+  h[16] = ((parseInt(h[16]!, 16) & 3) | 8).toString(16);
+  return `${h.slice(0, 8).join('')}-${h.slice(8, 12).join('')}-${h.slice(12, 16).join('')}-${h.slice(16, 20).join('')}-${h.slice(20).join('')}`;
 }
 
 function withSessionDefaults(record: CreateSessionRecord): SessionRecord {

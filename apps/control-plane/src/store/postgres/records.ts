@@ -85,6 +85,8 @@ export type MessageRow = QueryResultRow & {
   author_name: string | null;
   source: string | null;
   context: Record<string, unknown> | null;
+  scheduled_follow_up_id: string | null;
+  scheduled_follow_up_occurrence_id: string | null;
   created_at: Date;
 };
 
@@ -189,6 +191,7 @@ export type CallbackDeliveryRow = QueryResultRow & {
   next_attempt_at: Date | null;
   last_attempt_at: Date | null;
   delivered_at: Date | null;
+  claim_token: string | null;
 };
 
 export type AutomationRow = QueryResultRow & {
@@ -386,6 +389,9 @@ export function toMessage(row: MessageRow): MessageRecord {
   if (row.source) record.source = row.source;
   if (row.author_name) record.authorName = row.author_name;
   if (row.context) record.context = row.context;
+  if (row.scheduled_follow_up_id) record.scheduledFollowUpId = row.scheduled_follow_up_id;
+  if (row.scheduled_follow_up_occurrence_id)
+    record.scheduledFollowUpOccurrenceId = row.scheduled_follow_up_occurrence_id;
   return record;
 }
 
@@ -516,6 +522,7 @@ export function toCallbackDelivery(row: CallbackDeliveryRow): CallbackDeliveryRe
   if (row.next_attempt_at) record.nextAttemptAt = row.next_attempt_at;
   if (row.last_attempt_at) record.lastAttemptAt = row.last_attempt_at;
   if (row.delivered_at) record.deliveredAt = row.delivered_at;
+  if (row.claim_token) record.claimToken = row.claim_token;
   return record;
 }
 

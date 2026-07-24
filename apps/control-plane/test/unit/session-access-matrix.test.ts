@@ -44,6 +44,15 @@ describe('session HTTP role matrix', () => {
 
     for (const actor of [viewer, creator, other, admin])
       expect((await request(`/sessions/${id}`, actor)).status).toBe(200);
+    expect(
+      (
+        await request(`/sessions/${id}/scheduled-follow-ups/preview`, viewer, {
+          method: 'POST',
+          body: JSON.stringify({ schedule: { kind: 'once', runAt: new Date(Date.now() + 60_000).toISOString() } }),
+          headers: json,
+        })
+      ).status,
+    ).toBe(200);
     expect((await request(`/sessions/${id}`, viewer, patch({ title: 'no' }))).status).toBe(403);
     expect((await request(`/sessions/${id}`, other, patch({ title: 'member changed it' }))).status).toBe(200);
     expect((await request(`/sessions/${id}`, admin, patch({ title: 'admin changed it' }))).status).toBe(200);
@@ -88,6 +97,23 @@ describe('session HTTP role matrix', () => {
     expect((await request(`/sessions/${created.session.id}`, admin)).status).toBe(404);
     expect((await request(`/sessions/${created.session.id}`, other, patch({ title: 'leak' }))).status).toBe(404);
 
+    const followUpsPath = `/sessions/${created.session.id}/scheduled-follow-ups`;
+    expect(
+      (
+        await request(followUpsPath, owner, {
+          method: 'POST',
+          body: JSON.stringify({
+            prompt: 'private later',
+            schedule: { kind: 'once', runAt: new Date(Date.now() + 60_000).toISOString() },
+          }),
+          headers: json,
+        })
+      ).status,
+    ).toBe(201);
+    expect((await request(followUpsPath, owner)).status).toBe(200);
+    expect((await request(followUpsPath, other)).status).toBe(404);
+    expect((await request(followUpsPath, admin)).status).toBe(404);
+
     for (const actor of [other, admin]) {
       const list = (await (await request('/sessions', actor)).json()) as { sessions: Array<{ id: string }> };
       expect(list.sessions.map((session) => session.id)).not.toContain(created.session.id);
@@ -116,6 +142,28 @@ describe('session HTTP role matrix', () => {
 
     await store.updateAuthUserRole({ userId: 'user-private-owner', role: 'viewer', updatedAt: new Date() });
     expect((await request(`/sessions/${created.session.id}`, owner)).status).toBe(200);
+    expect((await request(followUpsPath, owner)).status).toBe(200);
+    expect(
+      (
+        await request(`${followUpsPath}/preview`, owner, {
+          method: 'POST',
+          body: JSON.stringify({ schedule: { kind: 'once', runAt: new Date(Date.now() + 60_000).toISOString() } }),
+          headers: json,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await request(followUpsPath, owner, {
+          method: 'POST',
+          body: JSON.stringify({
+            prompt: 'viewer cannot schedule',
+            schedule: { kind: 'once', runAt: new Date(Date.now() + 60_000).toISOString() },
+          }),
+          headers: json,
+        })
+      ).status,
+    ).toBe(404);
     expect((await request(`/sessions/${created.session.id}`, owner, patch({ title: 'viewer write' }))).status).toBe(
       404,
     );

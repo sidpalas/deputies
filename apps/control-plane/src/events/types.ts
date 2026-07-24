@@ -36,6 +36,31 @@ export type NormalizedEventPayloadMap = {
   session_visibility_changed: { visibility: 'tenant' };
   session_queue_paused: EmptyEventPayload;
   session_queue_resumed: EmptyEventPayload;
+  scheduled_follow_up_created: { followUpId: string; nextDueAt: string | null };
+  scheduled_follow_up_updated: { followUpId: string; revision: number; nextDueAt: string | null };
+  scheduled_follow_up_cancelled: { followUpId: string };
+  scheduled_follow_up_completed: { followUpId: string };
+  scheduled_follow_up_occurrence_created: {
+    followUpId: string;
+    occurrenceId: string;
+    occurrenceNumber: number;
+    scheduledAt: string;
+    messageId: string;
+  };
+  scheduled_follow_up_occurrence_skipped: {
+    followUpId: string;
+    occurrenceId: string;
+    occurrenceNumber: number;
+    scheduledAt: string;
+    reason: string;
+  };
+  scheduled_follow_up_occurrence_failed: {
+    followUpId: string;
+    occurrenceId: string;
+    occurrenceNumber: number;
+    scheduledAt: string;
+    reason: string;
+  };
   message_created: { sequence: number; source: string | null; transcriptOnly?: true };
   message_updated: { sequence: number };
   message_cancelled: { sequence: number; transcriptOnly?: true; reason?: 'session_archived' };
@@ -221,6 +246,13 @@ export type NormalizedEventType =
   | 'session_visibility_changed'
   | 'session_queue_paused'
   | 'session_queue_resumed'
+  | 'scheduled_follow_up_created'
+  | 'scheduled_follow_up_updated'
+  | 'scheduled_follow_up_cancelled'
+  | 'scheduled_follow_up_completed'
+  | 'scheduled_follow_up_occurrence_created'
+  | 'scheduled_follow_up_occurrence_skipped'
+  | 'scheduled_follow_up_occurrence_failed'
   | 'message_created'
   | 'message_updated'
   | 'message_cancelled'

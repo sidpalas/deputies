@@ -4,7 +4,15 @@ import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import type { EventService } from '../events/service.js';
 import type { RunnerArtifact, RunnerResult } from '../runner/types.js';
-import type { ArtifactRecord, CallbackDeliveryRecord, CallbackStore, ClaimedMessage } from '../store/types.js';
+import type {
+  ArtifactRecord,
+  CallbackDeliveryRecord,
+  CallbackStore,
+  ClaimedMessage,
+  CreateCallbackDeliveryRecord,
+  MessageRecord,
+  RunRecord,
+} from '../store/types.js';
 import { deterministicUuid } from '../artifacts/service.js';
 
 const DEFAULT_HTTP_CALLBACK_TIMEOUT_MS = 10_000;
@@ -16,14 +24,33 @@ export type CompletionCallback = {
   target: Record<string, unknown>;
 };
 
-export type CompletionCallbackPayload = {
-  event: 'message_completed';
-  sessionId: string;
-  runId: string;
-  messageId: string;
-  text: string;
-  artifacts: CompletionCallbackArtifact[];
-};
+export type CompletionCallbackPayload =
+  | {
+      event: 'message_completed';
+      sessionId: string;
+      runId: string;
+      messageId: string;
+      text: string;
+      artifacts: CompletionCallbackArtifact[];
+    }
+  | {
+      event: 'scheduled_follow_up_run_failed';
+      sessionId: string;
+      scheduledFollowUpId: string;
+      occurrenceId: string;
+      runId: string;
+      messageId: string;
+      text: string;
+      artifacts: [];
+    }
+  | {
+      event: 'scheduled_follow_up_failed';
+      sessionId: string;
+      scheduledFollowUpId: string;
+      occurrenceId: string;
+      text: string;
+      artifacts: [];
+    };
 
 export type CompletionCallbackArtifact = {
   type: string;
@@ -95,6 +122,51 @@ export class CallbackService {
       nextAttemptAt: now,
     });
     return delivery;
+  }
+
+  async enqueueScheduledFollowUpRunFailure(input: {
+    message: MessageRecord;
+    run: RunRecord;
+    error: string;
+  }): Promise<CallbackDeliveryRecord | null> {
+    const record = this.buildScheduledFollowUpRunFailure(input);
+    return record ? this.store.createCallbackDelivery(record) : null;
+  }
+
+  buildScheduledFollowUpRunFailure(input: {
+    message: MessageRecord;
+    run: RunRecord;
+    error: string;
+    now?: Date;
+  }): CreateCallbackDeliveryRecord | null {
+    if (!input.message.scheduledFollowUpId || !input.message.scheduledFollowUpOccurrenceId) return null;
+    const callback = getCompletionCallback(input.message.context);
+    if (!callback || (callback.type !== 'slack' && callback.type !== 'github')) return null;
+    const now = input.now ?? new Date();
+    return {
+      id: deterministicUuid(
+        `scheduled-follow-up-run-failed:${input.message.scheduledFollowUpOccurrenceId}:${input.run.id}`,
+      ),
+      sessionId: input.message.sessionId,
+      runId: input.run.id,
+      messageId: input.message.id,
+      targetType: callback.type,
+      target: callback.target,
+      eventType: 'scheduled_follow_up_run_failed',
+      payload: {
+        event: 'scheduled_follow_up_run_failed',
+        sessionId: input.message.sessionId,
+        scheduledFollowUpId: input.message.scheduledFollowUpId,
+        occurrenceId: input.message.scheduledFollowUpOccurrenceId,
+        runId: input.run.id,
+        messageId: input.message.id,
+        text: `This scheduled follow-up failed: ${input.error}`,
+        artifacts: [],
+      } satisfies CompletionCallbackPayload,
+      createdAt: now,
+      updatedAt: now,
+      nextAttemptAt: now,
+    };
   }
 
   async list(input: { sessionId: string; messageId?: string }): Promise<CallbackDeliveryRecord[]> {
@@ -220,7 +292,11 @@ export class CallbackDispatcher {
     try {
       if (!sender) throw new Error(`No callback sender configured for target type: ${callback.type}`);
       await sender.deliver(callback, delivery.payload as CompletionCallbackPayload);
-      const sent = await this.store.markCallbackDeliverySent({ id: delivery.id, deliveredAt: this.now() });
+      const sent = await this.store.markCallbackDeliverySent({
+        id: delivery.id,
+        claimToken: delivery.claimToken!,
+        deliveredAt: this.now(),
+      });
       await this.events.append({
         sessionId: sent.sessionId,
         ...(sent.runId ? { runId: sent.runId } : {}),
@@ -233,6 +309,7 @@ export class CallbackDispatcher {
       const terminal = delivery.attempts >= delivery.maxAttempts;
       const failed = await this.store.markCallbackDeliveryFailed({
         id: delivery.id,
+        claimToken: delivery.claimToken!,
         failedAt: this.now(),
         error: message,
         terminal,

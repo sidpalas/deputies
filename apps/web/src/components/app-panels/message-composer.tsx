@@ -10,6 +10,8 @@ import type {
   Skill,
   Snippet,
   SkillInvocationRef,
+  ScheduledFollowUpSchedule,
+  ScheduledFollowUpPreview,
 } from '../../api.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
@@ -33,6 +35,7 @@ import { defaultReasoningLevelLabel, reasoningLevelLabel, REASONING_LEVEL_OPTION
 import { SkillInvocationField } from './skill-invocation-field.js';
 import { useSkillInvocationDraft } from './skill-invocation-draft.js';
 import { SnippetPicker, useSnippetPicker } from './snippet-picker.js';
+import { FollowUpScheduleFields } from './follow-up-schedule-fields.js';
 
 export function MessageComposer(props: {
   archived: boolean;
@@ -76,10 +79,21 @@ export function MessageComposer(props: {
   onReasoningLevelChange: (value: ReasoningLevel | '') => void;
   onFocusChange: (focused: boolean) => void;
   onSubmit: (input: { prompt: string; skills: string[]; skillRefs: SkillInvocationRef[] }) => Promise<boolean>;
+  onSchedule?: (input: {
+    prompt: string;
+    skills: string[];
+    skillRefs: SkillInvocationRef[];
+    schedule: ScheduledFollowUpSchedule;
+  }) => Promise<boolean>;
+  onSchedulePreview?: (schedule: ScheduledFollowUpSchedule) => Promise<ScheduledFollowUpPreview>;
 }) {
   const [prompt, setPrompt] = useState('');
   const [promptResetKey, setPromptResetKey] = useState(0);
   const [branchControlsOpen, setBranchControlsOpen] = useState(false);
+  const [sendMode, setSendMode] = useState<'now' | 'schedule'>('now');
+  const [schedule, setSchedule] = useState<ScheduledFollowUpSchedule | null>(null);
+  const [schedulePreviewValid, setSchedulePreviewValid] = useState(false);
+  const [scheduleResetKey, setScheduleResetKey] = useState(0);
   const submitTouchRef = useRef<{ moved: boolean; x: number; y: number } | null>(null);
   const explicitEnvironment =
     props.environmentOptions.find((environment) => environment.id === props.environmentId) ?? null;
@@ -132,13 +146,19 @@ export function MessageComposer(props: {
     setPromptResetKey((key) => key + 1);
     setPrompt('');
     skillDraft.clearSelectedSkills();
-    const sent = await props.onSubmit({
-      ...prepared,
-    });
+    const sent =
+      sendMode === 'schedule' && schedule && props.onSchedule
+        ? await props.onSchedule({ ...prepared, schedule })
+        : await props.onSubmit({ ...prepared });
     if (!sent) {
       setPrompt(submittedPrompt);
       skillDraft.restoreSelectedSkills(submittedSkills);
+      return;
     }
+    setSendMode('now');
+    setSchedule(null);
+    setSchedulePreviewValid(false);
+    setScheduleResetKey((key) => key + 1);
   }
 
   function handleSubmit(event: FormEvent) {
@@ -220,6 +240,31 @@ export function MessageComposer(props: {
           disabled={props.archived || props.readOnly}
         />
         <div className="relative flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+          {props.onSchedule && props.onSchedulePreview ? (
+            <>
+              <label className="sr-only" htmlFor="composer-send-mode">
+                Send choice
+              </label>
+              <select
+                id="composer-send-mode"
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                value={sendMode}
+                onChange={(event) => setSendMode(event.target.value as typeof sendMode)}
+                disabled={props.archived || props.readOnly}
+              >
+                <option value="now">Send now</option>
+                <option value="schedule">Schedule send</option>
+              </select>
+              {sendMode === 'schedule' ? (
+                <FollowUpScheduleFields
+                  key={scheduleResetKey}
+                  onChange={setSchedule}
+                  onPreview={props.onSchedulePreview}
+                  onPreviewValid={setSchedulePreviewValid}
+                />
+              ) : null}
+            </>
+          ) : null}
           <CodebasePicker
             className="min-w-0 flex-[2_1_16rem]"
             triggerClassName="h-8 text-xs"
@@ -326,9 +371,9 @@ export function MessageComposer(props: {
           <Button
             className="ml-auto h-8 w-8 shrink-0 p-0"
             type="submit"
-            disabled={!canSubmit}
-            aria-label="Send message"
-            title="Send message"
+            disabled={!canSubmit || (sendMode === 'schedule' && (!schedule || !schedulePreviewValid))}
+            aria-label={sendMode === 'schedule' ? 'Schedule message' : 'Send message'}
+            title={sendMode === 'schedule' ? 'Schedule message' : 'Send message'}
             onTouchStart={handleSubmitTouchStart}
             onTouchMove={handleSubmitTouchMove}
             onTouchEnd={handleSubmitTouchEnd}

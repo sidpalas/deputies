@@ -1,6 +1,6 @@
 import type { AgentEvent, Artifact, ExternalResource } from './api.js';
 
-export type DetailResource = 'messages' | 'artifacts' | 'services' | 'externalResources' | 'callbacks';
+export type DetailResource = 'messages' | 'artifacts' | 'services' | 'externalResources' | 'callbacks' | 'followUps';
 
 export type SessionPresentationEffect = 'none' | 'summary' | 'list';
 
@@ -18,7 +18,9 @@ export type SessionEventPlan = {
 export function planSessionEvent(event: AgentEvent): SessionEventPlan {
   switch (event.type) {
     case 'session_created':
+      return plan([], 'list');
     case 'session_archived':
+      return plan(['followUps'], 'list');
     case 'session_unarchived':
     case 'session_visibility_changed':
       return plan([], 'list');
@@ -64,6 +66,14 @@ export function planSessionEvent(event: AgentEvent): SessionEventPlan {
     case 'callback_failed':
     case 'callback_replay_requested':
       return plan(['callbacks']);
+    case 'scheduled_follow_up_created':
+    case 'scheduled_follow_up_updated':
+    case 'scheduled_follow_up_cancelled':
+    case 'scheduled_follow_up_completed':
+    case 'scheduled_follow_up_occurrence_created':
+    case 'scheduled_follow_up_occurrence_skipped':
+    case 'scheduled_follow_up_occurrence_failed':
+      return plan(['followUps']);
     case 'run_started':
     case 'run_completed':
     case 'sandbox_starting':

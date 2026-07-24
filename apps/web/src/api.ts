@@ -6,6 +6,79 @@ export type ApiAuthMode = 'none' | 'bearer' | 'session';
 export type AuthProvider = 'static' | 'github';
 export type ReasoningLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+export type ScheduledFollowUpSchedule =
+  | { kind: 'once'; runAt: string; displayTimezone?: string }
+  | {
+      kind: 'recurring';
+      dtstartLocal: string;
+      timezone: string;
+      rrule: string;
+      endsAt?: string;
+      maxOccurrences?: number;
+    };
+export type ScheduledFollowUpContextOverrides = {
+  environmentId?: string;
+  environmentRevisionId?: string;
+  environmentRevisionPolicy?: 'follow_latest' | 'pinned';
+  repository?: { provider: 'github'; owner: string; repo: string } | string | null;
+  branch?: string | null;
+  model?: string | null;
+  reasoningLevel?: ReasoningLevel | null;
+  skills?: string[];
+  skillRefs?: Array<{ id: string; name: string; revisionId?: string }>;
+};
+export type ScheduledFollowUp = {
+  id: string;
+  sessionId: string;
+  status: 'active' | 'completed' | 'cancelled';
+  scheduleKind: ScheduledFollowUpSchedule['kind'];
+  prompt: string;
+  contextOverrides?: ScheduledFollowUpContextOverrides;
+  runAt?: string;
+  dtstartLocal?: string;
+  timezone?: string;
+  rrule?: string;
+  endsAt?: string;
+  maxOccurrences?: number;
+  nextDueAt?: string;
+  definitionRevision: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  cancelledAt?: string;
+  canManage: boolean;
+};
+export type ScheduledFollowUpOccurrence = {
+  id: string;
+  scheduledFollowUpId: string;
+  occurrenceNumber: number;
+  definitionRevision: number;
+  scheduledAt: string;
+  activatedAt: string;
+  outcome: 'message_created' | 'skipped' | 'pre_message_failed';
+  reason?:
+    | 'missed_during_downtime'
+    | 'previous_message_unfinished'
+    | 'invalid_context'
+    | 'resource_unavailable'
+    | 'external_binding_invalid'
+    | string;
+  error?: string;
+  messageId?: string;
+  effectiveContext?: Record<string, unknown>;
+};
+export type ScheduledFollowUpPreview = { normalized: ScheduledFollowUpSchedule; occurrences: string[] };
+export type ScheduledFollowUpPage = {
+  scheduledFollowUps: ScheduledFollowUp[];
+  hasMore: boolean;
+  nextCursor?: string;
+};
+export type ScheduledFollowUpOccurrencePage = {
+  occurrences: ScheduledFollowUpOccurrence[];
+  hasMore: boolean;
+  nextCursor?: string;
+};
+
 export type Health = {
   status: 'ok' | 'degraded';
   runMode: string;
@@ -1225,6 +1298,106 @@ export async function unarchiveSession(input: { sessionId: string; token: string
     body: {},
   });
   return body.session;
+}
+
+export async function previewScheduledFollowUp(input: {
+  sessionId: string;
+  schedule: ScheduledFollowUpSchedule;
+  token: string;
+}): Promise<ScheduledFollowUpPreview> {
+  return request(`/sessions/${input.sessionId}/scheduled-follow-ups/preview`, {
+    method: 'POST',
+    token: input.token,
+    body: { schedule: input.schedule },
+  });
+}
+export async function createScheduledFollowUp(input: {
+  sessionId: string;
+  prompt: string;
+  schedule: ScheduledFollowUpSchedule;
+  token: string;
+  contextOverrides?: ScheduledFollowUpContextOverrides;
+}): Promise<ScheduledFollowUp> {
+  const body = await request<{ scheduledFollowUp: ScheduledFollowUp }>(
+    `/sessions/${input.sessionId}/scheduled-follow-ups`,
+    {
+      method: 'POST',
+      token: input.token,
+      body: {
+        prompt: input.prompt,
+        schedule: input.schedule,
+        ...(input.contextOverrides ? { contextOverrides: input.contextOverrides } : {}),
+      },
+    },
+  );
+  return body.scheduledFollowUp;
+}
+export async function listScheduledFollowUps(
+  sessionId: string,
+  token: string,
+  limit = 50,
+  cursor?: string,
+): Promise<ScheduledFollowUpPage> {
+  const query = new URLSearchParams({ limit: String(Math.min(100, Math.max(1, limit))) });
+  if (cursor) query.set('cursor', cursor);
+  return request<ScheduledFollowUpPage>(`/sessions/${sessionId}/scheduled-follow-ups?${query}`, { token });
+}
+export async function getScheduledFollowUp(input: { sessionId: string; followUpId: string; token: string }) {
+  const body = await request<{ scheduledFollowUp: ScheduledFollowUp }>(
+    `/sessions/${input.sessionId}/scheduled-follow-ups/${input.followUpId}`,
+    { token: input.token },
+  );
+  return body.scheduledFollowUp;
+}
+export async function updateScheduledFollowUp(input: {
+  sessionId: string;
+  followUpId: string;
+  definitionRevision: number;
+  token: string;
+  prompt?: string;
+  schedule?: ScheduledFollowUpSchedule;
+  contextOverrides?: ScheduledFollowUpContextOverrides | null;
+}) {
+  const body = await request<{ scheduledFollowUp: ScheduledFollowUp }>(
+    `/sessions/${input.sessionId}/scheduled-follow-ups/${input.followUpId}`,
+    {
+      method: 'PATCH',
+      token: input.token,
+      body: {
+        definitionRevision: input.definitionRevision,
+        ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+        ...(input.schedule ? { schedule: input.schedule } : {}),
+        ...(input.contextOverrides !== undefined ? { contextOverrides: input.contextOverrides } : {}),
+      },
+    },
+  );
+  return body.scheduledFollowUp;
+}
+export async function cancelScheduledFollowUp(input: {
+  sessionId: string;
+  followUpId: string;
+  definitionRevision: number;
+  token: string;
+}) {
+  const body = await request<{ scheduledFollowUp: ScheduledFollowUp }>(
+    `/sessions/${input.sessionId}/scheduled-follow-ups/${input.followUpId}?definitionRevision=${input.definitionRevision}`,
+    { method: 'DELETE', token: input.token },
+  );
+  return body.scheduledFollowUp;
+}
+export async function listScheduledFollowUpOccurrences(input: {
+  sessionId: string;
+  followUpId: string;
+  token: string;
+  cursor?: number;
+  limit?: number;
+}) {
+  const query = new URLSearchParams({ limit: String(Math.min(100, Math.max(1, input.limit ?? 50))) });
+  if (input.cursor !== undefined) query.set('cursor', String(input.cursor));
+  return request<ScheduledFollowUpOccurrencePage>(
+    `/sessions/${input.sessionId}/scheduled-follow-ups/${input.followUpId}/occurrences?${query}`,
+    { token: input.token },
+  );
 }
 
 export async function listMessages(sessionId: string, token: string, options: RequestOptions = {}): Promise<Message[]> {

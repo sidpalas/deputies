@@ -73,6 +73,7 @@ type MockApiOptions = {
   searchResults?: unknown[];
   searchNextCursor?: string | null;
   callbacks?: unknown[];
+  scheduledFollowUps?: unknown[];
   sessionOverride?: Partial<typeof session> & {
     visibility?: 'tenant' | 'private';
     ownerUserId?: string;
@@ -256,6 +257,36 @@ it('stops API client event paging when a hasMore cursor does not advance', async
     `/sessions/${session.id}/events?limit=1000`,
     `/sessions/${session.id}/events?limit=1000&after=1`,
   ]);
+});
+
+it('loads existing scheduled follow-ups when opening a session', async () => {
+  const requests: string[] = [];
+  mockApi({
+    requests,
+    scheduledFollowUps: [
+      {
+        id: '00000000-0000-4000-8000-000000000030',
+        sessionId: session.id,
+        status: 'active',
+        scheduleKind: 'once',
+        prompt: 'Review the deployment tomorrow',
+        runAt: '2026-07-25T10:00:00Z',
+        definitionRevision: 1,
+        createdAt: '2026-07-24T10:00:00Z',
+        updatedAt: '2026-07-24T10:00:00Z',
+        canManage: true,
+      },
+    ],
+  });
+
+  render(<App />);
+
+  const summary = await screen.findByText(/Scheduled Follow-ups/, { selector: 'summary' });
+  expect(summary).toBeVisible();
+  expect(screen.queryByText('Review the deployment tomorrow')).not.toBeInTheDocument();
+  fireEvent.click(summary);
+  expect(screen.getByText('Review the deployment tomorrow')).toBeVisible();
+  expect(requests).toContain(`GET /sessions/${session.id}/scheduled-follow-ups?limit=50`);
 });
 
 it('aborts API response body reads after headers arrive', async () => {
@@ -4470,6 +4501,8 @@ it('shows session lineage and labels deputy-authored messages', async () => {
         sequence: 1,
         status: 'pending',
         source: 'deputy',
+        authorName: 'Deputy: Child investigation',
+        context: { sourceSessionId: childSession.id },
         prompt: 'Child session completed with a summary.',
       }),
     ],
@@ -4477,11 +4510,13 @@ it('shows session lineage and labels deputy-authored messages', async () => {
   });
   render(<App />);
 
-  expect(await screen.findByText('Deputy message 1')).toBeInTheDocument();
+  expect(await screen.findByRole('article', { name: 'Message 1' })).toHaveTextContent(
+    'Deputy message 1 from Deputy: Child investigation',
+  );
   const contextPanel = within(await screen.findByLabelText('Session details'));
   expect(contextPanel.getByText('Session lineage')).toBeInTheDocument();
   expect(contextPanel.getByText('Children (1)')).toBeInTheDocument();
-  fireEvent.click(contextPanel.getByRole('button', { name: /Child investigation/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Deputy: Child investigation' }));
 
   await waitFor(() => expect(sessionStorage.getItem('deputies-selected-session-id')).toBe(childSession.id));
 });
@@ -5398,6 +5433,10 @@ function mockApi(options: MockApiOptions = {}) {
       return jsonResponse({ callbacks });
     }
 
+    if (url.pathname.match(/^\/sessions\/[^/]+\/scheduled-follow-ups$/) && method === 'GET') {
+      return jsonResponse({ scheduledFollowUps: options.scheduledFollowUps ?? [], hasMore: false });
+    }
+
     const sessionNotepadMatch = url.pathname.match(/^\/sessions\/([^/]+)\/notepad$/);
     if (sessionNotepadMatch && method === 'GET') {
       const notepad = options.sessionNotepad ?? {
@@ -5492,6 +5531,7 @@ function messageFixture(input: {
   status: string;
   steering?: boolean;
   prompt: string;
+  authorName?: string;
   source?: string;
   context?: Record<string, unknown>;
 }) {

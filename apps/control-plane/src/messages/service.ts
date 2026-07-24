@@ -157,6 +157,23 @@ export class MessageService {
     if (failedMessage.status !== 'failed')
       throw new MessageServiceError('conflict', 'Only failed messages can be retried');
 
+    if (failedMessage.scheduledFollowUpId) {
+      const retried = await this.store.retryScheduledMessage({
+        sessionId: input.sessionId,
+        messageId: input.messageId,
+        retriedAt: new Date(),
+      });
+      if (!retried)
+        throw new MessageServiceError('conflict', 'A newer unfinished message exists for this scheduled follow-up');
+      await this.events.append({
+        sessionId: input.sessionId,
+        messageId: retried.id,
+        type: 'message_updated',
+        payload: { sequence: retried.sequence },
+      });
+      return retried;
+    }
+
     return this.enqueue({
       sessionId: input.sessionId,
       prompt: failedMessage.prompt,

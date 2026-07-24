@@ -1189,9 +1189,10 @@ describe('core API', () => {
       nextAttemptAt: now,
       maxAttempts: 1,
     });
-    await store.claimDueCallbackDeliveries({ now, limit: 1 });
+    const [claim] = await store.claimDueCallbackDeliveries({ now, limit: 1 });
     await store.markCallbackDeliveryFailed({
       id: delivery.id,
+      claimToken: claim!.claimToken!,
       failedAt: now,
       error: 'HTTP callback returned 500',
       terminal: true,

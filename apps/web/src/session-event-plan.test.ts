@@ -25,7 +25,8 @@ const cases: Array<{
   resources?: DetailResource[];
   sessionEffect?: SessionPresentationEffect;
 }> = [
-  { types: ['session_created', 'session_archived', 'session_unarchived'], sessionEffect: 'list' },
+  { types: ['session_created', 'session_unarchived'], sessionEffect: 'list' },
+  { types: ['session_archived'], resources: ['followUps'], sessionEffect: 'list' },
   {
     types: ['session_spawned', 'session_queue_paused', 'session_queue_resumed'],
     sessionEffect: 'summary',
@@ -47,6 +48,18 @@ const cases: Array<{
     resources: ['callbacks'],
   },
   { types: noEffects },
+  {
+    types: [
+      'scheduled_follow_up_created',
+      'scheduled_follow_up_updated',
+      'scheduled_follow_up_cancelled',
+      'scheduled_follow_up_completed',
+      'scheduled_follow_up_occurrence_created',
+      'scheduled_follow_up_occurrence_skipped',
+      'scheduled_follow_up_occurrence_failed',
+    ],
+    resources: ['followUps'],
+  },
 ];
 
 describe('planSessionEvent', () => {

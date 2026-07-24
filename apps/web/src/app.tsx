@@ -19,6 +19,12 @@ import {
   createSession,
   createSnippet,
   enqueueMessage,
+  createScheduledFollowUp,
+  previewScheduledFollowUp,
+  listScheduledFollowUps,
+  listScheduledFollowUpOccurrences,
+  cancelScheduledFollowUp,
+  updateScheduledFollowUp,
   extendSandbox,
   getCurrentUser,
   getArtifactPreview,
@@ -71,6 +77,10 @@ import {
   type SetupStatus,
   type Snippet,
   type WorkspaceToolId,
+  type ScheduledFollowUp,
+  type ScheduledFollowUpPage,
+  type ScheduledFollowUpSchedule,
+  type SkillInvocationRef,
 } from './api.js';
 import { isSnippetMutationAuthoritative, isSnippetMutationCurrent } from './app-state.js';
 import { useAutomationsAdmin } from './automations-admin.js';
@@ -90,6 +100,7 @@ import {
   type SessionPresentationEffect,
 } from './session-event-plan.js';
 import { SelectedResourceCoordinator, type SelectedResourceContext } from './selected-resource-coordinator.js';
+import { ScheduledFollowUpsPanel } from './components/app-panels/scheduled-follow-ups-panel.js';
 import {
   SessionIndexCoordinator,
   type SessionIndexContext,
@@ -235,6 +246,7 @@ const selectedDetailResources: DetailResource[] = [
   'services',
   'externalResources',
   'callbacks',
+  'followUps',
 ];
 
 type SessionFilters = {
@@ -259,7 +271,10 @@ type SessionDetailState = {
   services: SandboxService[];
   externalResources: ExternalResource[];
   callbacks: CallbackDelivery[];
+  followUps: ScheduledFollowUpPageState | null;
 };
+
+type ScheduledFollowUpPageState = ScheduledFollowUpPage & { firstPageIds: string[] };
 
 function resolveStateUpdate<T>(next: StateUpdate<T>, current: T): T {
   return typeof next === 'function' ? (next as (current: T) => T)(current) : next;
@@ -274,6 +289,7 @@ function emptySessionDetail(): SessionDetailState {
     services: [],
     externalResources: [],
     callbacks: [],
+    followUps: null,
   };
 }
 
@@ -388,6 +404,8 @@ export function App() {
     environmentEditorDirtyRef.current = dirty;
   }
   const [sessionDetail, setSessionDetail] = useState<SessionDetailState>(emptySessionDetail);
+  const [scheduledFollowUpsLoadingOlder, setScheduledFollowUpsLoadingOlder] = useState(false);
+  const scheduledFollowUpsOlderLoadGenerationRef = useRef(0);
   const [repositoryOptionsState, setRepositoryOptionsState] = useState<AsyncState<RepositoryOption[]>>({
     data: [],
     loading: false,
@@ -564,6 +582,11 @@ export function App() {
         ) {
           return;
         }
+        // An authoritative first page replaces all pagination state. Advance the
+        // resource version so an older-page request already in flight cannot
+        // append after this reset, even when the server returns the same cursor.
+        if (resource === 'followUps')
+          selectedResourceCoordinatorRef.current?.supersede(context, new Set(['followUps']));
         setSessionDetail((current) => applySelectedResource(current, resource, value));
       },
       onError: (error) => handleApiErrorRef.current(error),
@@ -869,6 +892,8 @@ export function App() {
       resetIncrementalRecovery();
       sessionSelectionVersionRef.current += 1;
       sessionDetailLoadGenerationRef.current += 1;
+      scheduledFollowUpsOlderLoadGenerationRef.current += 1;
+      setScheduledFollowUpsLoadingOlder(false);
       selectedSessionIdRef.current = nextSessionId;
       selectedResourceCoordinatorRef.current?.setContext(selectedResourceContext(nextSessionId));
       clearSessionDetail();
@@ -2764,9 +2789,11 @@ export function App() {
           callbacks: selectedResourceVersionIsCurrent(context, resourceVersions, 'callbacks')
             ? loaded.callbacks
             : current.callbacks,
+          followUps: current.followUps,
         };
       });
       satisfySelectedSnapshotDisplacement(new Set(selectedDetailResources));
+      selectedResourceCoordinatorRef.current?.invalidate(context, new Set(['followUps']));
       detailLoadedSessionIdRef.current = sessionId;
       setDetailLoadedSessionId(sessionId);
       return loaded;
@@ -2962,6 +2989,10 @@ export function App() {
       });
 
     void Promise.all([detailReadyPromise, outputsPromise, servicesLoadPromise]).then(() => {
+      if (requestIsCurrent()) {
+        satisfySelectedSnapshotDisplacement(new Set(['followUps']));
+        selectedResourceCoordinatorRef.current?.invalidate(context, new Set(['followUps']));
+      }
       if (sessionMilestoneInteractionRef.current === milestones) sessionMilestoneInteractionRef.current = null;
     });
 
@@ -3201,6 +3232,60 @@ export function App() {
       return false;
     } finally {
       sendMessageInFlightRef.current = false;
+    }
+  }
+
+  function scheduledContextOverrides(input: { skills: string[]; skillRefs: SkillInvocationRef[] }) {
+    return {
+      ...(followUpEnvironmentId ? { environmentId: followUpEnvironmentId } : {}),
+      ...(!followUpEnvironmentId && followUpRepository.trim() ? { repository: followUpRepository.trim() } : {}),
+      ...(!followUpEnvironmentId && followUpBranch ? { branch: followUpBranch } : {}),
+      ...(selectedFollowUpModel ? { model: selectedFollowUpModel } : {}),
+      ...(selectedFollowUpReasoningLevel ? { reasoningLevel: selectedFollowUpReasoningLevel } : {}),
+      ...(input.skills.length ? { skills: input.skills } : {}),
+      ...(input.skillRefs.length ? { skillRefs: input.skillRefs } : {}),
+    };
+  }
+
+  async function handleScheduleMessage(input: {
+    prompt: string;
+    skills: string[];
+    skillRefs: SkillInvocationRef[];
+    schedule: ScheduledFollowUpSchedule;
+  }): Promise<boolean> {
+    if (!selectedSessionId || !canWriteSelectedSession || selectedSessionArchived) return false;
+    const context = selectedResourceContext(selectedSessionId);
+    try {
+      const followUp = await createScheduledFollowUp({
+        sessionId: selectedSessionId,
+        prompt: input.prompt.trim(),
+        schedule: input.schedule,
+        contextOverrides: scheduledContextOverrides(input),
+        token,
+      });
+      if (!isSelectedResourceContextCurrent(context)) return false;
+      applySelectedResourceMutation(context, new Set<DetailResource>(['followUps']), (current) => ({
+        ...current,
+        followUps: current.followUps
+          ? {
+              ...current.followUps,
+              scheduledFollowUps: [
+                followUp,
+                ...current.followUps.scheduledFollowUps.filter((item) => item.id !== followUp.id),
+              ],
+              firstPageIds: [followUp.id, ...current.followUps.firstPageIds.filter((id) => id !== followUp.id)],
+            }
+          : { scheduledFollowUps: [followUp], hasMore: false, firstPageIds: [followUp.id] },
+      }));
+      setFollowUpEnvironmentId('');
+      setFollowUpRepository('');
+      setFollowUpBranch('');
+      setFollowUpModel('');
+      setFollowUpReasoningLevel('');
+      return true;
+    } catch (error) {
+      handleApiError(error);
+      return false;
     }
   }
 
@@ -4957,6 +5042,7 @@ export function App() {
                                   steeringMessageIds={steeringMessageIds}
                                   openableManagedSkillIds={skillsWorkspace.model.openableManagedSkillIds}
                                   onOpenSkill={skillsWorkspace.actions.select}
+                                  onOpenSession={selectSession}
                                   onRetryFailedMessages={fireAndForget(retryFailedMessages)}
                                   onSaveEdit={fireAndForget(saveMessageEdit)}
                                   onExtendSandbox={fireAndForget(handleExtendSandbox)}
@@ -4985,6 +5071,127 @@ export function App() {
                         </div>
                         {selectedSessionArchived ? (
                           <ArchivedSessionNotice onRestore={fireAndForget(restoreSelectedSession)} />
+                        ) : null}
+                        {selectedSessionDetailLoading ? null : sessionDetail.followUps ? (
+                          <ScheduledFollowUpsPanel
+                            followUps={sessionDetail.followUps.scheduledFollowUps}
+                            hasMore={sessionDetail.followUps.hasMore}
+                            loadingOlder={scheduledFollowUpsLoadingOlder}
+                            archived={selectedSessionArchived}
+                            onPreview={(schedule) =>
+                              previewScheduledFollowUp({ sessionId: selectedSession.id, schedule, token })
+                            }
+                            onUpdate={async (item, prompt, schedule) => {
+                              let updated: ScheduledFollowUp;
+                              try {
+                                updated = await updateScheduledFollowUp({
+                                  sessionId: selectedSession.id,
+                                  followUpId: item.id,
+                                  definitionRevision: item.definitionRevision,
+                                  prompt,
+                                  ...(schedule ? { schedule } : {}),
+                                  token,
+                                });
+                              } catch (error) {
+                                if (error instanceof ApiError && error.status === 409)
+                                  selectedResourceCoordinatorRef.current?.invalidate(
+                                    selectedResourceContext(selectedSession.id),
+                                    new Set(['followUps']),
+                                  );
+                                throw error;
+                              }
+                              setSessionDetail((current) => ({
+                                ...current,
+                                followUps: current.followUps
+                                  ? {
+                                      ...current.followUps,
+                                      scheduledFollowUps: current.followUps.scheduledFollowUps.map((value) =>
+                                        value.id === updated.id ? updated : value,
+                                      ),
+                                    }
+                                  : null,
+                              }));
+                            }}
+                            onLoadOlder={async () => {
+                              const cursor = sessionDetail.followUps?.nextCursor;
+                              if (!cursor || scheduledFollowUpsLoadingOlder) return;
+                              const context = selectedResourceContext(selectedSession.id);
+                              const resourceVersion =
+                                selectedResourceCoordinatorRef.current?.captureVersion(context, 'followUps') ?? -1;
+                              const loadGeneration = scheduledFollowUpsOlderLoadGenerationRef.current + 1;
+                              scheduledFollowUpsOlderLoadGenerationRef.current = loadGeneration;
+                              setScheduledFollowUpsLoadingOlder(true);
+                              try {
+                                const page = await listScheduledFollowUps(selectedSession.id, token, 50, cursor);
+                                if (
+                                  !isSelectedResourceContextCurrent(context) ||
+                                  !(
+                                    selectedResourceCoordinatorRef.current?.isVersionCurrent(
+                                      context,
+                                      'followUps',
+                                      resourceVersion,
+                                    ) ?? false
+                                  )
+                                )
+                                  return;
+                                setSessionDetail((current) => ({
+                                  ...current,
+                                  followUps: current.followUps
+                                    ? appendScheduledFollowUpPageIfCurrent(
+                                        current.followUps,
+                                        page,
+                                        cursor,
+                                        resourceVersion,
+                                        selectedResourceCoordinatorRef.current?.captureVersion(context, 'followUps') ??
+                                          -1,
+                                      )
+                                    : null,
+                                }));
+                              } catch (error) {
+                                if (isSelectedResourceContextCurrent(context)) handleApiError(error);
+                              } finally {
+                                if (scheduledFollowUpsOlderLoadGenerationRef.current === loadGeneration)
+                                  setScheduledFollowUpsLoadingOlder(false);
+                              }
+                            }}
+                            onHistory={(item, cursor) =>
+                              listScheduledFollowUpOccurrences({
+                                sessionId: selectedSession.id,
+                                followUpId: item.id,
+                                token,
+                                ...(cursor !== undefined ? { cursor } : {}),
+                              })
+                            }
+                            onCancel={async (item) => {
+                              let cancelled: ScheduledFollowUp;
+                              try {
+                                cancelled = await cancelScheduledFollowUp({
+                                  sessionId: selectedSession.id,
+                                  followUpId: item.id,
+                                  definitionRevision: item.definitionRevision,
+                                  token,
+                                });
+                              } catch (error) {
+                                if (error instanceof ApiError && error.status === 409)
+                                  selectedResourceCoordinatorRef.current?.invalidate(
+                                    selectedResourceContext(selectedSession.id),
+                                    new Set(['followUps']),
+                                  );
+                                throw error;
+                              }
+                              setSessionDetail((current) => ({
+                                ...current,
+                                followUps: current.followUps
+                                  ? {
+                                      ...current.followUps,
+                                      scheduledFollowUps: current.followUps.scheduledFollowUps.map((value) =>
+                                        value.id === cancelled.id ? cancelled : value,
+                                      ),
+                                    }
+                                  : null,
+                              }));
+                            }}
+                          />
                         ) : null}
                         {selectedSessionDetailLoading ? null : (
                           <MessageComposer
@@ -5029,6 +5236,10 @@ export function App() {
                             onReasoningLevelChange={setFollowUpReasoningLevel}
                             onFocusChange={setComposerFocused}
                             onSubmit={handleSendMessage}
+                            onSchedule={handleScheduleMessage}
+                            onSchedulePreview={(schedule: ScheduledFollowUpSchedule) =>
+                              previewScheduledFollowUp({ sessionId: selectedSession.id, schedule, token })
+                            }
                           />
                         )}
                       </section>
@@ -5150,6 +5361,11 @@ function loadSelectedResource(resource: DetailResource, sessionId: string, token
       return listExternalResources(sessionId, token);
     case 'callbacks':
       return listCallbacks(sessionId, token);
+    case 'followUps':
+      return listScheduledFollowUps(sessionId, token).catch((error) => {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      });
   }
 }
 
@@ -5172,6 +5388,11 @@ function applySelectedResource(
       };
     case 'callbacks':
       return { ...current, callbacks: value as CallbackDelivery[] };
+    case 'followUps':
+      return {
+        ...current,
+        followUps: value ? firstScheduledFollowUpPage(value as ScheduledFollowUpPage) : null,
+      };
   }
 }
 
@@ -5183,6 +5404,42 @@ function upsertById<T extends { id: string }>(current: T[], entity: T): T[] {
 
 function mergeEntitiesById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
   return incoming.reduce(upsertById, current);
+}
+
+export function firstScheduledFollowUpPage(page: ScheduledFollowUpPage): ScheduledFollowUpPageState {
+  return { ...page, firstPageIds: page.scheduledFollowUps.map((item) => item.id) };
+}
+
+export function appendScheduledFollowUpPage(
+  current: ScheduledFollowUpPageState,
+  page: ScheduledFollowUpPage,
+): ScheduledFollowUpPageState {
+  const next: ScheduledFollowUpPageState = {
+    ...current,
+    scheduledFollowUps: mergeEntitiesById(current.scheduledFollowUps, page.scheduledFollowUps),
+    hasMore: page.hasMore,
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+  };
+  if (!page.nextCursor) delete next.nextCursor;
+  return next;
+}
+
+export function appendScheduledFollowUpPageIfCurrent(
+  current: ScheduledFollowUpPageState,
+  page: ScheduledFollowUpPage,
+  capturedCursor: string,
+  capturedResourceVersion: number,
+  currentResourceVersion: number,
+): ScheduledFollowUpPageState {
+  if (current.nextCursor !== capturedCursor || currentResourceVersion !== capturedResourceVersion) return current;
+  return appendScheduledFollowUpPage(current, page);
+}
+
+export function mergeScheduledFollowUpFirstPage(
+  _current: ScheduledFollowUpPageState | null,
+  page: ScheduledFollowUpPage,
+): ScheduledFollowUpPageState {
+  return firstScheduledFollowUpPage(page);
 }
 
 function mergeEventsBySequence(current: AgentEvent[], incoming: AgentEvent[]): AgentEvent[] {

@@ -79,6 +79,8 @@ export class StoreConflictError extends Error {
       | 'automation_environment_unavailable'
       | 'automation_archived'
       | 'automation_invocation_active'
+      | 'scheduled_follow_up_active_limit'
+      | 'scheduled_follow_up_run_limit'
       | 'skill_name_exists'
       | 'skill_update_conflict'
       | 'skill_archived'
@@ -212,7 +214,108 @@ export type MessageRecord = {
   authorName?: string;
   source?: string;
   context?: Record<string, unknown>;
+  scheduledFollowUpId?: string;
+  scheduledFollowUpOccurrenceId?: string;
 };
+
+export type ScheduledFollowUpStatus = 'active' | 'completed' | 'cancelled';
+export type ScheduledFollowUpContextOverrides = {
+  environmentId?: string;
+  environmentRevisionId?: string;
+  environmentRevisionPolicy?: 'follow_latest' | 'pinned';
+  repository?: import('../repositories/extract.js').RepositoryReference | null;
+  branch?: string | null;
+  model?: string | null;
+  reasoningLevel?: import('../runner/reasoning.js').ReasoningLevel | null;
+  skills?: string[];
+  /** Canonical, server-generated invocation selections paired with skills. */
+  skillRefs?: import('../skills/invocation.js').SkillInvocationRef[];
+};
+export type ScheduledFollowUpRecord = {
+  id: string;
+  sessionId: string;
+  status: ScheduledFollowUpStatus;
+  scheduleKind: 'once' | 'recurring';
+  prompt: string;
+  contextOverrides?: ScheduledFollowUpContextOverrides;
+  runAt?: Date;
+  dtstartLocal?: string;
+  timezone?: string;
+  rrule?: string;
+  endsAt?: Date;
+  maxOccurrences?: number;
+  nextDueAt?: Date | undefined;
+  definitionRevision: number;
+  schedulerLockOwner?: string | undefined;
+  schedulerLockedUntil?: Date | undefined;
+  createdByUserId?: string;
+  createdBySessionId?: string;
+  createdByRunId?: string;
+  createdByMessageId?: string;
+  idempotencyKey?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt?: Date | undefined;
+  cancelledAt?: Date | undefined;
+};
+export type ScheduledFollowUpOccurrenceOutcome = 'message_created' | 'skipped' | 'pre_message_failed';
+export type ScheduledFollowUpOccurrenceRecord = {
+  id: string;
+  scheduledFollowUpId: string;
+  occurrenceNumber: number;
+  definitionRevision: number;
+  scheduledAt: Date;
+  activatedAt: Date;
+  outcome: ScheduledFollowUpOccurrenceOutcome;
+  reason?:
+    | 'missed_during_downtime'
+    | 'previous_message_unfinished'
+    | 'invalid_context'
+    | 'resource_unavailable'
+    | 'external_binding_invalid';
+  error?: string;
+  messageId?: string;
+  effectiveContext?: Record<string, unknown>;
+  deliveryMetadata?: Record<string, unknown>;
+};
+export type ScheduledFollowUpCursor = { createdAt: Date; id: string };
+export type ScheduledFollowUpOccurrenceCursor = { occurrenceNumber: number };
+export type CreateScheduledFollowUpRecordInput = Omit<ScheduledFollowUpRecord, 'status' | 'definitionRevision'> & {
+  status?: 'active';
+  definitionRevision?: 1;
+  maxNewForRun?: number;
+};
+export type UpdateScheduledFollowUpRecordInput = {
+  id: string;
+  sessionId: string;
+  expectedRevision: number;
+  prompt?: string;
+  contextOverrides?: ScheduledFollowUpContextOverrides | null;
+  scheduleKind?: 'once' | 'recurring';
+  runAt?: Date | null;
+  dtstartLocal?: string | null;
+  timezone?: string | null;
+  rrule?: string | null;
+  endsAt?: Date | null;
+  maxOccurrences?: number | null;
+  /** Store computes cutover while holding the session/definition lock. */
+  normalizedSchedule: import('../scheduled-follow-ups/recurrence.js').NormalizedSchedule;
+  updatedAt: Date;
+};
+export type ScheduledFollowUpClaim = { followUp: ScheduledFollowUpRecord; claimedRevision: number };
+export type ScheduledFollowUpMutationResult = {
+  followUp: ScheduledFollowUpRecord;
+  events: EventRecord[];
+  idempotent?: boolean;
+};
+export type ScheduledFollowUpActivationResult = ScheduledFollowUpMutationResult & {
+  occurrences: ScheduledFollowUpOccurrenceRecord[];
+  message?: MessageRecord;
+};
+
+export type ScheduledFollowUpResolvedContext =
+  | { status: 'valid'; overrides: Record<string, unknown>; clear: string[] }
+  | { status: 'invalid'; reason: 'invalid_context' | 'resource_unavailable'; error: string };
 
 export type SnippetRecord = {
   id: string;
@@ -363,6 +466,7 @@ export type CallbackDeliveryRecord = {
   nextAttemptAt?: Date;
   lastAttemptAt?: Date;
   deliveredAt?: Date;
+  claimToken?: string;
 };
 
 export type AutomationRecord = {
@@ -545,6 +649,8 @@ export type CreateMessageRecord = {
   authorName?: string;
   source?: string;
   context?: Record<string, unknown>;
+  scheduledFollowUpId?: string;
+  scheduledFollowUpOccurrenceId?: string;
 };
 
 export type CreateSessionWithFirstMessageInput = {
@@ -1050,6 +1156,11 @@ export interface MessageStore {
     steering?: boolean;
     context?: Record<string, unknown>;
   }): Promise<MessageRecord | null>;
+  retryScheduledMessage(input: {
+    sessionId: string;
+    messageId: string;
+    retriedAt: Date;
+  }): Promise<MessageRecord | null>;
   cancelPendingMessage(input: {
     sessionId: string;
     messageId: string;
@@ -1127,6 +1238,7 @@ export interface RunStore {
     leaseOwner: string;
     failedAt: Date;
     error: string;
+    callbackDelivery?: CreateCallbackDeliveryRecord;
   }): Promise<ClaimedMessageBatch | null>;
 }
 
@@ -1148,9 +1260,14 @@ export interface CallbackStore {
   createCallbackDelivery(record: CreateCallbackDeliveryRecord): Promise<CallbackDeliveryRecord>;
   listCallbackDeliveries(input: { sessionId: string; messageId?: string }): Promise<CallbackDeliveryRecord[]>;
   claimDueCallbackDeliveries(input: { now: Date; limit: number }): Promise<CallbackDeliveryRecord[]>;
-  markCallbackDeliverySent(input: { id: string; deliveredAt: Date }): Promise<CallbackDeliveryRecord>;
+  markCallbackDeliverySent(input: {
+    id: string;
+    claimToken: string;
+    deliveredAt: Date;
+  }): Promise<CallbackDeliveryRecord>;
   markCallbackDeliveryFailed(input: {
     id: string;
+    claimToken: string;
     failedAt: Date;
     error: string;
     terminal: boolean;
@@ -1288,6 +1405,7 @@ export interface IntegrationStore {
   getWebhookSource(key: string): Promise<WebhookSourceRecord | null>;
   withExternalThreadLock?<T>(source: string, externalId: string, fn: () => Promise<T>): Promise<T>;
   getExternalThread(source: string, externalId: string): Promise<ExternalThreadRecord | null>;
+  getExternalThreadsForSession(sessionId: string): Promise<ExternalThreadRecord[]>;
   createExternalThread(input: {
     id: string;
     source: string;
@@ -1315,6 +1433,48 @@ export interface IntegrationStore {
   }): Promise<boolean>;
 }
 
+export interface ScheduledFollowUpStore {
+  createScheduledFollowUp(input: CreateScheduledFollowUpRecordInput): Promise<ScheduledFollowUpMutationResult>;
+  getScheduledFollowUpByCreatorKey(
+    createdByRunId: string,
+    idempotencyKey: string,
+  ): Promise<ScheduledFollowUpRecord | null>;
+  getScheduledFollowUp(id: string): Promise<ScheduledFollowUpRecord | null>;
+  listScheduledFollowUps(input: {
+    sessionId: string;
+    limit: number;
+    before?: ScheduledFollowUpCursor;
+  }): Promise<ScheduledFollowUpRecord[]>;
+  updateScheduledFollowUp(input: UpdateScheduledFollowUpRecordInput): Promise<ScheduledFollowUpMutationResult>;
+  cancelScheduledFollowUp(input: {
+    id: string;
+    sessionId: string;
+    expectedRevision: number;
+    now: Date;
+  }): Promise<ScheduledFollowUpMutationResult>;
+  listScheduledFollowUpOccurrences(input: {
+    followUpId: string;
+    limit: number;
+    before?: ScheduledFollowUpOccurrenceCursor;
+  }): Promise<ScheduledFollowUpOccurrenceRecord[]>;
+  claimDueScheduledFollowUp(input: {
+    lockOwner: string;
+    now: Date;
+    lockedUntil: Date;
+  }): Promise<ScheduledFollowUpClaim | null>;
+  activateDueScheduledFollowUp(input: {
+    id: string;
+    lockOwner: string;
+    claimedRevision: number;
+    now: Date;
+    resolvedContext: ScheduledFollowUpResolvedContext;
+    externalCallback?: { type: 'slack' | 'github'; target: Record<string, unknown> };
+    externalBindingError?: string;
+    /** Null means no binding was observed; a UUID fences the exact trusted binding. */
+    expectedExternalThreadId?: string | null;
+  }): Promise<ScheduledFollowUpActivationResult | null>;
+}
+
 export interface AppStore
   extends
     SessionStore,
@@ -1331,4 +1491,5 @@ export interface AppStore
     AuthStore,
     ArtifactStore,
     ExternalResourceStore,
-    IntegrationStore {}
+    IntegrationStore,
+    ScheduledFollowUpStore {}

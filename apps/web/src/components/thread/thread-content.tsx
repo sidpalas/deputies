@@ -96,6 +96,7 @@ export function ChatPanel(props: {
   onLoadArtifactPreview: (artifact: Artifact) => Promise<ArtifactPreview>;
   openableManagedSkillIds?: ReadonlySet<string>;
   onOpenSkill?: (skillId: string, revisionId: string) => void;
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const historicalAssistantText = useMemo(() => buildAssistantText(props.events), [props.events]);
   const assistantText = { ...historicalAssistantText, ...props.activeProgress };
@@ -155,6 +156,7 @@ export function ChatPanel(props: {
                 steeringPending={props.steeringMessageIds.has(message.id)}
                 {...(props.openableManagedSkillIds ? { openableManagedSkillIds: props.openableManagedSkillIds } : {})}
                 {...(props.onOpenSkill ? { onOpenSkill: props.onOpenSkill } : {})}
+                {...(props.onOpenSession ? { onOpenSession: props.onOpenSession } : {})}
                 onRetryFailedMessages={props.onRetryFailedMessages}
                 onSaveEdit={props.onSaveEdit}
               />

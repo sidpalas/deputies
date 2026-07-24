@@ -124,12 +124,20 @@ export class WorkerService {
     } catch (error) {
       if (await this.finalizeCancellationIfRequested(claimed.run.id)) return true;
       const message = error instanceof Error ? error.message : 'Unknown worker error';
+      const failedAt = new Date();
+      const failureDelivery = new CallbackService(this.options.store).buildScheduledFollowUpRunFailure({
+        message: claimed.messages[0]!,
+        run: claimed.run,
+        error: message,
+        now: failedAt,
+      });
       const failed = await traceAsync('worker.finalize_run', { 'deputies.result': 'failed' }, () =>
         this.options.store.failRunBatch({
           runId: claimed.run.id,
           leaseOwner: this.options.leaseOwner,
-          failedAt: new Date(),
+          failedAt,
           error: message,
+          ...(failureDelivery ? { callbackDelivery: failureDelivery } : {}),
         }),
       );
       if (!failed) {
@@ -629,6 +637,7 @@ export class WorkerService {
         prompt,
         source: 'deputy',
         authorName: `Deputy: ${consumed.session.title || consumed.session.id}`,
+        context: { sourceSessionId: consumed.session.id },
       });
     } catch (error) {
       console.warn(
@@ -731,6 +740,7 @@ export class WorkerService {
   }
 
   private async notifyRunFailed(message: MessageRecord, run: RunRecord, error: string): Promise<void> {
+    if (message.scheduledFollowUpId && getTrustedProviderCallback(message.context)) return;
     for (const notifier of this.options.progressNotifiers ?? []) {
       try {
         await notifier.onRunFailed?.({ message, run, error });
@@ -749,6 +759,13 @@ export class WorkerService {
       }
     }
   }
+}
+
+function getTrustedProviderCallback(context: Record<string, unknown> | undefined): boolean {
+  const callback = context?.callback;
+  if (!callback || typeof callback !== 'object' || Array.isArray(callback)) return false;
+  const type = (callback as Record<string, unknown>).type;
+  return type === 'slack' || type === 'github';
 }
 
 export function normalizeRunnerSkillInvocations(context: Record<string, unknown> | undefined): RunnerSkillInvocation[] {

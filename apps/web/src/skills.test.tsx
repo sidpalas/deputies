@@ -645,6 +645,62 @@ it('restores composer text and chips after a failed send', async () => {
   );
 });
 
+it('resets schedule mode and structured fields only after a successful scheduled send', async () => {
+  const onSchedule = vi.fn(async (_input: unknown) => true);
+  render(
+    <MessageComposer
+      {...messageComposerProps(vi.fn(async () => true))}
+      onSchedule={onSchedule}
+      onSchedulePreview={async (schedule) => ({ normalized: schedule, occurrences: ['2026-07-25T10:00:00Z'] })}
+    />,
+  );
+
+  fireEvent.change(screen.getByLabelText('Send choice'), { target: { value: 'schedule' } });
+  const composer = screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: '/rev' } });
+  fireEvent.click(screen.getByRole('option', { name: /review-change/i }));
+  fireEvent.change(composer, { target: { value: 'inspect this' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Show send times' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Schedule message' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Schedule message' }));
+
+  await waitFor(() => expect(onSchedule).toHaveBeenCalled());
+  expect(onSchedule.mock.calls[0]?.[0]).toMatchObject({
+    prompt: 'inspect this',
+    skills: ['review-change'],
+    skillRefs: [{ id: 'skill-1', name: 'review-change', revisionId: 'revision-2' }],
+  });
+  await waitFor(() => expect(screen.getByLabelText('Send choice')).toHaveValue('now'));
+  expect(screen.queryByRole('group', { name: 'Schedule settings' })).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...')).toHaveValue('');
+});
+
+it('preserves schedule mode, valid preview, prompt, and skills after a failed scheduled send', async () => {
+  const onSchedule = vi.fn(async (_input: unknown) => false);
+  render(
+    <MessageComposer
+      {...messageComposerProps(vi.fn(async () => true))}
+      onSchedule={onSchedule}
+      onSchedulePreview={async (schedule) => ({ normalized: schedule, occurrences: ['2026-07-25T10:00:00Z'] })}
+    />,
+  );
+
+  fireEvent.change(screen.getByLabelText('Send choice'), { target: { value: 'schedule' } });
+  const composer = screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+  fireEvent.change(composer, { target: { value: '/rev' } });
+  fireEvent.click(screen.getByRole('option', { name: /review-change/i }));
+  fireEvent.change(composer, { target: { value: 'inspect this' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Show send times' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Schedule message' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Schedule message' }));
+
+  await waitFor(() => expect(onSchedule).toHaveBeenCalled());
+  expect(screen.getByLabelText('Send choice')).toHaveValue('schedule');
+  expect(screen.getByRole('button', { name: 'Schedule message' })).toBeEnabled();
+  expect(composer).toHaveValue('inspect this');
+  expect(screen.getByRole('button', { name: 'Remove review-change skill' })).toBeInTheDocument();
+});
+
 it('overlays the skill picker without resizing the composer input surface', () => {
   render(<MessageComposer {...messageComposerProps(vi.fn(async () => true))} />);
 

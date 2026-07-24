@@ -1,0 +1,3 @@
+# Bind scheduled follow-ups to sessions
+
+Scheduled follow-ups belong to their target session rather than being modeled as an automation kind. The binding preserves the target session's lifecycle, continuation semantics, and access boundary while automations remain independent tenant-wide rules whose invocations create new sessions. A follow-up on a tenant session is tenant-readable; a follow-up on a private session is owner-only and undiscoverable to everyone else, including Admins and bypass identities. Creator identity remains audit-only, due activation does not reauthorize the creator, and archiving the session permanently cancels its remaining scheduled follow-ups without resurrecting them on restore.

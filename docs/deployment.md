@@ -396,6 +396,12 @@ Agent Skills requires `017_skills.sql`. Apply migrations before rolling revision
 
 Managed auto-load resolves current at run start. Manual managed invocations are pinned by the API to current when a message is enqueued; persisted historical pins continue to resolve only while the tenant skill is enabled and non-archived. Repository refs remain repository-scoped and revisionless. `skills_loaded` is the canonical run audit record.
 
+## Scheduled Follow-ups
+
+Scheduled Follow-ups are always on. Complete the private-Session rollout through migrations 021 and 022 first. **Hard deployment requirement:** stop and drain every old API and worker process, apply migration `023_scheduled_follow_ups.sql`, then deploy the new API and workers using a stop-the-world or blue-green cutover. Never run an old worker alongside the new scheduler/API; mixed-version operation is unsupported. Slack/GitHub provider configuration and access are required for externally bound Sessions.
+
+Recurring follow-ups preserve wall-clock time in their IANA timezone and accept bounded hourly, daily, weekly, monthly, or yearly RRULEs. Existing Automation UTC cron behavior is unchanged.
+
 ## Repository Setup Scripts
 
 Deputies runs a repository-committed `.agents/setup` script after clone/checkout and before the agent prompt when the script is present. See [Repository Setup Scripts](./repository-setup-scripts.md) for the user-facing convention.
@@ -809,6 +815,7 @@ Use a secrets manager where possible. Avoid `UNSAFE_*` flags in production.
 - Choose topology: `all` or split `api`/`worker`.
 - Use `API_AUTH_MODE=session` for browser deployments. Reserve `bearer` or `none` for development tooling, tests, or programmatic/internal API access.
 - Provision Postgres and run migrations before starting API or worker processes.
+- For Scheduled Follow-up migration 023, drain/stop all old API/workers before migration and cut over the new API/workers together; do not use a mixed-version rolling deployment.
 - Provision object storage if artifacts are needed.
 - Configure DNS/TLS for app host and wildcard service preview hosts.
 - Prepare model credentials.

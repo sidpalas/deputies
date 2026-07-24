@@ -49,6 +49,7 @@ import { startSandboxService } from '../sandbox/service-process.js';
 import { PI_SESSION_DATA_VERSION, type PiSessionData, type PiSessionStore } from './session-store.js';
 import { createPiArtifactToolDefinition } from './artifact-tool.js';
 import { createPiDeputyToolDefinition } from './deputy-tool.js';
+import { createPiScheduledFollowUpsToolDefinition } from './scheduled-follow-ups-tool.js';
 import { createPiNotepadToolDefinition } from './notepad-tool.js';
 import { createPiGitToolDefinition } from './git-tool.js';
 import { createPiGitHubCliToolDefinition } from './github-cli-tool.js';
@@ -67,6 +68,7 @@ import type { McpConnection, McpRuntimeOptions } from '../mcp/types.js';
 import type { WebSearchToolServices } from '../web-search/tool.js';
 import type { DeputyToolBaseServices } from '../sessions/deputy-tool.js';
 import type { NotepadToolBaseServices } from '../notepads/tool.js';
+import type { ScheduledFollowUpToolBaseServices } from '../scheduled-follow-ups/tool.js';
 import { sessionTitleFromGeneratedResponse } from '../sessions/service.js';
 import {
   createPiSubagentToolDefinition,
@@ -110,6 +112,7 @@ export type PiRunnerOptions = {
   webSearch?: WebSearchToolServices;
   mcp?: McpRuntimeOptions & { connect?: typeof connectMcpServer };
   deputy?: DeputyToolBaseServices;
+  scheduledFollowUps?: ScheduledFollowUpToolBaseServices;
   notepad?: NotepadToolBaseServices;
   skills?: PiSkillsProvider;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
@@ -612,6 +615,18 @@ function createPiToolSet(
         runId: input.runId,
         messageId: input.messageId,
         runState: context.deputyRunState,
+        ...(input.shouldPersist ? { shouldPersist: input.shouldPersist } : {}),
+      }),
+    );
+  }
+
+  if (options.scheduledFollowUps && context.subagentDepth === 0) {
+    customTools.push(
+      createPiScheduledFollowUpsToolDefinition({
+        ...options.scheduledFollowUps,
+        sessionId: input.sessionId,
+        runId: input.runId,
+        messageId: input.messageId,
         ...(input.shouldPersist ? { shouldPersist: input.shouldPersist } : {}),
       }),
     );

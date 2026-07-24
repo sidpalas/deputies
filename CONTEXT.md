@@ -20,6 +20,12 @@ Use these terms in current product documentation and implementation.
 
 **Explicit Notepad**: A tenant-wide durable coordination document that can be associated with sessions. Associations do not alter tenant access.
 
+**Scheduled Follow-up**: A session-bound durable instruction to append and process a message in that session at one or more future times. It inherits the target session's tenant or private access boundary rather than defining separate ownership. Recurring scheduled follow-ups are always bounded by an end time, a maximum number of occurrences, or both.
+
+**Scheduled Follow-up Occurrence**: A durable record of one due activation of a scheduled follow-up that appends or attempts to append a message and counts toward the schedule's occurrence bound regardless of outcome. Recurrence neither accumulates unfinished messages nor replays every missed time; after an interruption, only the latest missed time may produce a catch-up message.
+
+**Scheduled Follow-up Context**: The context used by a scheduled follow-up occurrence. Explicitly selected values remain fixed from schedule creation, while unspecified values resolve from the session's active context when the occurrence becomes due.
+
 **Environment**: A tenant-wide reusable, revisioned multi-repository work context selected for sessions or automations.
 
 **Skill**: A reusable agent instruction with immutable definition revisions and live enabled and archive state. Tenant skills are available tenant-wide and may auto-load. Personal skills are owner-only and manually invokable. Repository skills remain repository-authored instructions discovered during runs.

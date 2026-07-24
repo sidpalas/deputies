@@ -57,6 +57,7 @@ import type { WebSearchToolServices } from './web-search/tool.js';
 import { startWorkerLoop, WorkerService, type WorkerLoopHandle } from './worker/service.js';
 import type { DeputyToolBaseServices } from './sessions/deputy-tool.js';
 import type { NotepadToolBaseServices } from './notepads/tool.js';
+import type { ScheduledFollowUpToolBaseServices } from './scheduled-follow-ups/tool.js';
 
 const config = loadConfig(process.env);
 const telemetry = startTelemetry({ runMode: config.runMode });
@@ -69,6 +70,23 @@ const artifactObjectStorage = config.artifactStorage === 'disabled' ? undefined 
 const services = createServices(store, {
   sandboxProvider,
   unsafeAllowLocalHttpCallbacks: config.unsafeAllowLocalHttpCallbacks,
+  scheduledFollowUpContext: {
+    modelConfig: {
+      ...(config.runnerModelDefault ? { runnerModelDefault: config.runnerModelDefault } : {}),
+      runnerModelChoices: config.runnerModelChoices,
+    },
+    skillsEnabled: config.skillsEnabled,
+    repoSkillsEnabled: config.repoSkillsEnabled,
+  },
+  scheduledFollowUpExternalResolver: {
+    slackBotConfigured: Boolean(config.slackBotToken),
+    slackAllowedTeamIds: config.slackAllowedTeamIds,
+    slackAllowedChannelIds: config.slackAllowedChannelIds,
+    githubAppConfigured: Boolean(config.githubAppId && config.githubAppPrivateKey),
+    githubAllowedRepositories: config.githubAllowedRepositories,
+    ...(config.githubWebhookTriggerPhrases[0] ? { githubReplyPhrase: config.githubWebhookTriggerPhrases[0] } : {}),
+    ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
+  },
   ...(artifactObjectStorage ? { artifactObjectStorage } : {}),
 });
 const webSearch = createWebSearchServices();
@@ -80,6 +98,9 @@ const githubClient =
   config.githubAppId || config.githubAppPrivateKey ? new GitHubClient({ apiBaseUrl: config.githubApiBaseUrl }) : null;
 const githubRepositoryAccess = githubClient ? createGitHubRepositoryAccess(githubClient) : null;
 if (githubClient && githubRepositoryAccess) {
+  services.scheduledFollowUps.setGitHubAccessVerifier((repository) =>
+    githubRepositoryAccess.getRepositoryAccess(repository),
+  );
   services.githubReactionSender = new GitHubReactionSender(githubClient, githubRepositoryAccess);
   services.githubIssueContextFetcher = new GitHubIssueContextFetcher(githubClient, githubRepositoryAccess);
   services.githubArchivedSessionNotifier = new GitHubArchivedSessionNotifier(githubClient, githubRepositoryAccess);
@@ -93,6 +114,7 @@ let sessionSearchIndexer: ReturnType<typeof startSessionSearchIndexer> | undefin
 let sandboxReaper: ReturnType<typeof startSandboxReaper> | undefined;
 const processInstanceId = `${hostname()}-${process.pid}-${randomUUID()}`;
 const automationSchedulerLockOwner = `automation-scheduler-${processInstanceId}`;
+const scheduledFollowUpSchedulerLockOwner = `scheduled-follow-up-scheduler-${processInstanceId}`;
 
 if (telemetry) resources.push(telemetry);
 if ('close' in baseStore && typeof baseStore.close === 'function') resources.push(baseStore);
@@ -125,6 +147,12 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
     },
     config.workerPollIntervalMs,
   );
+  const scheduledFollowUpSchedulerLoop = startWorkerLoop(
+    {
+      processNext: () => services.scheduledFollowUps.processNext({ lockOwner: scheduledFollowUpSchedulerLockOwner }),
+    },
+    config.workerPollIntervalMs,
+  );
   const workerLoops = Array.from({ length: config.workerConcurrency }, (_, index) => {
     const worker = new WorkerService({
       store,
@@ -145,10 +173,15 @@ if (config.runMode === 'combined' || config.runMode === 'all' || config.runMode 
   workerLoop = {
     wake(): void {
       automationSchedulerLoop.wake();
+      scheduledFollowUpSchedulerLoop.wake();
       for (const loop of workerLoops) loop.wake();
     },
     async stop(): Promise<void> {
-      await Promise.all([automationSchedulerLoop.stop(), ...workerLoops.map((loop) => loop.stop())]);
+      await Promise.all([
+        automationSchedulerLoop.stop(),
+        scheduledFollowUpSchedulerLoop.stop(),
+        ...workerLoops.map((loop) => loop.stop()),
+      ]);
     },
   };
   const unsubscribeWorkerWake = services.events.subscribeAllEvents((event) => {
@@ -410,6 +443,7 @@ async function createRunner(): Promise<Runner> {
     };
   }
   if (deputy) piOptions.deputy = deputy;
+  piOptions.scheduledFollowUps = createScheduledFollowUpToolServices();
   piOptions.notepad = createNotepadToolServices();
   if (config.skillsEnabled) {
     piOptions.skills = {
@@ -462,6 +496,10 @@ function createDeputyToolServices(): DeputyToolBaseServices | undefined {
 
 function createNotepadToolServices(): NotepadToolBaseServices {
   return { store: services.store, notepads: services.notepads };
+}
+
+function createScheduledFollowUpToolServices(): ScheduledFollowUpToolBaseServices {
+  return { store: services.store, scheduledFollowUps: services.scheduledFollowUps };
 }
 
 function createWebSearchServices(): WebSearchToolServices | undefined {

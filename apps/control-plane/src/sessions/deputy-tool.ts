@@ -253,7 +253,7 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
       createdAt: now,
       source: 'deputy',
       authorName,
-      ...(Object.keys(context).length ? { context } : {}),
+      context: { ...context, sourceSessionId: parent.id },
     },
     sessionCreatedEvent: normalizeAppendInput({
       sessionId,
@@ -388,6 +388,7 @@ async function sendMessage(services: DeputyToolServices, params: Record<string, 
     prompt,
     source: 'deputy',
     authorName: deputyAuthorName(parent),
+    context: { sourceSessionId: parent.id },
   });
   return { session: serializeSessionSummary(child), message: serializeMessageSummary(message) };
 }

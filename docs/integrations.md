@@ -125,6 +125,7 @@ Current callback support:
 - Generic webhook payloads may include an HTTP `callback` target.
 - On message completion, the worker posts a JSON payload to that URL.
 - Callback attempts are persisted in `callback_deliveries`. The dispatcher claims due callbacks, delivers them through target-specific sender plugins, records `callback_sent` on success, schedules retry on transient failure, and records `callback_failed` after terminal failure.
+- Provider callback delivery is at-least-once: a crash after provider success but before recording success can redeliver. Deterministic delivery IDs support reconciliation. Slack and GitHub have no safe universal idempotency mechanism, so rare duplicates must be reconciled rather than using unsafe provider-history searches.
 
 Current stored source shape is `key`, `name`, `enabled`, `bearer_token`, and optional `prompt_prefix`. Mapping, filters, default templates, and token hashes remain future extensions. Future rich source configuration could look like:
 
