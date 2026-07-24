@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.24.0](https://github.com/sidpalas/deputies/compare/v0.23.0...v0.24.0) (2026-07-24)
+
+
+### Features
+
+* add private sessions ([370c6af](https://github.com/sidpalas/deputies/commit/370c6af55aa77f9dea166c65583931a27ccab8b2))
+* add scheduled follow-ups ([020400c](https://github.com/sidpalas/deputies/commit/020400caad1210d2079d0220cd8f1f1dcb5d4360))
+
+
+### Bug Fixes
+
+* normalize encoded follow-up schedules ([dc2c36e](https://github.com/sidpalas/deputies/commit/dc2c36eecdcbfff6a7209c7d051fbb11aa859e1c))
+* repair static demo navigation ([68117df](https://github.com/sidpalas/deputies/commit/68117dfb8cded988715bc3e3f5defe5f2cdbe7d0))
+
 ## [0.23.0](https://github.com/sidpalas/deputies/compare/v0.22.0...v0.23.0) (2026-07-24)
 
 
