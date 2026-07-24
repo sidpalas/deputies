@@ -95,9 +95,9 @@ export function registerNotepadRoutes(
     handle(c, async () => ({
       notepads: await services.notepads.list(
         await authorized(c),
-        optionalUuidQuery(c, 'groupId'),
         queryInt(c, 'limit', 50),
         queryInt(c, 'cursor', 0),
+        c.req.query('archived') === 'true',
       ),
     })),
   );
@@ -105,19 +105,19 @@ export function registerNotepadRoutes(
     handle(c, async () => ({
       results: await services.notepads.search(
         await authorized(c),
-        requiredUuidQuery(c, 'groupId'),
         c.req.query('q'),
         queryInt(c, 'limit', 20),
+        c.req.query('archived') === 'true',
       ),
     })),
   );
-  app.get('/groups/:groupId/notepads/inventory', async (c) =>
+  app.get('/notepads/inventory', async (c) =>
     handle(c, async () => ({
       notepads: await services.notepads.inventory(
         await authorized(c),
-        uuidParam(c, 'groupId'),
         queryInt(c, 'limit', 50),
         queryInt(c, 'cursor', 0),
+        c.req.query('archived') === 'true',
       ),
     })),
   );
@@ -127,7 +127,6 @@ export function registerNotepadRoutes(
       async () => {
         const auth = await authorized(c);
         const input = await body(c);
-        if (typeof input.ownerGroupId === 'string') validUuid(input.ownerGroupId, 'ownerGroupId');
         if ('initialWritableSessionId' in input) {
           if (typeof input.initialWritableSessionId !== 'string')
             throw new NotepadServiceError('invalid', 'initialWritableSessionId must be a UUID string');
@@ -163,6 +162,12 @@ export function registerNotepadRoutes(
         actor(await authorized(c)),
       ),
     })),
+  );
+  app.post('/notepads/:id/archive', async (c) =>
+    handle(c, async () => ({ notepad: await services.notepads.archive(await authorized(c), uuidParam(c, 'id')) })),
+  );
+  app.post('/notepads/:id/restore', async (c) =>
+    handle(c, async () => ({ notepad: await services.notepads.restore(await authorized(c), uuidParam(c, 'id')) })),
   );
   for (const [path, field] of [
     ['/notepads/:id/content', 'content'],
@@ -331,9 +336,6 @@ function uuidParam(c: NotepadContext, name: string) {
 function optionalUuidQuery(c: NotepadContext, name: string) {
   const value = c.req.query(name);
   return value === undefined ? undefined : validUuid(value, name);
-}
-function requiredUuidQuery(c: NotepadContext, name: string) {
-  return validUuid(c.req.query(name), name);
 }
 function revisionParam(c: NotepadContext) {
   const value = c.req.param('revision');

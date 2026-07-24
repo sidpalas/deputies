@@ -8,7 +8,6 @@ import type {
   MessageRecord,
   SessionRecord,
 } from '../store/types.js';
-import { defaultGroupId } from '../store/types.js';
 import { resolveIntegrationSkillInvocation, type SkillInvocationRef } from '../skills/invocation.js';
 import type { SkillService } from '../skills/service.js';
 
@@ -166,19 +165,18 @@ async function integrationSkillInvocation(
   skills: Pick<SkillService, 'listInvocationCandidates'>,
   session: SessionRecord,
   input: IntegrationIngress,
-): Promise<{ name: string; text: string; ref: SkillInvocationRef; source: 'group' | 'shared' | 'repo' } | null> {
+): Promise<{ name: string; text: string; ref: SkillInvocationRef; source: 'managed' | 'repo' } | null> {
   if (!input.currentMessageText) return null;
   try {
     const invocation = await resolveIntegrationSkillInvocation({
       skills,
       events,
-      ownerGroupId: session.ownerGroupId,
       sessionId: session.id,
       repoSkillsEnabled: input.repoSkillsEnabled !== false,
       skillsEnabled: input.skillsEnabled !== false,
       currentMessageText: input.currentMessageText,
     });
-    if (!invocation || invocation.source === 'personal') return null;
+    if (!invocation) return null;
     return { ...invocation, source: invocation.source };
   } catch {
     console.warn('Skill lookup degraded for an integration message; the leading token was preserved.');
@@ -188,7 +186,7 @@ async function integrationSkillInvocation(
 
 export function integrationMessageContext(
   input: IntegrationIngress,
-  invocation?: { name: string; ref: SkillInvocationRef; source: 'group' | 'shared' | 'repo' },
+  invocation?: { name: string; ref: SkillInvocationRef; source: 'managed' | 'repo' },
 ): Record<string, unknown> {
   const { skills: _untrustedSkills, skillRefs: _untrustedSkillRefs, ...context } = input.context ?? {};
   return compactRecord({
@@ -226,9 +224,6 @@ async function getOrCreateExternalThreadSessionUnlocked(
 
   const createdSession = await sessions.create({
     title: input.title,
-    ownerGroupId: defaultGroupId,
-    visibility: 'group',
-    writePolicy: 'creator_only',
     ...(input.tags ? { tags: input.tags } : {}),
   });
   const thread = await store.createExternalThread({

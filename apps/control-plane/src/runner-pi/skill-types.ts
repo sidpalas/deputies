@@ -2,7 +2,7 @@ import type { Skill } from '@earendil-works/pi-coding-agent';
 import type { NormalizedEventPayload } from '../events/types.js';
 import type { RunnerMessageInput } from '../runner/types.js';
 
-export type ManagedSkillSource = 'personal' | 'group' | 'shared';
+export type ManagedSkillSource = 'managed';
 export type LoadedSkillSource = ManagedSkillSource | 'repo';
 
 export type ManagedSkillCandidate = {
@@ -14,16 +14,13 @@ export type ManagedSkillCandidate = {
   body: string;
   autoLoad: boolean;
   source: ManagedSkillSource;
-  ownerGroupId?: string;
-  ownerGroupName?: string;
   createdAt: Date;
 };
 
 export type PiSkillsProvider = {
   repoScanEnabled: boolean;
   listForRun(input: {
-    ownerGroupId: string;
-    createdByUserId?: string;
+    userId?: string;
     invokedNames: string[];
     invokedRevisions: Array<{ skillId: string; revisionId: string }>;
   }): Promise<ManagedSkillCandidate[]>;
@@ -49,8 +46,6 @@ export type ResolvedSkill = ResolvedSkillBase &
         skillId: string;
         revisionId: string;
         revisionNumber: number;
-        ownerGroupId?: string;
-        ownerGroupName?: string;
         createdAt: Date;
         repo?: never;
       }
@@ -60,8 +55,6 @@ export type ResolvedSkill = ResolvedSkillBase &
         skillId?: never;
         revisionId?: never;
         revisionNumber?: never;
-        ownerGroupId?: never;
-        ownerGroupName?: never;
         createdAt?: never;
       }
   );

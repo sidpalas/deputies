@@ -6,8 +6,6 @@ import {
   AutomationsSidebar,
   EnvironmentsPanel,
   EnvironmentsSidebar,
-  GroupsPanel,
-  GroupsSidebar,
   MessageComposer,
   SkillsPanel,
   SkillsSidebar,
@@ -24,8 +22,6 @@ import {
   demoAutomations,
   demoCurrentUser,
   demoEnvironments,
-  demoGroupMembers,
-  demoGroups,
   demoShowcaseSessions,
   demoSkills,
   demoSnippets,
@@ -78,7 +74,6 @@ export function StaticDemoApp() {
   const [selectedSkillId, setSelectedSkillId] = useState(() => getInitialResourceId('skill', demoSkills));
   const [selectedSkillRevisionId, setSelectedSkillRevisionId] = useState(() => getInitialRevisionId('skills'));
   const [selectedSnippetId, setSelectedSnippetId] = useState(() => getInitialResourceId('snippet', demoSnippets));
-  const [selectedGroupId, setSelectedGroupId] = useState(() => getInitialResourceId('group', demoGroups));
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const [sessionFilters, setSessionFilters] = useState<StaticSessionFilters>(emptyStaticSessionFilters);
   const [sessionStarOverrides, setSessionStarOverrides] = useState<Record<string, boolean>>({});
@@ -168,7 +163,6 @@ export function StaticDemoApp() {
       setSelectedSkillId(getInitialResourceId('skill', demoSkills));
       setSelectedSkillRevisionId(nextPage === 'skills' ? (params.get('revision') ?? '') : '');
       setSelectedSnippetId(getInitialResourceId('snippet', demoSnippets));
-      setSelectedGroupId(getInitialResourceId('group', demoGroups));
       if (nextPage === 'sessions') {
         const requestedSessionId = params.get('session') ?? '';
         const requestedSession = sessions.find((session) => session.id === requestedSessionId);
@@ -191,7 +185,6 @@ export function StaticDemoApp() {
   const selectedAutomation = demoAutomations.find((automation) => automation.id === selectedAutomationId) ?? null;
   const selectedSkill = demoSkills.find((skill) => skill.id === selectedSkillId) ?? null;
   const selectedSnippet = demoSnippets.find((snippet) => snippet.id === selectedSnippetId) ?? null;
-  const selectedGroup = demoGroups.find((group) => group.id === selectedGroupId) ?? null;
 
   function navigate(nextPage: StaticDemoPage) {
     setPage(nextPage);
@@ -240,7 +233,6 @@ export function StaticDemoApp() {
     if (nextPage === 'environments') return selectedEnvironmentId;
     if (nextPage === 'skills') return selectedSkillId;
     if (nextPage === 'snippets') return selectedSnippetId;
-    if (nextPage === 'groups') return selectedGroupId;
     return selected?.session.id ?? '';
   }
 
@@ -304,8 +296,8 @@ export function StaticDemoApp() {
                 automations={demoAutomations}
                 canCallApi={false}
                 canCreateAutomations={false}
+                canManageTenantResources={false}
                 footerProps={footerProps}
-                groups={demoGroups}
                 loading={false}
                 selectedAutomationId={selectedAutomationId}
                 onArchiveAutomation={() => undefined}
@@ -337,7 +329,6 @@ export function StaticDemoApp() {
                 canCreateSkills={false}
                 readOnly
                 footerProps={footerProps}
-                groups={demoGroups}
                 loading={false}
                 skills={demoSkills}
                 selectedSkillId={selectedSkillId}
@@ -362,22 +353,6 @@ export function StaticDemoApp() {
                 onCollapse={collapseSidebar}
                 onArchive={() => undefined}
                 onRestore={() => undefined}
-              />
-            ) : page === 'groups' ? (
-              <GroupsSidebar
-                canCreateGroups={false}
-                currentUser={demoCurrentUser}
-                footerProps={footerProps}
-                groups={demoGroups}
-                selectedGroupId={selectedGroupId}
-                selectedView="group"
-                superAdminUsers={[]}
-                onBackToSessions={() => navigate('sessions')}
-                onCollapse={collapseSidebar}
-                onArchiveGroup={() => undefined}
-                onCreateGroup={() => undefined}
-                onSelectGroup={(id) => selectResource('groups', id, setSelectedGroupId)}
-                onSelectSuperAdmins={() => undefined}
               />
             ) : (
               <ThreadSidebar
@@ -440,7 +415,7 @@ export function StaticDemoApp() {
             automationsLoading={false}
             canCallApi={false}
             canCreateAutomations={false}
-            groups={demoGroups}
+            canManageTenantResources={false}
             token=""
             environmentOptions={demoEnvironments}
             environmentOptionsLoading={false}
@@ -474,7 +449,7 @@ export function StaticDemoApp() {
             selectedEnvironmentId={selectedEnvironmentId}
             selectedRevisionId={selectedEnvironmentRevisionId}
             canCallApi={false}
-            groups={demoGroups}
+            canManageTenantResources={false}
             token=""
             repositoryOptions={[]}
             repositoryOptionsLoading={false}
@@ -501,8 +476,6 @@ export function StaticDemoApp() {
             loading={false}
             readOnly
             token=""
-            groups={demoGroups}
-            creatableGroups={[]}
             showOpenSidebar={!sidebarOpen}
             onOpenSidebar={() => setSidebarOpen(true)}
             onSkillChanged={() => undefined}
@@ -528,49 +501,6 @@ export function StaticDemoApp() {
             onRestore={() => undefined}
             onDirtyChange={() => undefined}
             onError={() => undefined}
-          />
-        ) : page === 'groups' ? (
-          <GroupsPanel
-            canCreateGroups={false}
-            currentUser={demoCurrentUser}
-            groupMembers={demoGroupMembers}
-            groups={demoGroups}
-            groupForm={{
-              name: selectedGroup?.name ?? '',
-              visibility: selectedGroup?.defaultVisibility ?? 'organization',
-              writePolicy: selectedGroup?.defaultWritePolicy ?? 'group_members',
-              automationCreateRequiredRole: selectedGroup?.automationCreateRequiredRole ?? 'member',
-              serverError: '',
-            }}
-            groupFormError=""
-            memberSearch={{ query: '', loading: false, userId: '', role: 'viewer', options: [] }}
-            selectedGroupId={selectedGroupId}
-            selectedView="group"
-            superAdminSearch={{ query: '', loading: false, userId: '', options: [] }}
-            superAdminUsers={[]}
-            showOpenSidebar={!sidebarOpen}
-            onAddMember={() => undefined}
-            onArchiveGroup={() => undefined}
-            onCreateGroup={() => undefined}
-            onGroupFormAutomationCreateRequiredRoleChange={() => undefined}
-            onGroupFormNameChange={() => undefined}
-            onGroupFormVisibilityChange={() => undefined}
-            onGroupFormWritePolicyChange={() => undefined}
-            onMemberRoleChange={() => undefined}
-            onMemberSearchQueryChange={() => undefined}
-            onMemberUserIdChange={() => undefined}
-            onOpenSidebar={() => setSidebarOpen(true)}
-            onPromoteSuperAdmin={() => undefined}
-            onRemoveMember={() => undefined}
-            onRemoveSuperAdmin={() => undefined}
-            onSaveGroup={() => undefined}
-            onSelectGroup={(id) => selectResource('groups', id, setSelectedGroupId)}
-            onSelectMemberUser={() => undefined}
-            onSelectSuperAdminUser={() => undefined}
-            onSelectSuperAdmins={() => undefined}
-            onSuperAdminSearchQueryChange={() => undefined}
-            onSuperAdminUserIdChange={() => undefined}
-            onUpdateMemberRole={() => undefined}
           />
         ) : (
           <StaticSessionView

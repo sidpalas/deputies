@@ -1,33 +1,22 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Archive, PanelLeftOpen, RotateCcw, Save, Share2 } from 'lucide-react';
-import {
-  createSkill,
-  listSkillRevisions,
-  promoteSkill,
-  updateSkill,
-  type Group,
-  type Skill,
-  type SkillShareMode,
-} from '../../api.js';
+import { Archive, PanelLeftOpen, RotateCcw, Save } from 'lucide-react';
+import { createSkill, listSkillRevisions, updateSkill, type Skill } from '../../api.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Input } from '../ui/input.js';
 import { Textarea } from '../ui/textarea.js';
-import { SharingGroupPicker } from './sharing-group-picker.js';
 import { RevisionSelector, useRevisionViewer } from './revision-selector.js';
 import { slugNameValidationError, UnsavedIndicator } from './shared.js';
 import { useEditorDirty } from './use-editor-dirty.js';
 
 type SkillForm = {
   id: string;
-  ownerGroupId: string;
+  scope: 'tenant' | 'personal';
   name: string;
   description: string;
   body: string;
   autoLoad: boolean;
   enabled: boolean;
-  shareMode: SkillShareMode;
-  shareGroupIds: string[];
 };
 
 function loadRevisions(skillId: string, token: string) {
@@ -41,9 +30,8 @@ export function SkillsPanel(props: {
   loaded: boolean;
   loading: boolean;
   readOnly?: boolean;
+  canCreateTenantSkills?: boolean;
   token: string;
-  groups: Group[];
-  creatableGroups: Group[];
   showOpenSidebar: boolean;
   onOpenSidebar: () => void;
   onSkillChanged: (skill: Skill) => void;
@@ -62,7 +50,7 @@ export function SkillsPanel(props: {
     currentRevisionId: selected?.currentRevisionId,
     selectedRevisionId: props.selectedRevisionId,
     token: props.token,
-    enabled: Boolean(selected?.canManage) && !props.readOnly,
+    enabled: Boolean(selected),
     loadRevisions,
     onSelectRevision: props.onSelectRevision,
     onError: props.onError,
@@ -79,8 +67,6 @@ export function SkillsPanel(props: {
         }
       : selected;
   const selectedArchived = Boolean(selected?.archivedAt);
-  const selectedGroupOwned = selected?.ownerKind === 'group';
-  const groupOwned = Boolean(selectedGroupOwned || (!selected && form.ownerGroupId));
   const canEdit =
     !props.readOnly && (selected ? Boolean(selected.canManage) && !selectedArchived && !viewedRevision : true);
   const nameError = skillNameValidationError(form.name);
@@ -88,17 +74,21 @@ export function SkillsPanel(props: {
   const complete = Boolean(!nameError && form.name && form.description.trim() && bodySizeBytes <= 65_536);
   const baselineForm = displayed ? skillFormFromSkill(displayed) : emptySkillForm();
   const skillDirty = skillFieldsChanged(form, baselineForm);
-  const sharingDirty = Boolean(groupOwned && sharingFieldsChanged(form, baselineForm));
-  const dirty = skillDirty || sharingDirty;
-  const sharingComplete = !groupOwned || form.shareMode !== 'specific' || form.shareGroupIds.length > 0;
+  const dirty = skillDirty;
   useEditorDirty(dirty, props.onDirtyChange);
 
   useEffect(() => {
     setForm(displayed ? skillFormFromSkill(displayed) : emptySkillForm());
   }, [displayed?.id, displayed?.archivedAt, displayed?.currentRevisionId, props.selectedSkillId, viewedRevision?.id]);
 
+  useEffect(() => {
+    if (!selected && props.canCreateTenantSkills === false) {
+      setForm((current) => ({ ...current, scope: 'personal', autoLoad: false }));
+    }
+  }, [selected, props.canCreateTenantSkills]);
+
   async function save() {
-    if (!canEdit || !complete || !sharingComplete || !dirty || saving) return;
+    if (!canEdit || !complete || !dirty || saving) return;
     setSaving(true);
     try {
       const saved = form.id
@@ -110,50 +100,17 @@ export function SkillsPanel(props: {
             body: form.body,
             autoLoad: form.autoLoad,
             enabled: form.enabled,
-            ...(selectedGroupOwned && sharingDirty
-              ? {
-                  shareMode: form.shareMode,
-                  ...(form.shareMode === 'specific' ? { groupIds: form.shareGroupIds } : {}),
-                }
-              : {}),
             ...(selected?.currentRevisionId ? { expectedCurrentRevisionId: selected.currentRevisionId } : {}),
           })
         : await createSkill({
             token: props.token,
+            scope: form.scope,
             name: form.name,
             description: form.description.trim(),
             body: form.body,
-            autoLoad: form.autoLoad,
-            ...(form.ownerGroupId ? { ownerGroupId: form.ownerGroupId } : {}),
-            ...(form.ownerGroupId
-              ? {
-                  shareMode: form.shareMode,
-                  ...(form.shareMode === 'specific' ? { groupIds: form.shareGroupIds } : {}),
-                }
-              : {}),
+            autoLoad: form.scope === 'personal' ? false : form.autoLoad,
           });
       props.onSkillSaved(saved);
-      setForm(skillFormFromSkill(saved));
-    } catch (error) {
-      props.onError(error);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function promote(groupId: string) {
-    if (props.readOnly || !selected?.canManage || selectedGroupOwned || selectedArchived || !groupId || saving) return;
-    const target = props.groups.find((group) => group.id === groupId);
-    if (
-      !window.confirm(
-        `Move this skill to ${target?.name ?? 'this group'}? It will stop loading as a personal skill and cannot be moved back.`,
-      )
-    )
-      return;
-    setSaving(true);
-    try {
-      const saved = await promoteSkill({ skillId: selected.id, groupId, token: props.token });
-      props.onSkillChanged(saved);
       setForm(skillFormFromSkill(saved));
     } catch (error) {
       props.onError(error);
@@ -207,10 +164,7 @@ export function SkillsPanel(props: {
                 {selected ? (
                   <div className="flex shrink-0 items-center gap-2">
                     {dirty ? <UnsavedIndicator /> : null}
-                    {!props.readOnly &&
-                    selected.canManage &&
-                    selected.currentRevisionId &&
-                    selected.currentRevisionNumber ? (
+                    {selected.currentRevisionId && selected.currentRevisionNumber ? (
                       <RevisionSelector
                         currentRevisionId={selected.currentRevisionId}
                         currentRevisionNumber={selected.currentRevisionNumber}
@@ -243,7 +197,7 @@ export function SkillsPanel(props: {
               ) : null}
               {selectedArchived ? (
                 <p className="mt-4 rounded-md border border-border bg-muted/60 p-3 text-sm text-muted-foreground">
-                  This skill is archived. Restore it before editing or sharing it.
+                  This skill is archived. Restore it before editing it.
                 </p>
               ) : null}
               <form
@@ -254,28 +208,32 @@ export function SkillsPanel(props: {
                 }}
               >
                 {!selected ? (
-                  <Field label="Owner" htmlFor="skill-owner">
+                  <Field
+                    label="Scope"
+                    htmlFor="skill-scope"
+                    hint="Personal skills are manually invoked and visible only to you."
+                  >
                     <select
-                      id="skill-owner"
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                      value={form.ownerGroupId}
-                      onChange={(event) =>
-                        setForm({
-                          ...form,
-                          ownerGroupId: event.target.value,
-                          ...(!event.target.value ? { shareMode: 'none' as const, shareGroupIds: [] } : {}),
-                        })
-                      }
+                      id="skill-scope"
+                      className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                      value={form.scope}
+                      onChange={(event) => {
+                        const scope = event.target.value as 'tenant' | 'personal';
+                        setForm({ ...form, scope, autoLoad: scope === 'personal' ? false : form.autoLoad });
+                      }}
+                      disabled={!canEdit}
                     >
-                      <option value="">My personal skills</option>
-                      {props.creatableGroups.map((group) => (
-                        <option key={group.id} value={group.id}>
-                          {group.name}
-                        </option>
-                      ))}
+                      <option value="personal">Personal</option>
+                      <option value="tenant" disabled={props.canCreateTenantSkills === false}>
+                        Tenant
+                      </option>
                     </select>
                   </Field>
-                ) : null}
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Scope: {selected.scope === 'personal' ? 'Personal' : 'Tenant'}
+                  </p>
+                )}
                 <Field label="Name" htmlFor="skill-name" hint="Lowercase letters, numbers, and single hyphens; max 64.">
                   <Input
                     id="skill-name"
@@ -312,15 +270,19 @@ export function SkillsPanel(props: {
                   />
                 </Field>
                 <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground">
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={form.autoLoad}
-                      onChange={(event) => setForm({ ...form, autoLoad: event.target.checked })}
-                      disabled={!canEdit}
-                    />
-                    Load automatically
-                  </label>
+                  {form.scope !== 'personal' ? (
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={form.autoLoad}
+                        onChange={(event) => setForm({ ...form, autoLoad: event.target.checked })}
+                        disabled={!canEdit}
+                      />
+                      Load automatically
+                    </label>
+                  ) : (
+                    <span>Personal skills are manual invocation only.</span>
+                  )}
                   {selected ? (
                     <label className="flex items-center gap-2">
                       <input
@@ -333,51 +295,8 @@ export function SkillsPanel(props: {
                     </label>
                   ) : null}
                 </div>
-                {groupOwned && !viewedRevision ? (
-                  <div className="rounded-md border border-border bg-muted/20 p-4">
-                    <div className="flex items-center gap-2">
-                      <Share2 className="h-4 w-4 text-primary" />
-                      <h3 className="text-sm font-semibold text-foreground">Sharing</h3>
-                    </div>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Sharing grants read and invocation access. It never grants edit access.
-                    </p>
-                    {!props.readOnly && (!selected || selected.canManage) ? (
-                      <>
-                        <fieldset className="mt-4 grid gap-2 text-sm" disabled={!canEdit}>
-                          {(['none', 'specific', 'all_groups'] as const).map((mode) => (
-                            <label key={mode} className="flex items-center gap-2">
-                              <input
-                                type="radio"
-                                name="skill-share-mode"
-                                checked={form.shareMode === mode}
-                                onChange={() => setForm({ ...form, shareMode: mode })}
-                              />
-                              {shareModeLabel(mode)}
-                            </label>
-                          ))}
-                        </fieldset>
-                        {form.shareMode === 'specific' ? (
-                          <div className="mt-3">
-                            <SharingGroupPicker
-                              groups={props.groups}
-                              ownerGroupId={selected?.ownerGroupId ?? form.ownerGroupId}
-                              selectedGroupIds={form.shareGroupIds}
-                              disabled={!canEdit}
-                              onSelectedGroupIdsChange={(shareGroupIds) => setForm({ ...form, shareGroupIds })}
-                            />
-                          </div>
-                        ) : null}
-                      </>
-                    ) : (
-                      selected && (
-                        <p className="mt-4 text-sm text-foreground">{readOnlyShareModeSummary(selected.shareMode)}</p>
-                      )
-                    )}
-                  </div>
-                ) : null}
                 <div className="flex flex-wrap gap-2">
-                  <Button type="submit" disabled={!canEdit || !complete || !sharingComplete || !dirty || saving}>
+                  <Button type="submit" disabled={!canEdit || !complete || !dirty || saving}>
                     <Save className="h-4 w-4" /> {selected ? 'Save skill' : 'Create skill'}
                   </Button>
                   {selected ? (
@@ -405,55 +324,10 @@ export function SkillsPanel(props: {
                 </div>
               </form>
             </Card>
-
-            {selected &&
-            !props.readOnly &&
-            !viewedRevision &&
-            !selectedArchived &&
-            selected.canManage &&
-            !selectedGroupOwned ? (
-              <PromoteCard
-                groups={props.creatableGroups}
-                saving={saving || dirty}
-                onPromote={(groupId) => void promote(groupId)}
-              />
-            ) : null}
           </>
         )}
       </div>
     </section>
-  );
-}
-
-function PromoteCard(props: { groups: Group[]; saving: boolean; onPromote: (groupId: string) => void }) {
-  const [groupId, setGroupId] = useState('');
-  return (
-    <Card className="p-5">
-      <div className="flex items-center gap-2">
-        <Share2 className="h-4 w-4 text-primary" />
-        <h2 className="text-lg font-semibold">Move to access group</h2>
-      </div>
-      <p className="mt-1 text-sm text-muted-foreground">
-        This permanently moves the personal skill into the selected group. It cannot be moved back.
-      </p>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <select
-          className="h-10 min-w-52 rounded-md border border-input bg-background px-3 text-sm"
-          value={groupId}
-          onChange={(event) => setGroupId(event.target.value)}
-        >
-          <option value="">Select group...</option>
-          {props.groups.map((group) => (
-            <option key={group.id} value={group.id}>
-              {group.name}
-            </option>
-          ))}
-        </select>
-        <Button variant="secondary" disabled={!groupId || props.saving} onClick={() => props.onPromote(groupId)}>
-          Move skill
-        </Button>
-      </div>
-    </Card>
   );
 }
 
@@ -479,57 +353,34 @@ export function skillNameValidationError(name: string): string {
 function emptySkillForm(): SkillForm {
   return {
     id: '',
-    ownerGroupId: '',
+    scope: 'tenant',
     name: '',
     description: '',
     body: '',
     autoLoad: true,
     enabled: true,
-    shareMode: 'none',
-    shareGroupIds: [],
   };
 }
 
 function skillFormFromSkill(skill: Skill): SkillForm {
   return {
     id: skill.id,
-    ownerGroupId: skill.ownerGroupId ?? '',
+    scope: skill.scope ?? 'tenant',
     name: skill.name,
     description: skill.description,
     body: skill.body ?? '',
     autoLoad: skill.autoLoad,
     enabled: skill.enabled,
-    shareMode: skill.shareMode,
-    shareGroupIds: skill.shareGroupIds ?? [],
   };
 }
 
 function skillFieldsChanged(form: SkillForm, baseline: SkillForm): boolean {
   return (
-    form.ownerGroupId !== baseline.ownerGroupId ||
     form.name !== baseline.name ||
+    form.scope !== baseline.scope ||
     form.description !== baseline.description ||
     form.body !== baseline.body ||
     form.autoLoad !== baseline.autoLoad ||
     form.enabled !== baseline.enabled
   );
-}
-
-function sharingFieldsChanged(form: SkillForm, baseline: SkillForm): boolean {
-  return (
-    form.shareMode !== baseline.shareMode ||
-    [...form.shareGroupIds].sort().join('\0') !== [...baseline.shareGroupIds].sort().join('\0')
-  );
-}
-
-function shareModeLabel(mode: SkillShareMode): string {
-  if (mode === 'all_groups') return 'All groups';
-  if (mode === 'specific') return 'Specific groups';
-  return 'Owner group only';
-}
-
-function readOnlyShareModeSummary(mode: SkillShareMode): string {
-  if (mode === 'specific') return 'Shared with specific groups.';
-  if (mode === 'all_groups') return 'Shared with all groups.';
-  return 'Available only to the owner group.';
 }

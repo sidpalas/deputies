@@ -7,7 +7,6 @@ import { SlackCompletionCallbackSender } from '../../src/integrations/slack/call
 import { SlackRunProgressNotifier } from '../../src/integrations/slack/progress-notifier.js';
 import { SlackIntegrationService } from '../../src/integrations/slack/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId } from '../../src/store/types.js';
 
 const signingSecret = 'dev-slack-signing-secret';
 const botUserId = 'UDEVDEPUTY';
@@ -423,7 +422,6 @@ describe('Slack integration', () => {
       name: 'review-code',
       description: 'Review code',
       body: 'Review carefully',
-      ownerGroupId: defaultGroupId,
     });
     const slack = new SlackIntegrationService(store, services.sessions, services.messages, services.skills, {
       skillsEnabled: true,

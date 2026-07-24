@@ -1,6 +1,6 @@
 import { useMemo, useState, type SyntheticEvent } from 'react';
 import { ChevronDown, CornerUpLeft, PanelLeftClose, Plus, X } from 'lucide-react';
-import type { Automation, Group } from '../../api.js';
+import type { Automation } from '../../api.js';
 import { archivedAutomationsOpenStorageKey } from '../../app-helpers.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
@@ -13,8 +13,8 @@ export function AutomationsSidebar(props: {
   automations: Automation[];
   canCallApi: boolean;
   canCreateAutomations: boolean;
+  canManageTenantResources: boolean;
   footerProps: SidebarFooterProps;
-  groups: Group[];
   loading: boolean;
   selectedAutomationId: string;
   onArchiveAutomation: (automationId: string) => void;
@@ -80,7 +80,7 @@ export function AutomationsSidebar(props: {
             onClick={props.onCreateAutomation}
             disabled={!props.canCallApi || !props.canCreateAutomations}
             aria-label="New automation"
-            title={props.canCreateAutomations ? 'New automation' : 'No access group allows you to create automations'}
+            title={props.canCreateAutomations ? 'New automation' : 'Member access is required'}
           >
             <Plus className="h-4 w-4" />
           </Button>
@@ -114,9 +114,8 @@ export function AutomationsSidebar(props: {
             <AutomationSidebarButton
               key={automation.id}
               automation={automation}
-              ownerGroupArchived={automationOwnerGroupArchived(automation, props.groups)}
               selected={automation.id === props.selectedAutomationId}
-              onArchive={props.onArchiveAutomation}
+              {...(props.canManageTenantResources ? { onArchive: props.onArchiveAutomation } : {})}
               onSelect={props.onSelectAutomation}
             />
           ))}
@@ -137,10 +136,9 @@ export function AutomationsSidebar(props: {
                   <AutomationSidebarButton
                     key={automation.id}
                     automation={automation}
-                    ownerGroupArchived={automationOwnerGroupArchived(automation, props.groups)}
                     selected={automation.id === props.selectedAutomationId}
                     onSelect={props.onSelectAutomation}
-                    onUnarchive={props.onUnarchiveAutomation}
+                    {...(props.canManageTenantResources ? { onUnarchive: props.onUnarchiveAutomation } : {})}
                   />
                 ))}
               </div>
@@ -158,13 +156,12 @@ export function AutomationsSidebar(props: {
 
 function AutomationSidebarButton(props: {
   automation: Automation;
-  ownerGroupArchived: boolean;
   selected: boolean;
   onArchive?: (automationId: string) => void;
   onSelect: (automationId: string) => void;
   onUnarchive?: (automationId: string) => void;
 }) {
-  const status = automationSidebarStatus(props.automation, props.ownerGroupArchived);
+  const status = automationSidebarStatus(props.automation);
 
   return (
     <div
@@ -215,24 +212,13 @@ function activeAutomationsEmptyMessage(loading: boolean, search: string): string
   return 'No active scheduled automations.';
 }
 
-function automationSidebarStatus(
-  automation: Automation,
-  ownerGroupArchived: boolean,
-): { label: string; labelClassName: string; detail: string } {
+function automationSidebarStatus(automation: Automation): { label: string; labelClassName: string; detail: string } {
   if (automation.archivedAt) {
     return { label: 'Archived', labelClassName: 'text-muted-foreground', detail: formatDate(automation.archivedAt) };
   }
 
   const label = automation.enabled ? 'Enabled' : 'Disabled';
   const labelClassName = automation.enabled ? 'text-success' : 'text-warning';
-  if (ownerGroupArchived) return { label, labelClassName, detail: 'Suspended: access group archived' };
-
   const nextInvocation = automation.nextInvocationAt ? formatDate(automation.nextInvocationAt) : 'not scheduled';
   return { label, labelClassName, detail: `Next ${nextInvocation}` };
-}
-
-function automationOwnerGroupArchived(automation: Automation, groups: Group[]): boolean {
-  return Boolean(
-    groups.find((group) => group.id === automation.ownerGroupId)?.archivedAt ?? automation.ownerGroupArchivedAt,
-  );
 }

@@ -2,18 +2,12 @@ import type { Context, Hono } from 'hono';
 import { EnvironmentServiceError, type EnvironmentRepositoryInput } from '../environments/service.js';
 import {
   canManageEnvironment,
-  canManageGroup,
   canReadEnvironment,
   readRequestAuthorization,
   type RequestAuthorization,
 } from '../auth/authorization.js';
 import type { AppConfig } from '../config/index.js';
-import {
-  StoreConflictError,
-  type EnvironmentShareMode,
-  type EnvironmentWithDetailsRecord,
-  type GroupRecord,
-} from '../store/types.js';
+import { StoreConflictError, type EnvironmentWithDetailsRecord } from '../store/types.js';
 import { writeError } from './http-error.js';
 import { optionalString, readJsonBody } from './request.js';
 import type { AppServices, AppVariables } from './server.js';
@@ -29,13 +23,8 @@ export function registerEnvironmentRoutes(
     const environments = (await services.environments.list()).filter((environment) =>
       canReadEnvironment(auth, environment),
     );
-    const ownerGroups = new Map((await services.store.listGroups()).map((group) => [group.id, group]));
     return c.json({
-      environments: await Promise.all(
-        environments.map((environment) =>
-          serializeEnvironment(services, auth, environment, ownerGroups.get(environment.ownerGroupId) ?? null),
-        ),
-      ),
+      environments: environments.map((environment) => serializeEnvironment(auth, environment)),
     });
   });
 
@@ -43,21 +32,16 @@ export function registerEnvironmentRoutes(
     const auth = await requireRequestAuthorization(config, services, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const ownerGroupId = optionalString(body.ownerGroupId);
-    if (!ownerGroupId) return writeError(c, 400, 'invalid_request', 'Expected ownerGroupId');
-    if (!canManageGroup(auth, ownerGroupId)) return writeError(c, 403, 'forbidden', 'Group admin access is required');
+    if (!canManageEnvironment(auth)) return writeError(c, 403, 'forbidden', 'Member access is required');
 
     try {
-      const shareMode = parseShareMode(body.shareMode);
+      rejectLegacyAccessFields(body);
       const environment = await services.environments.create({
         name: optionalString(body.name) ?? '',
-        ownerGroupId,
-        ...(shareMode ? { shareMode } : {}),
         repositories: parseRepositories(body.repositories),
-        sharedGroupIds: parseSharedGroupIds(body.sharedGroupIds),
         actor: environmentMutationActor(auth),
       });
-      return c.json({ environment: await serializeEnvironment(services, auth, environment) }, 201);
+      return c.json({ environment: serializeEnvironment(auth, environment) }, 201);
     } catch (error) {
       return environmentErrorResponse(c, error);
     }
@@ -70,7 +54,7 @@ export function registerEnvironmentRoutes(
     if (!environment) return writeError(c, 404, 'not_found', 'Environment not found');
     if (!canReadEnvironment(auth, environment))
       return writeError(c, 403, 'forbidden', 'Environment access is required');
-    return c.json({ environment: await serializeEnvironment(services, auth, environment) });
+    return c.json({ environment: serializeEnvironment(auth, environment) });
   });
 
   app.get('/environments/:environmentId/revisions', async (c) => {
@@ -88,8 +72,8 @@ export function registerEnvironmentRoutes(
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const environment = await services.environments.get(c.req.param('environmentId'));
     if (!environment) return writeError(c, 404, 'not_found', 'Environment not found');
-    if (!canManageEnvironment(auth, environment))
-      return writeError(c, 403, 'forbidden', 'Environment management access is required');
+    if (!canReadEnvironment(auth, environment))
+      return writeError(c, 403, 'forbidden', 'Environment access is required');
     return c.json({ activity: await services.environments.listActivity(environment.id) });
   });
 
@@ -102,23 +86,16 @@ export function registerEnvironmentRoutes(
       return writeError(c, 403, 'forbidden', 'Environment management access is required');
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const nextOwnerGroupId = optionalString(body.ownerGroupId);
-    if (nextOwnerGroupId && nextOwnerGroupId !== existing.ownerGroupId && !canManageGroup(auth, nextOwnerGroupId)) {
-      return writeError(c, 403, 'forbidden', 'Group admin access is required for both groups');
-    }
 
     try {
-      const shareMode = body.shareMode !== undefined ? parseShareMode(body.shareMode) : undefined;
+      rejectLegacyAccessFields(body);
       const updated = await services.environments.update({
         id: existing.id,
         ...(body.name !== undefined ? { name: optionalString(body.name) ?? '' } : {}),
-        ...(nextOwnerGroupId ? { ownerGroupId: nextOwnerGroupId } : {}),
-        ...(shareMode ? { shareMode } : {}),
         ...(body.repositories !== undefined ? { repositories: parseRepositories(body.repositories) } : {}),
-        ...(body.sharedGroupIds !== undefined ? { sharedGroupIds: parseSharedGroupIds(body.sharedGroupIds) } : {}),
         actor: environmentMutationActor(auth),
       });
-      return c.json({ environment: await serializeEnvironment(services, auth, updated) });
+      return c.json({ environment: serializeEnvironment(auth, updated) });
     } catch (error) {
       return environmentErrorResponse(c, error);
     }
@@ -133,7 +110,7 @@ export function registerEnvironmentRoutes(
       return writeError(c, 403, 'forbidden', 'Environment management access is required');
     try {
       const archived = await services.environments.archive(existing.id, environmentMutationActor(auth));
-      return c.json({ environment: await serializeEnvironment(services, auth, archived) });
+      return c.json({ environment: serializeEnvironment(auth, archived) });
     } catch (error) {
       return environmentErrorResponse(c, error);
     }
@@ -148,7 +125,7 @@ export function registerEnvironmentRoutes(
       return writeError(c, 403, 'forbidden', 'Environment management access is required');
     try {
       const unarchived = await services.environments.unarchive(existing.id, environmentMutationActor(auth));
-      return c.json({ environment: await serializeEnvironment(services, auth, unarchived) });
+      return c.json({ environment: serializeEnvironment(auth, unarchived) });
     } catch (error) {
       return environmentErrorResponse(c, error);
     }
@@ -163,23 +140,12 @@ async function requireRequestAuthorization(
   return readRequestAuthorization(config, services.store, c);
 }
 
-async function serializeEnvironment(
-  services: AppServices,
-  auth: RequestAuthorization,
-  environment: EnvironmentWithDetailsRecord,
-  prefetchedOwnerGroup?: GroupRecord | null,
-) {
-  const ownerGroup =
-    prefetchedOwnerGroup === undefined ? await services.store.getGroup(environment.ownerGroupId) : prefetchedOwnerGroup;
+function serializeEnvironment(auth: RequestAuthorization, environment: EnvironmentWithDetailsRecord) {
   return {
     id: environment.id,
     name: environment.name,
-    ownerGroupId: environment.ownerGroupId,
-    ...(ownerGroup ? { ownerGroupName: ownerGroup.name } : {}),
-    shareMode: environment.shareMode,
     currentRevisionId: environment.currentRevisionId,
     currentRevisionNumber: environment.currentRevisionNumber,
-    sharedGroupIds: environment.sharedGroupIds,
     repositories: environment.repositories.map((repository) => ({
       id: repository.id,
       provider: repository.provider,
@@ -200,10 +166,9 @@ function environmentMutationActor(auth: RequestAuthorization) {
   return auth.bypass ? ({ type: 'system' } as const) : ({ type: 'user', userId: auth.user.id } as const);
 }
 
-function parseShareMode(value: unknown): EnvironmentShareMode | undefined {
-  if (value === undefined) return undefined;
-  if (value === 'private' || value === 'selected_groups' || value === 'all_groups') return value;
-  throw new EnvironmentServiceError('invalid_request', 'Expected valid environment shareMode');
+function rejectLegacyAccessFields(body: Record<string, unknown>): void {
+  if (['ownerGroupId', 'shareMode', 'sharedGroupIds', 'allowedGroupIds'].some((field) => field in body))
+    throw new EnvironmentServiceError('invalid_request', 'Environment ownership and sharing fields are not supported');
 }
 
 function parseRepositories(value: unknown): EnvironmentRepositoryInput[] {
@@ -226,14 +191,6 @@ function parseRepositories(value: unknown): EnvironmentRepositoryInput[] {
   });
 }
 
-function parseSharedGroupIds(value: unknown): string[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
-    throw new EnvironmentServiceError('invalid_request', 'Expected sharedGroupIds array');
-  }
-  return value;
-}
-
 function environmentErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof StoreConflictError && error.code === 'environment_name_exists') {
     return writeError(c, 409, error.code, error.message);
@@ -247,8 +204,6 @@ function environmentErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof EnvironmentServiceError) {
     if (error.code === 'not_found') return writeError(c, 404, 'not_found', error.message);
     if (error.code === 'archived') return writeError(c, 409, 'environment_archived', error.message, error.details);
-    if (error.code === 'group_not_found') return writeError(c, 404, 'group_not_found', error.message, error.details);
-    if (error.code === 'archived_group') return writeError(c, 409, 'archived_group', error.message, error.details);
     if (error.code === 'automation_conflict') {
       return writeError(c, 409, 'environment_automation_conflict', error.message, error.details);
     }

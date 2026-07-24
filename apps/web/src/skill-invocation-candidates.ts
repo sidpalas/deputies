@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ApiError, listSkillInvocationCandidates, type Skill } from './api.js';
 import { errorMessage } from './app-state.js';
 
-export function useSkillInvocationCandidates(input: { enabled: boolean; ownerGroupId: string; token: string }) {
+export function useSkillInvocationCandidates(input: { enabled: boolean; token: string }) {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [available, setAvailable] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
@@ -12,7 +12,7 @@ export function useSkillInvocationCandidates(input: { enabled: boolean; ownerGro
   useEffect(() => {
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
-    if (!input.enabled || !input.ownerGroupId) {
+    if (!input.enabled) {
       setSkills([]);
       setLoading(false);
       setError('');
@@ -24,7 +24,7 @@ export function useSkillInvocationCandidates(input: { enabled: boolean; ownerGro
     setSkills([]);
     setLoading(true);
     setError('');
-    void listSkillInvocationCandidates({ ownerGroupId: input.ownerGroupId, token: input.token })
+    void listSkillInvocationCandidates({ token: input.token })
       .then((next) => {
         if (active && requestRef.current === requestId) {
           setSkills(next);
@@ -44,7 +44,7 @@ export function useSkillInvocationCandidates(input: { enabled: boolean; ownerGro
     return () => {
       active = false;
     };
-  }, [input.enabled, input.ownerGroupId, input.token]);
+  }, [input.enabled, input.token]);
 
   return { skills, available, loading, error, setError };
 }

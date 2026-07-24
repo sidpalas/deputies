@@ -800,8 +800,7 @@ async function readPreviewAuthUser(
   if (user?.id !== payload.userId) return null;
   const session = await store.getSession(payload.previewSessionId);
   if (!session) return null;
-  const memberships = await store.listUserGroupMemberships(user.id);
-  const auth: RequestAuthorization = { bypass: false, user, memberships };
+  const auth: RequestAuthorization = { bypass: false, user };
   if (!canReadSession(auth, session)) return null;
   const cookie = options.renew ? renewedPreviewCookie(config, payload) : undefined;
   return { user, canWrite: canWriteSession(auth, session), ...(cookie ? { cookie } : {}) };

@@ -34,7 +34,6 @@ export function runnerInput(overrides: Partial<RunnerInput> = {}): RunnerInput {
     sessionId: 'session-1',
     runId: 'run-1',
     messageId: 'message-1',
-    ownerGroupId: 'group-1',
     prompt: 'request',
     context: {},
     sandbox: sandboxHandle(new MemorySandboxFileSystem('/workspace')),

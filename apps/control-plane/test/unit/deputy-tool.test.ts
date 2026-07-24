@@ -5,17 +5,16 @@ import { createPiDeputyToolDefinition } from '../../src/runner-pi/deputy-tool.js
 import { executeDeputyTool, type DeputyToolServices } from '../../src/sessions/deputy-tool.js';
 import { SessionService } from '../../src/sessions/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId, type SessionRecord } from '../../src/store/types.js';
+import type { SessionRecord } from '../../src/store/types.js';
 
 const parentId = '00000000-0000-4000-8000-000000000101';
 const runId = '00000000-0000-4000-8000-000000000102';
 const messageId = '00000000-0000-4000-8000-000000000103';
-const otherGroupId = '00000000-0000-4000-8000-000000000104';
 const creatorUserId = '00000000-0000-4000-8000-000000000105';
 const now = new Date('2026-05-01T00:00:00.000Z');
 
 describe('deputies tool', () => {
-  it('spawns child sessions with inherited access, first message, lineage events, and stable retry ids', async () => {
+  it('spawns child sessions with the first message, lineage events, and stable retry ids', async () => {
     const { services, store } = await createDeputyServices();
 
     const first = await executeDeputyTool(services, {
@@ -41,9 +40,6 @@ describe('deputies tool', () => {
       status: 'queued',
       parentSessionId: parentId,
       spawnDepth: 1,
-      ownerGroupId: defaultGroupId,
-      visibility: 'group',
-      writePolicy: 'group_members',
       tags: ['sub-deputy'],
       createdByUserId: creatorUserId,
       context: { deputy: expect.objectContaining({ notifyParentOnComplete: true, parentSessionId: parentId }) },
@@ -216,37 +212,25 @@ describe('deputies tool', () => {
     });
   });
 
-  it('lists sessions by child, group, and organization-readable scopes', async () => {
+  it('lists sessions by child and tenant scopes', async () => {
     const { services, store } = await createDeputyServices();
     const spawned = await executeDeputyTool(services, { action: 'spawn', prompt: 'child' });
     if (!spawned.ok) throw new Error(spawned.error);
     const childId = (spawned.session as { id: string }).id;
-    const sameGroupId = '00000000-0000-4000-8000-000000000201';
-    const orgVisibleId = '00000000-0000-4000-8000-000000000202';
-    const hiddenId = '00000000-0000-4000-8000-000000000203';
-    await store.createSession(sessionRecord({ id: sameGroupId, title: 'Same group' }));
-    await store.createSession(
-      sessionRecord({ id: orgVisibleId, title: 'Org visible', ownerGroupId: otherGroupId, visibility: 'organization' }),
-    );
-    await store.createSession(
-      sessionRecord({ id: hiddenId, title: 'Hidden', ownerGroupId: otherGroupId, visibility: 'group' }),
-    );
+    const peerId = '00000000-0000-4000-8000-000000000201';
+    await store.createSession(sessionRecord({ id: peerId, title: 'Peer session' }));
 
     const defaultList = await executeDeputyTool(services, { action: 'list_sessions' });
-    expect(defaultList).toMatchObject({ ok: true, scope: 'organization' });
-    expect(sessionIds(defaultList).sort()).toEqual([parentId, childId, sameGroupId, orgVisibleId].sort());
+    expect(defaultList).toMatchObject({ ok: true, scope: 'tenant' });
+    expect(sessionIds(defaultList).sort()).toEqual([parentId, childId, peerId].sort());
 
     const children = await executeDeputyTool(services, { action: 'list_sessions', scope: 'children' });
     expect(children).toMatchObject({ ok: true, scope: 'children' });
     expect(sessionIds(children)).toEqual([childId]);
 
-    const group = await executeDeputyTool(services, { action: 'list_sessions', scope: 'group' });
-    expect(group).toMatchObject({ ok: true, scope: 'group' });
-    expect(sessionIds(group).sort()).toEqual([parentId, childId, sameGroupId].sort());
-
-    const organization = await executeDeputyTool(services, { action: 'list_sessions', scope: 'organization' });
-    expect(organization).toMatchObject({ ok: true, scope: 'organization' });
-    expect(sessionIds(organization).sort()).toEqual([parentId, childId, sameGroupId, orgVisibleId].sort());
+    const tenant = await executeDeputyTool(services, { action: 'list_sessions', scope: 'tenant' });
+    expect(tenant).toMatchObject({ ok: true, scope: 'tenant' });
+    expect(sessionIds(tenant).sort()).toEqual([parentId, childId, peerId].sort());
   });
 
   it('returns cheap summaries by default and bounded newest-first transcript pages on request', async () => {
@@ -492,9 +476,6 @@ function sessionRecord(input: Partial<SessionRecord> & { id: string }): SessionR
   return {
     status: 'idle',
     spawnDepth: 0,
-    ownerGroupId: defaultGroupId,
-    visibility: 'group',
-    writePolicy: 'group_members',
     createdAt: now,
     updatedAt: now,
     lastActivityAt: now,
@@ -519,9 +500,6 @@ async function createDeputyServices(
     id: parentId,
     status: 'idle',
     spawnDepth: 0,
-    ownerGroupId: defaultGroupId,
-    visibility: 'group',
-    writePolicy: 'group_members',
     title: 'Parent',
     createdAt: now,
     updatedAt: now,

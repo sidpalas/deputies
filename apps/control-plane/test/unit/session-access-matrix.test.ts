@@ -1,234 +1,16 @@
 import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createServer, createServices, type AppServices } from '../../src/app/server.js';
-import type { ArtifactObjectStorage, StoredArtifactObject } from '../../src/artifacts/storage.js';
+import { createServer, createServices } from '../../src/app/server.js';
 import { loadConfig } from '../../src/config/index.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import type {
-  AuthUserRecord,
-  GroupRole,
-  SessionRecord,
-  SessionVisibility,
-  SessionWritePolicy,
-} from '../../src/store/types.js';
+import type { AuthRole } from '../../src/store/types.js';
 
-const sessionCookieName = 'dev_deputies_session';
-const unauthorizedReadStatus = 403;
-const groupAId = '00000000-0000-4000-8000-0000000000a1';
-const groupBId = '00000000-0000-4000-8000-0000000000b1';
-
-const personaNames = ['aAdmin', 'aCreator', 'aMember', 'aViewer', 'bMember', 'orgUser'] as const;
-type PersonaName = (typeof personaNames)[number];
-
-const userIds: Record<PersonaName, string> = {
-  aAdmin: '00000000-0000-4000-8000-000000001001',
-  aCreator: '00000000-0000-4000-8000-000000001002',
-  aMember: '00000000-0000-4000-8000-000000001003',
-  aViewer: '00000000-0000-4000-8000-000000001004',
-  bMember: '00000000-0000-4000-8000-000000001005',
-  orgUser: '00000000-0000-4000-8000-000000001006',
-};
-
-const accountIds: Record<PersonaName, string> = {
-  aAdmin: '00000000-0000-4000-8000-000000002001',
-  aCreator: '00000000-0000-4000-8000-000000002002',
-  aMember: '00000000-0000-4000-8000-000000002003',
-  aViewer: '00000000-0000-4000-8000-000000002004',
-  bMember: '00000000-0000-4000-8000-000000002005',
-  orgUser: '00000000-0000-4000-8000-000000002006',
-};
-
-const groupAPersonas = new Set<PersonaName>(['aAdmin', 'aCreator', 'aMember', 'aViewer']);
-
-const sessionCases = [
-  { key: 'group/group_members', visibility: 'group', writePolicy: 'group_members' },
-  { key: 'group/creator_only', visibility: 'group', writePolicy: 'creator_only' },
-  { key: 'organization/group_members', visibility: 'organization', writePolicy: 'group_members' },
-  { key: 'organization/creator_only', visibility: 'organization', writePolicy: 'creator_only' },
-] as const satisfies ReadonlyArray<{
-  key: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
-}>;
-type SessionKey = (typeof sessionCases)[number]['key'];
-type SessionCase = (typeof sessionCases)[number];
-
-type MatrixFixture = {
-  artifactIds: Record<SessionKey, string>;
-  cookies: Record<PersonaName, string>;
-  sessions: Record<SessionKey, SessionRecord>;
-  users: Record<PersonaName, AuthUserRecord>;
-};
-
-type ReadRoute = {
-  name: string;
-  path: (input: { artifactId: string; session: SessionRecord }) => string;
-};
-
-const readRoutes: ReadRoute[] = [
-  { name: 'session detail', path: ({ session }) => `/sessions/${session.id}` },
-  { name: 'messages list', path: ({ session }) => `/sessions/${session.id}/messages` },
-  { name: 'events list', path: ({ session }) => `/sessions/${session.id}/events` },
-  { name: 'artifacts list', path: ({ session }) => `/sessions/${session.id}/artifacts` },
-  {
-    name: 'artifact download',
-    path: ({ artifactId, session }) => `/sessions/${session.id}/artifacts/${artifactId}/download`,
-  },
-  {
-    name: 'artifact preview',
-    path: ({ artifactId, session }) => `/sessions/${session.id}/artifacts/${artifactId}/preview`,
-  },
-  { name: 'external resources', path: ({ session }) => `/sessions/${session.id}/external-resources` },
-  { name: 'callbacks list', path: ({ session }) => `/sessions/${session.id}/callbacks` },
-  { name: 'services list', path: ({ session }) => `/sessions/${session.id}/services` },
-];
-
-type WriteRoute = {
-  body?: (input: WriteRouteInput) => Record<string, unknown>;
-  expectedStatus?: (persona: PersonaName, sessionCase: SessionCase) => number;
-  method: 'DELETE' | 'PATCH' | 'POST';
-  name: string;
-  path: (input: WriteRouteInput) => string;
-  prepare?: (input: WriteRoutePrepareInput) => Promise<WriteRouteFixture>;
-  successStatus: number;
-};
-
-type WriteRouteFixture = {
-  deliveryId?: string;
-  messageId?: string;
-};
-
-type WriteRouteInput = WriteRouteFixture & {
-  session: SessionRecord;
-};
-
-type WriteRoutePrepareInput = {
-  services: AppServices;
-  session: SessionRecord;
-  store: MemoryStore;
-};
-
-const writeRoutes: WriteRoute[] = [
-  {
-    name: 'update title',
-    method: 'PATCH',
-    path: ({ session }) => `/sessions/${session.id}`,
-    body: () => ({ title: 'Updated by matrix' }),
-    successStatus: 200,
-  },
-  {
-    name: 'update access',
-    method: 'PATCH',
-    path: ({ session }) => `/sessions/${session.id}/access`,
-    body: ({ session }) => ({ visibility: session.visibility === 'group' ? 'organization' : 'group' }),
-    expectedStatus: (persona) => (persona === 'aAdmin' ? 200 : 403),
-    successStatus: 200,
-  },
-  {
-    name: 'archive session',
-    method: 'POST',
-    path: ({ session }) => `/sessions/${session.id}/archive`,
-    successStatus: 200,
-  },
-  {
-    name: 'unarchive session',
-    method: 'POST',
-    path: ({ session }) => `/sessions/${session.id}/unarchive`,
-    prepare: async ({ services, session }) => {
-      await services.sessions.archive(session.id);
-      return {};
-    },
-    successStatus: 200,
-  },
-  {
-    name: 'pause queue',
-    method: 'POST',
-    path: ({ session }) => `/sessions/${session.id}/queue/pause`,
-    successStatus: 200,
-  },
-  {
-    name: 'resume queue',
-    method: 'POST',
-    path: ({ session }) => `/sessions/${session.id}/queue/resume`,
-    prepare: async ({ services, session }) => {
-      await services.sessions.pauseQueue(session.id);
-      return {};
-    },
-    successStatus: 200,
-  },
-  {
-    name: 'cancel current run',
-    method: 'POST',
-    path: ({ session }) => `/sessions/${session.id}/runs/current/cancel`,
-    prepare: async ({ services, session, store }) => {
-      await services.messages.enqueue({ sessionId: session.id, prompt: 'cancel active run' });
-      const now = new Date();
-      const claimed = await store.claimNextPendingMessageBatch({
-        runId: `matrix-run-${session.id}`,
-        runnerType: 'matrix',
-        leaseOwner: 'matrix-worker',
-        leaseExpiresAt: new Date(now.getTime() + 60_000),
-        now,
-      });
-      if (!claimed || claimed.run.sessionId !== session.id) throw new Error(`Expected active run for ${session.id}`);
-      return {};
-    },
-    successStatus: 200,
-  },
-  {
-    name: 'enqueue message',
-    method: 'POST',
-    path: ({ session }) => `/sessions/${session.id}/messages`,
-    body: () => ({ prompt: 'hello from the access matrix' }),
-    successStatus: 202,
-  },
-  {
-    name: 'edit message',
-    method: 'PATCH',
-    path: ({ messageId, session }) => `/sessions/${session.id}/messages/${requiredId(messageId, 'messageId')}`,
-    body: () => ({ prompt: 'edited by matrix' }),
-    prepare: async ({ services, session }) => ({
-      messageId: (await services.messages.enqueue({ sessionId: session.id, prompt: 'pending edit' })).id,
-    }),
-    successStatus: 200,
-  },
-  {
-    name: 'cancel message',
-    method: 'POST',
-    path: ({ messageId, session }) => `/sessions/${session.id}/messages/${requiredId(messageId, 'messageId')}/cancel`,
-    prepare: async ({ services, session }) => ({
-      messageId: (await services.messages.enqueue({ sessionId: session.id, prompt: 'pending cancel' })).id,
-    }),
-    successStatus: 200,
-  },
-  {
-    name: 'retry message',
-    method: 'POST',
-    path: ({ messageId, session }) => `/sessions/${session.id}/messages/${requiredId(messageId, 'messageId')}/retry`,
-    prepare: async ({ session, store }) => ({ messageId: await createFailedMessage(store, session) }),
-    successStatus: 202,
-  },
-  {
-    name: 'replay callback',
-    method: 'POST',
-    path: ({ deliveryId, session }) =>
-      `/sessions/${session.id}/callbacks/${requiredId(deliveryId, 'deliveryId')}/replay`,
-    prepare: async ({ session, store }) => ({ deliveryId: await createFailedCallback(store, session) }),
-    successStatus: 200,
-  },
-];
-
-describe('session object-level authorization matrix', () => {
-  let baseUrl: string;
-  let fixture: MatrixFixture;
+describe('session HTTP role matrix', () => {
   let server: Server;
-  let services: AppServices;
+  let baseUrl: string;
   let store: MemoryStore;
 
   beforeEach(async () => {
     store = new MemoryStore();
-    services = createServices(store, { artifactObjectStorage: new InMemoryArtifactObjectStorage() });
     server = createServer(
       loadConfig({
         API_AUTH_MODE: 'session',
@@ -236,615 +18,96 @@ describe('session object-level authorization matrix', () => {
         AUTH_STATIC_USERNAME: 'admin',
         AUTH_STATIC_PASSWORD: 'password',
       }),
-      services,
+      createServices(store),
     );
     baseUrl = await listen(server);
-    fixture = await seedFixture(store, services);
   });
+  afterEach(() => close(server));
 
-  afterEach(async () => {
-    await closeServer(server);
-  });
+  it('allows tenant-wide reads, member/admin cross-creator writes, and no viewer writes', async () => {
+    const viewer = await user('viewer', 'viewer');
+    const creator = await user('creator', 'member');
+    const other = await user('other', 'member');
+    const admin = await user('admin', 'admin');
 
-  it('enforces cross-group read access for session-scoped read routes', async () => {
-    for (const route of readRoutes) {
-      for (const sessionCase of sessionCases) {
-        const session = fixture.sessions[sessionCase.key];
-        const artifactId = fixture.artifactIds[sessionCase.key];
-
-        for (const persona of personaNames) {
-          const response = await fetch(`${baseUrl}${route.path({ artifactId, session })}`, {
-            headers: { cookie: fixture.cookies[persona] },
-          });
-          const expectedStatus = expectedReadStatus(persona, sessionCase.visibility);
-
-          expect(response.status, matrixLabel('read', route.name, persona, sessionCase)).toBe(expectedStatus);
-          await response.arrayBuffer();
-        }
-      }
-    }
-  });
-
-  it('rejects cross-group users before opening session event streams', async () => {
-    for (const sessionCase of sessionCases.filter((candidate) => candidate.visibility === 'group')) {
-      const session = fixture.sessions[sessionCase.key];
-
-      for (const persona of ['bMember', 'orgUser'] as const) {
-        const abort = new AbortController();
-        const timeout = setTimeout(() => abort.abort(), 1_000);
-        const response = await fetch(`${baseUrl}/sessions/${session.id}/events/stream`, {
-          headers: { cookie: fixture.cookies[persona] },
-          signal: abort.signal,
-        });
-        clearTimeout(timeout);
-
-        await response.body?.cancel().catch(() => undefined);
-        expect(response.status, matrixLabel('read', 'events stream', persona, sessionCase)).toBe(403);
-      }
-    }
-  });
-
-  it('enforces cross-group write access for unsafe session-scoped routes', async () => {
-    for (const route of writeRoutes) {
-      for (const sessionCase of sessionCases) {
-        for (const persona of personaNames) {
-          const { session } = await createMatrixSession(services, sessionCase, fixture.users.aCreator.id, {
-            seedReadResources: false,
-          });
-          const prepared = (await route.prepare?.({ services, session, store })) ?? {};
-          const routeInput = { session, ...prepared };
-          const expectedStatus =
-            route.expectedStatus?.(persona, sessionCase) ??
-            (canPersonaWrite(persona, sessionCase.writePolicy) ? route.successStatus : 403);
-          const headers: Record<string, string> = { cookie: fixture.cookies[persona] };
-          const body = route.body?.(routeInput);
-          if (body) headers['content-type'] = 'application/json';
-
-          const response = await fetch(`${baseUrl}${route.path(routeInput)}`, {
-            method: route.method,
-            headers,
-            ...(body ? { body: JSON.stringify(body) } : {}),
-          });
-
-          expect(response.status, matrixLabel('write', route.name, persona, sessionCase)).toBe(expectedStatus);
-          await response.arrayBuffer();
-        }
-      }
-    }
-  });
-
-  it('rejects cross-group users before sandbox-dependent session handlers', async () => {
-    const session = fixture.sessions['group/group_members'];
-    const sandboxRoutes: WriteRoute[] = [
-      {
-        name: 'extend sandbox',
-        method: 'POST',
-        path: ({ session: current }) => `/sessions/${current.id}/sandbox/extend`,
-        body: () => ({ seconds: 60 }),
-        successStatus: 200,
-      },
-      {
-        name: 'open workspace tool',
-        method: 'POST',
-        path: ({ session: current }) => `/sessions/${current.id}/workspace-tools/ide/open`,
-        successStatus: 200,
-      },
-    ];
-
-    for (const route of sandboxRoutes) {
-      for (const persona of ['bMember', 'orgUser'] as const) {
-        const headers: Record<string, string> = { cookie: fixture.cookies[persona] };
-        const body = route.body?.({ session });
-        if (body) headers['content-type'] = 'application/json';
-
-        const response = await fetch(`${baseUrl}${route.path({ session })}`, {
-          method: route.method,
-          headers,
-          ...(body ? { body: JSON.stringify(body) } : {}),
-        });
-
-        expect(response.status, matrixLabel('write', route.name, persona, sessionCases[0])).toBe(403);
-        await response.arrayBuffer();
-      }
-    }
-  });
-
-  it('allows viewers to star readable sessions without granting write access', async () => {
-    const readable = fixture.sessions['organization/group_members'];
-    const privateSession = fixture.sessions['group/group_members'];
-
-    const starReadable = await fetch(`${baseUrl}/sessions/${readable.id}/star`, {
-      method: 'PUT',
-      headers: { cookie: fixture.cookies.aViewer },
-    });
-    expect(starReadable.status).toBe(200);
-    await expect(starReadable.json()).resolves.toEqual({ starred: true });
-
-    const patchReadable = await patchJson(`/sessions/${readable.id}`, fixture.cookies.aViewer, {
-      title: 'viewer edit',
-    });
-    expect(patchReadable.status).toBe(403);
-    await patchReadable.arrayBuffer();
-
-    const starPrivate = await fetch(`${baseUrl}/sessions/${privateSession.id}/star`, {
-      method: 'PUT',
-      headers: { cookie: fixture.cookies.bMember },
-    });
-    expect(starPrivate.status).toBe(403);
-    await starPrivate.arrayBuffer();
-  });
-
-  it('filters sessions by participant=me and starred=me for real users', async () => {
-    const participantSession = fixture.sessions['organization/group_members'];
-    const starredSession = fixture.sessions['organization/creator_only'];
-    await services.messages.enqueue({
-      sessionId: participantSession.id,
-      prompt: 'participant route filter',
-      authorUserId: fixture.users.aMember.id,
-    });
-    await fetch(`${baseUrl}/sessions/${starredSession.id}/star`, {
-      method: 'PUT',
-      headers: { cookie: fixture.cookies.aMember },
-    });
-
-    const participant = await fetch(`${baseUrl}/sessions?participant=me`, {
-      headers: { cookie: fixture.cookies.aMember },
-    });
-    const participantBody = (await participant.json()) as { sessions: Array<{ id: string }> };
-    expect(participant.status).toBe(200);
-    expect(participantBody.sessions.map((session) => session.id)).toContain(participantSession.id);
-    expect(participantBody.sessions.map((session) => session.id)).not.toContain(starredSession.id);
-
-    const starred = await fetch(`${baseUrl}/sessions?starred=me`, { headers: { cookie: fixture.cookies.aMember } });
-    const starredBody = (await starred.json()) as { sessions: Array<{ id: string; starred?: boolean }> };
-    expect(starred.status).toBe(200);
-    expect(starredBody.sessions.map((session) => session.id)).toEqual([starredSession.id]);
-    expect(starredBody.sessions[0]).toMatchObject({ starred: true });
-  });
-
-  it('keeps starred decoration private per user on list, search, and detail routes', async () => {
-    const target = fixture.sessions['organization/group_members'];
-    await services.store.upsertSessionSearchDocs([
-      {
-        sessionId: target.id,
-        kind: 'title',
-        sourceId: target.id,
-        content: 'Private star target',
-        createdAt: target.createdAt,
-      },
-    ]);
-    const star = await fetch(`${baseUrl}/sessions/${target.id}/star`, {
-      method: 'PUT',
-      headers: { cookie: fixture.cookies.aMember },
-    });
-    expect(star.status).toBe(200);
-
-    const memberList = await fetch(`${baseUrl}/sessions`, { headers: { cookie: fixture.cookies.aMember } });
-    const memberListBody = (await memberList.json()) as { sessions: Array<{ id: string; starred?: boolean }> };
-    expect(memberListBody.sessions.find((session) => session.id === target.id)).toMatchObject({ starred: true });
-
-    const viewerList = await fetch(`${baseUrl}/sessions`, { headers: { cookie: fixture.cookies.aViewer } });
-    const viewerListBody = (await viewerList.json()) as { sessions: Array<{ id: string; starred?: boolean }> };
-    expect(viewerListBody.sessions.find((session) => session.id === target.id)).toMatchObject({ starred: false });
-
-    const memberSearch = await fetch(`${baseUrl}/sessions/search?q=Private`, {
-      headers: { cookie: fixture.cookies.aMember },
-    });
-    const memberSearchBody = (await memberSearch.json()) as {
-      results: Array<{ session: { id: string; starred?: boolean } }>;
-    };
-    expect(memberSearchBody.results.find((result) => result.session.id === target.id)?.session).toMatchObject({
-      starred: true,
-    });
-
-    const viewerSearch = await fetch(`${baseUrl}/sessions/search?q=Private`, {
-      headers: { cookie: fixture.cookies.aViewer },
-    });
-    const viewerSearchBody = (await viewerSearch.json()) as {
-      results: Array<{ session: { id: string; starred?: boolean } }>;
-    };
-    expect(viewerSearchBody.results.find((result) => result.session.id === target.id)?.session).toMatchObject({
-      starred: false,
-    });
-
-    const memberDetail = await fetch(`${baseUrl}/sessions/${target.id}`, {
-      headers: { cookie: fixture.cookies.aMember },
-    });
-    await expect(memberDetail.json()).resolves.toMatchObject({ session: { id: target.id, starred: true } });
-
-    const viewerDetail = await fetch(`${baseUrl}/sessions/${target.id}`, {
-      headers: { cookie: fixture.cookies.aViewer },
-    });
-    await expect(viewerDetail.json()).resolves.toMatchObject({ session: { id: target.id, starred: false } });
-  });
-
-  it('makes star and unstar API calls idempotent', async () => {
-    const target = fixture.sessions['organization/group_members'];
-
-    for (const method of ['PUT', 'PUT', 'DELETE', 'DELETE'] as const) {
-      const response = await fetch(`${baseUrl}/sessions/${target.id}/star`, {
-        method,
-        headers: { cookie: fixture.cookies.aMember },
-      });
-      expect(response.status, method).toBe(200);
-      await expect(response.json()).resolves.toEqual({ starred: method === 'PUT' });
-    }
-
-    const starred = await fetch(`${baseUrl}/sessions?starred=me`, { headers: { cookie: fixture.cookies.aMember } });
-    await expect(starred.json()).resolves.toMatchObject({ sessions: [] });
-  });
-
-  it('hides group-only tags from non-members', async () => {
-    const groupSession = await services.sessions.update({
-      id: fixture.sessions['group/group_members'].id,
-      title: fixture.sessions['group/group_members'].title ?? 'Group session',
-      tags: ['private-tag'],
-    });
-    expect(groupSession.tags).toEqual(['private-tag']);
-
-    const orgUserTags = await fetch(`${baseUrl}/sessions/tags`, { headers: { cookie: fixture.cookies.orgUser } });
-    await expect(orgUserTags.json()).resolves.toEqual({ tags: [] });
-
-    const memberTags = await fetch(`${baseUrl}/sessions/tags`, { headers: { cookie: fixture.cookies.aMember } });
-    await expect(memberTags.json()).resolves.toEqual({ tags: [{ tag: 'private-tag', sessionCount: 1 }] });
-  });
-
-  it('hides cross-group group listings', async () => {
-    const expectedGroupIds: Record<PersonaName, string[]> = {
-      aAdmin: [groupAId],
-      aCreator: [groupAId],
-      aMember: [groupAId],
-      aViewer: [groupAId],
-      bMember: [groupBId],
-      orgUser: [],
-    };
-
-    for (const persona of personaNames) {
-      const response = await fetch(`${baseUrl}/groups`, { headers: { cookie: fixture.cookies[persona] } });
-      expect(response.status, `group list ${persona}`).toBe(200);
-      const body = (await response.json()) as { groups: Array<{ id: string }> };
-      expect(
-        body.groups.map((group) => group.id),
-        `group list ${persona}`,
-      ).toEqual(expectedGroupIds[persona]);
-    }
-  });
-
-  it('requires group admin access for group management routes', async () => {
-    const groupManagementRoutes: WriteRoute[] = [
-      {
-        name: 'update group',
-        method: 'PATCH',
-        path: () => `/groups/${groupAId}`,
-        body: () => ({ name: 'Group A updated' }),
-        successStatus: 200,
-      },
-      {
-        name: 'add group member',
-        method: 'POST',
-        path: () => `/groups/${groupAId}/members`,
-        body: () => ({ userId: fixture.users.orgUser.id, role: 'viewer' }),
-        successStatus: 200,
-      },
-      {
-        name: 'update group member',
-        method: 'PATCH',
-        path: () => `/groups/${groupAId}/members/${fixture.users.aViewer.id}`,
-        body: () => ({ role: 'member' }),
-        successStatus: 200,
-      },
-      {
-        name: 'delete group member',
-        method: 'DELETE',
-        path: () => `/groups/${groupAId}/members/${fixture.users.aViewer.id}`,
-        successStatus: 200,
-      },
-    ];
-
-    const readMembers = await fetch(`${baseUrl}/groups/${groupAId}/members`, {
-      headers: { cookie: fixture.cookies.aAdmin },
-    });
-    expect(readMembers.status, 'read group members aAdmin').toBe(200);
-    await readMembers.arrayBuffer();
-
-    for (const route of groupManagementRoutes) {
-      for (const persona of ['aCreator', 'aMember', 'aViewer', 'bMember', 'orgUser'] as const) {
-        const headers: Record<string, string> = { cookie: fixture.cookies[persona] };
-        const body = route.body?.({ session: fixture.sessions['group/group_members'] });
-        if (body) headers['content-type'] = 'application/json';
-        const response = await fetch(`${baseUrl}${route.path({ session: fixture.sessions['group/group_members'] })}`, {
-          method: route.method,
-          headers,
-          ...(body ? { body: JSON.stringify(body) } : {}),
-        });
-
-        expect(response.status, `group management ${route.name} ${persona}`).toBe(403);
-        await response.arrayBuffer();
-      }
-    }
-
-    const updateGroup = await patchJson(`/groups/${groupAId}`, fixture.cookies.aAdmin, {
-      name: 'Group A admin updated',
-    });
-    expect(updateGroup.status, 'update group aAdmin').toBe(200);
-    await updateGroup.arrayBuffer();
-
-    const addMember = await postJson(`/groups/${groupAId}/members`, fixture.cookies.aAdmin, {
-      userId: fixture.users.orgUser.id,
-      role: 'viewer',
-    });
-    expect(addMember.status, 'add group member aAdmin').toBe(200);
-    await addMember.arrayBuffer();
-
-    const updateMember = await patchJson(
-      `/groups/${groupAId}/members/${fixture.users.orgUser.id}`,
-      fixture.cookies.aAdmin,
-      {
-        role: 'member',
-      },
-    );
-    expect(updateMember.status, 'update group member aAdmin').toBe(200);
-    await updateMember.arrayBuffer();
-
-    const deleteMember = await fetch(`${baseUrl}/groups/${groupAId}/members/${fixture.users.orgUser.id}`, {
-      method: 'DELETE',
-      headers: { cookie: fixture.cookies.aAdmin },
-    });
-    expect(deleteMember.status, 'delete group member aAdmin').toBe(200);
-    await deleteMember.arrayBuffer();
-  });
-
-  function postJson(path: string, cookie: string, body: Record<string, unknown>): Promise<Response> {
-    return fetch(`${baseUrl}${path}`, {
+    expect(
+      (await request('/sessions', viewer, { method: 'POST', body: JSON.stringify({ title: 'no' }), headers: json }))
+        .status,
+    ).toBe(403);
+    const createdResponse = await request('/sessions', creator, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ title: 'shared' }),
+      headers: json,
     });
-  }
+    expect(createdResponse.status).toBe(201);
+    const id = ((await createdResponse.json()) as { session: { id: string } }).session.id;
 
-  function patchJson(path: string, cookie: string, body: Record<string, unknown>): Promise<Response> {
-    return fetch(`${baseUrl}${path}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify(body),
+    for (const actor of [viewer, creator, other, admin])
+      expect((await request(`/sessions/${id}`, actor)).status).toBe(200);
+    expect((await request(`/sessions/${id}`, viewer, patch({ title: 'no' }))).status).toBe(403);
+    expect((await request(`/sessions/${id}`, other, patch({ title: 'member changed it' }))).status).toBe(200);
+    expect((await request(`/sessions/${id}`, admin, patch({ title: 'admin changed it' }))).status).toBe(200);
+
+    expect((await request(`/sessions/${id}/archive`, viewer, { method: 'POST' })).status).toBe(403);
+    expect((await request(`/sessions/${id}/archive`, other, { method: 'POST' })).status).toBe(200);
+    for (const actor of [viewer, creator, other, admin])
+      expect((await request(`/sessions/${id}`, actor)).status).toBe(200);
+    expect((await request(`/sessions/${id}`, admin, patch({ title: 'archived write' }))).status).toBe(409);
+    expect((await request(`/sessions/${id}/unarchive`, viewer, { method: 'POST' })).status).toBe(403);
+    expect((await request(`/sessions/${id}/unarchive`, admin, { method: 'POST' })).status).toBe(200);
+  });
+
+  it('removes group routes and retains object guards for agent credentials', async () => {
+    const member = await user('member', 'member');
+    expect((await request('/groups', member)).status).toBe(404);
+    const created = await request('/sessions', member, {
+      method: 'POST',
+      body: JSON.stringify({ title: 'guarded' }),
+      headers: json,
     });
+    const id = ((await created.json()) as { session: { id: string } }).session.id;
+    // Human session cookies are tenant-role authorization; an arbitrary bearer token is not an agent credential.
+    expect(
+      (await fetch(`${baseUrl}/sessions/${id}`, { headers: { authorization: 'Bearer wrong-object-token' } })).status,
+    ).toBe(401);
+  });
+
+  async function user(name: string, role: AuthRole) {
+    const now = new Date();
+    const id = `user-${name}`;
+    await store.upsertAuthUserForAccount({
+      userId: id,
+      accountId: `account-${name}`,
+      provider: 'test',
+      providerAccountId: name,
+      username: name,
+      role,
+      profile: {},
+      now,
+    });
+    const sessionId = `auth-${name}`;
+    await store.createAuthSession({
+      id: sessionId,
+      userId: id,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    return { cookie: `dev_deputies_session=${sessionId}` };
+  }
+  function request(path: string, auth: { cookie: string }, init: RequestInit = {}) {
+    return fetch(`${baseUrl}${path}`, { ...init, headers: { ...init.headers, cookie: auth.cookie } });
   }
 });
 
-async function seedFixture(store: MemoryStore, services: AppServices): Promise<MatrixFixture> {
-  const now = new Date();
-  await store.createGroup(groupRecord(groupAId, 'Group A', now));
-  await store.createGroup(groupRecord(groupBId, 'Group B', now));
-
-  const users = {} as Record<PersonaName, AuthUserRecord>;
-  const cookies = {} as Record<PersonaName, string>;
-  for (const persona of personaNames) {
-    const { cookie, user } = await createAuthUser(store, persona, now);
-    users[persona] = user;
-    cookies[persona] = cookie;
-  }
-
-  await addGroupMember(store, groupAId, users.aAdmin.id, 'admin', now);
-  await addGroupMember(store, groupAId, users.aCreator.id, 'member', now);
-  await addGroupMember(store, groupAId, users.aMember.id, 'member', now);
-  await addGroupMember(store, groupAId, users.aViewer.id, 'viewer', now);
-  await addGroupMember(store, groupBId, users.bMember.id, 'member', now);
-
-  const sessions = {} as Record<SessionKey, SessionRecord>;
-  const artifactIds = {} as Record<SessionKey, string>;
-  for (const sessionCase of sessionCases) {
-    const { artifactId, session } = await createMatrixSession(services, sessionCase, users.aCreator.id, {
-      seedReadResources: true,
-    });
-    sessions[sessionCase.key] = session;
-    artifactIds[sessionCase.key] = artifactId;
-  }
-
-  return { artifactIds, cookies, sessions, users };
+const json = { 'content-type': 'application/json' };
+const patch = (body: unknown): RequestInit => ({ method: 'PATCH', headers: json, body: JSON.stringify(body) });
+async function listen(server: Server) {
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('address');
+  return `http://${address.address}:${address.port}`;
 }
-
-async function createAuthUser(
-  store: MemoryStore,
-  persona: PersonaName,
-  now: Date,
-): Promise<{ cookie: string; user: AuthUserRecord }> {
-  const user = await store.upsertAuthUserForAccount({
-    userId: userIds[persona],
-    accountId: accountIds[persona],
-    provider: 'test',
-    providerAccountId: persona,
-    username: persona,
-    role: 'user',
-    profile: {},
-    now,
-  });
-  const authSessionId = `${persona}-session`;
-  await store.createAuthSession({
-    id: authSessionId,
-    userId: user.id,
-    createdAt: now,
-    expiresAt: new Date(now.getTime() + 60_000),
-  });
-  return { cookie: `${sessionCookieName}=${authSessionId}`, user };
-}
-
-async function createMatrixSession(
-  services: AppServices,
-  sessionCase: SessionCase,
-  creatorUserId: string,
-  options: { seedReadResources: boolean },
-): Promise<{ artifactId: string; session: SessionRecord }> {
-  const session = await services.sessions.create({
-    title: `Matrix ${sessionCase.key}`,
-    ownerGroupId: groupAId,
-    visibility: sessionCase.visibility,
-    writePolicy: sessionCase.writePolicy,
-    createdByUserId: creatorUserId,
-  });
-
-  if (!options.seedReadResources) return { artifactId: '', session };
-
-  const [artifact] = await services.artifacts.recordRunArtifacts({
-    sessionId: session.id,
-    runId: `run-${session.id}`,
-    messageId: `message-${session.id}`,
-    result: {
-      text: 'created artifact',
-      artifacts: [
-        {
-          type: 'log',
-          title: 'Matrix log',
-          content: `artifact for ${sessionCase.key}`,
-          contentType: 'text/plain',
-          fileName: 'matrix.log',
-        },
-      ],
-    },
-  });
-  if (!artifact) throw new Error(`Expected artifact for ${sessionCase.key}`);
-
-  await services.externalResources.create({
-    sessionId: session.id,
-    type: 'url',
-    title: 'Matrix resource',
-    url: 'https://example.com/matrix-resource',
-  });
-  const now = new Date();
-  await services.store.createCallbackDelivery({
-    id: `callback-${session.id}`,
-    sessionId: session.id,
-    targetType: 'http',
-    target: { url: 'https://example.com/callback' },
-    eventType: 'message_completed',
-    payload: { ok: true },
-    createdAt: now,
-    updatedAt: now,
-    nextAttemptAt: now,
-  });
-
-  return { artifactId: artifact.id, session };
-}
-
-async function createFailedMessage(store: MemoryStore, session: SessionRecord): Promise<string> {
-  const now = new Date();
-  const message = await store.createMessage({
-    id: `failed-message-${session.id}`,
-    sessionId: session.id,
-    sequence: await store.nextMessageSequence(session.id),
-    status: 'failed',
-    prompt: 'failed retry',
-    createdAt: now,
-  });
-  return message.id;
-}
-
-async function createFailedCallback(store: MemoryStore, session: SessionRecord): Promise<string> {
-  const now = new Date();
-  const delivery = await store.createCallbackDelivery({
-    id: `callback-replay-${session.id}`,
-    sessionId: session.id,
-    targetType: 'http',
-    target: { url: 'https://example.com/callback' },
-    eventType: 'message_completed',
-    payload: { ok: true },
-    createdAt: now,
-    updatedAt: now,
-    nextAttemptAt: now,
-    maxAttempts: 1,
-  });
-  await store.markCallbackDeliveryFailed({
-    id: delivery.id,
-    failedAt: now,
-    error: 'matrix callback failure',
-    terminal: true,
-  });
-  return delivery.id;
-}
-
-function groupRecord(id: string, name: string, now: Date) {
-  return {
-    id,
-    name,
-    defaultVisibility: 'group' as const,
-    defaultWritePolicy: 'group_members' as const,
-    automationCreateRequiredRole: 'member' as const,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function addGroupMember(
-  store: MemoryStore,
-  groupId: string,
-  userId: string,
-  role: GroupRole,
-  now: Date,
-): Promise<unknown> {
-  return store.upsertGroupMember({ groupId, userId, role, createdAt: now, updatedAt: now });
-}
-
-function expectedReadStatus(persona: PersonaName, visibility: SessionVisibility): number {
-  if (groupAPersonas.has(persona) || visibility === 'organization') return 200;
-  return unauthorizedReadStatus;
-}
-
-function canPersonaWrite(persona: PersonaName, writePolicy: SessionWritePolicy): boolean {
-  if (persona === 'aAdmin') return true;
-  if (writePolicy === 'creator_only') return persona === 'aCreator';
-  return persona === 'aCreator' || persona === 'aMember';
-}
-
-function matrixLabel(kind: 'read' | 'write', route: string, persona: PersonaName, sessionCase: SessionCase): string {
-  return `${kind} route=${route} persona=${persona} session=${sessionCase.key}`;
-}
-
-function requiredId(value: string | undefined, label: string): string {
-  if (!value) throw new Error(`Expected ${label}`);
-  return value;
-}
-
-async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      server.off('error', reject);
-      resolve();
-    });
-  });
-  const address = server.address() as AddressInfo | null;
-  if (!address) throw new Error('Expected server address');
-  return `http://127.0.0.1:${address.port}`;
-}
-
-async function closeServer(server: Server): Promise<void> {
-  if (!server.listening) return;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-class InMemoryArtifactObjectStorage implements ArtifactObjectStorage {
-  private readonly objects = new Map<string, StoredArtifactObject>();
-
-  async put(input: Parameters<ArtifactObjectStorage['put']>[0]): Promise<void> {
-    this.objects.set(input.key, {
-      body: input.body,
-      contentLength: input.body.byteLength,
-      ...(input.contentType ? { contentType: input.contentType } : {}),
-    });
-  }
-
-  async get(key: string): Promise<StoredArtifactObject | null> {
-    return this.objects.get(key) ?? null;
-  }
-
-  async getRange(key: string, start: number, endInclusive: number): Promise<StoredArtifactObject | null> {
-    const object = this.objects.get(key);
-    if (!object) return null;
-    return {
-      body: object.body.slice(start, endInclusive + 1),
-      contentLength: object.contentLength ?? object.body.byteLength,
-      ...(object.contentType ? { contentType: object.contentType } : {}),
-    };
-  }
+async function close(server: Server | undefined) {
+  if (server?.listening)
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 }

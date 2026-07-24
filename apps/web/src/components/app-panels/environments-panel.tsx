@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, Archive, PanelLeftOpen, Plus, RotateCcw, Save, Share2, Trash2 } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Archive, PanelLeftOpen, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
 import {
   archiveEnvironment,
   createEnvironment,
@@ -9,16 +9,13 @@ import {
   type Environment,
   type EnvironmentRevision,
   type EnvironmentRepositoryInput,
-  type EnvironmentShareMode,
-  type Group,
   type RepositoryOption,
 } from '../../api.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Input } from '../ui/input.js';
-import { OptionPicker, RepositoryPicker, type OptionPickerOption } from './option-picker.js';
+import { RepositoryPicker } from './option-picker.js';
 import { RevisionSelector, useRevisionViewer } from './revision-selector.js';
-import { SharingGroupPicker } from './sharing-group-picker.js';
 import { UnsavedIndicator } from './shared.js';
 import { useEditorDirty } from './use-editor-dirty.js';
 
@@ -34,9 +31,6 @@ type EnvironmentRepositoryForm = {
 type EnvironmentForm = {
   id: string;
   name: string;
-  ownerGroupId: string;
-  shareMode: EnvironmentShareMode;
-  sharedGroupIds: string[];
   repositories: EnvironmentRepositoryForm[];
 };
 
@@ -53,7 +47,7 @@ export function EnvironmentsPanel(props: {
   selectedEnvironmentId: string;
   selectedRevisionId: string;
   canCallApi: boolean;
-  groups: Group[];
+  canManageTenantResources: boolean;
   token: string;
   repositoryOptions: RepositoryOption[];
   repositoryOptionsLoading: boolean;
@@ -68,7 +62,7 @@ export function EnvironmentsPanel(props: {
   onSelectRevision: (revisionId: string) => void;
   onError: (error: unknown) => void;
 }) {
-  const [form, setForm] = useState<EnvironmentForm>(() => emptyForm(props.groups));
+  const [form, setForm] = useState<EnvironmentForm>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const selected = props.environments.find((environment) => environment.id === props.selectedEnvironmentId) ?? null;
@@ -83,24 +77,18 @@ export function EnvironmentsPanel(props: {
     onError: props.onError,
   });
   const viewedRevision = revisionViewer.viewedRevision;
-  const manageableGroups = useMemo(
-    () => props.groups.filter((group) => !group.archivedAt && group.canManage),
-    [props.groups],
-  );
-  const ownerGroup = props.groups.find((group) => group.id === form.ownerGroupId);
-  const canCreate = props.canCallApi && manageableGroups.length > 0;
+  const canCreate = props.canCallApi && props.canManageTenantResources;
   const canEdit =
     props.canCallApi &&
+    props.canManageTenantResources &&
     !viewedRevision &&
     (form.id ? Boolean(selected?.canManage) && !selected?.archivedAt : canCreate);
   const complete = validateForm(form) === '';
   let displayedForm: EnvironmentForm;
-  if (!selected) displayedForm = emptyForm(props.groups);
+  if (!selected) displayedForm = emptyForm();
   else if (viewedRevision) displayedForm = formFromEnvironmentRevision(selected, viewedRevision);
   else displayedForm = formFromEnvironment(selected);
-  const baselineForm = props.selectedEnvironmentId
-    ? displayedForm
-    : { ...displayedForm, ownerGroupId: form.ownerGroupId };
+  const baselineForm = displayedForm;
   const dirty = environmentFormChanged(form, baselineForm);
   const saveDisabled = !canEdit || saving || !complete || !dirty;
   useEditorDirty(dirty, props.onDirtyChange);
@@ -110,38 +98,10 @@ export function EnvironmentsPanel(props: {
     setFormError('');
   }, [props.selectedEnvironmentId, selected?.id, selected?.currentRevisionId, selected?.updatedAt, viewedRevision?.id]);
 
-  useEffect(() => {
-    setForm((current) => {
-      if (current.id || manageableGroups.some((group) => group.id === current.ownerGroupId)) return current;
-      const ownerGroupId = manageableGroups[0]?.id ?? '';
-      return {
-        ...current,
-        ownerGroupId,
-        sharedGroupIds: current.sharedGroupIds.filter((groupId) => groupId !== ownerGroupId),
-      };
-    });
-  }, [manageableGroups]);
-
   function startNewEnvironment() {
     if (!props.onCreateEnvironment()) return;
-    setForm(emptyForm(props.groups));
+    setForm(emptyForm());
     setFormError('');
-  }
-
-  function updateOwnerGroup(ownerGroupId: string) {
-    setForm((current) => ({
-      ...current,
-      ownerGroupId,
-      sharedGroupIds: current.sharedGroupIds.filter((groupId) => groupId !== ownerGroupId),
-    }));
-  }
-
-  function updateShareMode(shareMode: EnvironmentShareMode) {
-    setForm((current) => ({
-      ...current,
-      shareMode,
-      sharedGroupIds: shareMode === 'selected_groups' ? current.sharedGroupIds : [],
-    }));
   }
 
   function updateRepository(key: string, next: Partial<EnvironmentRepositoryForm>) {
@@ -194,9 +154,6 @@ export function EnvironmentsPanel(props: {
       const input = {
         token: props.token,
         name: form.name.trim(),
-        ownerGroupId: form.ownerGroupId,
-        shareMode: form.shareMode,
-        sharedGroupIds: form.shareMode === 'selected_groups' ? form.sharedGroupIds : [],
         repositories: repositoriesInput(form.repositories),
       };
       const saved = form.id
@@ -318,8 +275,8 @@ export function EnvironmentsPanel(props: {
 
             {viewedRevision ? (
               <p className="mt-4 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
-                Viewing repository configuration from revision {viewedRevision.revisionNumber}. Name, owner, and sharing
-                reflect the current environment; this view is read-only.
+                Viewing repository configuration from revision {viewedRevision.revisionNumber}. The name reflects the
+                current environment; this view is read-only.
               </p>
             ) : revisionViewer.requestedRevisionMissing ? (
               <p className="mt-4 rounded-md border border-border bg-muted/60 p-3 text-sm text-muted-foreground">
@@ -340,7 +297,7 @@ export function EnvironmentsPanel(props: {
                 void saveEnvironment();
               }}
             >
-              <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <div className="grid min-w-0 gap-3">
                 <Field label="Name" htmlFor="environment-name">
                   <Input
                     id="environment-name"
@@ -348,17 +305,6 @@ export function EnvironmentsPanel(props: {
                     onChange={(event) => setForm({ ...form, name: event.target.value })}
                     placeholder="Control plane and web"
                     disabled={!canEdit}
-                  />
-                </Field>
-                <Field label="Owner group" htmlFor="environment-owner-group">
-                  <OptionPicker
-                    id="environment-owner-group"
-                    label="Owner group"
-                    value={form.ownerGroupId}
-                    options={ownerGroupOptions(manageableGroups, ownerGroup)}
-                    emptyLabel="Select owner group..."
-                    onChange={updateOwnerGroup}
-                    disabled={!canEdit || ownerGroupOptions(manageableGroups, ownerGroup).length <= 1}
                   />
                 </Field>
               </div>
@@ -435,55 +381,6 @@ export function EnvironmentsPanel(props: {
                 </div>
               </div>
 
-              <div className="rounded-md border border-border bg-muted/20 p-4">
-                <div className="flex items-center gap-2">
-                  <Share2 className="h-4 w-4 text-primary" />
-                  <h3 className="text-sm font-semibold text-foreground">Sharing</h3>
-                </div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Sharing grants use and read access. Management stays with the owner group.
-                </p>
-                <div className="mt-4 grid min-w-0 gap-3 xl:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
-                  <fieldset className="grid self-start gap-2 text-sm" disabled={!canEdit}>
-                    <legend className="sr-only">Sharing</legend>
-                    {(['private', 'selected_groups', 'all_groups'] as const).map((mode) => (
-                      <label key={mode} className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="environment-share-mode"
-                          checked={form.shareMode === mode}
-                          onChange={() => updateShareMode(mode)}
-                        />
-                        {environmentShareModeLabel(mode)}
-                      </label>
-                    ))}
-                  </fieldset>
-                  <div className="min-w-0">
-                    {form.shareMode === 'all_groups' ? (
-                      <div className="flex min-w-0 gap-2 rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning-foreground dark:text-warning">
-                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                        <p className="min-w-0">
-                          All current and future active groups can use this environment and its repositories. Management
-                          stays with {ownerGroup?.name ?? 'the owner group'}.
-                        </p>
-                      </div>
-                    ) : form.shareMode === 'selected_groups' ? (
-                      <SharingGroupPicker
-                        groups={props.groups}
-                        ownerGroupId={form.ownerGroupId}
-                        selectedGroupIds={form.sharedGroupIds}
-                        disabled={!canEdit}
-                        onSelectedGroupIdsChange={(sharedGroupIds) => setForm({ ...form, sharedGroupIds })}
-                      />
-                    ) : (
-                      <p className="flex min-h-10 min-w-0 items-center text-sm text-muted-foreground">
-                        Only members of {ownerGroup?.name ?? 'the owner group'} can view and use this environment.
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-
               {formError || (!complete && form.name.trim()) ? (
                 <p className="text-sm text-destructive">{formError || validateForm(form)}</p>
               ) : null}
@@ -491,7 +388,7 @@ export function EnvironmentsPanel(props: {
                 <Button type="submit" disabled={saveDisabled}>
                   <Save className="h-4 w-4" /> {form.id ? 'Save environment' : 'Create environment'}
                 </Button>
-                {selected?.archivedAt ? (
+                {props.canManageTenantResources && selected?.archivedAt ? (
                   <Button
                     type="button"
                     variant="secondary"
@@ -500,7 +397,7 @@ export function EnvironmentsPanel(props: {
                   >
                     <RotateCcw className="h-4 w-4" /> Restore
                   </Button>
-                ) : selected ? (
+                ) : props.canManageTenantResources && selected ? (
                   <Button
                     type="button"
                     className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10"
@@ -510,11 +407,6 @@ export function EnvironmentsPanel(props: {
                   >
                     <Archive className="h-4 w-4" /> Archive
                   </Button>
-                ) : null}
-                {!canCreate && !form.id ? (
-                  <p className="self-center text-sm text-muted-foreground">
-                    Group admin access is required to create environments.
-                  </p>
                 ) : null}
               </div>
             </form>
@@ -536,13 +428,10 @@ function Field(props: { label: string; htmlFor: string; children: ReactNode }) {
   );
 }
 
-function emptyForm(groups: Group[]): EnvironmentForm {
+function emptyForm(): EnvironmentForm {
   return {
     id: '',
     name: '',
-    ownerGroupId: groups.find((group) => !group.archivedAt && group.canManage)?.id ?? '',
-    shareMode: 'private',
-    sharedGroupIds: [],
     repositories: [{ key: nextRepositoryKey(), repository: '', branch: '', primary: true }],
   };
 }
@@ -551,9 +440,6 @@ function formFromEnvironment(environment: Environment): EnvironmentForm {
   return {
     id: environment.id,
     name: environment.name,
-    ownerGroupId: environment.ownerGroupId,
-    shareMode: environment.shareMode,
-    sharedGroupIds: environment.sharedGroupIds,
     repositories: environment.repositories
       .slice()
       .sort((left, right) => left.position - right.position)
@@ -584,25 +470,9 @@ function formFromEnvironmentRevision(environment: Environment, revision: Environ
 function environmentFormChanged(form: EnvironmentForm, baseline: EnvironmentForm): boolean {
   return (
     form.name !== baseline.name ||
-    form.ownerGroupId !== baseline.ownerGroupId ||
-    form.shareMode !== baseline.shareMode ||
-    [...form.sharedGroupIds].sort().join('\0') !== [...baseline.sharedGroupIds].sort().join('\0') ||
     JSON.stringify(form.repositories.map(({ repository, branch, primary }) => ({ repository, branch, primary }))) !==
       JSON.stringify(baseline.repositories.map(({ repository, branch, primary }) => ({ repository, branch, primary })))
   );
-}
-
-function ownerGroupOptions(manageableGroups: Group[], ownerGroup: Group | undefined): OptionPickerOption[] {
-  const options: OptionPickerOption[] = manageableGroups.map((group) => ({ value: group.id, label: group.name }));
-  if (ownerGroup && !options.some((option) => option.value === ownerGroup.id)) {
-    options.unshift({
-      value: ownerGroup.id,
-      label: `${ownerGroup.name}${ownerGroup.archivedAt ? ' (archived)' : ''}`,
-      available: false,
-      unavailableReason: ownerGroup.archivedAt ? 'Archived group.' : 'Unavailable group.',
-    });
-  }
-  return options;
 }
 
 function repositoryOptionsForValue(options: RepositoryOption[], value: string): RepositoryOption[] {
@@ -611,15 +481,8 @@ function repositoryOptionsForValue(options: RepositoryOption[], value: string): 
   return [{ fullName: value, owner, name }, ...options];
 }
 
-function environmentShareModeLabel(mode: EnvironmentShareMode): string {
-  if (mode === 'all_groups') return 'All groups';
-  if (mode === 'selected_groups') return 'Specific groups';
-  return 'Owner group only';
-}
-
 function validateForm(form: EnvironmentForm): string {
   if (!form.name.trim()) return 'Name is required.';
-  if (!form.ownerGroupId) return 'Owner group is required.';
   if (!form.repositories.length) return 'At least one repository is required.';
   if (form.repositories.filter((repository) => repository.primary).length !== 1)
     return 'Select one primary repository.';

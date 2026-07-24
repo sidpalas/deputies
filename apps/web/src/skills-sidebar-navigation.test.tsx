@@ -38,7 +38,6 @@ function SkillsNavigationHarness() {
         onSignOut: () => undefined,
         onThemeChange: () => undefined,
       }}
-      groups={[]}
       loading={false}
       skills={[]}
       selectedSkillId=""

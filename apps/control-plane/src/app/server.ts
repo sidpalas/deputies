@@ -8,19 +8,16 @@ import { AutomationService } from '../automations/service.js';
 import { ArtifactService, ArtifactServiceError } from '../artifacts/service.js';
 import type { ArtifactObjectStorage } from '../artifacts/storage.js';
 import {
-  canCreateSessionInGroup,
   canInvokeSkillInSession,
-  canManageGroup,
   canReadSession,
-  canUseEnvironmentInGroup,
+  canUseEnvironment,
   canWriteSession,
-  isSuperAdmin,
   readRequestAuthorization,
   readRequestAuthUser,
   type RequestAuthorization,
 } from '../auth/authorization.js';
 import type { GitHubOAuthClient } from '../auth/github.js';
-import { apiAuthMiddleware, apiUnsafeMethodAdminMiddleware } from '../auth/middleware.js';
+import { apiAdminMiddleware, apiAuthMiddleware } from '../auth/middleware.js';
 import { readSessionId } from '../auth/session.js';
 import { CallbackService, CallbackServiceError } from '../callbacks/service.js';
 import { requireApiBearerToken, type AppConfig } from '../config/index.js';
@@ -46,26 +43,12 @@ import { SkillService } from '../skills/service.js';
 import { canonicalizeMessageSkillContext, SkillContextError } from '../skills/invocation.js';
 import { normalizeSessionTags } from '../sessions/tags.js';
 import { MemoryStore } from '../store/memory.js';
-import type {
-  AppStore,
-  SandboxRecord,
-  SessionListCursor,
-  SessionRecord,
-  SessionVisibility,
-  SessionWritePolicy,
-} from '../store/types.js';
-import {
-  parseSessionVisibility,
-  parseSessionWritePolicy,
-  resolveSessionCreateGroup,
-  sessionCreateDefaults,
-} from './access-policy.js';
-import { registerAuthRoutes, serializeBasicAuthUser } from './auth-routes.js';
+import type { AppStore, SandboxRecord, SessionListCursor, SessionRecord } from '../store/types.js';
+import { registerAuthRoutes } from './auth-routes.js';
 import { registerAutomationRoutes } from './automation-routes.js';
 import { registerEnvironmentRoutes } from './environment-routes.js';
 import { registerEventRoutes } from './event-routes.js';
 import { writeSessionEventStream } from './event-stream.js';
-import { registerGroupRoutes } from './group-routes.js';
 import { writeError } from './http-error.js';
 import { ModelAvailabilityService } from './model-availability.js';
 import { registerModelRoutes } from './model-routes.js';
@@ -246,8 +229,6 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('/repositories/*', apiAuthMiddleware(config, services.store));
   app.use('/repositories', apiAuthMiddleware(config, services.store));
   app.use('/models', apiAuthMiddleware(config, services.store));
-  app.use('/groups/*', apiAuthMiddleware(config, services.store));
-  app.use('/groups', apiAuthMiddleware(config, services.store));
   app.use('/users/*', apiAuthMiddleware(config, services.store));
   app.use('/users', apiAuthMiddleware(config, services.store));
   app.use('/setup/*', apiAuthMiddleware(config, services.store));
@@ -257,8 +238,8 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('/telemetry/*', apiAuthMiddleware(config, services.store));
   app.use('/telemetry', apiAuthMiddleware(config, services.store));
 
-  app.use('/setup/*', apiUnsafeMethodAdminMiddleware(config, services.store));
-  app.use('/setup', apiUnsafeMethodAdminMiddleware(config, services.store));
+  app.use('/setup/*', apiAdminMiddleware(config, services.store));
+  app.use('/setup', apiAdminMiddleware(config, services.store));
 
   app.use('/sessions/:sessionId/*', sessionAuthorizationMiddleware(config, services));
   app.use('/sessions/:sessionId', sessionAuthorizationMiddleware(config, services));
@@ -268,36 +249,19 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const title = optionalString(body.title);
-    const group = await resolveSessionCreateGroup(services.store, auth, body.ownerGroupId);
-    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
-    if (group.archivedAt) return writeError(c, 409, 'archived_group', 'Cannot create sessions in an archived group');
-    if (!canCreateSessionInGroup(auth, group.id)) {
-      return writeError(c, 403, 'forbidden', 'Group member access is required');
-    }
-    const requestedVisibility = body.visibility === undefined ? undefined : parseSessionVisibility(body.visibility);
-    const requestedWritePolicy = body.writePolicy === undefined ? undefined : parseSessionWritePolicy(body.writePolicy);
-    if (body.visibility !== undefined && !requestedVisibility) {
-      return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
-    }
-    if (body.writePolicy !== undefined && !requestedWritePolicy) {
-      return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
-    }
-    const defaults = sessionCreateDefaults(config, auth, group);
-    const canOverrideAccessDefaults = canManageGroup(auth, group.id);
     if (
-      !canOverrideAccessDefaults &&
-      ((requestedVisibility && requestedVisibility !== defaults.visibility) ||
-        (requestedWritePolicy && requestedWritePolicy !== defaults.writePolicy))
+      body.ownerGroupId !== undefined ||
+      body.ownerGroupName !== undefined ||
+      body.visibility !== undefined ||
+      body.writePolicy !== undefined
     ) {
-      return writeError(c, 403, 'forbidden', 'Group admin access is required to override access defaults');
+      return writeError(c, 400, 'invalid_request', 'Session access policy fields are no longer supported');
     }
-    const visibility = requestedVisibility ?? defaults.visibility;
-    const writePolicy = requestedWritePolicy ?? defaults.writePolicy;
+    if (!auth.bypass && auth.user.role === 'viewer') {
+      return writeError(c, 403, 'forbidden', 'Member access is required');
+    }
     const session = await services.sessions.create({
       ...(title ? { title } : {}),
-      ownerGroupId: group.id,
-      visibility,
-      writePolicy,
       ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
     });
     return c.json({ session: await serializeSessionWithSandbox(config, services, session) }, 201);
@@ -309,32 +273,21 @@ export function createApp(config: AppConfig, services = createServices()) {
     const limit = parseBoundedInteger(c.req.query('limit'), 50, 1, 200);
     const cursor = decodeSessionListCursor(c.req.query('cursor'));
     const archived = parseOptionalBoolean(c.req.query('archived')) ?? false;
-    const groupId = optionalString(c.req.query('groupId'));
+    if (c.req.query('groupId') !== undefined) {
+      return writeError(c, 400, 'invalid_request', 'groupId is no longer supported');
+    }
     const parentSessionId = optionalString(c.req.query('parentSessionId'));
     if (parentSessionId && !isUuid(parentSessionId)) {
       return writeError(c, 400, 'invalid_request', 'Expected valid parentSessionId');
     }
     const filters = parseSessionListFilters(c, auth);
-    if (groupId && !(await canFilterToGroup(auth, services.store, groupId))) {
-      return writeError(c, 403, 'forbidden', 'Group access is required');
-    }
-    const visibleTo =
-      auth.bypass || isSuperAdmin(auth)
-        ? undefined
-        : { groupIds: auth.memberships.map((membership) => membership.groupId) };
-    const [sessionsWithSandbox, groups] = await Promise.all([
-      services.store.listSessionsWithLatestSandbox(config.sandboxProvider, {
-        ...(visibleTo ? { visibleTo } : {}),
-        archived,
-        ...(groupId ? { groupId } : {}),
-        ...(parentSessionId ? { parentSessionId } : {}),
-        ...filters,
-        limit,
-        ...(cursor ? { cursor } : {}),
-      }),
-      services.store.listGroups(),
-    ]);
-    const groupNames = new Map(groups.map((group) => [group.id, group.name]));
+    const sessionsWithSandbox = await services.store.listSessionsWithLatestSandbox(config.sandboxProvider, {
+      archived,
+      ...(parentSessionId ? { parentSessionId } : {}),
+      ...filters,
+      limit,
+      ...(cursor ? { cursor } : {}),
+    });
     const starredSessionIds = await listStarredSessionIdsForAuth(
       services.store,
       auth,
@@ -343,17 +296,9 @@ export function createApp(config: AppConfig, services = createServices()) {
     // Keyset pagination is ordered by activity. A session updated while a client
     // pages can move ahead of the current cursor; the global event stream and
     // first-page refresh path upsert those live changes back into the sidebar.
-    const visibleSessions = sessionsWithSandbox.items
-      .filter(({ session }) => canReadSession(auth, session))
-      .map(({ session, sandbox, directChildCount }) =>
-        serializeSessionView(
-          session,
-          sandbox,
-          groupNames.get(session.ownerGroupId),
-          starredSessionIds?.has(session.id),
-          directChildCount,
-        ),
-      );
+    const visibleSessions = sessionsWithSandbox.items.map(({ session, sandbox, directChildCount }) =>
+      serializeSessionView(session, sandbox, starredSessionIds?.has(session.id), directChildCount),
+    );
     return c.json({
       sessions: visibleSessions,
       nextCursor: encodeSessionListCursor(sessionsWithSandbox.nextCursor),
@@ -366,47 +311,29 @@ export function createApp(config: AppConfig, services = createServices()) {
     const query = optionalString(c.req.query('q'))?.trim() ?? '';
     const limit = parseBoundedInteger(c.req.query('limit'), 20, 1, 50);
     const cursor = decodeOffsetCursor(c.req.query('cursor'));
-    const groupId = optionalString(c.req.query('groupId'));
-    const filters = parseSessionListFilters(c, auth);
-    if (groupId && !(await canFilterToGroup(auth, services.store, groupId))) {
-      return writeError(c, 403, 'forbidden', 'Group access is required');
+    if (c.req.query('groupId') !== undefined) {
+      return writeError(c, 400, 'invalid_request', 'groupId is no longer supported');
     }
+    const filters = parseSessionListFilters(c, auth);
     if (!query) return c.json({ results: [], nextCursor: null });
-    const visibleTo =
-      auth.bypass || isSuperAdmin(auth)
-        ? undefined
-        : { groupIds: auth.memberships.map((membership) => membership.groupId) };
-    const [page, groups] = await Promise.all([
-      services.store.searchSessions(config.sandboxProvider, {
-        query,
-        ...(visibleTo ? { visibleTo } : {}),
-        ...(groupId ? { groupId } : {}),
-        ...filters,
-        limit,
-        ...(cursor !== null ? { cursor } : {}),
-      }),
-      services.store.listGroups(),
-    ]);
-    const groupNames = new Map(groups.map((group) => [group.id, group.name]));
+    const page = await services.store.searchSessions(config.sandboxProvider, {
+      query,
+      ...filters,
+      limit,
+      ...(cursor !== null ? { cursor } : {}),
+    });
     const starredSessionIds = await listStarredSessionIdsForAuth(
       services.store,
       auth,
       page.items.map(({ item }) => item.session.id),
     );
     return c.json({
-      results: page.items
-        .filter(({ item }) => canReadSession(auth, item.session))
-        .map(({ item, snippet, matchKind, score }) => ({
-          session: serializeSessionView(
-            item.session,
-            item.sandbox,
-            groupNames.get(item.session.ownerGroupId),
-            starredSessionIds?.has(item.session.id),
-          ),
-          snippet,
-          matchKind,
-          score,
-        })),
+      results: page.items.map(({ item, snippet, matchKind, score }) => ({
+        session: serializeSessionView(item.session, item.sandbox, starredSessionIds?.has(item.session.id)),
+        snippet,
+        matchKind,
+        score,
+      })),
       nextCursor: encodeSearchOffsetCursor(page.nextCursor),
     });
   });
@@ -425,8 +352,6 @@ export function createApp(config: AppConfig, services = createServices()) {
   registerModelRoutes(app, config, services);
   registerSetupRoutes(app, config, services);
 
-  registerGroupRoutes(app, config, services, { serializeBasicAuthUser });
-
   registerUserRoutes(app, config, services);
 
   registerEventRoutes(app, config, services);
@@ -436,11 +361,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.get('/sessions/tags', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const visibleTo =
-      auth.bypass || isSuperAdmin(auth)
-        ? undefined
-        : { groupIds: auth.memberships.map((membership) => membership.groupId) };
-    const tags = await services.store.listSessionTags({ ...(visibleTo ? { visibleTo } : {}), limit: 100 });
+    const tags = await services.store.listSessionTags({ limit: 100 });
     return c.json({ tags });
   });
 
@@ -464,6 +385,14 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
     if (session.status === 'archived') return writeError(c, 409, 'conflict', 'Archived sessions are read-only');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
+    if (
+      body.ownerGroupId !== undefined ||
+      body.ownerGroupName !== undefined ||
+      body.visibility !== undefined ||
+      body.writePolicy !== undefined
+    ) {
+      return writeError(c, 400, 'invalid_request', 'Session access policy fields are no longer supported');
+    }
     const title = optionalString(body.title);
     if (body.title !== undefined && !title)
       return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: title');
@@ -528,31 +457,6 @@ export function createApp(config: AppConfig, services = createServices()) {
     return c.json({ starred: false });
   });
 
-  app.patch('/sessions/:sessionId/access', async (c) => {
-    const auth = await requireRequestAuthorization(config, services.store, c);
-    if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const session = getAuthorizedSession(c, c.req.param('sessionId'));
-    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
-
-    const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    if (body.ownerGroupId !== undefined) return writeError(c, 400, 'immutable_owner', 'Session ownership is immutable');
-    if (!canManageGroup(auth, session.ownerGroupId)) {
-      return writeError(c, 403, 'forbidden', 'Group admin access required');
-    }
-    let visibility: SessionVisibility | null = session.visibility;
-    let writePolicy: SessionWritePolicy | null = session.writePolicy;
-    if (body.visibility !== undefined) visibility = parseSessionVisibility(body.visibility);
-    if (body.writePolicy !== undefined) writePolicy = parseSessionWritePolicy(body.writePolicy);
-    if (!visibility) return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
-    if (!writePolicy) return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
-    const updated = await services.sessions.update({
-      id: session.id,
-      visibility,
-      writePolicy,
-    });
-    return c.json({ session: await serializeSessionWithSandbox(config, services, updated) });
-  });
-
   app.post('/sessions/:sessionId/archive', async (c) => {
     try {
       const session = await services.sessions.archive(c.req.param('sessionId'));
@@ -585,6 +489,8 @@ export function createApp(config: AppConfig, services = createServices()) {
     } catch (error) {
       if (error instanceof SessionServiceError && error.code === 'not_found')
         return writeError(c, 404, 'not_found', 'Session not found');
+      if (error instanceof SessionServiceError && error.code === 'archived')
+        return writeError(c, 409, 'conflict', 'Archived sessions are read-only');
       throw error;
     }
   });
@@ -596,6 +502,8 @@ export function createApp(config: AppConfig, services = createServices()) {
     } catch (error) {
       if (error instanceof SessionServiceError && error.code === 'not_found')
         return writeError(c, 404, 'not_found', 'Session not found');
+      if (error instanceof SessionServiceError && error.code === 'archived')
+        return writeError(c, 409, 'conflict', 'Archived sessions are read-only');
       throw error;
     }
   });
@@ -645,7 +553,6 @@ export function createApp(config: AppConfig, services = createServices()) {
       const skillContext = await canonicalizeMessageSkillContext({
         skills: services.skills,
         events: services.store,
-        ownerGroupId: session.ownerGroupId,
         sessionId: session.id,
         ...(authorUserId ? { userId: authorUserId } : {}),
         skillsEnabled: config.skillsEnabled,
@@ -711,7 +618,6 @@ export function createApp(config: AppConfig, services = createServices()) {
           ? await canonicalizeMessageSkillContext({
               skills: services.skills,
               events: services.store,
-              ownerGroupId: session.ownerGroupId,
               sessionId: session.id,
               ...(existing?.authorUserId ? { userId: existing.authorUserId } : {}),
               skillsEnabled: config.skillsEnabled,
@@ -1205,16 +1111,6 @@ function getAuthorizedSession(c: Context<{ Variables: AppVariables }>, sessionId
   return session && session.id === sessionId ? session : null;
 }
 
-async function canFilterToGroup(auth: RequestAuthorization, store: AppStore, groupId: string): Promise<boolean> {
-  if (!isUuid(groupId)) throw new HttpRequestError(400, 'invalid_request', 'Expected valid groupId');
-  if (!auth.bypass && !isSuperAdmin(auth) && !auth.memberships.some((membership) => membership.groupId === groupId)) {
-    return false;
-  }
-  const group = await store.getGroup(groupId);
-  if (!group) throw new HttpRequestError(404, 'not_found', 'Group not found');
-  return true;
-}
-
 function parseBoundedInteger(raw: string | undefined, fallback: number, min: number, max: number): number {
   if (raw === undefined) return fallback;
   const value = Number(raw);
@@ -1248,12 +1144,11 @@ async function environmentMessageContext(
   if (!auth) throw new HttpRequestError(401, 'unauthorized', 'Missing or invalid session');
   const environment = await services.environments.get(environmentId);
   if (!environment || environment.archivedAt) throw new HttpRequestError(404, 'not_found', 'Environment not found');
-  if (!canUseEnvironmentInGroup(auth, environment, session.ownerGroupId)) {
+  if (!canUseEnvironment(auth, environment)) {
     throw new HttpRequestError(403, 'forbidden', 'Environment use access is required');
   }
-  const snapshot = await services.environments.resolveForGroup({
+  const snapshot = await services.environments.resolve({
     environmentId,
-    groupId: session.ownerGroupId,
     branchOverrides: parseEnvironmentBranchOverrides(body.environmentBranchOverrides),
   });
   return {
@@ -1487,24 +1382,19 @@ async function serializeSessionWithSandbox(
   session: SessionRecord,
   starred?: boolean,
 ) {
-  const [sandbox, ownerGroup] = await Promise.all([
-    services.store.getLatestSandboxForSession(session.id, config.sandboxProvider),
-    services.store.getGroup(session.ownerGroupId),
-  ]);
-  return serializeSessionView(session, sandbox, ownerGroup?.name, starred);
+  const sandbox = await services.store.getLatestSandboxForSession(session.id, config.sandboxProvider);
+  return serializeSessionView(session, sandbox, starred);
 }
 
 function serializeSessionView(
   session: SessionRecord,
   sandbox: SandboxRecord | null,
-  ownerGroupName: string | undefined,
   starred?: boolean,
   directChildCount?: number,
 ) {
   const display = sessionDisplayStatus(session, sandbox);
   const serialized = {
     ...session,
-    ...(ownerGroupName ? { ownerGroupName } : {}),
     ...(starred !== undefined ? { starred } : {}),
     ...(directChildCount !== undefined ? { directChildCount } : {}),
     displayStatus: display.status,

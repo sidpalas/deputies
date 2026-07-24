@@ -109,7 +109,7 @@ The UI supports all product API auth modes exposed by `/health`:
 
 `API_AUTH_MODE` is required. Browser-facing deployments use `session`. Reserve `bearer` for development tooling or programmatic/internal API access, and use `none` only for intentional local or test no-auth runs.
 
-Session-cookie auth enables access-group RBAC for browser-facing product routes. Sessions belong to one access group and use group/organization visibility plus group-members/creator-only write policies. See [Access Groups](./access-groups.md) for roles, defaults, archived-group behavior, and GitHub auth allowlists.
+Session-cookie auth enables tenant-wide role checks for browser-facing product routes. Viewers can read all resources, members manage ordinary resources, and admins additionally manage users and setup configuration. See [Tenant Access](./tenant-access.md).
 
 Local static session-auth example:
 
@@ -138,12 +138,12 @@ AUTH_GITHUB_ADMIN_USERS=your-github-login
 # Optional non-admin sign-in allowlist:
 # AUTH_GITHUB_ALLOWED_USERS=teammate-login
 # AUTH_GITHUB_ALLOWED_ORGANIZATIONS=your-org
-# AUTH_GITHUB_DEFAULT_GROUP_ROLE=member
+# AUTH_GITHUB_DEFAULT_ROLE=member
 ```
 
 For GitHub App login, configure the GitHub App's callback URL to exactly match `GITHUB_OAUTH_CALLBACK_URL`. The same GitHub App can also provide runtime repository access through `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`; those are separate values from the app's user-authorization client ID and client secret.
 
-GitHub users in `AUTH_GITHUB_ADMIN_USERS` are super admins and are restored to that role on login. Users or organizations in `AUTH_GITHUB_ALLOWED_*` can sign in as regular users and receive default-group access from `AUTH_GITHUB_DEFAULT_GROUP_ROLE`.
+New GitHub users in `AUTH_GITHUB_ADMIN_USERS` start as admins. Users or organizations in `AUTH_GITHUB_ALLOWED_*` can sign in with `AUTH_GITHUB_DEFAULT_ROLE`; later admin-managed role changes are retained.
 
 Set `WEB_BASE_URL` to the externally reachable web UI origin when Slack/GitHub callbacks should include an “open session” link. The API appends `?session=<id>` to that URL, and the web UI opens the matching session when present.
 
@@ -162,9 +162,9 @@ The SSE client uses `fetch()` streaming instead of native `EventSource` because 
 - Edit or cancel pending queued messages.
 - Request cancellation of an active run.
 - Archive and restore sessions. Archived sessions are read-only until restored.
-- Manage access groups, group members, group defaults, archived groups, and super admins when the signed-in user has sufficient access.
+- Manage tenant users and roles as an admin; the final admin cannot be demoted or removed.
 - Manage environments and inspect immutable repository-configuration revisions.
-- Manage personal and group skills, including immutable definition revisions, promotion, sharing, enabled/auto-load settings, and archive/restore actions when the signed-in user has sufficient access.
+- Manage tenant-wide skills as a member or admin, or private personal skills as their owner, including immutable definition revisions and archive/restore actions.
 - Attach available skills to a message as structured invocation chips and inspect the skills loaded for each run.
 - Replay and stream session events internally, rendering assistant text in the transcript and non-text run/message events as collapsible diagnostics.
 - List session artifacts in the context panel.
@@ -181,21 +181,19 @@ Environment deep links use `?environment=<environment-id>&revision=<revision-id>
 
 ## Skills
 
-Open `Skills` from the main navigation to manage reusable agent instructions. The sidebar separates `My skills`, skills owned by each accessible group, and `Shared with my groups`. Shared-in skills show their owning group and are read-only unless the user also has management rights in that owner group.
+Open `Skills` from the main navigation to manage tenant-wide or private personal reusable agent instructions.
 
-The editor supports a slug name, one-line description, markdown body, enabled and auto-load toggles, and archive/restore actions. Creation publishes revision 1. Saving a real name/description/body change publishes the next immutable revision; an unchanged save or live setting/share/lifecycle change does not. Managers can inspect the complete read-only revision history and historical bodies from the compact, newest-first revision selector at the top of the editor. Selecting current returns to edit mode. Other readers see the current definition only and do not receive history access. Personal skills can be moved with `Move to access group`; the group picker includes only active groups where the user can create skills, and confirmation explains that the ownership move is one-way and stops personal loading. Managed group skills expose owner-group-only, specific-group, and all-groups sharing controls to their creator, owner-group admins, and super admins.
+The editor supports tenant and personal scope, a slug name, one-line description, markdown body, enabled and auto-load toggles, and archive/restore actions. Personal skills are visible only to their owner, cannot auto-load, and are only manually invokable. Creation publishes revision 1. Saving a real name/description/body change publishes the next immutable revision; unchanged saves and live setting/lifecycle changes do not. Users can inspect and manage their own personal skills; all roles can inspect tenant-skill revision history, while members and admins can edit tenant skills.
 
 ## Prompt snippets
 
-Use `/` in a composer to search skills and type `//` at the start of the prompt or after whitespace to search active personal prompt snippets. The snippet query is resolved at the caret, so snippets can be inserted while drafting a longer or multiline message. Selecting a snippet replaces only the `//name` token with editable body text and preserves the surrounding prompt; only that expanded text is submitted, with no snippet metadata or back-reference. Snippet lookup and expansion are entirely client-side and web-only. Slack, GitHub, generic webhooks, automations, and other integrations do not resolve `//` tokens or access personal snippet libraries. If reusable external-source text is needed later, it should use an explicitly owned integration or automation template instead. The Snippets management page supports create, edit, archive, and restore; archived snippets remain manageable but are excluded from composers.
+Use `/` in a composer to search available tenant, personal, and repository skills and `//` to search your active personal prompt snippets. Selecting a snippet replaces only that token with editable body text; only expanded text is submitted, with no snippet identity or back-reference. Snippet expansion is web-only. Every user can create, edit, archive, and restore only their own snippets; archived snippets remain readable to their owner but are excluded from composers.
 
-The message composer loads skills available to the current session and current message author. Skill invocation is slash-only: type a standalone `/query` at the start of the prompt or after whitespace to filter by name and attach up to eight skills. The query is resolved at the caret, and selecting a skill removes only that token while preserving the surrounding prompt. There is no persistent composer Skills button. The top match is selected by default; Arrow Up/Down or Home/End changes the active option, and Enter attaches it without sending the slash text. Same-name candidates remain separate options and show source plus owning group or repository provenance. Each selection becomes a removable chip; sending stores readable names in `context.skills` and aligned identity hints in `context.skillRefs` rather than inserting invocation syntax into prompt text. This message-scoped skill-reference shape is the source-independent contract shared with Slack, GitHub, automations, and future integrations. The server authorizes and pins a managed selection to current at enqueue; a stale/historical client pin is rejected rather than replayed. Repository selections use repository identity and remain revisionless. An exact leading `/name` uses the existing precedence winner as a keyboard-first fallback. A sent managed-skill chip links to its exact historical revision only when it has a persisted revision ID and the current user can manage and inspect that skill. Repository, legacy revisionless, and inaccessible managed chips remain display-only.
+The message composer loads tenant skills, the current user's personal skills, and discovered repository skills available to the session. Skill invocation is slash-only: type a standalone `/query` at the start of the prompt or after whitespace to filter by name and attach up to eight skills. Each selection becomes a removable chip; sending stores readable names in `context.skills` and aligned identity hints in `context.skillRefs`. The server authorizes and pins a managed selection to current at enqueue; a stale/historical client pin is rejected. Repository selections remain revisionless.
 
 A message may contain text plus skills or skills alone. Skill-only messages render their chips with “No additional instructions”; the runner expands each request-local skill body into Pi's native skill representation before the model call. Multiple skills apply to the same request in chip order.
 
-Before a new thread has a session, the UI calls `GET /skills/invocation-candidates?ownerGroupId=...` to list managed personal, selected-group, and shared skills without a sandbox. For an existing session it calls `GET /sessions/:sessionId/skills`; repository skills become browseable only after a run records them in `skills_loaded`. That includes discovered non-advertised and shadowed repository skills, which remain eligible for manual invocation. Skill loading metadata, managed revision IDs/numbers, shadowing, diagnostics, explicit selections, and successful model skill reads appear inside the run's collapsed Activity section rather than as separate transcript rows. An inaccessible or stale selection surfaces `unknown_skill` inline instead of silently sending.
-
-Personal auto-load follows the session creator for the lifetime of the session. A later contributor sees and can manually invoke their own personal skills, but those request-local selections do not replace the creator's auto-loaded catalog or become available to other contributors.
+Before a new thread has a session, the UI calls `GET /skills/invocation-candidates` to list managed tenant skills and the current user's personal skills without a sandbox. For an existing session it calls `GET /sessions/:sessionId/skills`; repository skills become browseable after a run records them in `skills_loaded`. Skill loading metadata, revisions, shadowing, diagnostics, explicit selections, and successful model reads appear in the run's collapsed Activity section.
 
 When `SKILLS_ENABLED=false`, the skills routes return `404` and the UI hides the skills administration and composer surfaces. `REPO_SKILLS_ENABLED=false` leaves managed skills and their UI available but removes repository-discovered skills.
 

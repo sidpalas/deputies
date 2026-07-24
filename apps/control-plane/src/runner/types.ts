@@ -6,7 +6,6 @@ export type RunnerInput = {
   sessionId: string;
   runId: string;
   messageId: string;
-  ownerGroupId?: string;
   createdByUserId?: string;
   prompt: string;
   messages?: RunnerMessageInput[];

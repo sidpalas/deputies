@@ -3,7 +3,6 @@ import {
   agentCanCancelSession,
   agentCanManageSession,
   agentCanReadSession,
-  agentCanSpawnInGroup,
   agentCanWriteSession,
   type AgentPrincipal,
 } from '../auth/agent-authorization.js';
@@ -61,7 +60,7 @@ export type DeputyToolResult =
   | { ok: false; action?: DeputyAction; error: string };
 
 type DeputyAction = 'spawn' | 'list_sessions' | 'get_session' | 'send_message' | 'cancel' | 'archive' | 'restore';
-type ListScope = 'children' | 'group' | 'organization';
+type ListScope = 'children' | 'tenant';
 
 const maxTitleLength = 255;
 const maxPromptLength = 64 * 1024;
@@ -102,8 +101,8 @@ export const deputyToolParameters = {
     },
     scope: {
       type: 'string',
-      enum: ['children', 'group', 'organization'],
-      description: 'Session listing scope. Defaults to organization-readable sessions.',
+      enum: ['children', 'tenant'],
+      description: 'Session listing scope. Defaults to tenant-readable sessions.',
     },
     status: {
       type: 'string',
@@ -199,7 +198,6 @@ function isMutatingAction(action: DeputyAction): boolean {
 async function spawnSession(services: DeputyToolServices, params: Record<string, unknown>) {
   const parent = await requireActingSession(services);
   const agent = agentPrincipal(parent);
-  if (!agentCanSpawnInGroup(agent, parent.ownerGroupId)) throw new Error('Agent cannot spawn outside its group');
   if (agent.spawnDepth >= services.maxSpawnDepth) {
     throw new Error(`Cannot spawn child sessions beyond depth ${services.maxSpawnDepth}`);
   }
@@ -224,9 +222,6 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
     status: 'queued',
     parentSessionId: parent.id,
     spawnDepth: parent.spawnDepth + 1,
-    ownerGroupId: parent.ownerGroupId,
-    visibility: parent.visibility,
-    writePolicy: parent.writePolicy,
     ...(parentMessage?.authorUserId ? { createdByUserId: parentMessage.authorUserId } : {}),
     createdAt: now,
     updatedAt: now,
@@ -254,9 +249,6 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
         parentSessionId: parent.id,
         spawnDepth: child.spawnDepth,
         spawnedBy: { sessionId: parent.id, runId: services.runId, messageId: services.messageId },
-        ownerGroupId: child.ownerGroupId,
-        visibility: child.visibility,
-        writePolicy: child.writePolicy,
       },
     }),
     messageCreatedEvent: normalizeAppendInput({
@@ -273,7 +265,6 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
       payload: {
         childSessionId: sessionId,
         title: child.title ?? null,
-        ownerGroupId: child.ownerGroupId,
         spawnDepth: child.spawnDepth,
       },
     }),
@@ -325,7 +316,6 @@ async function listSessions(services: DeputyToolServices, params: Record<string,
   const limit = readLimit(params.limit);
   const sessions = (
     await services.store.listSessionsForAgent({
-      ownerGroupId: agent.ownerGroupId,
       actingSessionId: agent.sessionId,
       scope,
       limit,
@@ -343,7 +333,6 @@ async function getSession(services: DeputyToolServices, params: Record<string, u
   const [children, messageSummary, latestRun, latestFinalResponse, transcript] = await Promise.all([
     services.store.listChildSessions({
       parentSessionId: session.id,
-      ownerGroupId: agent.ownerGroupId,
       limit: maxListLimit,
     }),
     services.store.getSessionMessageSummary(session.id),
@@ -494,7 +483,6 @@ function agentPrincipal(session: SessionRecord): AgentPrincipal {
   return {
     kind: 'session_agent',
     sessionId: session.id,
-    ownerGroupId: session.ownerGroupId,
     spawnDepth: session.spawnDepth,
   };
 }
@@ -504,9 +492,6 @@ function serializeSessionSummary(session: SessionRecord) {
     id: session.id,
     title: session.title ?? null,
     status: session.status,
-    ownerGroupId: session.ownerGroupId,
-    visibility: session.visibility,
-    writePolicy: session.writePolicy,
     parentSessionId: session.parentSessionId ?? null,
     spawnDepth: session.spawnDepth,
     createdAt: session.createdAt.toISOString(),
@@ -621,9 +606,9 @@ function readAction(value: unknown): DeputyAction {
 }
 
 function readScope(value: unknown): ListScope {
-  if (value === undefined) return 'organization';
-  if (value === 'children' || value === 'group' || value === 'organization') return value;
-  throw new Error('deputies scope must be one of: children, group, organization');
+  if (value === undefined) return 'tenant';
+  if (value === 'children' || value === 'tenant') return value;
+  throw new Error('deputies scope must be one of: children, tenant');
 }
 
 function readOptionalStatus(value: unknown): SessionStatus | undefined {

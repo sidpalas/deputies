@@ -26,10 +26,7 @@ export type CallbackDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed';
 export type AutomationKind = 'scheduled';
 export type AutomationInvocationTrigger = 'scheduled' | 'manual';
 export type AutomationInvocationStatus = 'creating' | 'created' | 'skipped' | 'failed';
-export type EnvironmentShareMode = 'private' | 'selected_groups' | 'all_groups';
-export type SkillOwnerKind = 'user' | 'group';
-export type SkillShareMode = 'none' | 'specific' | 'all_groups';
-export type SkillSource = 'personal' | 'group' | 'shared';
+export type SkillSource = 'managed';
 export type EnvironmentRevisionPolicy = 'follow_latest' | 'pinned';
 export type EnvironmentActivityType =
   | 'environment_created'
@@ -42,13 +39,7 @@ export type EnvironmentActivityType =
 export type AuditActorType = 'user' | 'system';
 export type RepositoryProvider = 'github';
 
-export const defaultGroupId = '00000000-0000-4000-8000-000000000001';
-
-export type AuthRole = 'user' | 'super_admin';
-export type GroupRole = 'viewer' | 'member' | 'admin';
-export type AutomationCreateRequiredRole = 'member' | 'admin';
-export type SessionVisibility = 'group' | 'organization';
-export type SessionWritePolicy = 'group_members' | 'creator_only';
+export type AuthRole = 'viewer' | 'member' | 'admin';
 
 export type AuthUserRecord = {
   id: string;
@@ -78,25 +69,16 @@ export type AuthSessionRecord = {
   expiresAt: Date;
 };
 
-export type GroupRecord = {
-  id: string;
-  name: string;
-  defaultVisibility: SessionVisibility;
-  defaultWritePolicy: SessionWritePolicy;
-  automationCreateRequiredRole: AutomationCreateRequiredRole;
-  archivedAt?: Date;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
 export class StoreConflictError extends Error {
   constructor(
     readonly code:
-      | 'group_name_exists'
       | 'environment_name_exists'
       | 'environment_update_conflict'
+      | 'environment_archived'
       | 'environment_automation_conflict'
       | 'automation_environment_unavailable'
+      | 'automation_archived'
+      | 'automation_invocation_active'
       | 'skill_name_exists'
       | 'skill_update_conflict'
       | 'skill_archived'
@@ -108,25 +90,14 @@ export class StoreConflictError extends Error {
       | 'invalid_notepad_size'
       | 'invalid_notepad_revision'
       | 'notepad_too_large'
-      | 'archived_group',
+      | 'notepad_association_forbidden'
+      | 'last_admin',
     message: string,
     readonly details: Record<string, unknown> = {},
   ) {
     super(message);
   }
 }
-
-export type GroupMemberRecord = {
-  groupId: string;
-  userId: string;
-  role: GroupRole;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-export type GroupMemberWithUserRecord = GroupMemberRecord & {
-  user: AuthUserRecord;
-};
 
 export type UpsertAuthUserForAccountRecord = {
   userId: string;
@@ -150,9 +121,6 @@ export type SessionRecord = {
   tags: string[];
   parentSessionId?: string;
   spawnDepth: number;
-  ownerGroupId: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
   title?: string;
   queuePausedAt?: Date;
   createdByUserId?: string;
@@ -168,15 +136,13 @@ export type NotepadMutationKind = 'replace' | 'patch' | 'append' | 'restore';
 export type ExplicitNotepadRecord = {
   id: string;
   title: string;
-  ownerGroupId: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
   revision: number;
   content: string;
   sizeBytes: number;
   createdByUserId?: string;
   createdAt: Date;
   updatedAt: Date;
+  archivedAt?: Date;
 };
 export type SessionNotepadRecord = {
   sessionId: string;
@@ -404,9 +370,6 @@ export type AutomationRecord = {
   prompt: string;
   scheduleCron: string;
   enabled: boolean;
-  ownerGroupId: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
   createdAt: Date;
   updatedAt: Date;
   archivedAt?: Date;
@@ -423,8 +386,6 @@ export type AutomationRecord = {
 export type EnvironmentRecord = {
   id: string;
   name: string;
-  ownerGroupId: string;
-  shareMode: EnvironmentShareMode;
   currentRevisionId: string;
   currentRevisionNumber: number;
   createdAt: Date;
@@ -477,7 +438,6 @@ export type EnvironmentActivityRecord = {
 
 export type EnvironmentWithDetailsRecord = EnvironmentRecord & {
   repositories: EnvironmentRepositoryRecord[];
-  sharedGroupIds: string[];
 };
 
 type SkillRecordBase = {
@@ -489,8 +449,6 @@ type SkillRecordBase = {
   currentRevisionNumber: number;
   autoLoad: boolean;
   enabled: boolean;
-  shareMode: SkillShareMode;
-  shareGroupIds: string[];
   createdByUserId?: string;
   archivedAt?: Date;
   createdAt: Date;
@@ -498,10 +456,7 @@ type SkillRecordBase = {
 };
 
 export type SkillRecord = SkillRecordBase &
-  (
-    | { ownerKind: 'group'; ownerGroupId: string; ownerUserId?: never }
-    | { ownerKind: 'user'; ownerUserId: string; ownerGroupId?: never }
-  );
+  ({ scope: 'tenant'; ownerUserId?: never } | { scope: 'personal'; ownerUserId: string });
 
 type SkillRevisionRecordBase = {
   id: string;
@@ -569,9 +524,6 @@ export type CreateSessionRecord = {
   tags?: string[];
   parentSessionId?: string;
   spawnDepth?: number;
-  ownerGroupId: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
   title?: string;
   createdByUserId?: string;
   context?: Record<string, unknown>;
@@ -681,9 +633,6 @@ export type CreateAutomationRecord = {
   prompt: string;
   scheduleCron: string;
   enabled: boolean;
-  ownerGroupId: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
   createdAt: Date;
   updatedAt: Date;
   nextInvocationAt?: Date;
@@ -697,7 +646,6 @@ export type CreateAutomationRecord = {
 export type CreateEnvironmentRecord = {
   environment: EnvironmentRecord;
   repositories: EnvironmentRepositoryRecord[];
-  sharedGroupIds: string[];
   revision: EnvironmentRevisionRecord;
   activities: EnvironmentActivityRecord[];
 };
@@ -707,18 +655,13 @@ type CreateSkillRecordBase = {
   revision: SkillRevisionWrite;
   autoLoad?: boolean;
   enabled?: boolean;
-  shareMode?: SkillShareMode;
-  shareGroupIds?: string[];
   createdByUserId?: string;
   createdAt: Date;
   updatedAt: Date;
 };
 
 export type CreateSkillRecord = CreateSkillRecordBase &
-  (
-    | { ownerKind: 'group'; ownerGroupId: string; ownerUserId?: never; shareMode?: SkillShareMode }
-    | { ownerKind: 'user'; ownerUserId: string; ownerGroupId?: never; shareMode?: SkillShareMode }
-  );
+  ({ scope: 'tenant'; ownerUserId?: never } | { scope: 'personal'; ownerUserId: string });
 
 export type UpdateSkillRecord = {
   id: string;
@@ -727,10 +670,6 @@ export type UpdateSkillRecord = {
   revision?: SkillRevisionWrite;
   autoLoad?: boolean;
   enabled?: boolean;
-  sharing?: {
-    shareMode: SkillShareMode;
-    groupIds: string[];
-  };
 };
 
 export type CreateAutomationInvocationRecord = {
@@ -760,9 +699,6 @@ export type UpdateAutomationRecord = {
   prompt?: string;
   scheduleCron?: string;
   enabled?: boolean;
-  ownerGroupId?: string;
-  visibility?: SessionVisibility;
-  writePolicy?: SessionWritePolicy;
   context?: Record<string, unknown> | null;
   environmentId?: string | null;
   environmentRevisionPolicy?: EnvironmentRevisionPolicy | null;
@@ -774,8 +710,6 @@ export type UpdateEnvironmentRecord = {
   expectedUpdatedAt: Date;
   environment: EnvironmentRecord;
   repositories: EnvironmentRepositoryRecord[];
-  sharedGroupIds: string[];
-  automationAccessAllowedGroupIds: string[] | null;
   revision?: EnvironmentRevisionRecord;
   activities: EnvironmentActivityRecord[];
 };
@@ -786,10 +720,9 @@ export type SessionWithSandboxRecord = {
   directChildCount?: number;
 };
 
-export type AgentSessionListScope = 'children' | 'group' | 'organization';
+export type AgentSessionListScope = 'children' | 'tenant';
 
 export type AgentSessionListOptions = {
-  ownerGroupId: string;
   actingSessionId: string;
   scope: AgentSessionListScope;
   limit: number;
@@ -798,7 +731,6 @@ export type AgentSessionListOptions = {
 
 export type ChildSessionListOptions = {
   parentSessionId: string;
-  ownerGroupId: string;
   limit: number;
 };
 
@@ -831,9 +763,7 @@ export type SessionListCursor = {
 };
 
 export type SessionListOptions = {
-  visibleTo?: SessionVisibilityFilter;
   archived: boolean;
-  groupId?: string;
   parentSessionId?: string;
   tags?: string[];
   createdByUserId?: string;
@@ -852,8 +782,6 @@ export type SessionSearchMatchKind = 'title' | 'prompt' | 'response';
 
 export type SessionSearchOptions = {
   query: string;
-  visibleTo?: SessionVisibilityFilter;
-  groupId?: string;
   tags?: string[];
   createdByUserId?: string;
   participantUserId?: string;
@@ -893,8 +821,6 @@ export type SessionMetadataUpdateInput = {
   requireNonArchived?: boolean;
   title?: string;
   tags?: string[];
-  visibility?: SessionVisibility;
-  writePolicy?: SessionWritePolicy;
 };
 
 export type SessionTitleUpdateInput = {
@@ -913,14 +839,6 @@ export type SessionContextUpdateInput = {
   updatedAt: Date;
 };
 
-// Limits a session listing to what a non-admin user can read: organization-visible
-// sessions plus sessions owned by one of the user's groups. Keep this in sync
-// with canReadSession in auth/authorization.ts and the SQL predicates in the
-// Postgres session list/search implementations.
-export type SessionVisibilityFilter = {
-  groupIds: string[];
-};
-
 export interface SessionStore {
   createSession(record: CreateSessionRecord): Promise<SessionRecord>;
   createSessionWithFirstMessage(
@@ -932,7 +850,7 @@ export interface SessionStore {
   listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]>;
   listSessionsWithLatestSandbox(provider: string, options: SessionListOptions): Promise<SessionWithSandboxPage>;
   searchSessions(provider: string, options: SessionSearchOptions): Promise<SessionSearchPage>;
-  listSessionTags(options: { visibleTo?: SessionVisibilityFilter; limit: number }): Promise<SessionTagSummary[]>;
+  listSessionTags(options: { limit: number }): Promise<SessionTagSummary[]>;
   starSession(input: { sessionId: string; userId: string; now: Date }): Promise<void>;
   unstarSession(input: { sessionId: string; userId: string }): Promise<void>;
   listStarredSessionIds(input: { userId: string; sessionIds: string[] }): Promise<Set<string>>;
@@ -1010,26 +928,19 @@ export interface NotepadStore {
   getExplicitNotepad(id: string): Promise<ExplicitNotepadRecord | null>;
   getExplicitNotepadMetadata(id: string): Promise<ExplicitNotepadMetadata | null>;
   listExplicitNotepads(input: {
-    groupId?: string;
-    /** Undefined means all-visible (bypass/superadmin); an empty array means
-     * organization-visible records only. */
-    authorizedGroupIds?: string[];
     limit: number;
     offset: number;
     includeDormant?: boolean;
+    archived?: boolean;
   }): Promise<NotepadPage<ExplicitNotepadMetadata>>;
   searchExplicitNotepads(input: {
-    groupId: string;
-    /** Undefined means all-visible (bypass/superadmin); an empty array means
-     * organization-visible records only. */
-    authorizedGroupIds?: string[];
     query: string;
     limit: number;
+    archived?: boolean;
   }): Promise<ExplicitNotepadSearchResult[]>;
   searchExplicitNotepadsWithCapability(input: {
     actorSessionId: string;
     expectedGrantorUserId: string;
-    groupId: string;
     query: string;
     limit: number;
   }): Promise<ExplicitNotepadSearchResult[]>;
@@ -1040,14 +951,13 @@ export interface NotepadStore {
   }): Promise<ExplicitNotepadRecord>;
   updateExplicitNotepadMetadata(input: {
     id: string;
-    ownerGroupId: string;
     title?: string;
-    visibility?: SessionVisibility;
-    writePolicy?: SessionWritePolicy;
     actor: NotepadActor;
     activityId: string;
     now: Date;
   }): Promise<ExplicitNotepadRecord>;
+  archiveExplicitNotepad(input: { id: string; archivedAt: Date }): Promise<ExplicitNotepadRecord | null>;
+  restoreExplicitNotepad(input: { id: string; updatedAt: Date }): Promise<ExplicitNotepadRecord | null>;
   mutateExplicitNotepad(input: {
     id: string;
     content?: string;
@@ -1308,15 +1218,10 @@ export interface SkillStore {
   updateSkill(input: UpdateSkillRecord): Promise<SkillRecord>;
   archiveSkill(input: { skillId: string; archivedAt: Date }): Promise<SkillRecord | null>;
   restoreSkill(input: { skillId: string; updatedAt: Date }): Promise<SkillRecord | null>;
-  promoteSkill(id: string, groupId: string, now: Date): Promise<SkillRecord | null>;
-  setSkillShares(id: string, shareMode: SkillShareMode, groupIds: string[], now: Date): Promise<SkillRecord | null>;
-  listSkillsForUser(userId: string): Promise<SkillRecord[]>;
-  listSkillsForGroups(groupIds: string[]): Promise<SkillRecord[]>;
-  listSkillsSharedIntoGroups(groupIds: string[]): Promise<SkillRecord[]>;
-  listSkillInvocationCandidates(input: { ownerGroupId: string; userId?: string }): Promise<SkillRunCandidate[]>;
+  listSkills(input: { userId?: string }): Promise<SkillRecord[]>;
+  listSkillInvocationCandidates(input: { userId?: string }): Promise<SkillRunCandidate[]>;
   listSkillsForRun(input: {
-    ownerGroupId: string;
-    createdByUserId?: string;
+    userId?: string;
     invokedNames?: string[];
     invokedRevisions?: SkillRevisionSelection[];
   }): Promise<SkillRunCandidate[]>;
@@ -1356,20 +1261,6 @@ export interface AuthStore {
   deleteAuthSession(sessionId: string): Promise<void>;
   listAuthUsers(input?: { query?: string }): Promise<AuthUserRecord[]>;
   updateAuthUserRole(input: { userId: string; role: AuthRole; updatedAt: Date }): Promise<AuthUserRecord | null>;
-}
-
-export interface GroupStore {
-  createGroup(record: GroupRecord): Promise<GroupRecord>;
-  getGroup(id: string): Promise<GroupRecord | null>;
-  getGroups(ids: string[]): Promise<GroupRecord[]>;
-  listGroups(): Promise<GroupRecord[]>;
-  updateGroup(record: GroupRecord): Promise<GroupRecord>;
-  upsertGroupMember(record: GroupMemberRecord): Promise<GroupMemberRecord>;
-  deleteGroupMember(input: { groupId: string; userId: string }): Promise<void>;
-  getGroupMember(input: { groupId: string; userId: string }): Promise<GroupMemberRecord | null>;
-  listGroupMembers(groupId: string): Promise<GroupMemberWithUserRecord[]>;
-  listGroupMembersForGroups(groupIds: string[]): Promise<GroupMemberWithUserRecord[]>;
-  listUserGroupMemberships(userId: string): Promise<GroupMemberRecord[]>;
 }
 
 export interface ArtifactStore {
@@ -1428,7 +1319,6 @@ export interface AppStore
     NotepadStore,
     EventStore,
     AuthStore,
-    GroupStore,
     ArtifactStore,
     ExternalResourceStore,
     IntegrationStore {}

@@ -1,11 +1,9 @@
 import type { Context, Hono } from 'hono';
 import { AutomationServiceError } from '../automations/service.js';
 import {
-  canCreateAutomationInGroup,
   canManageAutomation,
-  canManageGroup,
   canReadAutomation,
-  canUseEnvironmentInGroup,
+  canUseEnvironment,
   canReadSession,
   readRequestAuthorization,
   type RequestAuthorization,
@@ -15,12 +13,6 @@ import { EnvironmentServiceError, type EnvironmentBranchOverride } from '../envi
 import { StoreConflictError } from '../store/types.js';
 import type { AutomationInvocationRecord, AutomationRecord, SessionRecord } from '../store/types.js';
 import type { AppServices, AppVariables } from './server.js';
-import {
-  parseSessionVisibility,
-  parseSessionWritePolicy,
-  resolveAutomationCreateGroup,
-  sessionCreateDefaults,
-} from './access-policy.js';
 import { writeError } from './http-error.js';
 import {
   HttpRequestError,
@@ -52,41 +44,16 @@ export function registerAutomationRoutes(
     if (!name) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: name');
     if (!prompt) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: prompt');
     if (!scheduleCron) return writeError(c, 400, 'invalid_request', 'Expected non-empty string field: scheduleCron');
-
-    const group = await resolveAutomationCreateGroup(services.store, auth, body.ownerGroupId);
-    if (!group) return writeError(c, 404, 'not_found', 'Group not found');
-    if (group.archivedAt) return writeError(c, 409, 'archived_group', 'Cannot create automations in an archived group');
-    if (!canCreateAutomationInGroup(auth, group)) {
-      const required = group.automationCreateRequiredRole === 'admin' ? 'admin' : 'member';
-      return writeError(c, 403, 'forbidden', `Group ${required} access is required to create automations`);
-    }
-
-    const requestedVisibility = body.visibility === undefined ? undefined : parseSessionVisibility(body.visibility);
-    const requestedWritePolicy = body.writePolicy === undefined ? undefined : parseSessionWritePolicy(body.writePolicy);
-    if (body.visibility !== undefined && !requestedVisibility) {
-      return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
-    }
-    if (body.writePolicy !== undefined && !requestedWritePolicy) {
-      return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
-    }
-    const defaults = sessionCreateDefaults(config, auth, group);
-    const canOverrideAccessDefaults = canManageGroup(auth, group.id);
-    if (
-      !canOverrideAccessDefaults &&
-      ((requestedVisibility && requestedVisibility !== defaults.visibility) ||
-        (requestedWritePolicy && requestedWritePolicy !== defaults.writePolicy))
-    ) {
-      return writeError(c, 403, 'forbidden', 'Group admin access is required to override access defaults');
-    }
+    if (!canManageAutomation(auth)) return writeError(c, 403, 'forbidden', 'Member access is required');
+    rejectStaleAutomationFields(body);
 
     try {
-      const environmentId = await parseAutomationEnvironmentId(body, group.id, auth, services);
+      const environmentId = await parseAutomationEnvironmentId(body, auth, services);
       const revisionSelection = await parseEnvironmentRevisionSelection(body, environmentId, services);
       const environmentBranchOverrides = await parseAutomationEnvironmentBranchOverrides(
         body,
         environmentId,
         revisionSelection.environmentRevisionId,
-        group.id,
         services,
       );
       const context = parseAutomationCreateContextBody(
@@ -100,9 +67,6 @@ export function registerAutomationRoutes(
         name,
         prompt,
         scheduleCron,
-        ownerGroupId: group.id,
-        visibility: requestedVisibility ?? defaults.visibility,
-        writePolicy: requestedWritePolicy ?? defaults.writePolicy,
         enabled: body.enabled === undefined ? true : parseBooleanBody(body.enabled, 'enabled'),
         ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
         ...(environmentId ? { environmentId } : {}),
@@ -148,39 +112,10 @@ export function registerAutomationRoutes(
     }
 
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
-    const accessChangeRequested =
-      body.ownerGroupId !== undefined || body.visibility !== undefined || body.writePolicy !== undefined;
-    if (accessChangeRequested && !canManageGroup(auth, automation.ownerGroupId)) {
-      return writeError(c, 403, 'forbidden', 'Group admin access is required to change automation access');
-    }
-
-    const nextOwnerGroupId = optionalString(body.ownerGroupId) ?? automation.ownerGroupId;
-    const nextGroup = await services.store.getGroup(nextOwnerGroupId);
-    if (!nextGroup) return writeError(c, 404, 'not_found', 'Group not found');
-    if (nextOwnerGroupId !== automation.ownerGroupId && !canManageGroup(auth, nextOwnerGroupId)) {
-      return writeError(c, 403, 'forbidden', 'Group admin access is required for both groups');
-    }
-    if (nextOwnerGroupId !== automation.ownerGroupId && nextGroup.archivedAt) {
-      return writeError(c, 409, 'archived_group', 'Cannot move automations to an archived group');
-    }
-
-    const visibility = body.visibility === undefined ? undefined : parseSessionVisibility(body.visibility);
-    const writePolicy = body.writePolicy === undefined ? undefined : parseSessionWritePolicy(body.writePolicy);
-    if (body.visibility !== undefined && !visibility) {
-      return writeError(c, 400, 'invalid_request', 'Expected valid visibility');
-    }
-    if (body.writePolicy !== undefined && !writePolicy) {
-      return writeError(c, 400, 'invalid_request', 'Expected valid writePolicy');
-    }
+    rejectStaleAutomationFields(body);
 
     try {
-      const environmentId = await parseAutomationUpdateEnvironmentId(
-        body,
-        nextOwnerGroupId,
-        automation,
-        auth,
-        services,
-      );
+      const environmentId = await parseAutomationUpdateEnvironmentId(body, automation, auth, services);
       const effectiveEnvironmentId = environmentId === undefined ? automation.environmentId : environmentId;
       const revisionSelection = await parseEnvironmentRevisionSelection(
         body,
@@ -198,7 +133,6 @@ export function registerAutomationRoutes(
         body,
         effectiveEnvironmentId,
         effectiveRevisionId,
-        nextOwnerGroupId,
         services,
       );
       const context = parseAutomationUpdateContextBody(
@@ -219,9 +153,6 @@ export function registerAutomationRoutes(
         ...(body.prompt !== undefined ? { prompt: optionalString(body.prompt) ?? '' } : {}),
         ...(body.scheduleCron !== undefined ? { scheduleCron: optionalString(body.scheduleCron) ?? '' } : {}),
         ...(body.enabled !== undefined ? { enabled: parseBooleanBody(body.enabled, 'enabled') } : {}),
-        ...(accessChangeRequested ? { ownerGroupId: nextOwnerGroupId } : {}),
-        ...(visibility ? { visibility } : {}),
-        ...(writePolicy ? { writePolicy } : {}),
         ...(environmentId !== undefined ? { environmentId } : {}),
         ...revisionSelection,
         ...(context.changed ? { context: context.value } : {}),
@@ -332,8 +263,7 @@ async function requireRequestAuthorization(
 }
 
 async function serializeAutomation(services: AppServices, automation: AutomationRecord, auth: RequestAuthorization) {
-  const [ownerGroup, invocationPage, environmentRevision] = await Promise.all([
-    services.store.getGroup(automation.ownerGroupId),
+  const [invocationPage, environmentRevision] = await Promise.all([
     services.automations.listInvocationPage({ automationId: automation.id, limit: 1 }),
     automation.environmentRevisionId
       ? services.store.getEnvironmentRevision(automation.environmentRevisionId)
@@ -348,11 +278,6 @@ async function serializeAutomation(services: AppServices, automation: Automation
     scheduleCron: automation.scheduleCron,
     scheduleTimezone: 'UTC',
     enabled: automation.enabled,
-    ownerGroupId: automation.ownerGroupId,
-    ...(ownerGroup ? { ownerGroupName: ownerGroup.name } : {}),
-    ...(ownerGroup?.archivedAt ? { ownerGroupArchivedAt: ownerGroup.archivedAt } : {}),
-    visibility: automation.visibility,
-    writePolicy: automation.writePolicy,
     ...(automation.createdByUserId ? { createdByUserId: automation.createdByUserId } : {}),
     ...(automation.environmentId ? { environmentId: automation.environmentId } : {}),
     ...(automation.environmentRevisionPolicy
@@ -412,7 +337,6 @@ function automationServiceErrorResponse(c: Context, error: AutomationServiceErro
   if (error.code === 'not_found') return writeError(c, 404, 'not_found', error.message);
   if (error.code === 'disabled') return writeError(c, 409, 'automation_disabled', error.message, error.details);
   if (error.code === 'archived') return writeError(c, 409, 'automation_archived', error.message, error.details);
-  if (error.code === 'archived_group') return writeError(c, 409, 'archived_group', error.message, error.details);
   if (error.code === 'overlap') return writeError(c, 409, 'automation_overlap', error.message, error.details);
   if (error.code === 'invalid_schedule') return writeError(c, 400, 'invalid_schedule', error.message);
   return writeError(c, 400, 'invalid_request', error.message);
@@ -563,7 +487,6 @@ async function parseAutomationEnvironmentBranchOverrides(
   body: Record<string, unknown>,
   environmentId: string | null | undefined,
   environmentRevisionId: string | undefined,
-  ownerGroupId: string,
   services: AppServices,
 ): Promise<EnvironmentBranchOverride[] | undefined> {
   if (!Object.prototype.hasOwnProperty.call(body, 'environmentBranchOverrides')) return undefined;
@@ -572,9 +495,8 @@ async function parseAutomationEnvironmentBranchOverrides(
     throw new HttpRequestError(400, 'invalid_request', 'environmentBranchOverrides require environmentId');
   }
   try {
-    await services.environments.resolveForGroup({
+    await services.environments.resolve({
       environmentId,
-      groupId: ownerGroupId,
       ...(environmentRevisionId ? { revisionId: environmentRevisionId } : {}),
       branchOverrides,
     });
@@ -616,13 +538,12 @@ function parseEnvironmentBranchOverrides(value: unknown): EnvironmentBranchOverr
 
 async function parseAutomationEnvironmentId(
   body: Record<string, unknown>,
-  ownerGroupId: string,
   auth: RequestAuthorization,
   services: AppServices,
 ): Promise<string | undefined> {
   const environmentId = optionalString(body.environmentId);
   if (!environmentId) return undefined;
-  await assertEnvironmentUsable(environmentId, ownerGroupId, auth, services);
+  await assertEnvironmentUsable(environmentId, auth, services);
   return environmentId;
 }
 
@@ -660,24 +581,22 @@ async function parseEnvironmentRevisionSelection(
 
 async function parseAutomationUpdateEnvironmentId(
   body: Record<string, unknown>,
-  ownerGroupId: string,
   automation: AutomationRecord,
   auth: RequestAuthorization,
   services: AppServices,
 ): Promise<string | null | undefined> {
   if (!Object.prototype.hasOwnProperty.call(body, 'environmentId')) {
-    if (automation.environmentId) await assertEnvironmentUsable(automation.environmentId, ownerGroupId, auth, services);
+    if (automation.environmentId) await assertEnvironmentUsable(automation.environmentId, auth, services);
     return undefined;
   }
   const environmentId = optionalString(body.environmentId);
   if (!environmentId) return null;
-  await assertEnvironmentUsable(environmentId, ownerGroupId, auth, services);
+  await assertEnvironmentUsable(environmentId, auth, services);
   return environmentId;
 }
 
 async function assertEnvironmentUsable(
   environmentId: string,
-  ownerGroupId: string,
   auth: RequestAuthorization,
   services: AppServices,
 ): Promise<void> {
@@ -685,7 +604,16 @@ async function assertEnvironmentUsable(
   if (!environment || environment.archivedAt) {
     throw new HttpRequestError(404, 'not_found', 'Environment not found');
   }
-  if (!canUseEnvironmentInGroup(auth, environment, ownerGroupId)) {
+  if (!canUseEnvironment(auth, environment)) {
     throw new HttpRequestError(403, 'forbidden', 'Environment use access is required');
+  }
+}
+
+function rejectStaleAutomationFields(body: Record<string, unknown>): void {
+  const staleField = ['ownerGroupId', 'visibility', 'writePolicy', 'groupId', 'access'].find((field) =>
+    Object.prototype.hasOwnProperty.call(body, field),
+  );
+  if (staleField) {
+    throw new HttpRequestError(400, 'invalid_request', `Unsupported automation field: ${staleField}`);
   }
 }

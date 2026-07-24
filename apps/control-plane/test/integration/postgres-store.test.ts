@@ -8,7 +8,7 @@ import {
   type PiSessionData,
 } from '../../src/runner-pi/session-store.js';
 import { runSessionSearchIndexerOnce } from '../../src/search/indexer.js';
-import { defaultGroupId, type SessionListOptions, type SkillRevisionWrite } from '../../src/store/types.js';
+import type { SessionListOptions } from '../../src/store/types.js';
 import { PostgresStore } from '../../src/store/postgres.js';
 import { waitFor } from '../support/http.js';
 import { setupPostgresStoreSuite, testDatabaseUrl } from '../support/postgres-store-suite.js';
@@ -31,278 +31,111 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   defineSnippetsStoreContract(() => store);
   defineSkillsStoreContract(() => store);
 
-  it('lists memberships across groups with joined users in one batch', async () => {
-    const now = new Date('2026-07-21T00:00:00.000Z');
-    const groupId = '00000000-0000-4000-8000-000000000131';
-    const outsiderGroupId = '00000000-0000-4000-8000-000000000134';
-    for (const [id, name] of [
-      [groupId, 'Batched member listing'],
-      [outsiderGroupId, 'Unrequested member listing'],
-    ] as const) {
-      await store.createGroup({
-        id,
-        name,
-        defaultVisibility: 'group',
-        defaultWritePolicy: 'group_members',
-        automationCreateRequiredRole: 'member',
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-    const user = await store.upsertAuthUserForAccount({
-      userId: '00000000-0000-4000-8000-000000000132',
-      accountId: '00000000-0000-4000-8000-000000000133',
-      provider: 'batched-member-listing',
-      providerAccountId: 'shared-member',
-      username: 'shared-member',
-      role: 'user',
-      profile: {},
-      displayName: 'Shared Member',
-      now,
-    });
-    const outsider = await store.upsertAuthUserForAccount({
-      userId: '00000000-0000-4000-8000-000000000135',
-      accountId: '00000000-0000-4000-8000-000000000136',
-      provider: 'batched-member-listing',
-      providerAccountId: 'outsider',
-      username: 'outsider',
-      role: 'user',
-      profile: {},
-      now,
-    });
-    for (const selectedGroupId of [defaultGroupId, groupId]) {
-      await store.upsertGroupMember({
-        groupId: selectedGroupId,
-        userId: user.id,
-        role: 'member',
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-    await store.upsertGroupMember({
-      groupId: outsiderGroupId,
-      userId: outsider.id,
-      role: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
+  const authUser = (suffix: string, providerAccountId: string, role: 'admin' | 'member' = 'member') => ({
+    userId: `00000000-0000-4000-8000-${suffix.padStart(12, '0')}`,
+    accountId: `10000000-0000-4000-8000-${suffix.padStart(12, '0')}`,
+    provider: 'test',
+    providerAccountId,
+    username: `user-${suffix}`,
+    role,
+    profile: { login: suffix },
+    now: new Date('2026-07-24T12:00:00.000Z'),
+  });
 
-    const listed = await store.listGroupMembersForGroups([defaultGroupId, defaultGroupId, groupId]);
-    expect(listed.map((member) => [member.groupId, member.userId]).sort()).toEqual(
-      [
-        [defaultGroupId, user.id],
-        [groupId, user.id],
-      ].sort(),
-    );
-    expect(listed.map((member) => member.user)).toEqual([
-      expect.objectContaining({ id: user.id, username: 'shared-member', displayName: 'Shared Member' }),
-      expect.objectContaining({ id: user.id, username: 'shared-member', displayName: 'Shared Member' }),
+  it('serializes concurrent first logins for the same provider account', async () => {
+    const first = authUser('1', 'same-first-login');
+    const second = { ...authUser('2', 'same-first-login'), username: 'updated-name', profile: { login: 'updated' } };
+
+    const [firstResult, secondResult] = await Promise.all([
+      store.upsertAuthUserForAccount(first),
+      store.upsertAuthUserForAccount(second),
     ]);
-    await expect(store.listGroupMembersForGroups([])).resolves.toEqual([]);
+
+    expect(secondResult.id).toBe(firstResult.id);
+    const persisted = await pool.query<{ user_id: string }>(
+      `SELECT user_id FROM auth_accounts WHERE provider = $1 AND provider_account_id = $2`,
+      [first.provider, first.providerAccountId],
+    );
+    expect(persisted.rows).toEqual([{ user_id: firstResult.id }]);
+    await expect(pool.query('SELECT id FROM auth_users ORDER BY id')).resolves.toMatchObject({ rowCount: 1 });
+
+    const session = await store.createAuthSession({
+      id: 'concurrent-login-session',
+      userId: secondResult.id,
+      createdAt: first.now,
+      expiresAt: new Date('2026-07-25T12:00:00.000Z'),
+    });
+    await expect(store.getAuthUserBySession({ sessionId: session.id, now: first.now })).resolves.toMatchObject({
+      id: firstResult.id,
+    });
   });
 
-  it('rechecks persisted invocation authors against live Postgres membership and role state', async () => {
-    const services = createServices(store);
-    const now = new Date('2026-07-16T01:00:00.000Z');
-    const memberId = '00000000-0000-4000-8000-000000000141';
-    const adminId = '00000000-0000-4000-8000-000000000142';
-    for (const [userId, role] of [
-      [memberId, 'user'],
-      [adminId, 'super_admin'],
-    ] as const) {
-      await store.upsertAuthUserForAccount({
-        userId,
-        accountId: userId.replace(/1$/, '3').replace(/2$/, '4'),
-        provider: 'live-skill-access',
-        providerAccountId: userId,
-        username: userId,
-        role,
-        profile: {},
-        now,
-      });
-    }
-    await store.upsertGroupMember({
-      groupId: defaultGroupId,
-      userId: memberId,
-      role: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const skill = await services.skills.create({
-      name: 'postgres-live-access',
-      description: 'Verify live invocation access',
-      body: 'Run only for current members',
-      ownerGroupId: defaultGroupId,
-      autoLoad: false,
-    });
-    const request = (createdByUserId: string) => ({
-      ownerGroupId: defaultGroupId,
-      createdByUserId,
-      invokedNames: [],
-      invokedRevisions: [{ skillId: skill.id, revisionId: skill.currentRevisionId }],
-    });
-
-    await expect(services.skills.listForRun(request(memberId))).resolves.toHaveLength(1);
-    await store.deleteGroupMember({ groupId: defaultGroupId, userId: memberId });
-    await expect(services.skills.listForRun(request(memberId))).resolves.toEqual([]);
-
-    await expect(services.skills.listForRun(request(adminId))).resolves.toHaveLength(1);
-    await store.updateAuthUserRole({ userId: adminId, role: 'user', updatedAt: new Date(now.getTime() + 1) });
-    await expect(services.skills.listForRun(request(adminId))).resolves.toEqual([]);
-  });
-
-  it('serializes skill writes behind concurrent skill and group archival', async () => {
-    const now = new Date('2026-07-16T00:00:00.000Z');
-    const userId = '00000000-0000-4000-8000-000000000151';
-    await store.upsertAuthUserForAccount({
-      userId,
-      accountId: '00000000-0000-4000-8000-000000000152',
-      provider: 'skills-race',
-      providerAccountId: 'skills-race-user',
-      username: 'skills-race-user',
-      role: 'user',
-      profile: {},
-      now,
-    });
-
-    const groupIds = [
-      '00000000-0000-4000-8000-000000000161',
-      '00000000-0000-4000-8000-000000000162',
-      '00000000-0000-4000-8000-000000000163',
-      '00000000-0000-4000-8000-000000000164',
-    ];
-    for (const [index, id] of groupIds.entries()) {
-      await store.createGroup({
-        id,
-        name: `Skills race ${index}`,
-        defaultVisibility: 'group',
-        defaultWritePolicy: 'group_members',
-        automationCreateRequiredRole: 'member',
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-
-    const createOutcome = await archiveGroupBeforeWrite(groupIds[0]!, () =>
-      store.createSkill({
-        id: '00000000-0000-4000-8000-000000000171',
-        ownerKind: 'group',
-        ownerGroupId: groupIds[0]!,
-        revision: skillRevision('00000000-0000-4000-8000-000000000171', 'racing-create', 'Create race', now),
-        createdAt: now,
-        updatedAt: now,
-      }),
-    );
-    expect(createOutcome.error).toMatchObject({ code: 'archived_group' });
-
-    const personal = await store.createSkill({
-      id: '00000000-0000-4000-8000-000000000172',
-      ownerKind: 'user',
-      ownerUserId: userId,
-      revision: skillRevision('00000000-0000-4000-8000-000000000172', 'racing-promote', 'Promote race', now),
-      createdAt: now,
-      updatedAt: now,
-    });
-    const promoteOutcome = await archiveGroupBeforeWrite(groupIds[1]!, () =>
-      store.promoteSkill(personal.id, groupIds[1]!, new Date(now.getTime() + 1_000)),
-    );
-    expect(promoteOutcome.error).toMatchObject({ code: 'archived_group' });
-    await expect(store.getSkill(personal.id)).resolves.toMatchObject({ ownerKind: 'user', ownerUserId: userId });
-
-    const shared = await store.createSkill({
-      id: '00000000-0000-4000-8000-000000000173',
-      ownerKind: 'group',
-      ownerGroupId: groupIds[2]!,
-      revision: skillRevision('00000000-0000-4000-8000-000000000173', 'racing-share', 'Share race', now),
-      createdAt: now,
-      updatedAt: now,
-    });
-    const shareOutcome = await archiveGroupBeforeWrite(groupIds[3]!, () =>
-      store.setSkillShares(shared.id, 'specific', [groupIds[3]!], new Date(now.getTime() + 1_000)),
-    );
-    expect(shareOutcome.error).toMatchObject({ code: 'archived_group' });
-    await expect(store.getSkill(shared.id)).resolves.toMatchObject({ shareMode: 'none', shareGroupIds: [] });
-
-    await store.archiveSkill({ skillId: shared.id, archivedAt: new Date(now.getTime() + 2_000) });
-    const restoreOutcome = await archiveGroupBeforeWrite(groupIds[2]!, () =>
-      store.restoreSkill({ skillId: shared.id, updatedAt: new Date(now.getTime() + 3_000) }),
-    );
-    expect(restoreOutcome.error).toMatchObject({ code: 'archived_group' });
-    await expect(store.getSkill(shared.id)).resolves.toHaveProperty('archivedAt');
-
-    const blocker = await pool.connect();
+  it('preserves a role update racing an existing-account login', async () => {
+    const original = await store.upsertAuthUserForAccount(authUser('3', 'role-race', 'admin'));
+    await store.upsertAuthUserForAccount(authUser('30', 'role-race-remaining-admin', 'admin'));
+    const lockClient = await pool.connect();
+    await lockClient.query('BEGIN');
+    await lockClient.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', ['test', 'role-race']);
     try {
-      await blocker.query('BEGIN');
-      await blocker.query('UPDATE skills SET archived_at = $2 WHERE id = $1', [
-        shared.id,
-        new Date(now.getTime() + 2_000),
-      ]);
-      const updateOutcome = store
-        .updateSkill({
-          id: shared.id,
-          expectedCurrentRevisionId: shared.currentRevisionId,
-          revision: {
-            id: '00000000-0000-4000-8000-000000000174',
-            name: shared.name,
-            description: shared.description,
-            body: 'must not commit',
-            actorType: 'user',
-            actorUserId: userId,
-            createdAt: new Date(now.getTime() + 3_000),
-          },
-          updatedAt: new Date(now.getTime() + 3_000),
-        })
-        .then(
-          (value) => ({ value, error: undefined }),
-          (error: unknown) => ({ value: undefined, error }),
-        );
-      await waitForBlockedQuery(
-        'SELECT owner_kind, owner_group_id, archived_at, current_revision_id, current_revision_number FROM skills',
-      );
-      await blocker.query('COMMIT');
-      expect((await updateOutcome).error).toMatchObject({ code: 'skill_archived' });
-    } finally {
-      await blocker.query('ROLLBACK').catch(() => undefined);
-      blocker.release();
-    }
-
-    async function archiveGroupBeforeWrite<T>(
-      groupId: string,
-      write: () => Promise<T>,
-    ): Promise<{ value: T | undefined; error: unknown }> {
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        await client.query('UPDATE groups SET archived_at = $2 WHERE id = $1', [
-          groupId,
-          new Date(now.getTime() + 1_000),
-        ]);
-        const outcome = write().then(
-          (value) => ({ value, error: undefined }),
-          (error: unknown) => ({ value: undefined, error }),
-        );
-        await waitForBlockedQuery('SELECT id, archived_at FROM groups');
-        await client.query('COMMIT');
-        return await outcome;
-      } finally {
-        await client.query('ROLLBACK').catch(() => undefined);
-        client.release();
-      }
-    }
-
-    async function waitForBlockedQuery(queryPrefix: string): Promise<void> {
-      await waitFor(async () => {
-        const result = await pool.query<{ count: string }>(
-          `SELECT count(*)
-           FROM pg_stat_activity
-           WHERE datname = current_database()
-             AND wait_event_type = 'Lock'
-             AND query LIKE $1`,
-          [`${queryPrefix}%`],
-        );
-        return Number(result.rows[0]?.count ?? 0) > 0;
+      const login = store.upsertAuthUserForAccount({
+        ...authUser('4', 'role-race', 'admin'),
+        username: 'fresh-profile',
+        displayName: 'Fresh Profile',
       });
+      await store.updateAuthUserRole({
+        userId: original.id,
+        role: 'member',
+        updatedAt: new Date('2026-07-24T12:01:00Z'),
+      });
+      await lockClient.query('COMMIT');
+
+      await expect(login).resolves.toMatchObject({ id: original.id, role: 'member', username: 'fresh-profile' });
+      await expect(store.getAuthUser(original.id)).resolves.toMatchObject({
+        role: 'member',
+        displayName: 'Fresh Profile',
+      });
+    } finally {
+      await lockClient.query('ROLLBACK').catch(() => undefined);
+      lockClient.release();
     }
+  });
+
+  it('maps sole-admin demotion to last_admin', async () => {
+    const admin = await store.upsertAuthUserForAccount(authUser('5', 'sole-admin', 'admin'));
+
+    await expect(
+      store.updateAuthUserRole({ userId: admin.id, role: 'member', updatedAt: new Date() }),
+    ).rejects.toMatchObject({ code: 'last_admin' });
+  });
+
+  it('allows self or other demotion while another admin remains', async () => {
+    const first = await store.upsertAuthUserForAccount(authUser('6', 'first-admin', 'admin'));
+    const second = await store.upsertAuthUserForAccount(authUser('7', 'second-admin', 'admin'));
+
+    await expect(
+      store.updateAuthUserRole({ userId: first.id, role: 'member', updatedAt: new Date() }),
+    ).resolves.toMatchObject({ id: first.id, role: 'member' });
+    await store.updateAuthUserRole({ userId: first.id, role: 'admin', updatedAt: new Date() });
+    await expect(
+      store.updateAuthUserRole({ userId: second.id, role: 'member', updatedAt: new Date() }),
+    ).resolves.toMatchObject({ id: second.id, role: 'member' });
+  });
+
+  it('allows exactly one of two concurrent admin demotions', async () => {
+    const first = await store.upsertAuthUserForAccount(authUser('8', 'concurrent-admin-1', 'admin'));
+    const second = await store.upsertAuthUserForAccount(authUser('9', 'concurrent-admin-2', 'admin'));
+
+    const results = await Promise.allSettled([
+      store.updateAuthUserRole({ userId: first.id, role: 'member', updatedAt: new Date() }),
+      store.updateAuthUserRole({ userId: second.id, role: 'member', updatedAt: new Date() }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({ status: 'rejected', reason: { code: 'last_admin' } });
+    await expect(store.listAuthUsers()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ role: 'admin' }), expect.objectContaining({ role: 'member' })]),
+    );
   });
 
   it('preserves session, message, and event behavior', async () => {
@@ -350,7 +183,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     const services = createServices(store);
     const environment = await services.environments.create({
       name: 'Postgres environment',
-      ownerGroupId: defaultGroupId,
       repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
       actor: { type: 'system' },
     });
@@ -358,9 +190,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       name: 'Pinned Postgres automation',
       prompt: 'Use the original revision',
       scheduleCron: '0 9 * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
       environmentId: environment.id,
       environmentRevisionPolicy: 'pinned',
       environmentRevisionId: environment.currentRevisionId,
@@ -390,7 +219,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     });
   });
 
-  it('batch-lists environments with isolated repositories and shares in stable order', async () => {
+  it('batch-lists environments with isolated repositories in stable order', async () => {
     const emptyPool = new Pool({ connectionString: databaseUrl });
     const emptyStore = new PostgresStore(emptyPool);
     const emptyQueries = vi.spyOn(emptyPool, 'query');
@@ -402,21 +231,8 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     }
 
     const services = createServices(store);
-    const now = new Date('2026-07-20T12:00:00.000Z');
-    const sharedGroup = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000501',
-      name: 'Environment share target',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
     const first = await services.environments.create({
       name: 'First batched environment',
-      ownerGroupId: defaultGroupId,
-      shareMode: 'selected_groups',
-      sharedGroupIds: [sharedGroup.id],
       repositories: [
         { provider: 'github', owner: 'acme', repo: 'first-api', primary: true },
         { provider: 'github', owner: 'acme', repo: 'first-web', branch: 'release', primary: false },
@@ -425,7 +241,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     });
     const second = await services.environments.create({
       name: 'Second batched environment',
-      ownerGroupId: defaultGroupId,
       repositories: [{ provider: 'github', owner: 'other', repo: 'second', primary: true }],
       actor: { type: 'system' },
     });
@@ -444,13 +259,12 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     try {
       const environments = await countedStore.listEnvironments();
 
-      expect(queries).toHaveBeenCalledTimes(3);
+      expect(queries).toHaveBeenCalledTimes(2);
       expect(environments.map((environment) => environment.id)).toEqual([second.id, first.id]);
       expect(environments).toMatchObject([
         {
           id: second.id,
           repositories: [{ owner: 'other', repo: 'second', isPrimary: true, position: 0 }],
-          sharedGroupIds: [],
         },
         {
           id: first.id,
@@ -458,7 +272,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
             { owner: 'acme', repo: 'first-api', isPrimary: true, position: 0 },
             { owner: 'acme', repo: 'first-web', branch: 'release', isPrimary: false, position: 1 },
           ],
-          sharedGroupIds: [sharedGroup.id],
         },
       ]);
     } finally {
@@ -480,7 +293,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     const services = createServices(store);
     const environment = await services.environments.create({
       name: 'Batched revisions',
-      ownerGroupId: defaultGroupId,
       repositories: [
         { provider: 'github', owner: 'acme', repo: 'original-primary', primary: true },
         { provider: 'github', owner: 'acme', repo: 'original-secondary', branch: 'v1', primary: false },
@@ -540,7 +352,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       const data: PiSessionData = {
         version: PI_SESSION_DATA_VERSION,
         header: { id: session.id } as never,
-        entries: [{ type: 'message', role: 'user', content: 'Persist this prompt' } as never],
+        entries: [{ type: 'message', role: 'member', content: 'Persist this prompt' } as never],
       };
 
       await piStore.save(session.id, data);
@@ -676,109 +488,56 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(bySessionId.get(withoutSandbox.id)?.sandbox).toBeNull();
   });
 
-  it('filters non-visible sessions inside the batched session list query', async () => {
+  it('includes tenant-wide sessions inside the batched session list query', async () => {
     const services = createServices(store);
-    const now = new Date();
-    const memberGroup = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000721',
-      name: 'Member group',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const otherGroup = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000722',
-      name: 'Other group',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const organizationVisible = await services.sessions.create({
-      title: 'Org visible',
-      ownerGroupId: otherGroup.id,
-      visibility: 'organization',
-      writePolicy: 'group_members',
-    });
-    const ownGroupSession = await services.sessions.create({
-      title: 'Own group',
-      ownerGroupId: memberGroup.id,
-      visibility: 'group',
-      writePolicy: 'group_members',
-    });
-    const hiddenSession = await services.sessions.create({
-      title: 'Hidden',
-      ownerGroupId: otherGroup.id,
-      visibility: 'group',
-      writePolicy: 'group_members',
-    });
+    const first = await services.sessions.create({ title: 'Tenant session one' });
+    const second = await services.sessions.create({ title: 'Tenant session two' });
+    const third = await services.sessions.create({ title: 'Tenant session three' });
 
     const listed = await store.listSessionsWithLatestSandbox('fake', {
-      visibleTo: { groupIds: [memberGroup.id] },
       archived: false,
       limit: 50,
     });
     const listedIds = listed.items.map((item) => item.session.id);
 
-    expect(listedIds).toContain(organizationVisible.id);
-    expect(listedIds).toContain(ownGroupSession.id);
-    expect(listedIds).not.toContain(hiddenSession.id);
+    expect(listedIds).toEqual(expect.arrayContaining([first.id, second.id, third.id]));
   });
 
-  it('counts and paginates only visible direct child sessions', async () => {
+  it('counts and paginates all tenant direct child sessions', async () => {
     const services = createServices(store);
     const now = new Date('2026-07-19T00:00:00.000Z');
-    const hiddenGroup = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000723',
-      name: 'Hidden child group',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
     const parent = await services.sessions.create({ title: 'Child-count parent' });
-    const visibleChild = await store.createSession({
+    const firstChild = await store.createSession({
       id: '00000000-0000-4000-8000-000000000724',
       status: 'created',
-      title: 'Visible direct child',
+      title: 'First direct child',
       parentSessionId: parent.id,
       spawnDepth: 1,
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
       createdAt: now,
       updatedAt: now,
     });
-    await store.createSession({
+    const secondChild = await store.createSession({
       id: '00000000-0000-4000-8000-000000000725',
       status: 'created',
-      title: 'Hidden direct child',
+      title: 'Second direct child',
       parentSessionId: parent.id,
       spawnDepth: 1,
-      ownerGroupId: hiddenGroup.id,
-      visibility: 'group',
-      writePolicy: 'group_members',
       createdAt: now,
       updatedAt: now,
     });
 
     const options: SessionListOptions = {
-      visibleTo: { groupIds: [defaultGroupId] },
       archived: false,
       limit: 50,
     };
     const parentPage = await store.listSessionsWithLatestSandbox('fake', options);
-    expect(parentPage.items.find(({ session }) => session.id === parent.id)?.directChildCount).toBe(1);
+    expect(parentPage.items.find(({ session }) => session.id === parent.id)?.directChildCount).toBe(2);
 
     const childPage = await store.listSessionsWithLatestSandbox('fake', {
       ...options,
       parentSessionId: parent.id,
     });
-    expect(childPage.items.map(({ session }) => session.id)).toEqual([visibleChild.id]);
+    expect(childPage.items.map(({ session }) => session.id)).toEqual([secondChild.id, firstChild.id]);
   });
 
   it('paginates session lists with archived filtering', async () => {
@@ -817,9 +576,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
         id,
         status: 'created',
         spawnDepth: 0,
-        ownerGroupId: defaultGroupId,
-        visibility: 'organization',
-        writePolicy: 'group_members',
         createdAt: timestamp,
         updatedAt: timestamp,
         title: `Tie ${id}`,
@@ -839,41 +595,13 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(secondPage.nextCursor).toBeNull();
   });
 
-  it('paginates session lists with visibility filtering', async () => {
-    const now = new Date('2026-01-02T00:00:00.000Z');
-    const memberGroup = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000741',
-      name: 'Paged member group',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const hiddenGroup = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000742',
-      name: 'Paged hidden group',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
+  it('paginates tenant-wide session lists', async () => {
     const services = createServices(store);
-    const visible = [
-      await services.sessions.create({
-        title: 'Visible org',
-        visibility: 'organization',
-        ownerGroupId: hiddenGroup.id,
-      }),
-      await services.sessions.create({ title: 'Visible group 1', visibility: 'group', ownerGroupId: memberGroup.id }),
-      await services.sessions.create({ title: 'Visible group 2', visibility: 'group', ownerGroupId: memberGroup.id }),
+    const tenantSessions = [
+      await services.sessions.create({ title: 'Tenant page one' }),
+      await services.sessions.create({ title: 'Tenant page two' }),
+      await services.sessions.create({ title: 'Tenant page three' }),
     ];
-    const hidden = await services.sessions.create({
-      title: 'Hidden group',
-      visibility: 'group',
-      ownerGroupId: hiddenGroup.id,
-    });
 
     let cursor = undefined as
       | Awaited<ReturnType<PostgresStore['listSessionsWithLatestSandbox']>>['nextCursor']
@@ -882,7 +610,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     for (;;) {
       const page = await store.listSessionsWithLatestSandbox('fake', {
         archived: false,
-        visibleTo: { groupIds: [memberGroup.id] },
         limit: 1,
         ...(cursor ? { cursor } : {}),
       });
@@ -891,57 +618,26 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       cursor = page.nextCursor;
     }
 
-    expect(seen).toHaveLength(visible.length);
-    expect(new Set(seen)).toEqual(new Set(visible.map((session) => session.id)));
-    expect(seen).not.toContain(hidden.id);
+    expect(seen).toHaveLength(tenantSessions.length);
+    expect(new Set(seen)).toEqual(new Set(tenantSessions.map((session) => session.id)));
   });
 
-  it('searches session docs with visibility filtering', async () => {
+  it('searches session docs tenant-wide', async () => {
     const services = createServices(store);
     const now = new Date();
-    const memberGroup = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000731',
-      name: 'Search member group',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const otherGroup = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000732',
-      name: 'Search other group',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const visible = await services.sessions.create({
-      title: 'Visible search target',
-      ownerGroupId: memberGroup.id,
-      visibility: 'group',
-      writePolicy: 'group_members',
-    });
-    const hidden = await services.sessions.create({
-      title: 'Hidden search target',
-      ownerGroupId: otherGroup.id,
-      visibility: 'group',
-      writePolicy: 'group_members',
-    });
+    const first = await services.sessions.create({ title: 'First search target' });
+    const second = await services.sessions.create({ title: 'Second search target' });
     await store.upsertSessionSearchDocs([
-      { sessionId: visible.id, kind: 'prompt', sourceId: 'visible', content: 'needle prompt content', createdAt: now },
-      { sessionId: hidden.id, kind: 'prompt', sourceId: 'hidden', content: 'needle hidden content', createdAt: now },
+      { sessionId: first.id, kind: 'prompt', sourceId: 'first', content: 'needle prompt content', createdAt: now },
+      { sessionId: second.id, kind: 'prompt', sourceId: 'second', content: 'needle tenant content', createdAt: now },
     ]);
 
     const results = await store.searchSessions('fake', {
       query: 'needle',
-      visibleTo: { groupIds: [memberGroup.id] },
       limit: 10,
     });
     const ids = results.items.map((item) => item.item.session.id);
-    expect(ids).toContain(visible.id);
-    expect(ids).not.toContain(hidden.id);
+    expect(ids).toEqual(expect.arrayContaining([first.id, second.id]));
     expect(results.items[0]?.matchKind).toBe('prompt');
   });
 
@@ -1161,16 +857,16 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     const services = createServices(store);
     const session = await services.sessions.create({ title: 'Atomic update' });
 
-    const updated = await services.sessions.update({ id: session.id, title: 'Atomic update', visibility: 'group' });
-    expect(updated.visibility).toBe('group');
+    const updated = await services.sessions.update({ id: session.id, title: 'Atomic update' });
+    expect(updated.title).toBe('Atomic update');
 
     const events = await store.getEvents(session.id);
     expect(events.map((event) => event.type)).toEqual(['session_created', 'session_updated']);
     expect(events[1]).toMatchObject({
       sequence: 2,
-      payload: { title: 'Atomic update', visibility: 'group' },
+      payload: { title: 'Atomic update' },
     });
-    await expect(store.getSession(session.id)).resolves.toMatchObject({ visibility: 'group' });
+    await expect(store.getSession(session.id)).resolves.toMatchObject({ title: 'Atomic update' });
   });
 
   it('atomically replaces only the current title fallback', async () => {
@@ -1218,19 +914,18 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
 
   it('commits idempotent archive and targeted restore transitions with their events', async () => {
     const services = createServices(store);
-    const session = await services.sessions.create({ title: 'Lifecycle transition', visibility: 'group' });
+    const session = await services.sessions.create({ title: 'Lifecycle transition' });
     await services.messages.enqueue({ sessionId: session.id, prompt: 'pending work' });
 
     await services.sessions.archive(session.id);
     await services.sessions.archive(session.id);
-    await services.sessions.update({ id: session.id, title: 'Changed while archived', visibility: 'organization' });
+    await services.sessions.update({ id: session.id, title: 'Changed while archived' });
     const restored = await services.sessions.unarchive(session.id);
     await services.sessions.unarchive(session.id);
 
     expect(restored).toMatchObject({
       status: 'idle',
       title: 'Changed while archived',
-      visibility: 'organization',
     });
     expect((await store.getEvents(session.id)).map((event) => event.type)).toEqual([
       'session_created',
@@ -1243,9 +938,27 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     await expect(store.getMessages(session.id)).resolves.toMatchObject([{ status: 'cancelled' }]);
   });
 
+  it('rejects archived queue pause and resume without changing activity or events', async () => {
+    const services = createServices(store);
+    const session = await services.sessions.create({ title: 'Archived queue transitions' });
+    await services.sessions.archive(session.id);
+    const before = await store.getSession(session.id);
+    const eventsBefore = await store.getEvents(session.id);
+
+    await expect(store.pauseSessionQueue({ sessionId: session.id, pausedAt: new Date() })).rejects.toMatchObject({
+      code: 'session_archived',
+    });
+    await expect(store.resumeSessionQueue({ sessionId: session.id })).rejects.toMatchObject({
+      code: 'session_archived',
+    });
+
+    await expect(store.getSession(session.id)).resolves.toEqual(before);
+    await expect(store.getEvents(session.id)).resolves.toEqual(eventsBefore);
+  });
+
   it('creates a child session with its first message atomically and enforces child caps', async () => {
     const services = createServices(store);
-    const parent = await services.sessions.create({ title: 'Parent session', visibility: 'group' });
+    const parent = await services.sessions.create({ title: 'Parent session' });
     const now = new Date('2026-05-06T00:00:00.000Z');
     const childSession = {
       id: '00000000-0000-4000-8000-000000000931',
@@ -1253,9 +966,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
       title: 'Child session',
       parentSessionId: parent.id,
       spawnDepth: 1,
-      ownerGroupId: parent.ownerGroupId,
-      visibility: parent.visibility,
-      writePolicy: parent.writePolicy,
       createdAt: now,
       updatedAt: now,
     };
@@ -1285,7 +995,6 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
         payload: {
           childSessionId: childSession.id,
           title: childSession.title,
-          ownerGroupId: childSession.ownerGroupId,
           spawnDepth: childSession.spawnDepth,
         },
       }),
@@ -1339,15 +1048,14 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     });
     await expect(
       store.listSessionsForAgent({
-        ownerGroupId: parent.ownerGroupId,
         actingSessionId: parent.id,
         scope: 'children',
         limit: 1,
       }),
     ).resolves.toMatchObject([expect.objectContaining({ id: childSession.id })]);
-    await expect(
-      store.listChildSessions({ parentSessionId: parent.id, ownerGroupId: parent.ownerGroupId, limit: 1 }),
-    ).resolves.toMatchObject([expect.objectContaining({ id: childSession.id })]);
+    await expect(store.listChildSessions({ parentSessionId: parent.id, limit: 1 })).resolves.toMatchObject([
+      expect.objectContaining({ id: childSession.id }),
+    ]);
 
     await expect(
       store.createSessionWithFirstMessage({
@@ -2221,14 +1929,3 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     });
   });
 });
-
-function skillRevision(id: string, name: string, description: string, createdAt: Date): SkillRevisionWrite {
-  return {
-    id,
-    name,
-    description,
-    body: '',
-    actorType: 'system' as const,
-    createdAt,
-  };
-}

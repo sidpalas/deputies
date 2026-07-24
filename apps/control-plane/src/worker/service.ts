@@ -403,7 +403,6 @@ export class WorkerService {
             sessionId: primary.sessionId,
             runId: claimed.run.id,
             messageId: primary.id,
-            ownerGroupId: session.ownerGroupId,
             ...(session.createdByUserId ? { createdByUserId: session.createdByUserId } : {}),
             prompt: buildBatchPrompt(claimed.messages),
             messages: claimed.messages.map((message) => ({

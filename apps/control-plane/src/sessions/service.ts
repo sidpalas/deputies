@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EventService } from '../events/service.js';
-import { defaultGroupId, StoreConflictError } from '../store/types.js';
-import type { SessionRecord, SessionStore, SessionVisibility, SessionWritePolicy } from '../store/types.js';
+import { StoreConflictError } from '../store/types.js';
+import type { SessionRecord, SessionStore } from '../store/types.js';
 
 export type CreateSessionInput = {
   id?: string;
@@ -9,9 +9,6 @@ export type CreateSessionInput = {
   tags?: string[];
   parentSessionId?: string;
   spawnDepth?: number;
-  ownerGroupId?: string;
-  visibility?: SessionVisibility;
-  writePolicy?: SessionWritePolicy;
   createdByUserId?: string;
 };
 
@@ -20,8 +17,6 @@ export type UpdateSessionInput = {
   requireNonArchived?: boolean;
   title?: string;
   tags?: string[];
-  visibility?: SessionVisibility;
-  writePolicy?: SessionWritePolicy;
 };
 
 export function sessionTitleFromPrompt(prompt: string): string {
@@ -65,9 +60,6 @@ export class SessionService {
       id: input.id ?? randomUUID(),
       status: 'created',
       spawnDepth: input.spawnDepth ?? 0,
-      ownerGroupId: input.ownerGroupId ?? defaultGroupId,
-      visibility: input.visibility ?? 'organization',
-      writePolicy: input.writePolicy ?? 'group_members',
       createdAt: now,
       updatedAt: now,
       lastActivityAt: now,
@@ -82,12 +74,7 @@ export class SessionService {
     await this.events.append({
       sessionId: session.id,
       type: 'session_created',
-      payload: {
-        title: session.title ?? null,
-        ownerGroupId: session.ownerGroupId,
-        visibility: session.visibility,
-        writePolicy: session.writePolicy,
-      },
+      payload: { title: session.title ?? null },
     });
 
     return session;
@@ -117,8 +104,6 @@ export class SessionService {
         ...(input.requireNonArchived ? { requireNonArchived: true } : {}),
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.tags !== undefined ? { tags: input.tags } : {}),
-        ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
-        ...(input.writePolicy !== undefined ? { writePolicy: input.writePolicy } : {}),
       });
     } catch (error) {
       if (error instanceof StoreConflictError && error.code === 'session_archived') {
@@ -152,7 +137,15 @@ export class SessionService {
   async pauseQueue(id: string): Promise<SessionRecord> {
     const existing = await this.store.getSession(id);
     if (!existing) throw new SessionServiceError('not_found');
-    const session = await this.store.pauseSessionQueue({ sessionId: id, pausedAt: new Date() });
+    let session;
+    try {
+      session = await this.store.pauseSessionQueue({ sessionId: id, pausedAt: new Date() });
+    } catch (error) {
+      if (error instanceof StoreConflictError && error.code === 'session_archived') {
+        throw new SessionServiceError('archived');
+      }
+      throw error;
+    }
     await this.events.append({ sessionId: id, type: 'session_queue_paused', payload: {} });
     return session;
   }
@@ -160,7 +153,15 @@ export class SessionService {
   async resumeQueue(id: string): Promise<SessionRecord> {
     const existing = await this.store.getSession(id);
     if (!existing) throw new SessionServiceError('not_found');
-    const session = await this.store.resumeSessionQueue({ sessionId: id });
+    let session;
+    try {
+      session = await this.store.resumeSessionQueue({ sessionId: id });
+    } catch (error) {
+      if (error instanceof StoreConflictError && error.code === 'session_archived') {
+        throw new SessionServiceError('archived');
+      }
+      throw error;
+    }
     await this.events.append({ sessionId: id, type: 'session_queue_resumed', payload: {} });
     return session;
   }

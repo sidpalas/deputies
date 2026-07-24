@@ -1,6 +1,6 @@
 import type { NormalizedEvent } from '../events/types.js';
 import { MemorySkillStore } from './memory-skills.js';
-import { defaultGroupId, notepadRevisionRetentionLimit, StoreConflictError } from './types.js';
+import { notepadRevisionRetentionLimit, StoreConflictError } from './types.js';
 import type {
   AppStore,
   AgentSessionListOptions,
@@ -22,9 +22,6 @@ import type {
   CreateWebhookSourceRecord,
   ExternalResourceRecord,
   ExternalThreadRecord,
-  GroupMemberRecord,
-  GroupMemberWithUserRecord,
-  GroupRecord,
   IntegrationDeliveryRecord,
   EventRecord,
   EventDeltaCompactionInput,
@@ -64,7 +61,6 @@ import type {
   SessionTagSummary,
   SessionTitleUpdateInput,
   SessionWithSandboxPage,
-  SessionVisibilityFilter,
   SessionMessageSummary,
   SessionTranscriptOptions,
   SessionTranscriptPage,
@@ -72,7 +68,6 @@ import type {
   SkillRevisionRecord,
   SkillRevisionSelection,
   SkillRunCandidate,
-  SkillShareMode,
   SnippetRecord,
   UpdateAutomationRecord,
   UpdateEnvironmentRecord,
@@ -83,34 +78,11 @@ import type {
 } from './types.js';
 
 const staleCallbackSendingMs = 15 * 60_000;
-const defaultGroupCreatedAt = new Date(0);
-
 export class MemoryStore implements AppStore {
   private readonly authUsers = new Map<string, AuthUserRecord>();
   private readonly authAccounts = new Map<string, AuthAccountRecord>();
   private readonly authSessions = new Map<string, AuthSessionRecord>();
-  private readonly groups = new Map<string, GroupRecord>([
-    [
-      defaultGroupId,
-      {
-        id: defaultGroupId,
-        name: 'Default',
-        defaultVisibility: 'organization',
-        defaultWritePolicy: 'group_members',
-        automationCreateRequiredRole: 'member',
-        createdAt: defaultGroupCreatedAt,
-        updatedAt: defaultGroupCreatedAt,
-      },
-    ],
-  ]);
-  private readonly groupMembers = new Map<string, GroupMemberRecord>();
-  private readonly skillStore = new MemorySkillStore({
-    userExists: (userId) => this.authUsers.has(userId),
-    getGroupState: (groupId) => {
-      const group = this.groups.get(groupId);
-      return group ? { archived: Boolean(group.archivedAt) } : null;
-    },
-  });
+  private readonly skillStore = new MemorySkillStore();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly messages = new Map<string, MessageRecord[]>();
   private readonly runs = new Map<string, RunRecord>();
@@ -234,9 +206,6 @@ export class MemoryStore implements AppStore {
   }): Promise<ExplicitNotepadRecord> {
     this.assertLiveNotepadActor(input.actor);
     const { record } = input;
-    const group = this.groups.get(record.ownerGroupId);
-    if (!group) throw new StoreConflictError('not_found', 'Group not found');
-    if (group.archivedAt) throw new StoreConflictError('archived_group', 'Cannot create notepads in an archived group');
     if (this.explicitNotepads.has(record.id)) throw new StoreConflictError('notepad_exists', 'Notepad exists');
     if (Boolean(input.initialAssociation) !== Boolean(input.associationActivityId))
       throw new StoreConflictError('not_found', 'Initial association and activity ID are required together');
@@ -244,8 +213,7 @@ export class MemoryStore implements AppStore {
       if (input.initialAssociation.notepadId !== record.id)
         throw new StoreConflictError('not_found', 'Initial association must reference the created Notepad');
       const session = this.sessions.get(input.initialAssociation.sessionId);
-      if (!session || session.ownerGroupId !== record.ownerGroupId)
-        throw new StoreConflictError('not_found', 'Notepad and Session must belong to the same group');
+      if (!session) throw new StoreConflictError('not_found', 'Session not found');
       if (session.status === 'archived')
         throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
     }
@@ -278,9 +246,6 @@ export class MemoryStore implements AppStore {
       'created',
       {
         title: record.title,
-        ownerGroupId: record.ownerGroupId,
-        visibility: record.visibility,
-        writePolicy: record.writePolicy,
       },
       record.createdAt,
     );
@@ -310,20 +275,11 @@ export class MemoryStore implements AppStore {
     const { content: _content, ...metadata } = value;
     return structuredClone(metadata);
   }
-  async listExplicitNotepads(input: {
-    groupId?: string;
-    authorizedGroupIds?: string[];
-    limit: number;
-    offset: number;
-    includeDormant?: boolean;
-  }) {
+  async listExplicitNotepads(input: { limit: number; offset: number; includeDormant?: boolean; archived?: boolean }) {
     const all = [...this.explicitNotepads.values()]
       .filter(
         (n) =>
-          (!input.groupId || n.ownerGroupId === input.groupId) &&
-          (input.authorizedGroupIds === undefined ||
-            n.visibility === 'organization' ||
-            input.authorizedGroupIds.includes(n.ownerGroupId)) &&
+          Boolean(n.archivedAt) === Boolean(input.archived) &&
           (input.includeDormant || this.hasLiveNotepadAssociation(n.id)),
       )
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || a.id.localeCompare(b.id));
@@ -333,20 +289,12 @@ export class MemoryStore implements AppStore {
       input.limit,
     );
   }
-  async searchExplicitNotepads(input: {
-    groupId: string;
-    authorizedGroupIds?: string[];
-    query: string;
-    limit: number;
-  }) {
+  async searchExplicitNotepads(input: { query: string; limit: number; archived?: boolean }) {
     const q = input.query.toLowerCase();
     return [...this.explicitNotepads.values()]
       .filter(
         (n) =>
-          n.ownerGroupId === input.groupId &&
-          (input.authorizedGroupIds === undefined ||
-            n.visibility === 'organization' ||
-            input.authorizedGroupIds.includes(n.ownerGroupId)) &&
+          Boolean(n.archivedAt) === Boolean(input.archived) &&
           this.hasLiveNotepadAssociation(n.id) &&
           `${n.title}\n${n.content}`.toLowerCase().includes(q),
       )
@@ -357,12 +305,11 @@ export class MemoryStore implements AppStore {
   async searchExplicitNotepadsWithCapability(input: {
     actorSessionId: string;
     expectedGrantorUserId: string;
-    groupId: string;
     query: string;
     limit: number;
   }) {
-    this.assertMemoryExplicitSearchAuthority(input.actorSessionId, input.expectedGrantorUserId, input.groupId);
-    return this.searchExplicitNotepads({ groupId: input.groupId, query: input.query, limit: input.limit });
+    this.assertMemoryExplicitSearchAuthority(input.actorSessionId, input.expectedGrantorUserId);
+    return this.searchExplicitNotepads({ query: input.query, limit: input.limit });
   }
   async readExplicitNotepadWithCapability(input: {
     actorSessionId: string;
@@ -371,17 +318,13 @@ export class MemoryStore implements AppStore {
   }) {
     const notepad = this.explicitNotepads.get(input.notepadId);
     const actor = this.sessions.get(input.actorSessionId);
-    if (!notepad || !actor || actor.ownerGroupId !== notepad.ownerGroupId)
-      throw new StoreConflictError('not_found', 'Notepad access denied');
-    this.assertMemoryExplicitSearchAuthority(input.actorSessionId, input.expectedGrantorUserId, notepad.ownerGroupId);
+    if (!notepad || !actor) throw new StoreConflictError('not_found', 'Notepad access denied');
+    this.assertMemoryExplicitSearchAuthority(input.actorSessionId, input.expectedGrantorUserId);
     return structuredClone(notepad);
   }
   async updateExplicitNotepadMetadata(input: {
     id: string;
-    ownerGroupId: string;
     title?: string;
-    visibility?: ExplicitNotepadRecord['visibility'];
-    writePolicy?: ExplicitNotepadRecord['writePolicy'];
     actor: NotepadActor;
     activityId: string;
     now: Date;
@@ -389,13 +332,11 @@ export class MemoryStore implements AppStore {
     this.assertLiveNotepadActor(input.actor);
     this.assertMemoryExplicitWriteAuthority(input.id, input.actor);
     const existing = this.explicitNotepads.get(input.id);
-    if (!existing || existing.ownerGroupId !== input.ownerGroupId)
-      throw new StoreConflictError('not_found', 'Notepad not found');
+    if (!existing) throw new StoreConflictError('not_found', 'Notepad not found');
+    if (existing.archivedAt) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
     const updated = {
       ...existing,
       ...(input.title === undefined ? {} : { title: input.title }),
-      ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
-      ...(input.writePolicy === undefined ? {} : { writePolicy: input.writePolicy }),
       updatedAt: input.now,
     };
     this.explicitNotepads.set(input.id, structuredClone(updated));
@@ -404,7 +345,7 @@ export class MemoryStore implements AppStore {
       input.activityId,
       input.actor,
       'metadata_changed',
-      { title: updated.title, visibility: updated.visibility, writePolicy: updated.writePolicy },
+      { title: updated.title },
       input.now,
     );
     return structuredClone(updated);
@@ -424,6 +365,7 @@ export class MemoryStore implements AppStore {
     if (input.associatedAuthority) this.assertMemoryAssociatedAuthority(input.id, input.associatedAuthority);
     const old = this.explicitNotepads.get(input.id);
     if (!old) throw new StoreConflictError('not_found', 'Notepad not found');
+    if (old.archivedAt) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
     return this.mutateMemoryNotepad('explicit', input.id, old, input, (v) =>
       this.explicitNotepads.set(input.id, v as ExplicitNotepadRecord),
     ) as ExplicitNotepadRecord;
@@ -442,6 +384,7 @@ export class MemoryStore implements AppStore {
     if (input.associatedAuthority) this.assertMemoryAssociatedAuthority(input.id, input.associatedAuthority);
     const old = this.explicitNotepads.get(input.id);
     if (!old) throw new StoreConflictError('not_found', 'Notepad not found');
+    if (old.archivedAt) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
     if (old.revision !== input.expectedRevision)
       throw new StoreConflictError('stale_revision', 'Stale notepad revision');
     const target = (this.notepadRevisions.get(`explicit:${input.id}`) ?? []).find((r) => r.revision === input.revision);
@@ -493,8 +436,17 @@ export class MemoryStore implements AppStore {
     const { record } = input;
     const notepad = this.explicitNotepads.get(record.notepadId);
     const session = this.sessions.get(record.sessionId);
-    if (!notepad || !session || notepad.ownerGroupId !== session.ownerGroupId)
-      throw new StoreConflictError('not_found', 'Notepad and Session must belong to the same group');
+    if (!notepad || !session) throw new StoreConflictError('not_found', 'Notepad or Session not found');
+    if (
+      input.actor.kind === 'agent' &&
+      session.id !== input.actor.sessionId &&
+      session.parentSessionId !== input.actor.sessionId
+    )
+      throw new StoreConflictError(
+        'notepad_association_forbidden',
+        'Agents may associate notepads only with themselves or direct children',
+      );
+    if (notepad.archivedAt) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
     if (session.status === 'archived')
       throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
     const existed = this.notepadAssociations.has(`${record.notepadId}:${record.sessionId}`);
@@ -521,6 +473,16 @@ export class MemoryStore implements AppStore {
     const notepad = this.explicitNotepads.get(input.notepadId);
     const session = this.sessions.get(input.sessionId);
     if (!notepad || !session) throw new StoreConflictError('not_found', 'Notepad or Session not found');
+    if (
+      input.actor.kind === 'agent' &&
+      session.id !== input.actor.sessionId &&
+      session.parentSessionId !== input.actor.sessionId
+    )
+      throw new StoreConflictError(
+        'notepad_association_forbidden',
+        'Agents may associate notepads only with themselves or direct children',
+      );
+    if (notepad.archivedAt) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
     if (session.status === 'archived')
       throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
     const removed = this.notepadAssociations.delete(`${input.notepadId}:${input.sessionId}`);
@@ -619,34 +581,31 @@ export class MemoryStore implements AppStore {
     if (!this.memoryUserCanWriteSession(authority.expectedUserId, session))
       throw new StoreConflictError('not_found', 'Associated Session authority is no longer valid');
   }
-  private assertMemoryExplicitSearchAuthority(actorSessionId: string, userId: string, groupId: string) {
+  async archiveExplicitNotepad(input: { id: string; archivedAt: Date }) {
+    const record = this.explicitNotepads.get(input.id);
+    if (!record) return null;
+    const updated = { ...record, archivedAt: input.archivedAt, updatedAt: input.archivedAt };
+    this.explicitNotepads.set(input.id, structuredClone(updated));
+    return structuredClone(updated);
+  }
+  async restoreExplicitNotepad(input: { id: string; updatedAt: Date }) {
+    const record = this.explicitNotepads.get(input.id);
+    if (!record) return null;
+    const { archivedAt: _archivedAt, ...active } = record;
+    const updated = { ...active, updatedAt: input.updatedAt };
+    this.explicitNotepads.set(input.id, structuredClone(updated));
+    return structuredClone(updated);
+  }
+  private assertMemoryExplicitSearchAuthority(actorSessionId: string, userId: string) {
     const actor = this.sessions.get(actorSessionId);
     const grant = this.notepadCapabilities.get(`${actorSessionId}:explicit_search`);
     const user = this.authUsers.get(userId);
-    const group = this.groups.get(groupId);
-    const membership = this.groupMembers.get(`${groupId}:${userId}`);
-    if (
-      !actor ||
-      actor.status === 'archived' ||
-      actor.ownerGroupId !== groupId ||
-      grant?.grantedByUserId !== userId ||
-      !user ||
-      (!(user.role === 'super_admin') && (group?.archivedAt || !membership || membership.role === 'viewer'))
-    )
+    if (!actor || actor.status === 'archived' || grant?.grantedByUserId !== userId || !user || user.role === 'viewer')
       throw new StoreConflictError('not_found', 'Notepad access denied');
   }
-  private memoryUserCanWriteSession(userId: string, session: SessionRecord) {
+  private memoryUserCanWriteSession(userId: string, _session: SessionRecord) {
     const user = this.authUsers.get(userId);
-    const group = this.groups.get(session.ownerGroupId);
-    const membership = this.groupMembers.get(`${session.ownerGroupId}:${userId}`);
-    return Boolean(
-      user &&
-      (user.role === 'super_admin' ||
-        (session.writePolicy === 'creator_only' && session.createdByUserId === userId) ||
-        (!group?.archivedAt &&
-          (membership?.role === 'admin' ||
-            (session.writePolicy === 'group_members' && membership?.role === 'member')))),
-    );
+    return Boolean(user && (user.role === 'member' || user.role === 'admin'));
   }
   private assertMemoryCoordinationAuthority(
     actorSessionId: string,
@@ -655,21 +614,10 @@ export class MemoryStore implements AppStore {
   ) {
     const actor = this.sessions.get(actorSessionId);
     const capability = this.notepadCapabilities.get(`${actorSessionId}:session_notepad_coordination`);
-    if (
-      !actor ||
-      actor.ownerGroupId !== target.ownerGroupId ||
-      !expectedGrantorUserId ||
-      capability?.grantedByUserId !== expectedGrantorUserId
-    )
+    if (!actor || !expectedGrantorUserId || capability?.grantedByUserId !== expectedGrantorUserId)
       throw new StoreConflictError('not_found', 'Session Notepad coordination capability is required');
     const user = this.authUsers.get(expectedGrantorUserId);
-    const group = this.groups.get(target.ownerGroupId);
-    const membership = this.groupMembers.get(`${target.ownerGroupId}:${expectedGrantorUserId}`);
-    const authorized =
-      user?.role === 'super_admin' ||
-      (target.writePolicy === 'creator_only' && target.createdByUserId === expectedGrantorUserId) ||
-      (!group?.archivedAt &&
-        (membership?.role === 'admin' || (target.writePolicy === 'group_members' && membership?.role === 'member')));
+    const authorized = user?.role === 'member' || user?.role === 'admin';
     if (!user || !authorized) throw new StoreConflictError('not_found', 'Coordination grantor is no longer authorized');
   }
   private assertLiveSession(sessionId: string) {
@@ -744,7 +692,7 @@ export class MemoryStore implements AppStore {
 
   async createSnippet(record: CreateSnippetRecord): Promise<SnippetRecord> {
     if (!this.authUsers.has(record.ownerUserId)) throw new Error(`User does not exist: ${record.ownerUserId}`);
-    this.assertSnippetName(record.ownerUserId, record.name);
+    this.assertSnippetName(record.name, record.ownerUserId);
     this.snippets.set(record.id, { ...record });
     return structuredClone(record);
   }
@@ -764,7 +712,7 @@ export class MemoryStore implements AppStore {
   async updateSnippet(record: UpdateSnippetRecord): Promise<SnippetRecord | null> {
     const existing = this.snippets.get(record.id);
     if (!existing || existing.ownerUserId !== record.ownerUserId || existing.archivedAt) return null;
-    if (record.name !== undefined) this.assertSnippetName(record.ownerUserId, record.name, record.id);
+    if (record.name !== undefined) this.assertSnippetName(record.name, record.ownerUserId, record.id);
     const updated = { ...existing, ...record };
     this.snippets.set(record.id, updated);
     return { ...updated };
@@ -783,20 +731,20 @@ export class MemoryStore implements AppStore {
     const existing = this.snippets.get(id);
     if (!existing || existing.ownerUserId !== ownerUserId) return null;
     if (!existing.archivedAt) return { ...existing };
-    this.assertSnippetName(ownerUserId, existing.name, id);
+    this.assertSnippetName(existing.name, ownerUserId, id);
     const { archivedAt: _, ...active } = existing;
     const updated = { ...active, updatedAt };
     this.snippets.set(id, updated);
     return { ...updated };
   }
 
-  private assertSnippetName(ownerUserId: string, name: string, exceptId?: string): void {
+  private assertSnippetName(name: string, ownerUserId: string, exceptId?: string): void {
     if (
       [...this.snippets.values()].some(
-        (item) => item.ownerUserId === ownerUserId && item.name === name && !item.archivedAt && item.id !== exceptId,
+        (item) => !item.archivedAt && item.ownerUserId === ownerUserId && item.name === name && item.id !== exceptId,
       )
     )
-      throw new StoreConflictError('snippet_name_exists', 'An active snippet with this name already exists');
+      throw new StoreConflictError('snippet_name_exists', 'A snippet with this name already exists');
   }
 
   async upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord> {
@@ -806,7 +754,7 @@ export class MemoryStore implements AppStore {
     const user: AuthUserRecord = {
       id: existingUser?.id ?? record.userId,
       username: record.username,
-      role: existingUser?.role === 'super_admin' ? 'super_admin' : record.role,
+      role: existingUser?.role ?? record.role,
       createdAt: existingUser?.createdAt ?? record.now,
       updatedAt: record.now,
       ...(record.displayName ? { displayName: record.displayName } : {}),
@@ -864,93 +812,16 @@ export class MemoryStore implements AppStore {
   async updateAuthUserRole(input: { userId: string; role: AuthUserRecord['role']; updatedAt: Date }) {
     const user = this.authUsers.get(input.userId);
     if (!user) return null;
+    if (
+      user.role === 'admin' &&
+      input.role !== 'admin' &&
+      ![...this.authUsers.values()].some((candidate) => candidate.id !== user.id && candidate.role === 'admin')
+    ) {
+      throw new StoreConflictError('last_admin', 'Cannot demote the final administrator');
+    }
     const updated = { ...user, role: input.role, updatedAt: input.updatedAt };
     this.authUsers.set(input.userId, updated);
     return updated;
-  }
-
-  async createGroup(record: GroupRecord): Promise<GroupRecord> {
-    if (this.groups.has(record.id)) throw new Error(`Group already exists: ${record.id}`);
-    const group = { ...record, name: record.name.trim() };
-    this.assertUniqueGroupName(group.name);
-    this.groups.set(group.id, group);
-    return group;
-  }
-
-  async getGroup(id: string): Promise<GroupRecord | null> {
-    return this.groups.get(id) ?? null;
-  }
-
-  async getGroups(ids: string[]): Promise<GroupRecord[]> {
-    return [...new Set(ids)].flatMap((id) => {
-      const group = this.groups.get(id);
-      return group ? [group] : [];
-    });
-  }
-
-  async listGroups(): Promise<GroupRecord[]> {
-    return [...this.groups.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  async updateGroup(record: GroupRecord): Promise<GroupRecord> {
-    if (!this.groups.has(record.id)) throw new Error(`Group does not exist: ${record.id}`);
-    const group = { ...record, name: record.name.trim() };
-    this.assertUniqueGroupName(group.name, group.id);
-    this.groups.set(group.id, group);
-    return group;
-  }
-
-  private assertUniqueGroupName(name: string, currentGroupId?: string): void {
-    const key = normalizedGroupName(name);
-    const duplicate = [...this.groups.values()].some(
-      (group) => group.id !== currentGroupId && normalizedGroupName(group.name) === key,
-    );
-    if (duplicate) throw new StoreConflictError('group_name_exists', 'Group name already exists');
-  }
-
-  async upsertGroupMember(record: GroupMemberRecord): Promise<GroupMemberRecord> {
-    if (!this.groups.has(record.groupId)) throw new Error(`Group does not exist: ${record.groupId}`);
-    if (!this.authUsers.has(record.userId)) throw new Error(`Auth user does not exist: ${record.userId}`);
-    const key = groupMemberKey(record.groupId, record.userId);
-    const existing = this.groupMembers.get(key);
-    const member = existing ? { ...record, createdAt: existing.createdAt } : record;
-    this.groupMembers.set(key, member);
-    return member;
-  }
-
-  async deleteGroupMember(input: { groupId: string; userId: string }): Promise<void> {
-    this.groupMembers.delete(groupMemberKey(input.groupId, input.userId));
-  }
-
-  async getGroupMember(input: { groupId: string; userId: string }): Promise<GroupMemberRecord | null> {
-    return this.groupMembers.get(groupMemberKey(input.groupId, input.userId)) ?? null;
-  }
-
-  async listGroupMembers(groupId: string): Promise<GroupMemberWithUserRecord[]> {
-    return [...this.groupMembers.values()]
-      .filter((member) => member.groupId === groupId)
-      .map((member) => {
-        const user = this.authUsers.get(member.userId);
-        if (!user) throw new Error(`Auth user does not exist: ${member.userId}`);
-        return { ...member, user };
-      })
-      .sort((a, b) => a.user.username.localeCompare(b.user.username));
-  }
-
-  async listGroupMembersForGroups(groupIds: string[]): Promise<GroupMemberWithUserRecord[]> {
-    const selectedGroupIds = new Set(groupIds);
-    return [...this.groupMembers.values()]
-      .filter((member) => selectedGroupIds.has(member.groupId))
-      .map((member) => {
-        const user = this.authUsers.get(member.userId);
-        if (!user) throw new Error(`Auth user does not exist: ${member.userId}`);
-        return { ...member, user };
-      })
-      .sort((a, b) => a.user.username.localeCompare(b.user.username));
-  }
-
-  async listUserGroupMemberships(userId: string): Promise<GroupMemberRecord[]> {
-    return [...this.groupMembers.values()].filter((member) => member.userId === userId);
   }
 
   private setSession(id: string, session: SessionRecord): void {
@@ -1033,15 +904,12 @@ export class MemoryStore implements AppStore {
   async listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]> {
     return (await this.listSessions())
       .filter((session) => session.parentSessionId === input.parentSessionId)
-      .filter((session) => sessionIsReadableToAgentGroup(session, input.ownerGroupId))
       .slice(0, input.limit);
   }
 
   async listSessionsWithLatestSandbox(provider: string, options: SessionListOptions): Promise<SessionWithSandboxPage> {
     const matchingSessions = [...this.sessions.values()]
-      .filter((session) => canListSession(session, options.visibleTo))
       .filter((session) => (options.archived ? session.status === 'archived' : session.status !== 'archived'))
-      .filter((session) => !options.groupId || session.ownerGroupId === options.groupId)
       .filter((session) => sessionMatchesListFilters(session, options, this.messages, this.sessionStars));
     const sessions = matchingSessions
       .filter((session) => !options.parentSessionId || session.parentSessionId === options.parentSessionId)
@@ -1069,8 +937,6 @@ export class MemoryStore implements AppStore {
     if (!query) return { items: [], nextCursor: null };
     const terms = query.split(/\s+/).filter(Boolean);
     const matches = [...this.sessions.values()]
-      .filter((session) => canListSession(session, options.visibleTo))
-      .filter((session) => !options.groupId || session.ownerGroupId === options.groupId)
       .filter((session) => sessionMatchesListFilters(session, options, this.messages, this.sessionStars))
       .map((session) => ({
         session,
@@ -1096,10 +962,9 @@ export class MemoryStore implements AppStore {
     };
   }
 
-  async listSessionTags(options: { visibleTo?: SessionVisibilityFilter; limit: number }): Promise<SessionTagSummary[]> {
+  async listSessionTags(options: { limit: number }): Promise<SessionTagSummary[]> {
     const counts = new Map<string, number>();
     for (const session of this.sessions.values()) {
-      if (!canListSession(session, options.visibleTo)) continue;
       for (const tag of session.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
     }
     return [...counts.entries()]
@@ -1144,8 +1009,7 @@ export class MemoryStore implements AppStore {
       throw new Error(`Session does not exist: ${record.id}`);
     }
 
-    const existing = this.sessions.get(record.id)!;
-    const updated = cloneSession({ ...record, ownerGroupId: existing.ownerGroupId });
+    const updated = cloneSession(record);
     this.setSession(record.id, updated);
     return cloneSession(updated);
   }
@@ -1153,6 +1017,9 @@ export class MemoryStore implements AppStore {
   async updateSessionContext(input: SessionContextUpdateInput): Promise<SessionRecord> {
     const existing = this.sessions.get(input.id);
     if (!existing) throw new Error(`Session does not exist: ${input.id}`);
+    if (existing.status === 'archived') {
+      throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    }
     const session: SessionRecord = { ...existing, updatedAt: input.updatedAt };
     if (input.context !== undefined) session.context = structuredClone(input.context);
     else delete session.context;
@@ -1168,7 +1035,6 @@ export class MemoryStore implements AppStore {
     const current = this.sessions.get(record.id);
     const newerActivity = current && current.lastActivityAt > record.lastActivityAt;
     const next: SessionRecord = { ...record };
-    if (current) next.ownerGroupId = current.ownerGroupId;
     if (newerActivity) {
       next.status = current.status;
       next.lastActivityAt = current.lastActivityAt;
@@ -1192,8 +1058,6 @@ export class MemoryStore implements AppStore {
     const session: SessionRecord = { ...existing, updatedAt: input.updatedAt };
     if (input.title !== undefined) session.title = input.title;
     if (input.tags !== undefined) session.tags = input.tags;
-    if (input.visibility !== undefined) session.visibility = input.visibility;
-    if (input.writePolicy !== undefined) session.writePolicy = input.writePolicy;
     this.setSession(input.id, session);
 
     const event = this.appendEventWithNextSequenceSync({
@@ -1202,9 +1066,6 @@ export class MemoryStore implements AppStore {
       payload: {
         title: session.title ?? null,
         ...(input.tags !== undefined ? { tags: session.tags } : {}),
-        ownerGroupId: session.ownerGroupId,
-        visibility: session.visibility,
-        writePolicy: session.writePolicy,
       },
       createdAt: input.updatedAt,
     });
@@ -1235,9 +1096,6 @@ export class MemoryStore implements AppStore {
       type: 'session_updated',
       payload: {
         title: session.title,
-        ownerGroupId: session.ownerGroupId,
-        visibility: session.visibility,
-        writePolicy: session.writePolicy,
       },
       createdAt: input.updatedAt,
     });
@@ -1336,6 +1194,7 @@ export class MemoryStore implements AppStore {
     }
     const existing = this.sessions.get(input.id);
     if (!existing) throw new Error(`Session does not exist: ${input.id}`);
+    if (existing.status === 'archived') return null;
     const updated = { ...existing, context: structuredClone(input.context), updatedAt: input.updatedAt };
     this.setSession(input.id, updated);
     return cloneSession(updated);
@@ -1344,6 +1203,9 @@ export class MemoryStore implements AppStore {
   async pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord> {
     const existing = this.sessions.get(input.sessionId);
     if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
+    if (existing.status === 'archived') {
+      throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    }
     const updated = {
       ...existing,
       queuePausedAt: input.pausedAt,
@@ -1357,6 +1219,9 @@ export class MemoryStore implements AppStore {
   async resumeSessionQueue(input: { sessionId: string }): Promise<SessionRecord> {
     const existing = this.sessions.get(input.sessionId);
     if (!existing) throw new Error(`Session does not exist: ${input.sessionId}`);
+    if (existing.status === 'archived') {
+      throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    }
     const now = new Date();
     const { queuePausedAt: _queuePausedAt, ...updated } = { ...existing, updatedAt: now, lastActivityAt: now };
     this.setSession(input.sessionId, updated);
@@ -1387,38 +1252,16 @@ export class MemoryStore implements AppStore {
     return this.skillStore.restoreSkill(input);
   }
 
-  async promoteSkill(id: string, groupId: string, now: Date): Promise<SkillRecord | null> {
-    return this.skillStore.promoteSkill(id, groupId, now);
+  async listSkills(input: { userId?: string }): Promise<SkillRecord[]> {
+    return this.skillStore.listSkills(input);
   }
 
-  async setSkillShares(
-    id: string,
-    shareMode: SkillShareMode,
-    groupIds: string[],
-    now: Date,
-  ): Promise<SkillRecord | null> {
-    return this.skillStore.setSkillShares(id, shareMode, groupIds, now);
-  }
-
-  async listSkillsForUser(userId: string): Promise<SkillRecord[]> {
-    return this.skillStore.listSkillsForUser(userId);
-  }
-
-  async listSkillsForGroups(groupIds: string[]): Promise<SkillRecord[]> {
-    return this.skillStore.listSkillsForGroups(groupIds);
-  }
-
-  async listSkillsSharedIntoGroups(groupIds: string[]): Promise<SkillRecord[]> {
-    return this.skillStore.listSkillsSharedIntoGroups(groupIds);
-  }
-
-  async listSkillInvocationCandidates(input: { ownerGroupId: string; userId?: string }): Promise<SkillRunCandidate[]> {
+  async listSkillInvocationCandidates(input: { userId?: string }): Promise<SkillRunCandidate[]> {
     return this.skillStore.listSkillInvocationCandidates(input);
   }
 
   async listSkillsForRun(input: {
-    ownerGroupId: string;
-    createdByUserId?: string;
+    userId?: string;
     invokedNames?: string[];
     invokedRevisions?: SkillRevisionSelection[];
   }): Promise<SkillRunCandidate[]> {
@@ -1427,9 +1270,9 @@ export class MemoryStore implements AppStore {
 
   async createAutomation(record: CreateAutomationRecord): Promise<AutomationRecord> {
     if (this.automations.has(record.id)) throw new Error(`Automation already exists: ${record.id}`);
-    this.assertAutomationEnvironmentAvailable(record.environmentId, record.ownerGroupId);
-    this.automations.set(record.id, record);
-    return record;
+    this.assertAutomationEnvironmentAvailable(record.environmentId);
+    this.automations.set(record.id, structuredClone(record));
+    return structuredClone(record);
   }
 
   async getAutomation(id: string): Promise<AutomationRecord | null> {
@@ -1443,9 +1286,11 @@ export class MemoryStore implements AppStore {
   async updateAutomation(input: UpdateAutomationRecord): Promise<AutomationRecord> {
     const existing = this.automations.get(input.id);
     if (!existing) throw new Error(`Automation does not exist: ${input.id}`);
+    if (existing.archivedAt) {
+      throw new StoreConflictError('automation_archived', 'Restore this automation before editing it');
+    }
     this.assertAutomationEnvironmentAvailable(
       input.environmentId === undefined ? existing.environmentId : (input.environmentId ?? undefined),
-      input.ownerGroupId ?? existing.ownerGroupId,
     );
     const updated: AutomationRecord = {
       ...existing,
@@ -1454,9 +1299,6 @@ export class MemoryStore implements AppStore {
       ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
       ...(input.scheduleCron !== undefined ? { scheduleCron: input.scheduleCron } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-      ...(input.ownerGroupId !== undefined ? { ownerGroupId: input.ownerGroupId } : {}),
-      ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
-      ...(input.writePolicy !== undefined ? { writePolicy: input.writePolicy } : {}),
     };
     if (input.context !== undefined) {
       if (input.context) updated.context = input.context;
@@ -1484,7 +1326,7 @@ export class MemoryStore implements AppStore {
   async createEnvironment(record: CreateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord> {
     if (this.environments.has(record.environment.id))
       throw new Error(`Environment already exists: ${record.environment.id}`);
-    this.assertEnvironmentNameAvailable(record.environment.name, record.environment.ownerGroupId);
+    this.assertEnvironmentNameAvailable(record.environment.name);
     const created = this.environmentWithDetails(record);
     this.environments.set(created.id, created);
     this.environmentRevisions.set(record.revision.id, cloneEnvironmentRevision(record.revision));
@@ -1524,35 +1366,14 @@ export class MemoryStore implements AppStore {
   async updateEnvironment(record: UpdateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord> {
     const existing = this.environments.get(record.environment.id);
     if (!existing) throw new Error(`Environment does not exist: ${record.environment.id}`);
+    if (existing.archivedAt) {
+      throw new StoreConflictError('environment_archived', 'Restore this environment before editing it');
+    }
     if (existing.updatedAt.getTime() !== record.expectedUpdatedAt.getTime()) {
       throw new StoreConflictError('environment_update_conflict', 'Environment changed while it was being edited');
     }
-    if (record.automationAccessAllowedGroupIds) {
-      const allowed = new Set(record.automationAccessAllowedGroupIds);
-      const conflicts = [...this.automations.values()].filter(
-        (automation) =>
-          automation.environmentId === record.environment.id &&
-          !automation.archivedAt &&
-          !allowed.has(automation.ownerGroupId),
-      );
-      if (conflicts.length) {
-        throw new StoreConflictError(
-          'environment_automation_conflict',
-          'Environment access is used by active automations',
-          { automations: conflicts.map(automationConflictDetail) },
-        );
-      }
-    }
-    if (
-      !existing.archivedAt &&
-      !record.environment.archivedAt &&
-      (existing.name !== record.environment.name || existing.ownerGroupId !== record.environment.ownerGroupId)
-    ) {
-      this.assertEnvironmentNameAvailable(
-        record.environment.name,
-        record.environment.ownerGroupId,
-        record.environment.id,
-      );
+    if (!existing.archivedAt && !record.environment.archivedAt && existing.name !== record.environment.name) {
+      this.assertEnvironmentNameAvailable(record.environment.name, record.environment.id);
     }
     const updated = this.environmentWithDetails(record);
     this.environments.set(updated.id, updated);
@@ -1597,7 +1418,7 @@ export class MemoryStore implements AppStore {
     const existing = this.environments.get(input.environmentId);
     if (!existing) return null;
     if (!existing.archivedAt) return cloneEnvironment(existing)!;
-    this.assertEnvironmentNameAvailable(existing.name, existing.ownerGroupId, existing.id);
+    this.assertEnvironmentNameAvailable(existing.name, existing.id);
     const { archivedAt: _archivedAt, ...withoutArchive } = existing;
     const unarchived: EnvironmentWithDetailsRecord = {
       ...withoutArchive,
@@ -1613,6 +1434,13 @@ export class MemoryStore implements AppStore {
   async archiveAutomation(input: { automationId: string; archivedAt: Date }): Promise<AutomationRecord | null> {
     const automation = this.automations.get(input.automationId);
     if (!automation) return null;
+    if (
+      [...this.automationInvocations.values()].some(
+        (invocation) => invocation.automationId === input.automationId && invocation.status === 'creating',
+      )
+    ) {
+      throw new StoreConflictError('automation_invocation_active', 'Wait for the active invocation before archiving');
+    }
     const { schedulerLockOwner: _lockOwner, schedulerLockedUntil: _lockedUntil, ...withoutLock } = automation;
     const archived = {
       ...withoutLock,
@@ -1627,7 +1455,7 @@ export class MemoryStore implements AppStore {
   async unarchiveAutomation(input: { automationId: string; updatedAt: Date }): Promise<AutomationRecord | null> {
     const automation = this.automations.get(input.automationId);
     if (!automation) return null;
-    this.assertAutomationEnvironmentAvailable(automation.environmentId, automation.ownerGroupId);
+    this.assertAutomationEnvironmentAvailable(automation.environmentId);
     const {
       archivedAt: _archivedAt,
       schedulerLockOwner: _lockOwner,
@@ -1722,6 +1550,11 @@ export class MemoryStore implements AppStore {
   }
 
   async createAutomationInvocation(record: CreateAutomationInvocationRecord): Promise<AutomationInvocationRecord> {
+    const automation = this.automations.get(record.automationId);
+    if (!automation) throw new Error(`Automation does not exist: ${record.automationId}`);
+    if (automation.archivedAt) {
+      throw new StoreConflictError('automation_archived', 'Restore this automation before invoking it');
+    }
     if (this.automationInvocations.has(record.id)) {
       throw new Error(`Automation invocation already exists: ${record.id}`);
     }
@@ -1788,17 +1621,20 @@ export class MemoryStore implements AppStore {
   }
 
   async createMessage(record: CreateMessageRecord): Promise<MessageRecord> {
+    const session = this.sessions.get(record.sessionId);
+    if (!session) throw new Error(`Session does not exist: ${record.sessionId}`);
+    if (session.status === 'archived' && record.status === 'pending') {
+      throw new StoreConflictError('session_archived', 'Cannot enqueue messages to an archived session');
+    }
     const sessionMessages = this.messages.get(record.sessionId) ?? [];
     const message: MessageRecord = { ...record, steering: record.steering ?? false };
     sessionMessages.push(message);
     this.messages.set(record.sessionId, sessionMessages);
 
     if (record.status === 'pending') {
-      const session = this.sessions.get(record.sessionId);
-      if (!session) throw new Error(`Session does not exist: ${record.sessionId}`);
       this.setSession(record.sessionId, {
         ...session,
-        status: session.status === 'archived' ? 'archived' : session.status === 'active' ? 'active' : 'queued',
+        status: session.status === 'active' ? 'active' : 'queued',
         updatedAt: record.createdAt,
         lastActivityAt: record.createdAt,
       });
@@ -2820,26 +2656,20 @@ export class MemoryStore implements AppStore {
     return existing;
   }
 
-  private assertEnvironmentNameAvailable(name: string, ownerGroupId: string, exceptEnvironmentId?: string): void {
-    const normalized = normalizedGroupName(name);
+  private assertEnvironmentNameAvailable(name: string, exceptEnvironmentId?: string): void {
+    const normalized = normalizedResourceName(name);
     const conflict = [...this.environments.values()].find(
       (environment) =>
-        environment.id !== exceptEnvironmentId &&
-        !environment.archivedAt &&
-        environment.ownerGroupId === ownerGroupId &&
-        normalizedGroupName(environment.name) === normalized,
+        environment.id !== exceptEnvironmentId && normalizedResourceName(environment.name) === normalized,
     );
     if (conflict) throw new StoreConflictError('environment_name_exists', 'Environment name already exists');
   }
 
-  private assertAutomationEnvironmentAvailable(environmentId: string | undefined, ownerGroupId: string): void {
+  private assertAutomationEnvironmentAvailable(environmentId: string | undefined): void {
     if (!environmentId) return;
     const environment = this.environments.get(environmentId);
-    if (!environment || environment.archivedAt || !memoryEnvironmentAvailableToGroup(environment, ownerGroupId)) {
-      throw new StoreConflictError(
-        'automation_environment_unavailable',
-        'Environment is no longer available to the automation owner group',
-      );
+    if (!environment || environment.archivedAt) {
+      throw new StoreConflictError('automation_environment_unavailable', 'Environment is archived or unavailable');
     }
   }
 
@@ -2851,7 +2681,6 @@ export class MemoryStore implements AppStore {
       repositories: record.repositories
         .map((repository) => ({ ...repository }))
         .sort((left, right) => left.position - right.position),
-      sharedGroupIds: [...record.sharedGroupIds].sort(compareStringAsc),
     };
   }
 
@@ -2901,24 +2730,8 @@ function notepadSnippet(content: string, query: string) {
   return content.slice(Math.max(0, match - 80), Math.max(0, match - 80) + 240);
 }
 
-function memoryEnvironmentAvailableToGroup(environment: EnvironmentWithDetailsRecord, groupId: string): boolean {
-  return (
-    environment.ownerGroupId === groupId ||
-    environment.shareMode === 'all_groups' ||
-    (environment.shareMode === 'selected_groups' && environment.sharedGroupIds.includes(groupId))
-  );
-}
-
-function automationConflictDetail(automation: AutomationRecord): {
-  id: string;
-  name: string;
-  ownerGroupId: string;
-} {
-  return { id: automation.id, name: automation.name, ownerGroupId: automation.ownerGroupId };
-}
-
-function groupMemberKey(groupId: string, userId: string): string {
-  return `${groupId}:${userId}`;
+function automationConflictDetail(automation: AutomationRecord): { id: string; name: string } {
+  return { id: automation.id, name: automation.name };
 }
 
 function cloneEnvironment(
@@ -2928,7 +2741,6 @@ function cloneEnvironment(
   return {
     ...environment,
     repositories: environment.repositories.map((repository) => ({ ...repository })),
-    sharedGroupIds: [...environment.sharedGroupIds],
   };
 }
 
@@ -2940,12 +2752,8 @@ function cloneEnvironmentActivity(activity: EnvironmentActivityRecord): Environm
   return { ...activity, payload: structuredClone(activity.payload) };
 }
 
-function normalizedGroupName(name: string): string {
+function normalizedResourceName(name: string): string {
   return name.trim().toLowerCase();
-}
-
-function canListSession(session: SessionRecord, visibleTo: SessionVisibilityFilter | undefined): boolean {
-  return !visibleTo || session.visibility === 'organization' || visibleTo.groupIds.includes(session.ownerGroupId);
 }
 
 function sessionMatchesListFilters(
@@ -3099,16 +2907,9 @@ function validateParentChildLimit(
 
 function sessionMatchesAgentScope(session: SessionRecord, input: AgentSessionListOptions): boolean {
   if (input.scope === 'children') {
-    return (
-      session.parentSessionId === input.actingSessionId && sessionIsReadableToAgentGroup(session, input.ownerGroupId)
-    );
+    return session.parentSessionId === input.actingSessionId;
   }
-  if (input.scope === 'group') return session.ownerGroupId === input.ownerGroupId;
-  return sessionIsReadableToAgentGroup(session, input.ownerGroupId);
-}
-
-function sessionIsReadableToAgentGroup(session: SessionRecord, ownerGroupId: string): boolean {
-  return session.visibility === 'organization' || session.ownerGroupId === ownerGroupId;
+  return true;
 }
 
 function latestFinalResponseForMessage(events: EventRecord[], messageId: string): EventRecord | null {

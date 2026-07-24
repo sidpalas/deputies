@@ -3,8 +3,16 @@ import type { Snippet } from '../../api.js';
 import { insertSnippet, matchingSnippets, snippetQueryAtCaret } from './snippet-picker.js';
 
 const snippets: Snippet[] = [
-  { id: '1', ownerUserId: 'u', name: 'review-pr', body: 'Review this pull request', createdAt: '', updatedAt: '' },
-  { id: '2', ownerUserId: 'u', name: 'archived', body: 'Old', archivedAt: '2026-01-01', createdAt: '', updatedAt: '' },
+  { id: '1', createdByUserId: 'u', name: 'review-pr', body: 'Review this pull request', createdAt: '', updatedAt: '' },
+  {
+    id: '2',
+    createdByUserId: 'u',
+    name: 'archived',
+    body: 'Old',
+    archivedAt: '2026-01-01',
+    createdAt: '',
+    updatedAt: '',
+  },
 ];
 
 describe('personal snippet picker', () => {

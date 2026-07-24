@@ -12,7 +12,6 @@ import {
   type AutomationInvocationPage,
   type BranchOption,
   type Environment,
-  type Group,
   type ModelChoice,
   type ReasoningLevel,
   type RepositoryOption,
@@ -36,14 +35,12 @@ import {
   codebaseRepositoryValue,
   OptionPicker,
   parseCodebasePickerValue,
-  type OptionPickerOption,
 } from './option-picker.js';
 import { formatDate, statusTextClass } from './shared.js';
 import { defaultReasoningLevelLabel, REASONING_LEVEL_OPTIONS, reasoningLevelFromContext } from './reasoning-level.js';
 
 type AutomationForm = {
   id: string;
-  groupId: string;
   name: string;
   scheduleCron: string;
   environmentId: string;
@@ -67,50 +64,13 @@ type AsyncState<T> = {
 
 const invocationHistoryPageSize = 20;
 
-function automationGroupOptions(input: {
-  formGroupId: string;
-  selectableGroups: Group[];
-  selected: Automation | null;
-  selectedGroup: Group | undefined;
-  selectedGroupSelectable: boolean;
-}): OptionPickerOption[] {
-  const options = input.selectableGroups.map((group) => ({ value: group.id, label: group.name }));
-  if (!input.formGroupId || input.selectedGroupSelectable) return options;
-
-  options.unshift(unavailableAutomationGroupOption(input.formGroupId, input.selectedGroup, input.selected));
-  return options;
-}
-
-function unavailableAutomationGroupOption(
-  groupId: string,
-  group: Group | undefined,
-  automation: Automation | null,
-): OptionPickerOption {
-  if (group?.archivedAt) {
-    return {
-      value: groupId,
-      label: `${group.name} (archived)`,
-      available: false,
-      unavailableReason: 'Archived group.',
-      action: 'New sessions are suspended until this group is unarchived.',
-    };
-  }
-
-  return {
-    value: groupId,
-    label: `${group?.name ?? automation?.ownerGroupName ?? groupId} (current)`,
-    available: false,
-    unavailableReason: 'Unavailable group.',
-  };
-}
-
 export function AutomationsPanel(props: {
   automation: Automation | null;
   automationsLoaded: boolean;
   automationsLoading: boolean;
   canCallApi: boolean;
   canCreateAutomations: boolean;
-  groups: Group[];
+  canManageTenantResources: boolean;
   token: string;
   environmentOptions: Environment[];
   environmentOptionsLoading: boolean;
@@ -143,7 +103,7 @@ export function AutomationsPanel(props: {
   const [invocationsLoading, setInvocationsLoading] = useState(false);
   const [olderInvocationsLoading, setOlderInvocationsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<AutomationForm>(() => emptyForm(props.groups));
+  const [form, setForm] = useState<AutomationForm>(emptyForm);
   const [branchControlsOpen, setBranchControlsOpen] = useState(false);
   const [branchOptionsState, setBranchOptionsState] = useState<AsyncState<BranchOption[]>>({
     data: [],
@@ -154,15 +114,7 @@ export function AutomationsPanel(props: {
   const selected = props.automation;
   const selectedArchived = Boolean(selected?.archivedAt);
   const selectedAutomationIdRef = useRef(selected?.id ?? '');
-  const selectableGroups = props.groups.filter((group) => {
-    if (group.archivedAt) return false;
-    return selected ? group.canManage : group.canCreateAutomations;
-  });
-  const selectedGroup = props.groups.find((group) => group.id === form.groupId);
-  const selectedOwnerGroup = selected ? props.groups.find((group) => group.id === selected.ownerGroupId) : null;
-  const environmentOptions = props.environmentOptions.filter((environment) =>
-    environmentAvailableToGroup(environment, form.groupId),
-  );
+  const environmentOptions = props.environmentOptions.filter((environment) => !environment.archivedAt);
   const selectedEnvironment = environmentOptions.find((environment) => environment.id === form.environmentId) ?? null;
   const codebaseValue = form.environmentId
     ? codebaseEnvironmentValue(form.environmentId)
@@ -171,17 +123,6 @@ export function AutomationsPanel(props: {
       : '';
   const hasBranchControls = Boolean(form.repository || selectedEnvironment);
   const branchControlLabel = selectedEnvironment?.repositories.length === 1 || form.repository ? 'Branch' : 'Branches';
-  const selectedOwnerGroupArchived = Boolean(
-    selected && form.groupId === selected.ownerGroupId && (selectedGroup?.archivedAt || selected.ownerGroupArchivedAt),
-  );
-  const selectedGroupSelectable = selectableGroups.some((group) => group.id === form.groupId);
-  const groupOptions = automationGroupOptions({
-    formGroupId: form.groupId,
-    selectableGroups,
-    selected,
-    selectedGroup,
-    selectedGroupSelectable,
-  });
   const branchOptions = branchOptionsState.data;
   const branchOptionsLoading = branchOptionsState.loading;
   const branchOptionsError = branchOptionsState.error;
@@ -193,11 +134,12 @@ export function AutomationsPanel(props: {
       ? [{ value: form.model, label: `${form.model} (saved)`, available: true }, ...modelOptions]
       : modelOptions;
   const canEdit =
-    props.canCallApi && (selected ? Boolean(selected.canManage) && !selectedArchived : props.canCreateAutomations);
+    props.canCallApi &&
+    props.canManageTenantResources &&
+    (selected ? Boolean(selected.canManage) && !selectedArchived : props.canCreateAutomations);
   const canEditDefinition = canEdit;
-  const canChangeGroup = canEdit && (selected ? Boolean(selectedOwnerGroup?.canManage) : true);
-  const formComplete = Boolean(form.groupId && form.name.trim() && form.scheduleCron.trim() && form.prompt.trim());
-  const saveDisabled = !canEdit || saving || !formComplete || (!selected && !selectedGroupSelectable);
+  const formComplete = Boolean(form.name.trim() && form.scheduleCron.trim() && form.prompt.trim());
+  const saveDisabled = !canEdit || saving || !formComplete;
   const revisionPolicyHasUnsavedChanges =
     !selected ||
     form.environmentId !== (selected.environmentId ?? '') ||
@@ -218,16 +160,12 @@ export function AutomationsPanel(props: {
   }, [codebaseValue]);
 
   useEffect(() => {
-    setForm((current) => (current.groupId ? current : { ...current, groupId: defaultAutomationGroupId(props.groups) }));
-  }, [props.groups]);
-
-  useEffect(() => {
     if (!selected) {
       setInvocations([]);
       setInvocationsNextCursor('');
       setInvocationsLoading(false);
       setOlderInvocationsLoading(false);
-      if (!props.selectedAutomationId) setForm(emptyForm(props.groups));
+      if (!props.selectedAutomationId) setForm(emptyForm());
       return;
     }
     let cancelled = false;
@@ -325,7 +263,6 @@ export function AutomationsPanel(props: {
 
   async function invokeSelected(options: { allowOverlap?: boolean; disabledConfirmed?: boolean } = {}) {
     if (!props.canCallApi || !selected?.canManage || selected.archivedAt) return;
-    if (selectedOwnerGroupArchived) return;
     const allowDisabled = !selected.enabled;
     const allowOverlap = options.allowOverlap === true;
     if (
@@ -435,10 +372,10 @@ export function AutomationsPanel(props: {
                     {form.id ? 'Edit automation' : 'New automation'}
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Generated sessions use this automation&apos;s group and prompt context.
+                    Generated sessions use this automation&apos;s prompt and codebase context.
                   </p>
                 </div>
-                {selected && !selected.archivedAt ? (
+                {props.canManageTenantResources && selected && !selected.archivedAt ? (
                   <div className="flex shrink-0 flex-wrap items-center gap-2">
                     <Button
                       variant="secondary"
@@ -449,7 +386,7 @@ export function AutomationsPanel(props: {
                     </Button>
                     <Button
                       onClick={() => void invokeSelected()}
-                      disabled={!props.canCallApi || saving || !selected.canManage || selectedOwnerGroupArchived}
+                      disabled={!props.canCallApi || saving || !selected.canManage}
                     >
                       <Play className="h-4 w-4" /> Invoke now
                     </Button>
@@ -471,7 +408,7 @@ export function AutomationsPanel(props: {
                   void saveAutomation();
                 }}
               >
-                <div className="grid gap-3 md:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)]">
+                <div className="grid gap-3">
                   <Field label="Name" htmlFor="automation-name">
                     <Input
                       id="automation-name"
@@ -479,49 +416,6 @@ export function AutomationsPanel(props: {
                       onChange={(event) => setForm({ ...form, name: event.target.value })}
                       placeholder="Nightly dependency check"
                       disabled={!canEditDefinition}
-                    />
-                  </Field>
-                  <Field label="Access group" htmlFor="automation-group">
-                    <OptionPicker
-                      id="automation-group"
-                      label="Access group"
-                      value={form.groupId}
-                      options={groupOptions}
-                      emptyLabel="Select access group..."
-                      onChange={(value) =>
-                        setForm({
-                          ...form,
-                          groupId: value,
-                          environmentId:
-                            form.environmentId &&
-                            props.environmentOptions.some(
-                              (environment) =>
-                                environment.id === form.environmentId &&
-                                environmentAvailableToGroup(environment, value),
-                            )
-                              ? form.environmentId
-                              : '',
-                          branch:
-                            form.environmentId &&
-                            !props.environmentOptions.some(
-                              (environment) =>
-                                environment.id === form.environmentId &&
-                                environmentAvailableToGroup(environment, value),
-                            )
-                              ? ''
-                              : form.branch,
-                          environmentBranchOverrides:
-                            form.environmentId &&
-                            !props.environmentOptions.some(
-                              (environment) =>
-                                environment.id === form.environmentId &&
-                                environmentAvailableToGroup(environment, value),
-                            )
-                              ? {}
-                              : form.environmentBranchOverrides,
-                        })
-                      }
-                      disabled={!canChangeGroup || (selectableGroups.length <= 1 && selectedGroupSelectable)}
                     />
                   </Field>
                 </div>
@@ -672,20 +566,13 @@ export function AutomationsPanel(props: {
                 </Field>
 
                 {!formComplete ? (
-                  <p className="text-sm text-muted-foreground">Name, group, UTC cron, and prompt are required.</p>
-                ) : null}
-                {selectedOwnerGroupArchived ? (
-                  <div className="rounded-md border border-border bg-muted/60 p-3 text-sm text-muted-foreground">
-                    This automation is {selected?.enabled ? 'enabled, but' : 'disabled, and'} scheduled and manual
-                    invocations are suspended while its access group is archived. Unarchive the group or move the
-                    automation to an active access group to resume creating sessions.
-                  </div>
+                  <p className="text-sm text-muted-foreground">Name, UTC cron, and prompt are required.</p>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
                   <Button type="submit" disabled={saveDisabled}>
                     <Save className="h-4 w-4" /> {form.id ? 'Save automation' : 'Create automation'}
                   </Button>
-                  {selected ? (
+                  {props.canManageTenantResources && selected ? (
                     <AutomationArchiveAction
                       automation={selected}
                       disabled={!props.canCallApi}
@@ -903,10 +790,9 @@ function InvocationRow(props: { invocation: AutomationInvocation; onSelectSessio
   );
 }
 
-function emptyForm(groups: Group[]): AutomationForm {
+function emptyForm(): AutomationForm {
   return {
     id: '',
-    groupId: defaultAutomationGroupId(groups),
     name: '',
     scheduleCron: '0 9 * * 1-5',
     environmentId: '',
@@ -923,14 +809,9 @@ function emptyForm(groups: Group[]): AutomationForm {
   };
 }
 
-function defaultAutomationGroupId(groups: Group[]): string {
-  return groups.find((group) => !group.archivedAt && group.canCreateAutomations)?.id ?? '';
-}
-
 function formFromAutomation(automation: Automation): AutomationForm {
   return {
     id: automation.id,
-    groupId: automation.ownerGroupId,
     name: automation.name,
     scheduleCron: automation.scheduleCron,
     environmentId: automation.environmentId ?? '',
@@ -953,7 +834,6 @@ function automationFormInput(form: AutomationForm, token: string, environment: E
     name: form.name.trim(),
     prompt: form.prompt.trim(),
     scheduleCron: form.scheduleCron.trim(),
-    ownerGroupId: form.groupId,
     enabled: form.enabled,
     environmentId: form.environmentId,
     ...(form.environmentId
@@ -1023,15 +903,6 @@ function automationCodebaseFormPatch(
     repository: '',
     branch: '',
   };
-}
-
-function environmentAvailableToGroup(environment: Environment, groupId: string): boolean {
-  if (!groupId || environment.archivedAt) return false;
-  return (
-    environment.ownerGroupId === groupId ||
-    environment.shareMode === 'all_groups' ||
-    environment.sharedGroupIds.includes(groupId)
-  );
 }
 
 function repositoryContextLabel(value: unknown): string {

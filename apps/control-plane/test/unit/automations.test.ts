@@ -3,7 +3,7 @@ import { nextUtcCronInvocation } from '../../src/automations/cron.js';
 import { AutomationServiceError } from '../../src/automations/service.js';
 import { loadConfig } from '../../src/config/index.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId, type AutomationRecord } from '../../src/store/types.js';
+import type { AutomationRecord } from '../../src/store/types.js';
 
 describe('scheduled automations', () => {
   it('computes the next UTC cron invocation', () => {
@@ -22,9 +22,6 @@ describe('scheduled automations', () => {
       name: 'Nightly check',
       prompt: 'Check the repository',
       scheduleCron: '0 9 * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
       enabled: false,
     });
 
@@ -47,7 +44,6 @@ describe('scheduled automations', () => {
     const services = createServices(store);
     const environment = await services.environments.create({
       name: 'Product surface',
-      ownerGroupId: defaultGroupId,
       repositories: [
         { provider: 'github', owner: 'acme', repo: 'api', branch: 'main', primary: true },
         { provider: 'github', owner: 'acme', repo: 'web', primary: false },
@@ -57,9 +53,6 @@ describe('scheduled automations', () => {
       name: 'Environment automation',
       prompt: 'Run against the environment',
       scheduleCron: '0 9 * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
       environmentId: environment.id,
       context: {
         model: 'anthropic/claude-sonnet',
@@ -78,7 +71,6 @@ describe('scheduled automations', () => {
         revisionId: environment.currentRevisionId,
         revisionNumber: 1,
         name: 'Product surface',
-        ownerGroupId: defaultGroupId,
         codebase: {
           repositories: [
             { provider: 'github', owner: 'acme', repo: 'api', branch: 'main', primary: true },
@@ -94,16 +86,12 @@ describe('scheduled automations', () => {
     const services = createServices(store);
     const environment = await services.environments.create({
       name: 'Product surface',
-      ownerGroupId: defaultGroupId,
       repositories: [{ provider: 'github', owner: 'acme', repo: 'api', branch: 'main', primary: true }],
     });
     const automation = await services.automations.createScheduled({
       name: 'Environment automation',
       prompt: 'Run against the environment',
       scheduleCron: '0 9 * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
       environmentId: environment.id,
       context: {
         environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'api' }],
@@ -118,7 +106,6 @@ describe('scheduled automations', () => {
         revisionId: environment.currentRevisionId,
         revisionNumber: 1,
         name: 'Product surface',
-        ownerGroupId: defaultGroupId,
         codebase: {
           repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
         },
@@ -131,16 +118,12 @@ describe('scheduled automations', () => {
     const services = createServices(store);
     const environment = await services.environments.create({
       name: 'Pinned codebase',
-      ownerGroupId: defaultGroupId,
       repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
     });
     const automation = await services.automations.createScheduled({
       name: 'Pinned automation',
       prompt: 'Use the pinned revision',
       scheduleCron: '0 9 * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
       environmentId: environment.id,
       environmentRevisionPolicy: 'pinned',
       environmentRevisionId: environment.currentRevisionId,
@@ -167,16 +150,12 @@ describe('scheduled automations', () => {
     const services = createServices(store);
     const environment = await services.environments.create({
       name: 'Policy transition codebase',
-      ownerGroupId: defaultGroupId,
       repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
     });
     const pinned = await services.automations.createScheduled({
       name: 'Policy transition automation',
       prompt: 'Use the selected revision policy',
       scheduleCron: '0 9 * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
       environmentId: environment.id,
       environmentRevisionPolicy: 'pinned',
       environmentRevisionId: environment.currentRevisionId,
@@ -196,16 +175,12 @@ describe('scheduled automations', () => {
     const services = createServices(store);
     const environment = await services.environments.create({
       name: 'Latest codebase',
-      ownerGroupId: defaultGroupId,
       repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
     });
     const automation = await services.automations.createScheduled({
       name: 'Latest automation',
       prompt: 'Use the latest revision',
       scheduleCron: '0 9 * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
       environmentId: environment.id,
     });
     const revised = await services.environments.update({
@@ -232,9 +207,6 @@ describe('scheduled automations', () => {
       name: 'Weekday check',
       prompt: 'Run the weekday check',
       scheduleCron: '* * * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
     });
     await setNextInvocationAt(store, automation, new Date('2026-06-08T09:00:00Z'), now);
 
@@ -256,9 +228,6 @@ describe('scheduled automations', () => {
       name: 'Overlap guard',
       prompt: 'Run without overlap',
       scheduleCron: '* * * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
     });
     await setNextInvocationAt(store, automation, new Date('2026-06-08T09:00:00Z'), now);
     await services.automations.processNextScheduled({ now, lockOwner: 'scheduler-1' });
@@ -283,9 +252,6 @@ describe('scheduled automations', () => {
       name: 'No catch-up',
       prompt: 'Do not run late',
       scheduleCron: '* * * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
     });
     await setNextInvocationAt(store, automation, new Date('2026-06-08T09:00:00Z'), now);
 
@@ -305,9 +271,6 @@ describe('scheduled automations', () => {
       name: 'Retry stale creating',
       prompt: 'Recover this invocation',
       scheduleCron: '* * * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
     });
     await setNextInvocationAt(store, automation, scheduledAt, now);
     await store.createAutomationInvocation({
@@ -339,17 +302,11 @@ describe('scheduled automations', () => {
       name: 'Retry reserved creating',
       prompt: 'Recover reserved invocation',
       scheduleCron: '* * * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
     });
     await setNextInvocationAt(store, automation, scheduledAt, now);
     await services.sessions.create({
       id: sessionId,
       title: 'Retry reserved creating - 2026-06-08 09:00 UTC',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
     });
     await services.messages.enqueue({
       id: messageId,
@@ -385,9 +342,6 @@ describe('scheduled automations', () => {
       name: 'Manual lock guard',
       prompt: 'Do not overlap lock',
       scheduleCron: '* * * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
     });
     await store.claimAutomation({
       automationId: automation.id,
@@ -412,7 +366,6 @@ describe('scheduled automations', () => {
         name: 'API automation',
         prompt: 'Run from API',
         scheduleCron: '0 9 * * 1-5',
-        ownerGroupId: defaultGroupId,
         repository: 'acme/widget',
         branch: 'main',
         model: 'anthropic/claude-sonnet',
@@ -480,7 +433,6 @@ describe('scheduled automations', () => {
     const app = createApp(loadConfig({ API_AUTH_MODE: 'none' }), services);
     const environment = await services.environments.create({
       name: 'API environment',
-      ownerGroupId: defaultGroupId,
       repositories: [{ provider: 'github', owner: 'acme', repo: 'api', primary: true }],
     });
 
@@ -490,7 +442,6 @@ describe('scheduled automations', () => {
         name: 'Environment API automation',
         prompt: 'Run from API',
         scheduleCron: '0 9 * * 1-5',
-        ownerGroupId: defaultGroupId,
         environmentId: environment.id,
         environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'api', branch: 'release' }],
       }),
@@ -511,7 +462,6 @@ describe('scheduled automations', () => {
         name: 'Pinned environment API automation',
         prompt: 'Keep using this revision',
         scheduleCron: '0 9 * * 1-5',
-        ownerGroupId: defaultGroupId,
         environmentId: environment.id,
         environmentRevisionPolicy: 'pinned',
         environmentRevisionId: environment.currentRevisionId,
@@ -542,7 +492,6 @@ describe('scheduled automations', () => {
         name: 'Invalid environment API automation',
         prompt: 'Run from API',
         scheduleCron: '0 9 * * 1-5',
-        ownerGroupId: defaultGroupId,
         environmentId: environment.id,
         environmentBranchOverrides: [{ provider: 'github', owner: 'acme', repo: 'worker', branch: 'release' }],
       }),
@@ -554,78 +503,6 @@ describe('scheduled automations', () => {
     });
   });
 
-  it('enforces per-group automation creation policy', async () => {
-    const now = new Date('2026-06-08T09:00:00Z');
-    const store = new MemoryStore();
-    const services = createServices(store);
-    const app = createApp(
-      loadConfig({
-        API_AUTH_MODE: 'session',
-        AUTH_SESSION_SECRET: 'test-secret',
-        AUTH_STATIC_USERNAME: 'admin',
-        AUTH_STATIC_PASSWORD: 'password',
-      }),
-      services,
-    );
-    const member = await createSignedInUser(store, {
-      userId: '00000000-0000-4000-8000-000000000401',
-      sessionId: 'member-session',
-      username: 'member',
-      role: 'user',
-      groupRole: 'member',
-      now,
-    });
-    const admin = await createSignedInUser(store, {
-      userId: '00000000-0000-4000-8000-000000000402',
-      sessionId: 'admin-session',
-      username: 'group-admin',
-      role: 'user',
-      groupRole: 'admin',
-      now,
-    });
-    const superAdmin = await createSignedInUser(store, {
-      userId: '00000000-0000-4000-8000-000000000403',
-      sessionId: 'super-session',
-      username: 'super-admin',
-      role: 'super_admin',
-      now,
-    });
-
-    const memberAllowed = await app.request(
-      '/automations',
-      jsonRequest(automationCreateBody('Member-created automation'), 'POST', member.cookie),
-    );
-    expect(memberAllowed.status).toBe(201);
-
-    const group = await store.getGroup(defaultGroupId);
-    await store.updateGroup({ ...group!, automationCreateRequiredRole: 'admin', updatedAt: now });
-
-    const groupsForMember = await app.request('/groups', { headers: { cookie: member.cookie } });
-    expect(groupsForMember.status).toBe(200);
-    await expect(groupsForMember.json()).resolves.toMatchObject({
-      groups: [{ automationCreateRequiredRole: 'admin', canCreateAutomations: false }],
-    });
-
-    const memberBlocked = await app.request(
-      '/automations',
-      jsonRequest(automationCreateBody('Blocked member automation'), 'POST', member.cookie),
-    );
-    expect(memberBlocked.status).toBe(403);
-    await expect(memberBlocked.json()).resolves.toMatchObject({ error: 'forbidden' });
-
-    const adminAllowed = await app.request(
-      '/automations',
-      jsonRequest(automationCreateBody('Admin-created automation'), 'POST', admin.cookie),
-    );
-    expect(adminAllowed.status).toBe(201);
-
-    const superAllowed = await app.request(
-      '/automations',
-      jsonRequest(automationCreateBody('Super-created automation'), 'POST', superAdmin.cookie),
-    );
-    expect(superAllowed.status).toBe(201);
-  });
-
   it('archives, restores, and blocks archived automation enablement and invocation', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -634,9 +511,6 @@ describe('scheduled automations', () => {
       name: 'Archive me',
       prompt: 'Do not run archived',
       scheduleCron: '* * * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
     });
 
     const archiveResponse = await app.request(`/automations/${automation.id}/archive`, jsonRequest({}));
@@ -645,12 +519,14 @@ describe('scheduled automations', () => {
     expect(archiveBody.automation.enabled).toBe(false);
     expect(archiveBody.automation.archivedAt).toBeTruthy();
 
-    await store.updateAutomation({
-      id: automation.id,
-      enabled: true,
-      nextInvocationAt: new Date('2026-06-08T09:00:00Z'),
-      updatedAt: new Date('2026-06-08T08:59:00Z'),
-    });
+    await expect(
+      store.updateAutomation({
+        id: automation.id,
+        enabled: true,
+        nextInvocationAt: new Date('2026-06-08T09:00:00Z'),
+        updatedAt: new Date('2026-06-08T08:59:00Z'),
+      }),
+    ).rejects.toMatchObject({ code: 'automation_archived' });
     await expect(
       services.automations.processNextScheduled({ now: new Date('2026-06-08T09:00:30Z'), lockOwner: 'scheduler-1' }),
     ).resolves.toBe(false);
@@ -684,9 +560,6 @@ describe('scheduled automations', () => {
       name: 'Paged history',
       prompt: 'Create history',
       scheduleCron: '* * * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
     });
 
     for (let index = 0; index < 25; index += 1) {
@@ -716,78 +589,6 @@ describe('scheduled automations', () => {
     expect(secondBody.invocations.some((invocation) => firstIds.has(invocation.id))).toBe(false);
     expect(secondBody.nextCursor).toBeUndefined();
   });
-
-  it('suspends group-owned automations when archiving a group', async () => {
-    const store = new MemoryStore();
-    const services = createServices(store);
-    const app = createApp(loadConfig({ API_AUTH_MODE: 'none' }), services);
-    const automation = await services.automations.createScheduled({
-      name: 'Archive suspends me',
-      prompt: 'Should not keep running',
-      scheduleCron: '* * * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
-    });
-
-    const archiveResponse = await app.request(`/groups/${defaultGroupId}`, jsonRequest({ archived: true }, 'PATCH'));
-    expect(archiveResponse.status).toBe(200);
-
-    await expect(services.automations.get(automation.id)).resolves.toMatchObject({ enabled: true });
-    await setNextInvocationAt(
-      store,
-      (await services.automations.get(automation.id))!,
-      new Date('2026-06-08T09:00:00Z'),
-      new Date('2026-06-08T08:59:00Z'),
-    );
-
-    await expect(
-      services.automations.processNextScheduled({ now: new Date('2026-06-08T09:00:30Z'), lockOwner: 'scheduler-1' }),
-    ).resolves.toBe(true);
-    const invocations = await services.automations.listInvocations(automation.id);
-    expect(invocations[0]).toMatchObject({ status: 'skipped', reason: 'owner_group_archived' });
-    await expect(services.sessions.list()).resolves.toHaveLength(0);
-
-    const invokeResponse = await app.request(`/automations/${automation.id}/invoke`, jsonRequest({}));
-    expect(invokeResponse.status).toBe(409);
-    await expect(invokeResponse.json()).resolves.toMatchObject({ error: 'archived_group' });
-
-    const editResponse = await app.request(
-      `/automations/${automation.id}`,
-      jsonRequest({ enabled: false, name: 'Edited while suspended' }, 'PATCH'),
-    );
-    expect(editResponse.status).toBe(200);
-    await expect(editResponse.json()).resolves.toMatchObject({
-      automation: { enabled: false, name: 'Edited while suspended' },
-    });
-
-    const enableResponse = await app.request(`/automations/${automation.id}`, jsonRequest({ enabled: true }, 'PATCH'));
-    expect(enableResponse.status).toBe(200);
-    await expect(enableResponse.json()).resolves.toMatchObject({ automation: { enabled: true } });
-  });
-
-  it('uses the manual requester as creator for creator-only automation sessions', async () => {
-    const services = createServices(new MemoryStore());
-    const automation = await services.automations.createScheduled({
-      name: 'Creator-only automation',
-      prompt: 'Keep requester write access',
-      scheduleCron: '* * * * *',
-      ownerGroupId: defaultGroupId,
-      visibility: 'group',
-      writePolicy: 'creator_only',
-      createdByUserId: '00000000-0000-4000-8000-000000000301',
-    });
-
-    const result = await services.automations.invokeManual({
-      automationId: automation.id,
-      requestedByUserId: '00000000-0000-4000-8000-000000000302',
-    });
-
-    expect(result.session).toMatchObject({
-      writePolicy: 'creator_only',
-      createdByUserId: '00000000-0000-4000-8000-000000000302',
-    });
-  });
 });
 
 async function setNextInvocationAt(
@@ -801,54 +602,6 @@ async function setNextInvocationAt(
     nextInvocationAt,
     updatedAt,
   });
-}
-
-function automationCreateBody(name: string): Record<string, unknown> {
-  return {
-    name,
-    prompt: 'Run from policy test',
-    scheduleCron: '0 9 * * *',
-    ownerGroupId: defaultGroupId,
-  };
-}
-
-async function createSignedInUser(
-  store: MemoryStore,
-  input: {
-    userId: string;
-    sessionId: string;
-    username: string;
-    role: 'user' | 'super_admin';
-    groupRole?: 'viewer' | 'member' | 'admin';
-    now: Date;
-  },
-): Promise<{ cookie: string }> {
-  const user = await store.upsertAuthUserForAccount({
-    userId: input.userId,
-    accountId: input.userId,
-    provider: 'test',
-    providerAccountId: input.username,
-    username: input.username,
-    role: input.role,
-    profile: {},
-    now: input.now,
-  });
-  await store.createAuthSession({
-    id: input.sessionId,
-    userId: user.id,
-    createdAt: input.now,
-    expiresAt: new Date('2999-01-01T00:00:00Z'),
-  });
-  if (input.groupRole) {
-    await store.upsertGroupMember({
-      groupId: defaultGroupId,
-      userId: user.id,
-      role: input.groupRole,
-      createdAt: input.now,
-      updatedAt: input.now,
-    });
-  }
-  return { cookie: `dev_deputies_session=${input.sessionId}` };
 }
 
 function jsonRequest(body: Record<string, unknown>, method = 'POST', cookie?: string): RequestInit {

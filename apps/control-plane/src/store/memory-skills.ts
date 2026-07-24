@@ -1,106 +1,69 @@
 import { StoreConflictError } from './types.js';
 import type {
   CreateSkillRecord,
-  SkillOwnerKind,
   SkillRecord,
   SkillRevisionRecord,
   SkillRevisionSelection,
   SkillRunCandidate,
-  SkillShareMode,
   SkillStore,
   UpdateSkillRecord,
 } from './types.js';
 
-type MemorySkillStoreDependencies = {
-  userExists(userId: string): boolean;
-  getGroupState(groupId: string): { archived: boolean } | null;
-};
-
 export class MemorySkillStore implements SkillStore {
   private readonly skills = new Map<string, SkillRecord>();
   private readonly skillRevisions = new Map<string, SkillRevisionRecord>();
-  private readonly skillSharesByGroup = new Map<string, Set<string>>();
-
-  constructor(private readonly dependencies: MemorySkillStoreDependencies) {}
 
   async createSkill(record: CreateSkillRecord): Promise<SkillRecord> {
     if (this.skills.has(record.id)) throw new Error(`Skill already exists: ${record.id}`);
-    this.assertSkillOwner(record);
-    if (record.ownerKind === 'group') this.assertActiveGroup(record.ownerGroupId);
-    if (
-      record.ownerKind === 'user' &&
-      ((record.shareMode !== undefined && record.shareMode !== 'none') || Boolean(record.shareGroupIds?.length))
-    ) {
-      throw new Error(`Personal skill cannot be shared: ${record.id}`);
-    }
-    const shareGroupIds =
-      record.ownerKind === 'group' && record.shareMode === 'specific'
-        ? this.validatedSkillShares({ shareGroupIds: [], id: record.id }, record.shareGroupIds ?? [])
-        : [];
-    const ownerId = record.ownerKind === 'group' ? record.ownerGroupId : record.ownerUserId;
-    this.assertSkillNameAvailable(record.revision.name, record.ownerKind, ownerId);
+    this.assertSkillNameAvailable(record.revision.name, record.scope, record.ownerUserId);
     const revision: SkillRevisionRecord = { ...record.revision, skillId: record.id, revisionNumber: 1 };
+    const ownership =
+      record.scope === 'personal'
+        ? { scope: 'personal' as const, ownerUserId: record.ownerUserId }
+        : { scope: 'tenant' as const };
     const skill: SkillRecord = {
       id: record.id,
-      name: record.revision.name,
-      description: record.revision.description,
-      body: record.revision.body,
+      ...ownership,
+      name: revision.name,
+      description: revision.description,
+      body: revision.body,
       currentRevisionId: revision.id,
-      currentRevisionNumber: revision.revisionNumber,
-      autoLoad: record.autoLoad ?? true,
+      currentRevisionNumber: 1,
+      autoLoad: record.scope === 'personal' ? false : (record.autoLoad ?? true),
       enabled: record.enabled ?? true,
-      shareGroupIds,
+      ...(record.createdByUserId ? { createdByUserId: record.createdByUserId } : {}),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
-      ...(record.ownerKind === 'group'
-        ? { ownerKind: record.ownerKind, ownerGroupId: record.ownerGroupId, shareMode: record.shareMode ?? 'none' }
-        : { ownerKind: record.ownerKind, ownerUserId: record.ownerUserId, shareMode: record.shareMode ?? 'none' }),
-      ...(record.createdByUserId ? { createdByUserId: record.createdByUserId } : {}),
     };
-    this.skillRevisions.set(revision.id, cloneSkillRevision(revision));
+    this.skillRevisions.set(revision.id, { ...revision });
     this.skills.set(skill.id, skill);
-    if (shareGroupIds.length) this.replaceSkillShares(skill.id, [], shareGroupIds);
-    return cloneSkill(skill);
+    return { ...skill };
   }
 
   async getSkill(id: string): Promise<SkillRecord | null> {
     const skill = this.skills.get(id);
-    return skill ? cloneSkill(skill) : null;
+    return skill ? { ...skill } : null;
   }
-
+  async listSkills(input: { userId?: string }): Promise<SkillRecord[]> {
+    return this.sortedSkills((skill) => this.visible(skill, input.userId));
+  }
   async listSkillRevisions(skillId: string): Promise<SkillRevisionRecord[]> {
     return [...this.skillRevisions.values()]
       .filter((revision) => revision.skillId === skillId)
-      .sort((left, right) => right.revisionNumber - left.revisionNumber)
-      .map(cloneSkillRevision);
+      .sort((a, b) => b.revisionNumber - a.revisionNumber)
+      .map((revision) => ({ ...revision }));
   }
 
   async updateSkill(input: UpdateSkillRecord): Promise<SkillRecord> {
     const existing = this.skills.get(input.id);
     if (!existing) throw new Error(`Skill does not exist: ${input.id}`);
-    this.assertActiveSkill(existing);
-    if (input.revision && existing.currentRevisionId !== input.expectedCurrentRevisionId) {
+    if (existing.archivedAt) throw new StoreConflictError('skill_archived', 'Restore this skill before editing it');
+    if (input.revision && existing.currentRevisionId !== input.expectedCurrentRevisionId)
       throw new StoreConflictError('skill_update_conflict', 'The skill changed while it was being edited');
-    }
-    if (input.revision) {
-      this.assertSkillNameAvailable(
-        input.revision.name,
-        existing.ownerKind,
-        existing.ownerKind === 'group' ? existing.ownerGroupId : existing.ownerUserId,
-        existing.id,
-      );
-    }
-    if (input.sharing && existing.ownerKind !== 'group') {
-      throw new Error(`Personal skill cannot be shared: ${input.id}`);
-    }
-    const shareGroupIds =
-      input.sharing?.shareMode === 'specific' ? this.validatedSkillShares(existing, input.sharing.groupIds) : undefined;
-    const revision: SkillRevisionRecord | undefined = input.revision
-      ? {
-          ...input.revision,
-          skillId: existing.id,
-          revisionNumber: existing.currentRevisionNumber + 1,
-        }
+    if (input.revision)
+      this.assertSkillNameAvailable(input.revision.name, existing.scope, existing.ownerUserId, input.id);
+    const revision = input.revision
+      ? { ...input.revision, skillId: input.id, revisionNumber: existing.currentRevisionNumber + 1 }
       : undefined;
     const updated: SkillRecord = {
       ...existing,
@@ -114,127 +77,70 @@ export class MemorySkillStore implements SkillStore {
             currentRevisionNumber: revision.revisionNumber,
           }
         : {}),
-      ...(input.autoLoad !== undefined ? { autoLoad: input.autoLoad } : {}),
+      ...(input.autoLoad !== undefined ? { autoLoad: existing.scope === 'personal' ? false : input.autoLoad } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-      ...(input.sharing
-        ? {
-            shareMode: input.sharing.shareMode,
-            ...(shareGroupIds ? { shareGroupIds } : {}),
-          }
-        : {}),
     };
-    if (shareGroupIds) this.replaceSkillShares(existing.id, existing.shareGroupIds, shareGroupIds);
-    if (revision) this.skillRevisions.set(revision.id, cloneSkillRevision(revision));
+    if (revision) this.skillRevisions.set(revision.id, revision);
     this.skills.set(input.id, updated);
-    return cloneSkill(updated);
+    return { ...updated };
   }
 
   async archiveSkill(input: { skillId: string; archivedAt: Date }): Promise<SkillRecord | null> {
-    const existing = this.skills.get(input.skillId);
-    if (!existing) return null;
-    const archived = {
-      ...existing,
-      archivedAt: existing.archivedAt ?? input.archivedAt,
-      updatedAt: input.archivedAt,
-    };
-    this.skills.set(input.skillId, archived);
-    return cloneSkill(archived);
+    const skill = this.skills.get(input.skillId);
+    if (!skill) return null;
+    const archived = { ...skill, archivedAt: skill.archivedAt ?? input.archivedAt, updatedAt: input.archivedAt };
+    this.skills.set(skill.id, archived);
+    return { ...archived };
   }
-
   async restoreSkill(input: { skillId: string; updatedAt: Date }): Promise<SkillRecord | null> {
-    const existing = this.skills.get(input.skillId);
-    if (!existing) return null;
-    if (existing.ownerGroupId) this.assertActiveGroup(existing.ownerGroupId);
-    const { archivedAt: _archivedAt, ...active } = existing;
+    const skill = this.skills.get(input.skillId);
+    if (!skill) return null;
+    this.assertSkillNameAvailable(skill.name, skill.scope, skill.ownerUserId, skill.id);
+    const { archivedAt: _, ...active } = skill;
     const restored = { ...active, updatedAt: input.updatedAt };
-    this.skills.set(input.skillId, restored);
-    return cloneSkill(restored);
+    this.skills.set(skill.id, restored);
+    return { ...restored };
   }
 
-  async promoteSkill(id: string, groupId: string, now: Date): Promise<SkillRecord | null> {
-    const existing = this.skills.get(id);
-    if (!existing || existing.ownerKind !== 'user') return null;
-    this.assertActiveSkill(existing);
-    this.assertActiveGroup(groupId);
-    this.assertSkillNameAvailable(existing.name, 'group', groupId, id);
-    const { ownerUserId: _ownerUserId, ...withoutUserOwner } = existing;
-    const promoted: SkillRecord = {
-      ...withoutUserOwner,
-      ownerKind: 'group',
-      ownerGroupId: groupId,
-      shareMode: 'none',
-      updatedAt: now,
-    };
-    this.skills.set(id, promoted);
-    return cloneSkill(promoted);
+  async listSkillInvocationCandidates(input: { userId?: string }): Promise<SkillRunCandidate[]> {
+    return this.currentCandidates((skill) => this.visible(skill, input.userId));
   }
-
-  async setSkillShares(
-    id: string,
-    shareMode: SkillShareMode,
-    groupIds: string[],
-    now: Date,
-  ): Promise<SkillRecord | null> {
-    const existing = this.skills.get(id);
-    if (!existing || existing.ownerKind !== 'group') return null;
-    this.assertActiveSkill(existing);
-    const shareGroupIds =
-      shareMode === 'specific' ? this.validatedSkillShares(existing, groupIds) : existing.shareGroupIds;
-    if (shareMode === 'specific') this.replaceSkillShares(existing.id, existing.shareGroupIds, shareGroupIds);
-    const updated: SkillRecord = { ...existing, shareMode, shareGroupIds, updatedAt: now };
-    this.skills.set(id, updated);
-    return cloneSkill(updated);
-  }
-
-  async listSkillsForUser(userId: string): Promise<SkillRecord[]> {
-    return this.sortedSkills((skill) => skill.ownerKind === 'user' && skill.ownerUserId === userId);
-  }
-
-  async listSkillsForGroups(groupIds: string[]): Promise<SkillRecord[]> {
-    const groups = new Set(groupIds);
-    return this.sortedSkills((skill) => skill.ownerKind === 'group' && groups.has(skill.ownerGroupId));
-  }
-
-  async listSkillsSharedIntoGroups(groupIds: string[]): Promise<SkillRecord[]> {
-    if (!groupIds.length) return [];
-    const groups = new Set(groupIds);
-    const specificallyShared = new Set(
-      groupIds.flatMap((groupId) => [...(this.skillSharesByGroup.get(groupId) ?? [])]),
-    );
-    return this.sortedSkills(
-      (skill) =>
-        skill.ownerKind === 'group' &&
-        !groups.has(skill.ownerGroupId) &&
-        (skill.shareMode === 'all_groups' || (skill.shareMode === 'specific' && specificallyShared.has(skill.id))),
-    );
-  }
-
   async listSkillsForRun(input: {
-    ownerGroupId: string;
-    createdByUserId?: string;
+    userId?: string;
     invokedNames?: string[];
     invokedRevisions?: SkillRevisionSelection[];
   }): Promise<SkillRunCandidate[]> {
-    const invoked = new Set(input.invokedNames ?? []);
-    const eligible = this.currentCandidates(input, (skill) => skill.autoLoad || invoked.has(skill.name));
+    const names = new Set(input.invokedNames ?? []);
+    const current = this.currentCandidates(
+      (skill) =>
+        this.visible(skill, input.userId) && ((skill.scope === 'tenant' && skill.autoLoad) || names.has(skill.name)),
+    );
     const pinned = (input.invokedRevisions ?? []).flatMap((selection): SkillRunCandidate[] => {
-      const skill = this.skills.get(selection.skillId);
-      const revision = this.skillRevisions.get(selection.revisionId);
-      if (!skill || !revision || revision.skillId !== skill.id || !this.skillAvailableForRun(skill, input)) return [];
+      const skill = this.skills.get(selection.skillId),
+        revision = this.skillRevisions.get(selection.revisionId);
+      if (
+        !skill ||
+        !revision ||
+        revision.skillId !== skill.id ||
+        skill.archivedAt ||
+        !skill.enabled ||
+        !this.visible(skill, input.userId)
+      )
+        return [];
       return [
         {
-          ...cloneSkill(skill),
+          ...skill,
           name: revision.name,
           description: revision.description,
           body: revision.body,
-          source: skillSourceForRun(skill, input.ownerGroupId),
+          source: 'managed',
           resolvedRevisionId: revision.id,
           resolvedRevisionNumber: revision.revisionNumber,
         },
       ];
     });
     const seen = new Set<string>();
-    return [...eligible, ...pinned].filter((skill) => {
+    return [...current, ...pinned].filter((skill) => {
       const key = `${skill.id}:${skill.resolvedRevisionId}`;
       if (seen.has(key)) return false;
       seen.add(key);
@@ -242,126 +148,44 @@ export class MemorySkillStore implements SkillStore {
     });
   }
 
-  async listSkillInvocationCandidates(input: { ownerGroupId: string; userId?: string }): Promise<SkillRunCandidate[]> {
-    return this.currentCandidates(
-      { ownerGroupId: input.ownerGroupId, ...(input.userId ? { createdByUserId: input.userId } : {}) },
-      () => true,
-    );
-  }
-
-  private currentCandidates(
-    input: { ownerGroupId: string; createdByUserId?: string },
-    include: (skill: SkillRecord) => boolean,
-  ): SkillRunCandidate[] {
-    const specificallyShared = this.skillSharesByGroup.get(input.ownerGroupId) ?? new Set<string>();
+  private currentCandidates(include: (skill: SkillRecord) => boolean): SkillRunCandidate[] {
     return [...this.skills.values()]
-      .filter((skill) => include(skill) && this.skillAvailableForRun(skill, input, specificallyShared))
-      .map((skill) => runCandidate(skill, skillSourceForRun(skill, input.ownerGroupId)))
-      .sort(compareSkillsOldestFirst);
+      .filter((skill) => skill.enabled && !skill.archivedAt && include(skill))
+      .sort(compareSkills)
+      .map((skill) => ({
+        ...skill,
+        source: 'managed',
+        resolvedRevisionId: skill.currentRevisionId,
+        resolvedRevisionNumber: skill.currentRevisionNumber,
+      }));
   }
-
-  private skillAvailableForRun(
-    skill: SkillRecord,
-    input: { ownerGroupId: string; createdByUserId?: string },
-    specificallyShared = this.skillSharesByGroup.get(input.ownerGroupId) ?? new Set<string>(),
-  ): boolean {
-    if (
-      !skill.enabled ||
-      skill.archivedAt ||
-      (skill.ownerGroupId && this.dependencies.getGroupState(skill.ownerGroupId)?.archived)
-    ) {
-      return false;
-    }
-    if (skill.ownerKind === 'user') {
-      return Boolean(input.createdByUserId && skill.ownerUserId === input.createdByUserId);
-    }
-    if (skill.ownerGroupId === input.ownerGroupId) return true;
-    return skill.shareMode === 'all_groups' || (skill.shareMode === 'specific' && specificallyShared.has(skill.id));
-  }
-
-  private assertSkillOwner(record: CreateSkillRecord): void {
-    if (record.ownerKind === 'group' && this.dependencies.getGroupState(record.ownerGroupId)) return;
-    if (record.ownerKind === 'user' && this.dependencies.userExists(record.ownerUserId)) return;
-    throw new Error('Invalid skill owner');
-  }
-
   private assertSkillNameAvailable(
     name: string,
-    ownerKind: SkillOwnerKind,
-    ownerId: string,
-    exceptSkillId?: string,
+    scope: SkillRecord['scope'],
+    ownerUserId?: string,
+    except?: string,
   ): void {
-    const normalized = name.toLowerCase();
-    const conflict = [...this.skills.values()].some(
-      (skill) =>
-        skill.id !== exceptSkillId &&
-        skill.ownerKind === ownerKind &&
-        (ownerKind === 'group' ? skill.ownerGroupId : skill.ownerUserId) === ownerId &&
-        skill.name.toLowerCase() === normalized,
-    );
-    if (conflict) throw new StoreConflictError('skill_name_exists', 'Skill name already exists');
+    if (
+      [...this.skills.values()].some(
+        (skill) =>
+          skill.id !== except &&
+          skill.scope === scope &&
+          (scope === 'tenant' || (!skill.archivedAt && skill.ownerUserId === ownerUserId)) &&
+          skill.name.trim().toLowerCase() === name.trim().toLowerCase(),
+      )
+    )
+      throw new StoreConflictError('skill_name_exists', 'Skill name already exists');
   }
-
-  private validatedSkillShares(skill: Pick<SkillRecord, 'id' | 'shareGroupIds'>, groupIds: string[]): string[] {
-    const replacement = [...new Set(groupIds)].sort(compareStringAsc);
-    const existing = new Set(skill.shareGroupIds);
-    for (const groupId of replacement) {
-      if (!existing.has(groupId)) this.assertActiveGroup(groupId);
-    }
-    return replacement;
+  private visible(skill: SkillRecord, userId?: string): boolean {
+    return skill.scope === 'tenant' || (userId !== undefined && skill.ownerUserId === userId);
   }
-
-  private replaceSkillShares(skillId: string, previousGroupIds: string[], replacement: string[]): void {
-    for (const groupId of previousGroupIds) this.skillSharesByGroup.get(groupId)?.delete(skillId);
-    for (const groupId of replacement) {
-      const skillIds = this.skillSharesByGroup.get(groupId) ?? new Set<string>();
-      skillIds.add(skillId);
-      this.skillSharesByGroup.set(groupId, skillIds);
-    }
-  }
-
-  private assertActiveSkill(skill: SkillRecord): void {
-    if (skill.archivedAt) throw new StoreConflictError('skill_archived', 'Restore this skill before editing it');
-    if (skill.ownerGroupId) this.assertActiveGroup(skill.ownerGroupId);
-  }
-
-  private assertActiveGroup(groupId: string): void {
-    const group = this.dependencies.getGroupState(groupId);
-    if (!group) throw new Error(`Group does not exist: ${groupId}`);
-    if (group.archived) throw new StoreConflictError('archived_group', 'Cannot modify skills in an archived group');
-  }
-
   private sortedSkills(predicate: (skill: SkillRecord) => boolean): SkillRecord[] {
-    return [...this.skills.values()].filter(predicate).sort(compareSkillsOldestFirst).map(cloneSkill);
+    return [...this.skills.values()]
+      .filter(predicate)
+      .sort(compareSkills)
+      .map((skill) => ({ ...skill }));
   }
 }
-
-function runCandidate(skill: SkillRecord, source: SkillRunCandidate['source']): SkillRunCandidate {
-  return {
-    ...cloneSkill(skill),
-    source,
-    resolvedRevisionId: skill.currentRevisionId,
-    resolvedRevisionNumber: skill.currentRevisionNumber,
-  };
-}
-
-function skillSourceForRun(skill: SkillRecord, ownerGroupId: string): SkillRunCandidate['source'] {
-  if (skill.ownerKind === 'user') return 'personal';
-  return skill.ownerGroupId === ownerGroupId ? 'group' : 'shared';
-}
-
-function cloneSkill(skill: SkillRecord): SkillRecord {
-  return { ...skill, shareGroupIds: [...skill.shareGroupIds] };
-}
-
-function cloneSkillRevision(revision: SkillRevisionRecord): SkillRevisionRecord {
-  return { ...revision };
-}
-
-function compareSkillsOldestFirst(left: SkillRecord, right: SkillRecord): number {
-  return left.createdAt.getTime() - right.createdAt.getTime() || compareStringAsc(left.id, right.id);
-}
-
-function compareStringAsc(left: string, right: string): number {
-  return left.localeCompare(right);
+function compareSkills(a: SkillRecord, b: SkillRecord): number {
+  return a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id);
 }

@@ -23,14 +23,16 @@ describe('snippets API', () => {
   });
   afterEach(() => closeServer(server));
 
-  it('lists, creates, updates, archives, and restores personal snippets', async () => {
+  it('lists, reads, updates, archives, and restores snippets only for their owner', async () => {
     const user = await createUser('alice');
+    const other = await createUser('bob');
     const createdResponse = await json('/snippets', user, 'POST', { name: 'review-pr', body: 'Review this' });
     expect(createdResponse.status).toBe(201);
     const created = ((await createdResponse.json()) as { snippet: { id: string } }).snippet;
-    await expect(request('/snippets', user).then((r) => r.json())).resolves.toMatchObject({
-      snippets: [{ id: created.id, name: 'review-pr', body: 'Review this' }],
-    });
+    expect(created).not.toHaveProperty('ownerUserId');
+    await expect(request('/snippets', other).then((r) => r.json())).resolves.toEqual({ snippets: [] });
+    expect((await request(`/snippets/${created.id}`, other)).status).toBe(404);
+    expect((await json(`/snippets/${created.id}`, other, 'PATCH', { body: 'Review carefully' })).status).toBe(404);
     await expect(
       json(`/snippets/${created.id}`, user, 'PATCH', { body: 'Review carefully' }).then((r) => r.json()),
     ).resolves.toMatchObject({ snippet: { body: 'Review carefully' } });
@@ -67,19 +69,22 @@ describe('snippets API', () => {
     }
   });
 
-  it('does not reveal or mutate another user’s snippets', async () => {
-    const alice = await createUser('alice-owner');
-    const bob = await createUser('bob-other');
-    const created = (await (await json('/snippets', alice, 'POST', { name: 'private', body: 'Secret' })).json()) as {
+  it('allows viewers to manage their own snippets without seeing another user’s snippets', async () => {
+    const member = await createUser('member');
+    const viewer = await createUser('viewer', 'viewer');
+    const created = (await (await json('/snippets', member, 'POST', { name: 'shared', body: 'Visible' })).json()) as {
       snippet: { id: string };
     };
-    await expect(request('/snippets', bob).then((r) => r.json())).resolves.toEqual({ snippets: [] });
+    await expect(request('/snippets', viewer).then((r) => r.json())).resolves.toEqual({ snippets: [] });
+    expect((await request(`/snippets/${created.snippet.id}`, viewer)).status).toBe(404);
     for (const [path, method, body] of [
       [`/snippets/${created.snippet.id}`, 'PATCH', { body: 'stolen' }],
       [`/snippets/${created.snippet.id}/archive`, 'POST', {}],
       [`/snippets/${created.snippet.id}/restore`, 'POST', {}],
     ] as const)
-      expect((await json(path, bob, method, body)).status).toBe(404);
+      expect((await json(path, viewer, method, body)).status).toBe(404);
+    const own = await json('/snippets', viewer, 'POST', { name: 'mine', body: 'Private' });
+    expect(own.status).toBe(201);
   });
 
   it('rejects malformed snippet ids before store access', async () => {
@@ -104,7 +109,10 @@ describe('snippets API', () => {
     await expect(response.json()).resolves.toMatchObject({ error: 'unauthorized' });
   });
 
-  async function createUser(username: string): Promise<{ cookie: string }> {
+  async function createUser(
+    username: string,
+    role: 'viewer' | 'member' | 'admin' = 'member',
+  ): Promise<{ cookie: string }> {
     const now = new Date();
     const suffix = String([...username].reduce((sum, char) => sum + char.charCodeAt(0), 0)).padStart(12, '0');
     const user = await store.upsertAuthUserForAccount({
@@ -113,7 +121,7 @@ describe('snippets API', () => {
       provider: 'snippet-test',
       providerAccountId: username,
       username,
-      role: 'user',
+      role,
       profile: {},
       now,
     });

@@ -1,6 +1,5 @@
 import type { QueryResultRow } from 'pg';
 import type { NormalizedEventPayload, NormalizedEventType } from '../../events/types.js';
-import { defaultGroupId } from '../types.js';
 import type {
   ArtifactRecord,
   AutomationInvocationRecord,
@@ -20,14 +19,9 @@ import type {
   EnvironmentRevisionPolicy,
   EnvironmentRevisionRepository,
   EnvironmentActivityType,
-  EnvironmentShareMode,
   EventRecord,
   ExternalResourceRecord,
   ExternalThreadRecord,
-  GroupMemberRecord,
-  GroupMemberWithUserRecord,
-  GroupRecord,
-  GroupRole,
   IntegrationDeliveryRecord,
   MessageRecord,
   MessageStatus,
@@ -37,9 +31,7 @@ import type {
   SandboxStatus,
   SessionRecord,
   SessionStatus,
-  SessionVisibility,
   SessionWithSandboxRecord,
-  SessionWritePolicy,
   WebhookSourceRecord,
 } from '../types.js';
 
@@ -52,9 +44,6 @@ export type SessionRow = QueryResultRow & {
   context: Record<string, unknown> | null;
   parent_session_id: string | null;
   spawn_depth: PgInteger;
-  owner_group_id: string;
-  visibility: SessionVisibility;
-  write_policy: SessionWritePolicy;
   created_by_user_id: string | null;
   created_at: Date;
   updated_at: Date;
@@ -64,7 +53,7 @@ export type SessionRow = QueryResultRow & {
 };
 
 export const sessionSelectColumns =
-  'id, status, title, context, parent_session_id, spawn_depth, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at';
+  'id, status, title, context, parent_session_id, spawn_depth, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at';
 
 export type AuthUserRow = QueryResultRow & {
   id: string;
@@ -81,37 +70,6 @@ export type AuthSessionRow = QueryResultRow & {
   user_id: string;
   created_at: Date;
   expires_at: Date;
-};
-
-export type GroupRow = QueryResultRow & {
-  id: string;
-  name: string;
-  default_visibility: SessionVisibility;
-  default_write_policy: SessionWritePolicy;
-  automation_create_required_role: GroupRecord['automationCreateRequiredRole'];
-  archived_at: Date | null;
-  created_at: Date;
-  updated_at: Date;
-};
-
-export const groupSelectColumns =
-  'id, name, default_visibility, default_write_policy, automation_create_required_role, archived_at, created_at, updated_at';
-
-export type GroupMemberRow = QueryResultRow & {
-  group_id: string;
-  user_id: string;
-  role: GroupRole;
-  created_at: Date;
-  updated_at: Date;
-};
-
-export type GroupMemberWithUserRow = GroupMemberRow & {
-  username: string;
-  user_role: AuthUserRecord['role'];
-  display_name: string | null;
-  avatar_url: string | null;
-  user_created_at: Date;
-  user_updated_at: Date;
 };
 
 export type MessageRow = QueryResultRow & {
@@ -238,9 +196,6 @@ export type AutomationRow = QueryResultRow & {
   prompt: string;
   schedule_cron: string;
   enabled: boolean;
-  owner_group_id: string;
-  visibility: SessionVisibility;
-  write_policy: SessionWritePolicy;
   context: Record<string, unknown> | null;
   created_by_user_id: string | null;
   archived_at: Date | null;
@@ -255,13 +210,11 @@ export type AutomationRow = QueryResultRow & {
 };
 
 export const automationSelectColumns =
-  'id, kind, name, prompt, schedule_cron, enabled, owner_group_id, visibility, write_policy, context, created_by_user_id, archived_at, environment_id, environment_revision_policy, environment_revision_id, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
+  'id, kind, name, prompt, schedule_cron, enabled, context, created_by_user_id, archived_at, environment_id, environment_revision_policy, environment_revision_id, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
 
 export type EnvironmentRow = QueryResultRow & {
   id: string;
   name: string;
-  owner_group_id: string;
-  share_mode: EnvironmentShareMode;
   current_revision_id: string;
   current_revision_number: PgInteger;
   archived_at: Date | null;
@@ -270,7 +223,7 @@ export type EnvironmentRow = QueryResultRow & {
 };
 
 export const environmentSelectColumns =
-  'id, name, owner_group_id, share_mode, current_revision_id, current_revision_number, archived_at, created_at, updated_at';
+  'id, name, current_revision_id, current_revision_number, archived_at, created_at, updated_at';
 
 export type EnvironmentRevisionRow = QueryResultRow & {
   id: string;
@@ -391,51 +344,10 @@ export function toAuthSession(row: AuthSessionRow): AuthSessionRecord {
   };
 }
 
-export function toGroup(row: GroupRow): GroupRecord {
-  return {
-    id: row.id,
-    name: row.name,
-    defaultVisibility: row.default_visibility,
-    defaultWritePolicy: row.default_write_policy,
-    automationCreateRequiredRole: row.automation_create_required_role,
-    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-export function toGroupMember(row: GroupMemberRow): GroupMemberRecord {
-  return {
-    groupId: row.group_id,
-    userId: row.user_id,
-    role: row.role,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-export function toGroupMemberWithUser(row: GroupMemberWithUserRow): GroupMemberWithUserRecord {
-  return {
-    ...toGroupMember(row),
-    user: {
-      id: row.user_id,
-      username: row.username,
-      role: row.user_role,
-      createdAt: row.user_created_at,
-      updatedAt: row.user_updated_at,
-      ...(row.display_name ? { displayName: row.display_name } : {}),
-      ...(row.avatar_url ? { avatarUrl: row.avatar_url } : {}),
-    },
-  };
-}
-
 export function toSession(row: SessionRow): SessionRecord {
   const record: SessionRecord = {
     id: row.id,
     status: row.status,
-    ownerGroupId: row.owner_group_id ?? defaultGroupId,
-    visibility: row.visibility ?? 'organization',
-    writePolicy: row.write_policy ?? 'group_members',
     spawnDepth: Number(row.spawn_depth ?? 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -611,9 +523,6 @@ export function toAutomation(row: AutomationRow): AutomationRecord {
     prompt: row.prompt,
     scheduleCron: row.schedule_cron,
     enabled: row.enabled,
-    ownerGroupId: row.owner_group_id,
-    visibility: row.visibility,
-    writePolicy: row.write_policy,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
@@ -632,8 +541,6 @@ export function toEnvironment(row: EnvironmentRow): EnvironmentRecord {
   return {
     id: row.id,
     name: row.name,
-    ownerGroupId: row.owner_group_id,
-    shareMode: row.share_mode,
     currentRevisionId: row.current_revision_id,
     currentRevisionNumber: Number(row.current_revision_number),
     createdAt: row.created_at,

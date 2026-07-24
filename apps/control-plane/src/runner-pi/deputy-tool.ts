@@ -24,7 +24,7 @@ export function createPiDeputyToolDefinition(services: DeputyToolServices): Tool
       'Archived sessions are read-only until restored. Use deputies({ action: "restore", sessionId }) before sending an archived child more work.',
       'archive is idempotent; repeat it for an archived session when sandbox cleanup needs to be retried.',
       'Archiving the current session destroys its sandbox. Treat self-archive as the final sandbox-dependent action: the response may finish, but workspace tools will no longer work, and restoring the session does not restore the destroyed workspace.',
-      'Child sessions inherit this session group, visibility, and write policy. Parent run cancellation and parent archival do not cancel or archive children; explicitly use deputies({ action: "cancel", sessionId }) for direct children you no longer need.',
+      'Child sessions use tenant-wide access. Parent run cancellation and parent archival do not cancel or archive children; explicitly use deputies({ action: "cancel", sessionId }) for direct children you no longer need.',
     ],
     parameters: piDeputyToolParameters,
     executionMode: 'sequential',

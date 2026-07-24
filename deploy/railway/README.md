@@ -114,7 +114,7 @@ GITHUB_OAUTH_CLIENT_SECRET=<github-app-client-secret>
 GITHUB_OAUTH_CALLBACK_URL=https://<your-app-domain>/auth/oauth/github/callback
 AUTH_GITHUB_ADMIN_USERS=<github-login>
 AUTH_GITHUB_ALLOWED_ORGANIZATIONS=<github-org>
-AUTH_GITHUB_DEFAULT_GROUP_ROLE=member
+AUTH_GITHUB_DEFAULT_ROLE=member
 ```
 
 For sandbox service previews, configure an app domain and wildcard service domain that both point to the Railway web entrypoint:

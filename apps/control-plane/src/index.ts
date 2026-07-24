@@ -416,28 +416,17 @@ async function createRunner(): Promise<Runner> {
       repoScanEnabled: config.repoSkillsEnabled,
       listForRun: async (input) => {
         const skills = await services.skills.listForRun(input);
-        const groupIds = [...new Set(skills.flatMap((skill) => (skill.ownerGroupId ? [skill.ownerGroupId] : [])))];
-        const groups = new Map(
-          (await Promise.all(groupIds.map((groupId) => services.store.getGroup(groupId)))).flatMap((group) =>
-            group ? [[group.id, group] as const] : [],
-          ),
-        );
-        return skills.map((skill) => {
-          const ownerGroup = skill.ownerGroupId ? groups.get(skill.ownerGroupId) : undefined;
-          return {
-            id: skill.id,
-            revisionId: skill.resolvedRevisionId,
-            revisionNumber: skill.resolvedRevisionNumber,
-            name: skill.name,
-            description: skill.description,
-            body: skill.body,
-            autoLoad: skill.autoLoad,
-            source: skill.source,
-            ...(skill.ownerGroupId ? { ownerGroupId: skill.ownerGroupId } : {}),
-            ...(ownerGroup ? { ownerGroupName: ownerGroup.name } : {}),
-            createdAt: skill.createdAt,
-          };
-        });
+        return skills.map((skill) => ({
+          id: skill.id,
+          revisionId: skill.resolvedRevisionId,
+          revisionNumber: skill.resolvedRevisionNumber,
+          name: skill.name,
+          description: skill.description,
+          body: skill.body,
+          autoLoad: skill.autoLoad,
+          source: skill.source,
+          createdAt: skill.createdAt,
+        }));
       },
     };
   }

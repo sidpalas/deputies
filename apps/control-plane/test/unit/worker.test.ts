@@ -7,7 +7,7 @@ import type { GenerateTitleInput, Runner, RunnerInput, RunnerResult } from '../.
 import { runSandboxReaperOnce } from '../../src/sandbox/reaper.js';
 import { SandboxCleanupService } from '../../src/sandbox/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId, type MessageRecord, type SessionRecord } from '../../src/store/types.js';
+import { type MessageRecord, type SessionRecord } from '../../src/store/types.js';
 import { normalizeRunnerSkillInvocations, startWorkerLoop, WorkerService } from '../../src/worker/service.js';
 
 describe('WorkerService', () => {
@@ -2318,9 +2318,6 @@ async function createNotifyingChild(
     status: 'idle',
     parentSessionId,
     spawnDepth: 1,
-    ownerGroupId: defaultGroupId,
-    visibility: 'group',
-    writePolicy: 'group_members',
     context: {
       deputy: {
         notifyParentOnComplete: true,

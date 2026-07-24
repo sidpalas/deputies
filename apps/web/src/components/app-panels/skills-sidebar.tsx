@@ -1,6 +1,6 @@
 import { useMemo, useState, type SyntheticEvent } from 'react';
 import { ChevronDown, CircleOff, CornerUpLeft, MousePointerClick, PanelLeftClose, Plus, X, Zap } from 'lucide-react';
-import type { Group, Skill } from '../../api.js';
+import type { Skill } from '../../api.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
@@ -11,7 +11,6 @@ export function SkillsSidebar(props: {
   canCallApi: boolean;
   canCreateSkills: boolean;
   footerProps: SidebarFooterProps;
-  groups: Group[];
   loading: boolean;
   readOnly?: boolean;
   skills: Skill[];
@@ -38,11 +37,6 @@ export function SkillsSidebar(props: {
   );
   const activeSkills = skills.filter((skill) => !skill.archivedAt);
   const archivedSkills = skills.filter((skill) => skill.archivedAt);
-  const personal = activeSkills.filter(
-    (skill) => skill.source === 'personal' || (!skill.ownerGroupId && skill.source !== 'repo'),
-  );
-  const shared = activeSkills.filter((skill) => skill.source === 'shared');
-  const groupSkills = activeSkills.filter((skill) => skill.source === 'group' || (skill.ownerGroupId && !skill.source));
   const searching = Boolean(normalized);
   const selectedArchived = archivedSkills.some((skill) => skill.id === props.selectedSkillId);
   const archivedOpen = searching || selectedArchived || archivedOpenState;
@@ -58,7 +52,7 @@ export function SkillsSidebar(props: {
         <Button variant="ghost" size="icon" onClick={props.onCollapse} aria-label="Hide sidebar" title="Hide sidebar">
           <PanelLeftClose className="h-4 w-4" />
         </Button>
-        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">Skills</h2>
+        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">Managed Skills</h2>
         <Button variant="secondary" size="icon" onClick={props.onBackToSessions} aria-label="Back to sessions">
           <CornerUpLeft className="h-4 w-4" />
         </Button>
@@ -92,30 +86,7 @@ export function SkillsSidebar(props: {
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         <SkillSection
-          title="My skills"
-          skills={personal}
-          selectedSkillId={props.selectedSkillId}
-          readOnly={props.readOnly ?? false}
-          onArchiveSkill={props.onArchiveSkill}
-          onSelectSkill={props.onSelectSkill}
-        />
-        {props.groups.map((group) => {
-          const items = groupSkills.filter((skill) => skill.ownerGroupId === group.id);
-          return items.length ? (
-            <SkillSection
-              key={group.id}
-              title={group.name}
-              skills={items}
-              selectedSkillId={props.selectedSkillId}
-              readOnly={props.readOnly ?? false}
-              onArchiveSkill={props.onArchiveSkill}
-              onSelectSkill={props.onSelectSkill}
-            />
-          ) : null;
-        })}
-        <SkillSection
-          title="Shared with my groups"
-          skills={shared}
+          skills={activeSkills}
           selectedSkillId={props.selectedSkillId}
           readOnly={props.readOnly ?? false}
           onArchiveSkill={props.onArchiveSkill}
@@ -195,14 +166,8 @@ function SkillSection(props: {
                   <strong className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{skill.name}</strong>
                   <SkillStatusIcon skill={skill} />
                 </span>
-                <span
-                  className="block truncate text-xs text-muted-foreground"
-                  title={`${skill.description}${
-                    skill.source === 'shared' && skill.ownerGroupName ? ` · ${skill.ownerGroupName}` : ''
-                  }`}
-                >
+                <span className="block truncate text-xs text-muted-foreground" title={skill.description}>
                   {skill.description}
-                  {skill.source === 'shared' && skill.ownerGroupName ? ` · ${skill.ownerGroupName}` : ''}
                 </span>
               </button>
               {canArchive ? (

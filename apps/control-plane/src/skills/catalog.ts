@@ -1,6 +1,6 @@
 import type { SkillSource } from '../store/types.js';
 
-const sourceRank: Record<SkillSource | 'repo', number> = { personal: 0, group: 1, shared: 2, repo: 3 };
+const sourceRank: Record<SkillSource | 'repo', number> = { managed: 0, repo: 1 };
 
 export function skillSourcePrecedence(source: SkillSource | 'repo'): number {
   return sourceRank[source];

@@ -85,22 +85,6 @@ export const publicApiResponseSchemas = {
     description: 'Environment list envelope.',
     fields: { environments: 'array' },
   },
-  group: {
-    description: 'Single group envelope.',
-    fields: { group: 'object' },
-  },
-  groups: {
-    description: 'Group list envelope.',
-    fields: { groups: 'array' },
-  },
-  groupMembers: {
-    description: 'Group member list envelope.',
-    fields: { members: 'array' },
-  },
-  groupMember: {
-    description: 'Single group member envelope.',
-    fields: { member: 'object' },
-  },
   users: {
     description: 'Auth user list envelope.',
     fields: { users: 'array' },

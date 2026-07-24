@@ -44,7 +44,7 @@ Relevant precedent in this repo: `src/runner-pi/web-search-tool.ts` wraps a plai
 
 ## Non-Goals
 
-- Per-user or per-access-group MCP configuration stored in the database, and any web UI for managing MCP servers (future iteration; see Open Questions).
+- Database-backed instance MCP configuration and any web UI for managing MCP servers (future iteration; see Open Questions).
 - OAuth flows between Deputies and MCP servers. Auth is static operator-supplied headers (bearer token / API key).
 - Surfacing MCP elicitation/approval flows as interactive Deputies approvals. For Executor this turns out not to be needed: approval-gated calls pause the `execute` run and the agent resumes them itself through Executor's `resume` tool (connections with `elicitation_mode=model`) — plain tool calls from Deputies' perspective. Human-in-the-loop approval surfaced in the Deputies UI remains out of scope.
 - Running MCP clients inside the sandbox, stdio-transport MCP servers, or MCP resources/prompts/sampling — tools only.
@@ -161,7 +161,7 @@ Feature is off unless `MCP_SERVERS` is set, so rollout is opt-in per deployment.
 
 - ~~How MCP clients authenticate to Executor's `/mcp`~~ — resolved 2026-07-06: bearer token in the `Authorization` header; the operator's UI-generated API key was verified live against the self-hosted instance (200 authenticated / 401 unauthenticated). Nothing remains open here.
 - Should MCP-server unavailability optionally fail the run (strict mode env flag) for automations that depend on a data source? Default in this plan: continue with a prompt note.
-- Per-access-group MCP configuration (DB-backed, encrypted headers via the existing `sandboxSecretEncryptionKey` pattern) and a settings UI — likely the next iteration once instance-level config proves out.
+- Database-backed instance MCP configuration (with encrypted headers using the existing `sandboxSecretEncryptionKey` pattern) and an admin-only settings UI — likely the next iteration once environment configuration proves out.
 
 ## Links
 

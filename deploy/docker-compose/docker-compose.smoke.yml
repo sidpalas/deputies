@@ -10,7 +10,7 @@ services:
       AUTH_GITHUB_ADMIN_USERS: ''
       AUTH_GITHUB_ALLOWED_USERS: ''
       AUTH_GITHUB_ALLOWED_ORGANIZATIONS: ''
-      AUTH_GITHUB_DEFAULT_GROUP_ROLE: member
+      AUTH_GITHUB_DEFAULT_ROLE: member
       UNSAFE_AUTH_GITHUB_ALLOW_ALL: 'false'
       APP_DATA_STORE: postgres
       DATABASE_URL: postgres://deputies:deputies@postgres:5432/deputies
@@ -39,7 +39,7 @@ services:
       AUTH_GITHUB_ADMIN_USERS: ''
       AUTH_GITHUB_ALLOWED_USERS: ''
       AUTH_GITHUB_ALLOWED_ORGANIZATIONS: ''
-      AUTH_GITHUB_DEFAULT_GROUP_ROLE: member
+      AUTH_GITHUB_DEFAULT_ROLE: member
       UNSAFE_AUTH_GITHUB_ALLOW_ALL: 'false'
       APP_DATA_STORE: postgres
       RUNNER: fake

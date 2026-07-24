@@ -1,12 +1,4 @@
-import {
-  ApiError,
-  type AgentEvent,
-  type AuthUser,
-  type Group,
-  type Message,
-  type ModelChoice,
-  type Session,
-} from './api.js';
+import { ApiError, type AgentEvent, type AuthUser, type Message, type ModelChoice, type Session } from './api.js';
 
 export type ActiveProgress = { text: string; omitted: number; lastSequence?: number };
 export type ActiveProgressByMessageId = Record<string, ActiveProgress>;
@@ -301,39 +293,9 @@ export function isWorkspaceToolPreflightError(err: unknown): boolean {
   return err instanceof ApiError && (err.status === 404 || err.status === 409 || err.status === 401);
 }
 
-export function canWriteSession(user: AuthUser | null, session: Session, groups: Group[]): boolean {
+export function canWriteSession(user: AuthUser | null, _session: Session): boolean {
   if (!user) return false;
-  if (user.role === 'super_admin') return true;
-  if (session.createdByUserId === user.id && session.writePolicy === 'creator_only') return true;
-  const role = groups.find((group) => group.id === session.ownerGroupId)?.membershipRole;
-  if (role === 'admin') return true;
-  return role === 'member' && session.writePolicy === 'group_members';
-}
-
-export function groupCanManage(groups: Group[], groupId: string): boolean {
-  return groups.some((group) => group.id === groupId && group.canManage);
-}
-
-export function nextAccessGroupName(groups: Group[]): string {
-  const baseName = 'New access group';
-  const names = new Set(groups.map((group) => normalizeGroupName(group.name)));
-  if (!names.has(normalizeGroupName(baseName))) return baseName;
-
-  for (let index = 2; ; index += 1) {
-    const name = `${baseName} ${index}`;
-    if (!names.has(normalizeGroupName(name))) return name;
-  }
-}
-
-export function groupNameValidationError(groups: Group[], groupId: string, name: string): string {
-  const normalized = normalizeGroupName(name);
-  if (!normalized) return '';
-  const duplicate = groups.some((group) => group.id !== groupId && normalizeGroupName(group.name) === normalized);
-  return duplicate ? 'An access group with this name already exists.' : '';
-}
-
-function normalizeGroupName(name: string): string {
-  return name.trim().toLowerCase();
+  return user.role === 'member' || user.role === 'admin';
 }
 
 export function upsertAuthUser(users: AuthUser[], user: AuthUser): AuthUser[] {

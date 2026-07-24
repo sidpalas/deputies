@@ -21,7 +21,6 @@ import {
 import type { SandboxKeepaliveService } from '../../src/sandbox/service.js';
 import type { SandboxHandle } from '../../src/sandbox/types.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId } from '../../src/store/types.js';
 import { MemorySandboxFileSystem } from '../support/pi-skills.js';
 
 const piMock = vi.hoisted(() => ({
@@ -263,7 +262,7 @@ describe('PiRunner', () => {
           description: 'Review the implementation',
           body: 'Review carefully.',
           autoLoad: false,
-          source: 'group' as const,
+          source: 'managed' as const,
           createdAt: new Date('2026-01-01T00:00:00Z'),
         },
       ];
@@ -299,7 +298,6 @@ describe('PiRunner', () => {
       sessionId: 'session-1',
       runId: 'run-1',
       messageId: 'message-1',
-      ownerGroupId: 'group-1',
       prompt: 'initial',
       context: {},
       sandbox: createMemorySandbox(),
@@ -567,7 +565,7 @@ describe('PiRunner', () => {
   });
 
   it('traces explicit and successful model skill invocations once per run', async () => {
-    const skillPath = '/workspace/.deputies-skills/group/skill-review/revision-review-1/review/SKILL.md';
+    const skillPath = '/workspace/.deputies-skills/managed/skill-review/revision-review-1/review/SKILL.md';
     const messages = [
       {
         role: 'assistant',
@@ -633,9 +631,7 @@ describe('PiRunner', () => {
             description: 'Review the implementation',
             body: 'Review carefully.',
             autoLoad: true,
-            source: 'group',
-            ownerGroupId: 'group-1',
-            ownerGroupName: 'Engineering',
+            source: 'managed',
             createdAt: new Date('2026-01-01T00:00:00Z'),
           },
         ],
@@ -644,7 +640,6 @@ describe('PiRunner', () => {
       sessionId: 'session-1',
       runId: 'run-1',
       messageId: 'message-1',
-      ownerGroupId: 'group-1',
       createdByUserId: 'user-1',
       prompt: 'review this',
       context: { skills: ['review'], skillRefs: [{ id: 'skill-review', name: 'review' }] },
@@ -658,24 +653,20 @@ describe('PiRunner', () => {
     expect(events.filter((event) => event.type === 'skill_invoked').map((event) => event.payload)).toEqual([
       {
         name: 'review',
-        source: 'group',
+        source: 'managed',
         trigger: 'user',
         ref: 'skill-review',
         filePath: skillPath,
-        ownerGroupId: 'group-1',
-        ownerGroupName: 'Engineering',
         skillId: 'skill-review',
         revisionId: 'revision-review-1',
         revisionNumber: 1,
       },
       {
         name: 'review',
-        source: 'group',
+        source: 'managed',
         trigger: 'model',
         ref: 'skill-review',
         filePath: skillPath,
-        ownerGroupId: 'group-1',
-        ownerGroupName: 'Engineering',
         skillId: 'skill-review',
         revisionId: 'revision-review-1',
         revisionNumber: 1,
@@ -687,7 +678,7 @@ describe('PiRunner', () => {
   });
 
   it('drains skill invocation events before surfacing a prompt failure', async () => {
-    const skillPath = '/workspace/.deputies-skills/group/skill-review/revision-review-1/review/SKILL.md';
+    const skillPath = '/workspace/.deputies-skills/managed/skill-review/revision-review-1/review/SKILL.md';
     let listener: ((event: AgentSessionEvent) => void) | undefined;
     piMock.createAgentSession.mockResolvedValue({
       session: {
@@ -736,7 +727,7 @@ describe('PiRunner', () => {
             description: 'Review the implementation',
             body: 'Review carefully.',
             autoLoad: true,
-            source: 'group',
+            source: 'managed',
             createdAt: new Date('2026-01-01T00:00:00Z'),
           },
         ],
@@ -745,7 +736,6 @@ describe('PiRunner', () => {
       sessionId: 'session-1',
       runId: 'run-1',
       messageId: 'message-1',
-      ownerGroupId: 'group-1',
       prompt: 'review this',
       context: {},
       sandbox: createMemorySandbox(),
@@ -877,7 +867,7 @@ describe('PiRunner', () => {
         description: 'Review the implementation',
         body: 'Review carefully.',
         autoLoad: false,
-        source: 'group' as const,
+        source: 'managed' as const,
         createdAt: new Date('2026-01-01T00:00:00Z'),
       },
     ]);
@@ -920,7 +910,7 @@ describe('PiRunner', () => {
               type: 'tool_execution_start',
               toolName: 'read',
               toolCallId: 'subagent-skill-read',
-              args: { path: '/workspace/.deputies-skills/group/skill-review/revision-review-1/review/SKILL.md' },
+              args: { path: '/workspace/.deputies-skills/managed/skill-review/revision-review-1/review/SKILL.md' },
             });
             listener?.({
               type: 'tool_execution_end',
@@ -953,7 +943,6 @@ describe('PiRunner', () => {
       sessionId: 'session-1',
       runId: 'run-1',
       messageId: 'message-1',
-      ownerGroupId: 'group-1',
       prompt: 'parent task',
       context: { skills: ['review'] },
       skillInvocations: [{ name: 'review' }],
@@ -966,10 +955,10 @@ describe('PiRunner', () => {
     expect(result.text).toBe('leaf result');
     expect(createCount).toBe(5);
     expect(prompts[0]).toContain(
-      '0:<skill name="review" location="/workspace/.deputies-skills/group/skill-review/revision-review-1/review/SKILL.md">',
+      '0:<skill name="review" location="/workspace/.deputies-skills/managed/skill-review/revision-review-1/review/SKILL.md">',
     );
     expect(prompts[0]).toContain(
-      'References are relative to /workspace/.deputies-skills/group/skill-review/revision-review-1/review.',
+      'References are relative to /workspace/.deputies-skills/managed/skill-review/revision-review-1/review.',
     );
     expect(prompts[0]).toContain('Review carefully.\n</skill>\n\nparent task');
     expect(prompts.slice(1)).toEqual(['1:child-0', '2:child-1', '3:child-2', '4:child-3']);
@@ -1145,12 +1134,10 @@ describe('PiRunner', () => {
     const services = createServices(new MemoryStore());
     const environment = await services.environments.create({
       name: 'Product surface',
-      ownerGroupId: defaultGroupId,
       repositories: [{ provider: 'github', owner: 'manaflow-ai', repo: 'manaflow', primary: true }],
     });
-    const snapshot = await services.environments.resolveForGroup({
+    const snapshot = await services.environments.resolve({
       environmentId: environment.id,
-      groupId: defaultGroupId,
     });
     await services.environments.archive(environment.id);
     const prompt = vi.fn();
@@ -1190,7 +1177,6 @@ describe('PiRunner', () => {
       messageId: 'message-1',
       prompt: 'continue',
       context: { environment: snapshot },
-      ownerGroupId: defaultGroupId,
       sandbox: createMemorySandbox(),
       emit: async () => {},
     });
@@ -1679,9 +1665,6 @@ describe('PiRunner', () => {
         id: 'session-1',
         status: 'active',
         title: 'Pi artifact session',
-        ownerGroupId: defaultGroupId,
-        visibility: 'organization',
-        writePolicy: 'group_members',
         createdAt: new Date(),
         updatedAt: new Date(),
         context: {},
@@ -2113,9 +2096,6 @@ describe('PiRunner', () => {
         id: 'session-1',
         status: 'active',
         title: 'Pi artifact session',
-        ownerGroupId: defaultGroupId,
-        visibility: 'organization',
-        writePolicy: 'group_members',
         createdAt: new Date(),
         updatedAt: new Date(),
         context: {},

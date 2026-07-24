@@ -32,7 +32,6 @@ export function EnvironmentsSidebar(props: {
     ? sortedEnvironments.filter(
         (environment) =>
           environment.name.toLowerCase().includes(normalizedSearch) ||
-          (environment.ownerGroupName ?? '').toLowerCase().includes(normalizedSearch) ||
           environment.repositories.some((repository) =>
             `${repository.owner}/${repository.repo}`.toLowerCase().includes(normalizedSearch),
           ),
@@ -78,7 +77,7 @@ export function EnvironmentsSidebar(props: {
             onClick={props.onCreateEnvironment}
             disabled={!props.canCallApi || !props.canCreateEnvironments}
             aria-label="New environment"
-            title={props.canCreateEnvironments ? 'New environment' : 'Group admin access is required'}
+            title={props.canCreateEnvironments ? 'New environment' : 'Member access is required'}
           >
             <Plus className="h-4 w-4" />
           </Button>
@@ -176,13 +175,11 @@ function EnvironmentSidebarButton(props: {
       >
         <strong className="block w-full truncate text-sm font-medium text-foreground">{props.environment.name}</strong>
         <span className="block w-full truncate text-xs text-muted-foreground">
-          {props.environment.ownerGroupName ?? 'Unknown group'} · {repositoryCount} repo
+          {repositoryCount} repo
           {repositoryCount === 1 ? '' : 's'}
         </span>
         <span className="block w-full truncate text-xs text-muted-foreground">
-          {props.environment.archivedAt
-            ? `Archived ${formatDate(props.environment.archivedAt)}`
-            : shareModeLabel(props.environment)}
+          {props.environment.archivedAt ? `Archived ${formatDate(props.environment.archivedAt)}` : 'Active'}
         </span>
       </button>
       {props.environment.canManage && !props.environment.archivedAt && props.onArchive ? (
@@ -217,10 +214,4 @@ function activeEnvironmentsEmptyMessage(loading: boolean, search: string): strin
   if (loading) return 'Loading environments...';
   if (search) return 'No matching active environments.';
   return 'No active environments.';
-}
-
-function shareModeLabel(environment: Environment): string {
-  if (environment.shareMode === 'all_groups') return 'Available to all groups';
-  if (environment.shareMode === 'selected_groups') return `Shared with ${environment.sharedGroupIds.length} group(s)`;
-  return 'Owner group only';
 }

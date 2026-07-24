@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import {
-  canCreateSessionInGroup,
   canManageNotepad,
   canReadNotepad,
   canReadSession,
@@ -118,21 +117,9 @@ export class NotepadService {
     actor: NotepadActor = { kind: 'system' },
     initialWritableSessionId?: string,
   ) {
-    if (typeof input.ownerGroupId !== 'string' || !canCreateSessionInGroup(auth, input.ownerGroupId)) this.forbidden();
-    const group = await this.store.getGroup(input.ownerGroupId);
-    if (!group) this.notFound('Group');
-    if (group.archivedAt)
-      throw new NotepadServiceError('archived_group', 'Cannot create notepads in an archived group');
-    const canOverride = auth.bypass || canManageNotepad(auth, { ownerGroupId: group.id });
-    if (!canOverride && (input.visibility !== undefined || input.writePolicy !== undefined)) this.forbidden();
-    if (input.visibility !== undefined && input.visibility !== 'group' && input.visibility !== 'organization')
-      throw new NotepadServiceError('invalid', 'Invalid visibility');
-    if (
-      input.writePolicy !== undefined &&
-      input.writePolicy !== 'group_members' &&
-      input.writePolicy !== 'creator_only'
-    )
-      throw new NotepadServiceError('invalid', 'Invalid write policy');
+    this.allow(canManageNotepad(auth));
+    if ('ownerGroupId' in input || 'visibility' in input || 'writePolicy' in input)
+      throw new NotepadServiceError('invalid', 'Notepads are tenant-wide');
     const now = new Date();
     const content = input.content === undefined ? '' : stringValue(input.content, 'content');
     const sizeBytes = Buffer.byteLength(content, 'utf8');
@@ -141,9 +128,6 @@ export class NotepadService {
     const record: ExplicitNotepadRecord = {
       id: randomUUID(),
       title: validTitle(input.title),
-      ownerGroupId: group.id,
-      visibility: input.visibility ?? group.defaultVisibility,
-      writePolicy: input.writePolicy ?? group.defaultWritePolicy,
       revision: content ? 1 : 0,
       content,
       sizeBytes,
@@ -153,8 +137,7 @@ export class NotepadService {
     };
     if (initialWritableSessionId) {
       const target = await this.requireSession(initialWritableSessionId);
-      if (target.ownerGroupId !== group.id || target.status === 'archived' || !canWriteSession(auth, target))
-        this.notFound('Session');
+      if (target.status === 'archived' || !canWriteSession(auth, target)) this.notFound('Session');
     }
     const result = await this.store.createExplicitNotepad({
       record,
@@ -181,12 +164,7 @@ export class NotepadService {
   async createForSessionAgent(sessionId: string, input: { title?: unknown; content?: unknown }, actor: NotepadActor) {
     const session = await this.requireSession(sessionId);
     if (session.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
-    return this.create(
-      { bypass: true, user: null, memberships: [] },
-      { ownerGroupId: session.ownerGroupId, title: input.title, content: input.content },
-      actor,
-      sessionId,
-    );
+    return this.create({ bypass: true, user: null }, { title: input.title, content: input.content }, actor, sessionId);
   }
 
   async requireReadable(auth: RequestAuthorization, id: string, associatedSessionId?: string) {
@@ -201,40 +179,38 @@ export class NotepadService {
     return notepad;
   }
 
-  async list(auth: RequestAuthorization, groupId?: string, limit: unknown = 50, cursor: unknown = 0) {
+  async list(auth: RequestAuthorization, limit: unknown = 50, cursor: unknown = 0, archived = false) {
     const bounded = boundedLimit(limit);
     const offset = integerValue(cursor, 'cursor');
-    const allVisible = auth.bypass || auth.user.role === 'super_admin';
+    this.allow(canReadNotepad(auth, {} as ExplicitNotepadRecord));
     const records = await this.store.listExplicitNotepads({
-      ...(groupId ? { groupId } : {}),
-      ...(!allVisible ? { authorizedGroupIds: auth.memberships.map((membership) => membership.groupId) } : {}),
       limit: bounded,
       offset,
+      archived,
     });
     return { ...records, items: records.items.filter((item) => canReadNotepad(auth, item as ExplicitNotepadRecord)) };
   }
 
-  async inventory(auth: RequestAuthorization, groupId: string, limit: unknown = 50, cursor: unknown = 0) {
-    this.allow(canManageNotepad(auth, { ownerGroupId: groupId }));
+  async inventory(auth: RequestAuthorization, limit: unknown = 50, cursor: unknown = 0, archived = false) {
+    this.allow(canManageNotepad(auth));
     return this.store.listExplicitNotepads({
-      groupId,
       limit: boundedLimit(limit),
       offset: integerValue(cursor, 'cursor'),
       includeDormant: true,
+      archived,
     });
   }
 
-  async search(auth: RequestAuthorization, groupId: string, query: unknown, limit: unknown = 20) {
+  async search(auth: RequestAuthorization, query: unknown, limit: unknown = 20, archived = false) {
     if (typeof query !== 'string' || !query.trim() || query.trim().length > 200)
       throw new NotepadServiceError('invalid', 'Query must be 1 to 200 characters');
     const bounded = Math.min(integerValue(limit, 'limit'), 50);
-    const allVisible = auth.bypass || auth.user.role === 'super_admin';
+    this.allow(canReadNotepad(auth, {} as ExplicitNotepadRecord));
     return (
       await this.store.searchExplicitNotepads({
-        groupId,
-        ...(!allVisible ? { authorizedGroupIds: auth.memberships.map((membership) => membership.groupId) } : {}),
         query: query.trim(),
         limit: bounded,
+        archived,
       })
     ).filter((n) => canReadNotepad(auth, n));
   }
@@ -247,6 +223,7 @@ export class NotepadService {
     associatedSessionId?: string,
   ) {
     const notepad = await this.requireExplicit(id);
+    if (notepad.archivedAt) throw new NotepadServiceError('archived', 'Archived notepads are read-only');
     let writable = canWriteNotepad(auth, notepad);
     if (associatedSessionId) {
       const session = await this.requireSession(associatedSessionId);
@@ -271,21 +248,12 @@ export class NotepadService {
   ) {
     const notepad = await this.requireExplicit(id);
     this.allow(canManageNotepad(auth, notepad));
-    if ('ownerGroupId' in input) throw new NotepadServiceError('invalid', 'Notepad ownership is immutable');
-    if (input.visibility !== undefined && input.visibility !== 'group' && input.visibility !== 'organization')
-      throw new NotepadServiceError('invalid', 'Invalid visibility');
-    if (
-      input.writePolicy !== undefined &&
-      input.writePolicy !== 'group_members' &&
-      input.writePolicy !== 'creator_only'
-    )
-      throw new NotepadServiceError('invalid', 'Invalid write policy');
+    if (notepad.archivedAt) throw new NotepadServiceError('archived', 'Archived notepads are read-only');
+    if ('ownerGroupId' in input || 'visibility' in input || 'writePolicy' in input)
+      throw new NotepadServiceError('invalid', 'Notepads are tenant-wide');
     return this.store.updateExplicitNotepadMetadata({
       id,
-      ownerGroupId: notepad.ownerGroupId,
       ...(input.title === undefined ? {} : { title: validTitle(input.title) }),
-      ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
-      ...(input.writePolicy === undefined ? {} : { writePolicy: input.writePolicy }),
       actor,
       activityId: randomUUID(),
       now: new Date(),
@@ -299,9 +267,9 @@ export class NotepadService {
   }
   async putAssociation(auth: RequestAuthorization, id: string, sessionId: string, actor: NotepadActor) {
     const n = await this.requireExplicitMetadata(id);
+    if (n.archivedAt) throw new NotepadServiceError('archived', 'Archived notepads are read-only');
     const s = await this.requireSession(sessionId);
     if (s.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
-    if (n.ownerGroupId !== s.ownerGroupId) this.notFound('Session');
     this.allow(canWriteSession(auth, s) && canWriteNotepad(auth, n));
     const result = await this.store.putNotepadAssociation({
       record: {
@@ -318,8 +286,8 @@ export class NotepadService {
   }
   async removeAssociation(auth: RequestAuthorization, id: string, sessionId: string, actor: NotepadActor) {
     const n = await this.requireExplicitMetadata(id);
+    if (n.archivedAt) throw new NotepadServiceError('archived', 'Archived notepads are read-only');
     const s = await this.requireSession(sessionId);
-    if (n.ownerGroupId !== s.ownerGroupId) this.notFound('Session');
     if (s.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
     this.allow(canWriteSession(auth, s) && canWriteNotepad(auth, n));
     const removed = await this.store.removeNotepadAssociation({
@@ -351,7 +319,7 @@ export class NotepadService {
   async capabilities(auth: RequestAuthorization, sessionId: string) {
     const s = await this.requireSession(sessionId);
     if (s.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
-    this.allow(canManageNotepad(auth, { ownerGroupId: s.ownerGroupId }));
+    this.allow(canManageNotepad(auth));
     return this.store.listSessionNotepadCapabilities(sessionId);
   }
   async putCapability(auth: RequestAuthorization, sessionId: string, kind: unknown) {
@@ -359,7 +327,7 @@ export class NotepadService {
     if (s.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
     if (kind !== 'explicit_search' && kind !== 'session_notepad_coordination')
       throw new NotepadServiceError('invalid', 'Invalid capability');
-    this.allow(kind === 'explicit_search' ? canCreateSessionInGroup(auth, s.ownerGroupId) : canWriteSession(auth, s));
+    this.allow(kind === 'explicit_search' ? canManageNotepad(auth) : canWriteSession(auth, s));
     if (auth.bypass) throw new NotepadServiceError('invalid', 'Capabilities require a human grantor');
     return this.store.putSessionNotepadCapability({
       sessionId,
@@ -374,11 +342,8 @@ export class NotepadService {
       throw new NotepadServiceError('invalid', 'Invalid capability');
     if (s.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
     const existing = (await this.store.listSessionNotepadCapabilities(sessionId)).find((c) => c.kind === kind);
-    this.allow(
-      canManageNotepad(auth, { ownerGroupId: s.ownerGroupId }) ||
-        (!auth.bypass && existing?.grantedByUserId === auth.user.id),
-    );
-    const manager = canManageNotepad(auth, { ownerGroupId: s.ownerGroupId });
+    this.allow(canManageNotepad(auth) || (!auth.bypass && existing?.grantedByUserId === auth.user.id));
+    const manager = canManageNotepad(auth);
     return this.store.removeSessionNotepadCapability(sessionId, kind, manager ? undefined : auth.user!.id);
   }
   async activityList(auth: RequestAuthorization, id: string, limit: unknown = 50, cursor: unknown = 0) {
@@ -399,7 +364,7 @@ export class NotepadService {
     if (kind === 'session') {
       const session = await this.requireSession(id);
       this.allow(canReadSession(auth, session));
-      manager = isHumanRevisionManager(auth, session.ownerGroupId);
+      manager = isHumanRevisionManager(auth);
     } else {
       const notepad = await this.requireExplicitMetadata(id);
       if (associatedSessionId) {
@@ -407,7 +372,7 @@ export class NotepadService {
         const association = await this.store.getNotepadAssociation(id, associatedSessionId);
         this.allow(Boolean(association && canReadSession(auth, session)));
       } else this.allow(canReadNotepad(auth, notepad));
-      manager = isHumanRevisionManager(auth, notepad.ownerGroupId);
+      manager = isHumanRevisionManager(auth);
     }
     const records = await this.store.listNotepadRevisions(
       kind,
@@ -430,11 +395,9 @@ export class NotepadService {
   ) {
     if (!Number.isSafeInteger(revision) || revision < 1)
       throw new NotepadServiceError('invalid', 'revision must be a positive integer');
-    let ownerGroupId: string;
     if (kind === 'session') {
       const session = await this.requireSession(id);
       this.allow(canReadSession(auth, session));
-      ownerGroupId = session.ownerGroupId;
     } else {
       const notepad = await this.requireExplicitMetadata(id);
       if (associatedSessionId) {
@@ -442,9 +405,8 @@ export class NotepadService {
         const association = await this.store.getNotepadAssociation(id, associatedSessionId);
         this.allow(Boolean(association && canReadSession(auth, session)));
       } else this.allow(canReadNotepad(auth, notepad));
-      ownerGroupId = notepad.ownerGroupId;
     }
-    const manager = isHumanRevisionManager(auth, ownerGroupId);
+    const manager = isHumanRevisionManager(auth);
     const record = await this.store.getNotepadRevision(kind, id, revision);
     if (!record) this.notFound('Revision');
     const { actor, ...rest } = record;
@@ -477,6 +439,7 @@ export class NotepadService {
       return result;
     } else {
       const notepad = await this.requireExplicitMetadata(id);
+      if (notepad.archivedAt) throw new NotepadServiceError('archived', 'Archived notepads are read-only');
       if (associatedSessionId) {
         const session = await this.requireSession(associatedSessionId);
         const association = await this.store.getNotepadAssociation(id, associatedSessionId);
@@ -522,6 +485,18 @@ export class NotepadService {
       // The content mutation is already committed. A best-effort notification
       // failure must not make a successful write appear to have failed.
     }
+  }
+
+  async archive(auth: RequestAuthorization, id: string) {
+    const notepad = await this.requireExplicitMetadata(id);
+    this.allow(canManageNotepad(auth, notepad));
+    return (await this.store.archiveExplicitNotepad({ id, archivedAt: new Date() })) ?? this.notFound('Notepad');
+  }
+
+  async restore(auth: RequestAuthorization, id: string) {
+    const notepad = await this.requireExplicitMetadata(id);
+    this.allow(canManageNotepad(auth, notepad));
+    return (await this.store.restoreExplicitNotepad({ id, updatedAt: new Date() })) ?? this.notFound('Notepad');
   }
 
   private async publishAssociationChange(sessionId: string) {
@@ -641,6 +616,6 @@ function boundedLimit(value: unknown): number {
   return limit;
 }
 
-function isHumanRevisionManager(auth: RequestAuthorization, ownerGroupId: string): boolean {
-  return !auth.bypass && canManageNotepad(auth, { ownerGroupId });
+function isHumanRevisionManager(auth: RequestAuthorization): boolean {
+  return !auth.bypass && canManageNotepad(auth);
 }

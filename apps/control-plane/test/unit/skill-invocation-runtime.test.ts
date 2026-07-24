@@ -5,7 +5,7 @@ import type { PreparedSkillTrace } from '../../src/runner-pi/skill-types.js';
 describe('SkillInvocationRuntime', () => {
   const skill: PreparedSkillTrace = {
     name: 'review',
-    source: 'group',
+    source: 'managed',
     ref: 'skill-review',
     filePath: '/workspace/skills/review/SKILL.md',
   };

@@ -7,7 +7,7 @@ import {
   sessionTitleFromPrompt,
 } from '../../src/sessions/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId, type SessionRecord } from '../../src/store/types.js';
+import { type SessionRecord } from '../../src/store/types.js';
 
 describe('session lifecycle transitions', () => {
   it('derives bounded titles from normalized initial prompts', () => {
@@ -27,9 +27,6 @@ describe('session lifecycle transitions', () => {
       status: 'idle',
       title: 'Fallback title',
       tags: [],
-      ownerGroupId: defaultGroupId,
-      visibility: 'group',
-      writePolicy: 'group_members',
       spawnDepth: 0,
       createdAt: now,
       updatedAt: now,
@@ -121,9 +118,6 @@ describe('session lifecycle transitions', () => {
       title: 'Keep me',
       tags: ['one', 'two'],
       context: { nested: { value: true } },
-      ownerGroupId: defaultGroupId,
-      visibility: 'group',
-      writePolicy: 'creator_only',
       createdByUserId: 'user-1',
       parentSessionId: 'parent-1',
       spawnDepth: 2,
@@ -159,9 +153,6 @@ describe('session lifecycle transitions', () => {
       title: record.title,
       tags: record.tags,
       context: record.context,
-      ownerGroupId: record.ownerGroupId,
-      visibility: record.visibility,
-      writePolicy: record.writePolicy,
       createdByUserId: record.createdByUserId,
       parentSessionId: record.parentSessionId,
       spawnDepth: record.spawnDepth,
@@ -181,9 +172,6 @@ describe('session lifecycle transitions', () => {
       id: 'session-concurrent',
       status: 'queued',
       tags: [],
-      ownerGroupId: defaultGroupId,
-      visibility: 'group',
-      writePolicy: 'group_members',
       spawnDepth: 0,
       createdAt,
       updatedAt: createdAt,

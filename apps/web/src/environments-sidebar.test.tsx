@@ -1,18 +1,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import type { Environment, Group } from './api.js';
+import type { Environment } from './api.js';
 import { EnvironmentsPanel } from './components/app-panels/environments-panel.js';
 import { EnvironmentsSidebar } from './components/app-panels/environments-sidebar.js';
 
 const environment: Environment = {
   id: 'environment-1',
   name: 'Production',
-  ownerGroupId: 'group-1',
-  ownerGroupName: 'Platform',
-  shareMode: 'private',
   currentRevisionId: 'revision-2',
   currentRevisionNumber: 2,
-  sharedGroupIds: [],
   repositories: [
     {
       id: 'repository-1',
@@ -23,19 +19,6 @@ const environment: Environment = {
       position: 0,
     },
   ],
-  canManage: true,
-  createdAt: '2026-07-16T10:00:00.000Z',
-  updatedAt: '2026-07-16T10:00:00.000Z',
-};
-
-const group: Group = {
-  id: 'group-1',
-  name: 'Platform',
-  defaultVisibility: 'organization',
-  defaultWritePolicy: 'group_members',
-  automationCreateRequiredRole: 'member',
-  canCreateSessions: true,
-  canCreateAutomations: true,
   canManage: true,
   createdAt: '2026-07-16T10:00:00.000Z',
   updatedAt: '2026-07-16T10:00:00.000Z',
@@ -92,7 +75,7 @@ it('marks environment edits as unsaved without displacing the archive action', a
       selectedEnvironmentId={environment.id}
       selectedRevisionId=""
       canCallApi
-      groups={[group]}
+      canManageTenantResources
       token=""
       repositoryOptions={[]}
       repositoryOptionsLoading={false}
@@ -117,107 +100,6 @@ it('marks environment edits as unsaved without displacing the archive action', a
   expect(confirm).toHaveBeenCalledWith('Discard unsaved changes and archive this environment?');
 });
 
-it('preserves unsaved environment edits when groups refresh', async () => {
-  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    jsonResponse({ revisions: [environmentRevision('revision-2', 2, 'widget')] }),
-  );
-  const props = environmentPanelProps();
-  const { rerender } = render(<EnvironmentsPanel {...props} />);
-
-  expect(await screen.findByLabelText('Revision')).toHaveTextContent('Revision 2');
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Unsaved environment' } });
-  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
-
-  rerender(<EnvironmentsPanel {...props} groups={[{ ...group, name: 'Platform engineering' }]} />);
-
-  expect(screen.getByLabelText('Name')).toHaveValue('Unsaved environment');
-  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Platform engineering');
-  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
-});
-
-it('preserves new environment edits while replacing an unavailable owner group', () => {
-  const secondaryGroup = { ...group, id: 'group-2', name: 'Security' };
-  const props = environmentPanelProps();
-  const { rerender } = render(
-    <EnvironmentsPanel {...props} environments={[]} selectedEnvironmentId="" groups={[group, secondaryGroup]} />,
-  );
-
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Unsaved environment' } });
-  fireEvent.click(screen.getByRole('radio', { name: 'Specific groups' }));
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Security' }));
-  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Platform');
-
-  rerender(<EnvironmentsPanel {...props} environments={[]} selectedEnvironmentId="" groups={[secondaryGroup]} />);
-
-  expect(screen.getByLabelText('Name')).toHaveValue('Unsaved environment');
-  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Security');
-  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
-
-  rerender(
-    <EnvironmentsPanel {...props} environments={[]} selectedEnvironmentId="" groups={[secondaryGroup, group]} />,
-  );
-  fireEvent.click(screen.getByLabelText('Owner group'));
-  fireEvent.click(screen.getByRole('option', { name: 'Platform' }));
-  expect(screen.getByRole('checkbox', { name: 'Security' })).not.toBeChecked();
-});
-
-it('initializes a new environment owner when groups load without marking the form dirty', () => {
-  const props = environmentPanelProps();
-  const onDirtyChange = vi.fn();
-  const { rerender } = render(
-    <EnvironmentsPanel
-      {...props}
-      environments={[]}
-      selectedEnvironmentId=""
-      groups={[]}
-      onDirtyChange={onDirtyChange}
-    />,
-  );
-
-  rerender(
-    <EnvironmentsPanel
-      {...props}
-      environments={[]}
-      selectedEnvironmentId=""
-      groups={[group]}
-      onDirtyChange={onDirtyChange}
-    />,
-  );
-
-  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Platform');
-  expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
-  expect(onDirtyChange).not.toHaveBeenCalledWith(true);
-});
-
-it('keeps a clean new environment on its current owner when groups reorder', () => {
-  const secondaryGroup = { ...group, id: 'group-2', name: 'Security' };
-  const props = environmentPanelProps();
-  const onDirtyChange = vi.fn();
-  const { rerender } = render(
-    <EnvironmentsPanel
-      {...props}
-      environments={[]}
-      selectedEnvironmentId=""
-      groups={[group, secondaryGroup]}
-      onDirtyChange={onDirtyChange}
-    />,
-  );
-
-  rerender(
-    <EnvironmentsPanel
-      {...props}
-      environments={[]}
-      selectedEnvironmentId=""
-      groups={[secondaryGroup, group]}
-      onDirtyChange={onDirtyChange}
-    />,
-  );
-
-  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Platform');
-  expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
-  expect(onDirtyChange).not.toHaveBeenCalledWith(true);
-});
-
 it('shows historical repositories with current access fields and makes the whole editor read-only', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     jsonResponse({
@@ -238,13 +120,10 @@ it('shows historical repositories with current access fields and makes the whole
 
   render(<Harness />);
 
-  expect(await screen.findByText(/Name, owner, and sharing reflect the current environment/)).toBeInTheDocument();
+  expect(await screen.findByText(/The name reflects the current environment/)).toBeInTheDocument();
   expect(screen.getByLabelText('Name')).toHaveValue('Production');
-  expect(screen.getByLabelText('Owner group')).toHaveTextContent('Platform');
   await waitFor(() => expect(screen.getByLabelText('Repository 1')).toHaveTextContent('acme/legacy'));
   expect(screen.getByLabelText('Name')).toBeDisabled();
-  expect(screen.getByLabelText('Owner group')).toBeDisabled();
-  expect(screen.getByRole('radio', { name: 'Owner group only' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Add repo' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Save environment' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Archive' })).toBeDisabled();
@@ -280,6 +159,25 @@ it('allows environment readers to inspect revisions without granting edit access
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
+it('lets viewers browse environment revisions without create or edit controls', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    jsonResponse({ revisions: [environmentRevision('revision-2', 2, 'widget')] }),
+  );
+  render(
+    <EnvironmentsPanel
+      {...environmentPanelProps()}
+      canManageTenantResources={false}
+      environments={[{ ...environment, canManage: false }]}
+    />,
+  );
+
+  expect(await screen.findByLabelText('Revision')).toHaveTextContent('Revision 2');
+  expect(screen.getByRole('button', { name: 'New environment' })).toBeDisabled();
+  expect(screen.getByLabelText('Name')).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Save environment' })).toBeDisabled();
+  expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument();
+});
+
 function environmentPanelProps() {
   return {
     environments: [environment],
@@ -288,7 +186,7 @@ function environmentPanelProps() {
     selectedEnvironmentId: environment.id,
     selectedRevisionId: '',
     canCallApi: true,
-    groups: [group],
+    canManageTenantResources: true,
     token: 'test-token',
     repositoryOptions: [
       { fullName: 'acme/widget', owner: 'acme', name: 'widget' },

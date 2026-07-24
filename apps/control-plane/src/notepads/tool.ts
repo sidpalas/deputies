@@ -89,7 +89,7 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
     if (current.status === 'archived' && !readOnly.includes(action))
       throw new NotepadServiceError('archived', 'Archived sessions are read-only');
     const actor: NotepadActor = { kind: 'agent', sessionId: s.sessionId, runId: s.runId };
-    const agentAuth: RequestAuthorization = { bypass: true, user: null, memberships: [] };
+    const agentAuth: RequestAuthorization = { bypass: true, user: null };
     const capability = async (kind: 'explicit_search' | 'session_notepad_coordination') =>
       (await s.store.listSessionNotepadCapabilities(s.sessionId)).find((c) => c.kind === kind);
     const ownSession = async () => bounded(await s.notepads.readSession(agentAuth, s.sessionId), p);
@@ -147,7 +147,7 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
         if (action === 'patch_session') denied();
         throw new Error('Session Notepad coordination capability is required');
       }
-      const target = await sameGroupSession(s.store, targetId, current.ownerGroupId);
+      const target = await tenantSession(s.store, targetId);
       const targetAuth = await grantorAuth(s.store, coordinationCapability.grantedByUserId);
       if (action === 'read_session') {
         if (!canWriteSession(targetAuth, target)) denied();
@@ -227,7 +227,6 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
           .searchExplicitNotepadsWithCapability({
             actorSessionId: s.sessionId,
             expectedGrantorUserId: grant.grantedByUserId,
-            groupId: current.ownerGroupId,
             query,
             limit: Math.min(number(p.limit ?? 20, 'limit'), 50),
           })
@@ -245,7 +244,7 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
       if (!association) {
         // Resolve metadata and owner boundary before loading content or applying
         // the grantor's canonical readability. Every failure is intentionally
-        // indistinguishable to avoid existence and cross-group disclosure.
+        // indistinguishable to avoid disclosing whether the notepad exists.
         if (!searchGrant) denied();
         const record = await s.store
           .readExplicitNotepadWithCapability({
@@ -313,7 +312,7 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
         ),
       );
     if (action === 'grant') {
-      const target = await sameGroupSession(s.store, string(p.sessionId, 'sessionId'), current.ownerGroupId);
+      const target = await tenantSession(s.store, string(p.sessionId, 'sessionId'));
       return ok(action, associationAck(await s.notepads.putAssociation(agentAuth, id, target.id, actor)));
     }
     if (action === 'revoke')
@@ -389,10 +388,7 @@ function utf8Prefix(value: string, maxBytes: number): string {
 async function grantorAuth(store: AppStore, userId: string): Promise<RequestAuthorization> {
   const user = await store.getAuthUser(userId);
   if (!user) throw new Error('Capability grantor is no longer active');
-  const all = await store.listUserGroupMemberships(userId);
-  const groups = await Promise.all(all.map((m) => store.getGroup(m.groupId)));
-  const memberships = all.filter((_, i) => groups[i] && !groups[i].archivedAt);
-  return { bypass: false, user, memberships };
+  return { bypass: false, user };
 }
 async function requiredSession(store: AppStore, id: string) {
   const s = await store.getSession(id);
@@ -449,9 +445,9 @@ function acknowledgement(record: {
 function associationAck(record: { notepadId: string; sessionId: string }) {
   return { notepadId: record.notepadId, sessionId: record.sessionId };
 }
-async function sameGroupSession(store: AppStore, id: string, groupId: string) {
+async function tenantSession(store: AppStore, id: string) {
   const target = await store.getSession(id);
-  if (!target || target.ownerGroupId !== groupId) throw new Error('Target unavailable');
+  if (!target) throw new Error('Target unavailable');
   return target;
 }
 function errorMessage(e: unknown) {

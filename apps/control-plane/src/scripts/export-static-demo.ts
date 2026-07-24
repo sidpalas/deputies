@@ -27,9 +27,6 @@ type SessionRow = QueryResultRow & {
   context: Record<string, unknown> | null;
   parent_session_id: string | null;
   spawn_depth: number | string;
-  owner_group_id: string;
-  visibility: string;
-  write_policy: string;
   created_by_user_id: string | null;
   created_at: Date;
   updated_at: Date;
@@ -203,7 +200,7 @@ function requiredValue(values: string[], index: number, flag: string): string {
 async function loadSessions(pool: Pool, args: Args): Promise<SessionRow[]> {
   if (args.sessionIds.length) {
     const result = await pool.query<SessionRow>(
-      `SELECT id, status, title, context, parent_session_id, spawn_depth, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at
+      `SELECT id, status, title, context, parent_session_id, spawn_depth, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at
        FROM sessions
        WHERE id = ANY($1::uuid[])
        ORDER BY array_position($1::uuid[], id) ASC`,
@@ -213,7 +210,7 @@ async function loadSessions(pool: Pool, args: Args): Promise<SessionRow[]> {
   }
 
   const result = await pool.query<SessionRow>(
-    `SELECT id, status, title, context, parent_session_id, spawn_depth, owner_group_id, visibility, write_policy, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at
+    `SELECT id, status, title, context, parent_session_id, spawn_depth, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at
      FROM sessions
      ORDER BY last_activity_at DESC, created_at DESC, id DESC
      LIMIT $1`,
@@ -297,9 +294,6 @@ function toSession(row: SessionRow) {
     context: row.context ?? undefined,
     parentSessionId: row.parent_session_id ?? undefined,
     spawnDepth: Number(row.spawn_depth ?? 0),
-    ownerGroupId: row.owner_group_id,
-    visibility: row.visibility,
-    writePolicy: row.write_policy,
     createdByUserId: row.created_by_user_id ?? undefined,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),

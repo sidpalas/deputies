@@ -16,7 +16,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 ## Web UI
 
 - Saved session views/grouping for common filters, sources, repositories, and teams.
-- Saved codebase, branch, model, and reasoning defaults per user/group/integration source, building on the existing environment/repository picker and per-session controls.
+- Saved codebase, branch, model, and reasoning defaults per user or integration source, building on the existing environment/repository picker and per-session controls.
 - Audit and document preview-origin isolation after signed preview auth, including whether separate eTLD+1 deployment remains required for defense-in-depth against untrusted preview content.
 - Surface sandbox cleanup events and failures more clearly.
 - Expand callback delivery UI with filtering and clearer retry/failure history.
@@ -26,7 +26,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 ## Agent Runtime
 
 - Harden the opt-in `deputies` control tool with richer audit views, policy diagnostics, and eventual MCP exposure if external agent runtimes need the same scoped session-control surface.
-- Agent authentication to external services: instance-level remote MCP/Executor support is implemented through `MCP_SERVERS`; remaining work is per-user/per-access-group MCP configuration, CLI credential policy, API-token lifecycle, and short-lived provider tokens.
+- Agent authentication to external services: instance-level remote MCP/Executor support is implemented through `MCP_SERVERS`; remaining work is per-user configuration, CLI credential policy, API-token lifecycle, and short-lived provider tokens.
 - Credential scoping and injection policy for tools, commands, per-user MCP servers, and sandbox environments.
 - Sandbox credential broker for GitHub repository operations: keep GitHub App installation tokens outside the sandbox trust domain, route `git` smart-HTTP and `gh` operations through a control-plane or sandbox-bridge proxy, and enforce push/PR policy server-side with opaque per-session sandbox credentials. Treat this as the gate for safely preparing untrusted PR branches or forks; until then repository setup assumes trusted, allowlisted repositories.
 - Named agent presets that bundle versioned agent instructions with model/reasoning defaults, managed skills, environment/runtime defaults, and scoped tool or MCP policy. Keep the preset separate from stored prompt templates: a preset defines how the agent works and may reference a default prompt, while the rendered prompt remains user-visible session input.
@@ -37,10 +37,10 @@ This is a living backlog for product, integration, runtime, and operations work.
 
 ## Meta Agents
 
-- Human-facing controls to grant and revoke the existing Broad Notepad Discovery and Session Notepad Coordination capabilities for a Session, with clear descriptions of the grantor, access-group boundary, live authority checks, and read-versus-write effects.
+- Human-facing controls to grant and revoke Broad Notepad Discovery and Session Notepad Coordination capabilities for a session, with clear descriptions of the grantor, live authority checks, and read-versus-write effects.
 - A meta-agent overview showing capability-enabled Sessions, their associated Explicit Notepads, recent coordination activity, and the human authority each capability currently exercises.
 - An explicit workflow for a meta-agent to request or establish an association after discovering an Explicit Notepad, without turning broad read discovery into implicit write access.
-- Access-group policy controls for who may create meta-agent grants, which capabilities may be granted, and whether grants require an administrator, while preserving the current human-granted and revocable trust model.
+- Tenant policy controls for who may create meta-agent grants, which capabilities may be granted, and whether grants require an administrator, while preserving the human-granted and revocable trust model.
 - System-administrator diagnostics for tracing effective Notepad access across meta-agent capabilities, Session policies, Explicit Notepad associations, and revoked or stale grants.
 
 ## Automations
@@ -64,7 +64,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 ## Scale And Operations
 
 - Generate `docs/configuration.md` from `apps/control-plane/src/config/index.ts` as the env source of truth, with `Name`, `Required When`, `Default`, `Values`, and `Description` columns, including conditional requirements such as `SANDBOX_SECRET_ENCRYPTION_KEY` for Postgres-backed Docker sandboxes, `GITHUB_WEBHOOK_TRIGGER_PHRASES` when GitHub webhooks are enabled, and Slack allowlists when `SLACK_SIGNING_SECRET` is set.
-- User/org quotas and audit trails beyond the current auth, access-group, and session ownership model.
+- Tenant/user quotas and audit trails beyond the current role and resource model.
 - Generalize append-only environment activity into a product-wide audit framework with typed actor/resource/action records, transactional capture, authorization-aware queries, retention policy, filtering, and export. Preserve environment activity as the first resource-specific producer rather than delaying durable capture for the generalized UI.
 - Richer participant metadata beyond creator/message-author participation, such as tool-run actors and external integration actors.
 - Source/repository-derived session tag dimensions such as `github:owner/repo`, `slack:channel`, and `repo:owner/name`.

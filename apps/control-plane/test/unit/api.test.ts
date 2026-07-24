@@ -17,7 +17,6 @@ import type {
   SandboxServiceEndpointInput,
 } from '../../src/sandbox/types.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId } from '../../src/store/types.js';
 import {
   expectArtifactPreviewResponse,
   expectArtifactsResponse,
@@ -453,7 +452,47 @@ describe('core API', () => {
     expect(logout.headers.get('set-cookie')).toContain('Max-Age=0');
   });
 
-  it('allows super admins to promote existing users', async () => {
+  it('allows only session admins to access setup routes', async () => {
+    await closeServer(server);
+    store = new MemoryStore();
+    services = createServices(store);
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: 'session',
+        AUTH_STATIC_USERNAME: 'dev',
+        AUTH_STATIC_PASSWORD: 'password',
+        AUTH_SESSION_SECRET: 'test-secret',
+      }),
+      services,
+    );
+    baseUrl = await listen(server);
+
+    const login = await postJson(`${baseUrl}/auth/login`, { username: 'dev', password: 'password' });
+    const cookie = login.headers.get('set-cookie');
+    const { user } = (await login.json()) as { user: { id: string } };
+
+    expect((await fetch(`${baseUrl}/setup/status`, { headers: { cookie: cookie! } })).status).toBe(200);
+
+    await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000211',
+      accountId: '00000000-0000-4000-8000-000000000212',
+      provider: 'github',
+      providerAccountId: 'setup-admin',
+      username: 'setup-admin',
+      role: 'admin',
+      profile: {},
+      now: new Date(),
+    });
+
+    for (const role of ['member', 'viewer'] as const) {
+      await store.updateAuthUserRole({ userId: user.id, role, updatedAt: new Date() });
+      const response = await fetch(`${baseUrl}/setup/status`, { headers: { cookie: cookie! } });
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ error: 'forbidden' });
+    }
+  });
+
+  it('allows admins to manage users while preserving a last admin', async () => {
     await closeServer(server);
     store = new MemoryStore();
     services = createServices(store);
@@ -473,7 +512,7 @@ describe('core API', () => {
       provider: 'github',
       providerAccountId: '222',
       username: 'teammate',
-      role: 'user',
+      role: 'member',
       profile: {},
       now: new Date(),
     });
@@ -484,11 +523,11 @@ describe('core API', () => {
     const promote = await fetch(`${baseUrl}/users/${target.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', cookie: cookie! },
-      body: JSON.stringify({ role: 'super_admin' }),
+      body: JSON.stringify({ role: 'admin' }),
     });
 
     expect(promote.status).toBe(200);
-    await expect(promote.json()).resolves.toMatchObject({ user: { username: 'teammate', role: 'super_admin' } });
+    await expect(promote.json()).resolves.toMatchObject({ user: { username: 'teammate', role: 'admin' } });
 
     const reauthenticated = await store.upsertAuthUserForAccount({
       userId: '00000000-0000-4000-8000-000000000224',
@@ -496,19 +535,30 @@ describe('core API', () => {
       provider: 'github',
       providerAccountId: '222',
       username: 'teammate',
-      role: 'user',
+      role: 'member',
       profile: {},
       now: new Date(),
     });
-    expect(reauthenticated.role).toBe('super_admin');
+    expect(reauthenticated.role).toBe('admin');
 
-    const demoteOther = await fetch(`${baseUrl}/users/${target.id}`, {
+    const demoteSelf = await fetch(`${baseUrl}/users/${loginBody.user.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', cookie: cookie! },
-      body: JSON.stringify({ role: 'user' }),
+      body: JSON.stringify({ role: 'member' }),
     });
-    expect(demoteOther.status).toBe(200);
-    await expect(demoteOther.json()).resolves.toMatchObject({ user: { username: 'teammate', role: 'user' } });
+    expect(demoteSelf.status).toBe(200);
+    await expect(demoteSelf.json()).resolves.toMatchObject({ user: { username: 'dev', role: 'member' } });
+
+    const nonAdminList = await fetch(`${baseUrl}/users`, { headers: { cookie: cookie! } });
+    expect(nonAdminList.status).toBe(403);
+
+    await expect(
+      store.updateAuthUserRole({
+        userId: target.id,
+        role: 'member',
+        updatedAt: new Date(),
+      }),
+    ).rejects.toMatchObject({ code: 'last_admin' });
 
     const demotedReauthenticated = await store.upsertAuthUserForAccount({
       userId: '00000000-0000-4000-8000-000000000226',
@@ -516,106 +566,16 @@ describe('core API', () => {
       provider: 'github',
       providerAccountId: '222',
       username: 'teammate',
-      role: 'super_admin',
+      role: 'admin',
       profile: {},
       now: new Date(),
     });
-    expect(demotedReauthenticated.role).toBe('super_admin');
+    expect(demotedReauthenticated.role).toBe('admin');
 
-    const demoteSelf = await fetch(`${baseUrl}/users/${loginBody.user.id}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', cookie: cookie! },
-      body: JSON.stringify({ role: 'user' }),
-    });
-    expect(demoteSelf.status).toBe(409);
-
-    await store.updateAuthUserRole({ userId: loginBody.user.id, role: 'user', updatedAt: new Date() });
+    await store.updateAuthUserRole({ userId: loginBody.user.id, role: 'member', updatedAt: new Date() });
     const demotedStaticLogin = await postJson(`${baseUrl}/auth/login`, { username: 'dev', password: 'password' });
     expect(demotedStaticLogin.status).toBe(200);
-    await expect(demotedStaticLogin.json()).resolves.toMatchObject({ user: { username: 'dev', role: 'super_admin' } });
-  });
-
-  it('lists users for all managed groups with one batched membership lookup', async () => {
-    await closeServer(server);
-    store = new MemoryStore();
-    services = createServices(store);
-    server = createServer(
-      loadConfig({
-        API_AUTH_MODE: 'session',
-        AUTH_SESSION_SECRET: 'test-secret',
-        AUTH_STATIC_USERNAME: 'static-admin',
-        AUTH_STATIC_PASSWORD: 'password',
-      }),
-      services,
-    );
-    baseUrl = await listen(server);
-
-    const now = new Date();
-    const users = await Promise.all(
-      [
-        ['00000000-0000-4000-8000-000000000231', 'manager'],
-        ['00000000-0000-4000-8000-000000000232', 'zebra'],
-        ['00000000-0000-4000-8000-000000000233', 'alpha'],
-        ['00000000-0000-4000-8000-000000000234', 'outsider'],
-      ].map(([userId, username]) =>
-        store.upsertAuthUserForAccount({
-          userId: userId!,
-          accountId: userId!.replace(/.$/, '9'),
-          provider: 'group-manager-list',
-          providerAccountId: username!,
-          username: username!,
-          role: 'user',
-          profile: {},
-          now,
-        }),
-      ),
-    );
-    const groupIds = ['00000000-0000-4000-8000-000000000241', '00000000-0000-4000-8000-000000000242'];
-    for (const [index, groupId] of groupIds.entries()) {
-      await store.createGroup({
-        id: groupId,
-        name: `Managed group ${index + 1}`,
-        defaultVisibility: 'group',
-        defaultWritePolicy: 'group_members',
-        automationCreateRequiredRole: 'member',
-        createdAt: now,
-        updatedAt: now,
-      });
-      await store.upsertGroupMember({
-        groupId,
-        userId: users[0]!.id,
-        role: 'admin',
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-    for (const [groupId, user] of [
-      [groupIds[0]!, users[1]!],
-      [groupIds[0]!, users[2]!],
-      [groupIds[1]!, users[2]!],
-    ] as const) {
-      await store.upsertGroupMember({ groupId, userId: user.id, role: 'member', createdAt: now, updatedAt: now });
-    }
-    await store.createAuthSession({
-      id: 'group-manager-session',
-      userId: users[0]!.id,
-      createdAt: now,
-      expiresAt: new Date(now.getTime() + 60_000),
-    });
-    const batchedLookup = vi.spyOn(store, 'listGroupMembersForGroups');
-    const singleGroupLookup = vi.spyOn(store, 'listGroupMembers');
-
-    const response = await fetch(`${baseUrl}/users`, {
-      headers: { cookie: `${sessionCookieName}=group-manager-session` },
-    });
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      users: [{ username: 'alpha' }, { username: 'manager' }, { username: 'zebra' }],
-    });
-    expect(batchedLookup).toHaveBeenCalledOnce();
-    expect(batchedLookup).toHaveBeenCalledWith(groupIds);
-    expect(singleGroupLookup).not.toHaveBeenCalled();
+    await expect(demotedStaticLogin.json()).resolves.toMatchObject({ user: { username: 'dev', role: 'member' } });
   });
 
   it('supports GitHub OAuth login with admin users', async () => {
@@ -674,7 +634,7 @@ describe('core API', () => {
     const me = await fetch(`${baseUrl}/auth/me`, { headers: { cookie: cookie! } });
     expect(me.status).toBe(200);
     await expect(me.json()).resolves.toMatchObject({
-      user: { username: 'octocat', displayName: 'The Octocat', role: 'super_admin' },
+      user: { username: 'octocat', displayName: 'The Octocat', role: 'admin' },
     });
   });
 
@@ -690,7 +650,7 @@ describe('core API', () => {
         GITHUB_OAUTH_CLIENT_SECRET: 'client-secret',
         GITHUB_OAUTH_BASE_URL: 'https://github.example',
         AUTH_GITHUB_ALLOWED_ORGANIZATIONS: 'acme',
-        AUTH_GITHUB_DEFAULT_GROUP_ROLE: 'member',
+        AUTH_GITHUB_DEFAULT_ROLE: 'member',
       }),
       {
         ...createServices(store),
@@ -723,13 +683,12 @@ describe('core API', () => {
     await expect(me.json()).resolves.toMatchObject({
       user: {
         username: 'teammate',
-        role: 'user',
-        memberships: [{ groupId: defaultGroupId, role: 'member' }],
+        role: 'member',
       },
     });
   });
 
-  it('allows public GitHub users to create sessions as group members', async () => {
+  it('allows public GitHub users to create sessions as members', async () => {
     await closeServer(server);
     store = new MemoryStore();
     services = createServices(store);
@@ -771,14 +730,14 @@ describe('core API', () => {
     const me = await fetch(`${baseUrl}/auth/me`, { headers: { cookie: cookie! } });
     expect(me.status).toBe(200);
     await expect(me.json()).resolves.toMatchObject({
-      user: { username: 'viewer', role: 'user', memberships: [{ role: 'member' }] },
+      user: { username: 'viewer', role: 'member' },
     });
 
     const listSessions = await fetch(`${baseUrl}/sessions`, { headers: { cookie: cookie! } });
     expect(listSessions.status).toBe(200);
 
     const setupStatus = await fetch(`${baseUrl}/setup/status`, { headers: { cookie: cookie! } });
-    expect(setupStatus.status).toBe(200);
+    expect(setupStatus.status).toBe(403);
 
     const session = await services.sessions.create({ title: 'Existing session' });
     const listServices = await fetch(`${baseUrl}/sessions/${session.id}/services`, { headers: { cookie: cookie! } });
@@ -798,207 +757,6 @@ describe('core API', () => {
     expect(openSandbox.status).toBe(404);
   });
 
-  it('includes owner group names for organization-visible sessions', async () => {
-    await closeServer(server);
-    store = new MemoryStore();
-    services = createServices(store);
-    server = createServer(
-      loadConfig({
-        API_AUTH_MODE: 'session',
-        AUTH_SESSION_SECRET: 'test-secret',
-        AUTH_STATIC_USERNAME: 'admin',
-        AUTH_STATIC_PASSWORD: 'password',
-      }),
-      services,
-    );
-    baseUrl = await listen(server);
-
-    const now = new Date();
-    const user = await store.upsertAuthUserForAccount({
-      userId: '00000000-0000-4000-8000-000000000020',
-      accountId: '00000000-0000-4000-8000-000000000021',
-      provider: 'test',
-      providerAccountId: 'reader',
-      username: 'reader',
-      role: 'user',
-      profile: {},
-      now,
-    });
-    await store.createAuthSession({
-      id: 'reader-session',
-      userId: user.id,
-      createdAt: now,
-      expiresAt: new Date(now.getTime() + 60_000),
-    });
-    const group = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000022',
-      name: 'Client access',
-      defaultVisibility: 'organization',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
-    await services.sessions.create({
-      title: 'Organization visible',
-      ownerGroupId: group.id,
-      visibility: 'organization',
-      writePolicy: 'group_members',
-    });
-
-    const groups = await fetch(`${baseUrl}/groups`, { headers: { cookie: 'dev_deputies_session=reader-session' } });
-    await expect(groups.json()).resolves.toEqual({ groups: [] });
-
-    const list = await fetch(`${baseUrl}/sessions`, { headers: { cookie: 'dev_deputies_session=reader-session' } });
-    expect(list.status).toBe(200);
-    await expect(list.json()).resolves.toMatchObject({
-      sessions: [{ title: 'Organization visible', ownerGroupId: group.id, ownerGroupName: 'Client access' }],
-    });
-  });
-
-  it('serializes only authorized environments with batched owner-group resolution', async () => {
-    await closeServer(server);
-    store = new MemoryStore();
-    services = createServices(store);
-    server = createServer(
-      loadConfig({
-        API_AUTH_MODE: 'session',
-        AUTH_SESSION_SECRET: 'test-secret',
-        AUTH_STATIC_USERNAME: 'admin',
-        AUTH_STATIC_PASSWORD: 'password',
-      }),
-      services,
-    );
-    baseUrl = await listen(server);
-
-    const now = new Date();
-    const user = await store.upsertAuthUserForAccount({
-      userId: '00000000-0000-4000-8000-000000000120',
-      accountId: '00000000-0000-4000-8000-000000000121',
-      provider: 'test',
-      providerAccountId: 'environment-reader',
-      username: 'environment-reader',
-      role: 'user',
-      profile: {},
-      now,
-    });
-    await store.createAuthSession({
-      id: 'environment-reader-session',
-      userId: user.id,
-      createdAt: now,
-      expiresAt: new Date(now.getTime() + 60_000),
-    });
-    const groups = await Promise.all(
-      [
-        ['00000000-0000-4000-8000-000000000122', 'Reader group'],
-        ['00000000-0000-4000-8000-000000000123', 'Shared owner'],
-        ['00000000-0000-4000-8000-000000000124', 'Organization owner'],
-        ['00000000-0000-4000-8000-000000000125', 'Hidden owner'],
-      ].map(([id, name]) =>
-        store.createGroup({
-          id: id!,
-          name: name!,
-          defaultVisibility: 'group',
-          defaultWritePolicy: 'group_members',
-          automationCreateRequiredRole: 'member',
-          createdAt: now,
-          updatedAt: now,
-        }),
-      ),
-    );
-    const [readerGroup, sharedOwner, organizationOwner, hiddenOwner] = groups as [
-      (typeof groups)[number],
-      (typeof groups)[number],
-      (typeof groups)[number],
-      (typeof groups)[number],
-    ];
-    await store.upsertGroupMember({
-      groupId: readerGroup.id,
-      userId: user.id,
-      role: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const owned = await services.environments.create({
-      name: 'Owned private',
-      ownerGroupId: readerGroup.id,
-      repositories: [{ provider: 'github', owner: 'acme', repo: 'owned', branch: 'release', primary: true }],
-      actor: { type: 'system' },
-    });
-    const shared = await services.environments.create({
-      name: 'Selected share',
-      ownerGroupId: sharedOwner.id,
-      shareMode: 'selected_groups',
-      sharedGroupIds: [readerGroup.id],
-      repositories: [{ provider: 'github', owner: 'acme', repo: 'shared', primary: true }],
-      actor: { type: 'system' },
-    });
-    const organization = await services.environments.create({
-      name: 'All groups',
-      ownerGroupId: organizationOwner.id,
-      shareMode: 'all_groups',
-      repositories: [{ provider: 'github', owner: 'acme', repo: 'organization', primary: true }],
-      actor: { type: 'system' },
-    });
-    await services.environments.create({
-      name: 'Hidden private',
-      ownerGroupId: hiddenOwner.id,
-      repositories: [{ provider: 'github', owner: 'acme', repo: 'hidden', primary: true }],
-      actor: { type: 'system' },
-    });
-
-    const listGroups = vi.spyOn(store, 'listGroups');
-    const getGroup = vi.spyOn(store, 'getGroup');
-    const response = await fetch(`${baseUrl}/environments`, {
-      headers: { cookie: 'dev_deputies_session=environment-reader-session' },
-    });
-
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { environments: Array<Record<string, unknown>> };
-    expect(body.environments).toHaveLength(3);
-    expect(body.environments.map((environment) => environment.id)).toEqual(
-      expect.arrayContaining([owned.id, shared.id, organization.id]),
-    );
-    expect(body.environments).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: owned.id,
-          ownerGroupName: readerGroup.name,
-          shareMode: 'private',
-          sharedGroupIds: [],
-          canManage: false,
-          repositories: [
-            expect.objectContaining({
-              owner: 'acme',
-              repo: 'owned',
-              branch: 'release',
-              primary: true,
-              position: 0,
-            }),
-          ],
-        }),
-        expect.objectContaining({
-          id: shared.id,
-          ownerGroupName: sharedOwner.name,
-          sharedGroupIds: [readerGroup.id],
-          canManage: false,
-        }),
-        expect.objectContaining({
-          id: organization.id,
-          ownerGroupName: organizationOwner.name,
-          shareMode: 'all_groups',
-          canManage: false,
-        }),
-      ]),
-    );
-    expect(body.environments).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: 'Hidden private' })]),
-    );
-    expect(listGroups).toHaveBeenCalledTimes(1);
-    expect(getGroup).toHaveBeenCalledTimes(1);
-    expect(getGroup).toHaveBeenCalledWith(readerGroup.id);
-  });
-
   it('allows PATCH session title updates through CORS preflight', async () => {
     const response = await fetch(`${baseUrl}/sessions/00000000-0000-4000-8000-000000000001`, {
       method: 'OPTIONS',
@@ -1011,61 +769,6 @@ describe('core API', () => {
     expect(response.status).toBe(204);
     expect(response.headers.get('access-control-allow-methods')).toContain('PATCH');
     expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:5173');
-  });
-
-  it('keeps archived groups for existing sessions but blocks new targets', async () => {
-    const now = new Date();
-    const archivedGroup = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000333',
-      name: 'Archived group',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'creator_only',
-      automationCreateRequiredRole: 'member',
-      archivedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    const createInArchivedGroup = await postJson(`${baseUrl}/sessions`, {
-      title: 'Blocked archived group',
-      ownerGroupId: archivedGroup.id,
-    });
-    expect(createInArchivedGroup.status).toBe(409);
-    await expect(createInArchivedGroup.json()).resolves.toMatchObject({ error: 'archived_group' });
-
-    const createSession = await postJson(`${baseUrl}/sessions`, { title: 'Active group' });
-    expect(createSession.status).toBe(201);
-    const { session } = (await createSession.json()) as { session: { id: string } };
-
-    const moveToArchivedGroup = await fetch(`${baseUrl}/sessions/${session.id}/access`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ownerGroupId: archivedGroup.id }),
-    });
-    expect(moveToArchivedGroup.status).toBe(400);
-    await expect(moveToArchivedGroup.json()).resolves.toMatchObject({ error: 'immutable_owner' });
-  });
-
-  it('rejects duplicate group names case-insensitively', async () => {
-    const createGroup = await postJson(`${baseUrl}/groups`, { name: ' Client access ' });
-    expect(createGroup.status).toBe(201);
-    await expect(createGroup.json()).resolves.toMatchObject({ group: { name: 'Client access' } });
-
-    const duplicateCreate = await postJson(`${baseUrl}/groups`, { name: 'client access' });
-    expect(duplicateCreate.status).toBe(409);
-    await expect(duplicateCreate.json()).resolves.toMatchObject({ error: 'group_name_exists' });
-
-    const otherGroup = await postJson(`${baseUrl}/groups`, { name: 'Other access' });
-    expect(otherGroup.status).toBe(201);
-    const { group } = (await otherGroup.json()) as { group: { id: string } };
-
-    const duplicateUpdate = await fetch(`${baseUrl}/groups/${group.id}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'CLIENT ACCESS' }),
-    });
-    expect(duplicateUpdate.status).toBe(409);
-    await expect(duplicateUpdate.json()).resolves.toMatchObject({ error: 'group_name_exists' });
   });
 
   it('does not grant credentialed CORS access to untrusted origins', async () => {
@@ -1424,9 +1127,13 @@ describe('core API', () => {
     const malformedCursors = [
       'not-json',
       Buffer.from('not json').toString('base64url'),
-      Buffer.from(JSON.stringify({ updatedAt: 1, createdAt: '2026-01-01T00:00:00.000Z', id: defaultGroupId })).toString(
-        'base64url',
-      ),
+      Buffer.from(
+        JSON.stringify({
+          updatedAt: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          id: '00000000-0000-4000-8000-000000000001',
+        }),
+      ).toString('base64url'),
       Buffer.from(
         JSON.stringify({ updatedAt: '2026-01-01T00:00:00.000Z', createdAt: '2026-01-01T00:00:00.000Z', id: 'nope' }),
       ).toString('base64url'),
@@ -1605,6 +1312,22 @@ describe('core API', () => {
     expect((await resume.json()) as { session: { queuePausedAt?: string } }).toMatchObject({ session: {} });
   });
 
+  it('rejects pausing and resuming archived queues without changing activity or events', async () => {
+    const created = await postJson(`${baseUrl}/sessions`, { title: 'Archived queue' });
+    const { session } = (await created.json()) as { session: { id: string } };
+    expect((await postJson(`${baseUrl}/sessions/${session.id}/archive`, {})).status).toBe(200);
+    const before = await store.getSession(session.id);
+    const eventsBefore = await store.getEvents(session.id);
+
+    for (const action of ['pause', 'resume']) {
+      const response = await postJson(`${baseUrl}/sessions/${session.id}/queue/${action}`, {});
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ error: 'conflict' });
+      expect(await store.getSession(session.id)).toEqual(before);
+      expect(await store.getEvents(session.id)).toEqual(eventsBefore);
+    }
+  });
+
   it('validates and toggles steering only for pending messages', async () => {
     const created = await postJson(`${baseUrl}/sessions`, { title: 'Steering edits' });
     const { session } = (await created.json()) as { session: { id: string } };
@@ -1779,7 +1502,7 @@ describe('core API', () => {
       error: 'conflict',
       message: 'Archived sessions are read-only',
     });
-    expect(access.status).toBe(200);
+    expect(access.status).toBe(404);
     expect(archiveAgain.status).toBe(200);
     expect(star.status).toBe(400);
     await expect(star.json()).resolves.toMatchObject({ error: 'invalid_request' });
@@ -2498,9 +2221,6 @@ describe('core API', () => {
         ...session,
         status: 'idle',
         spawnDepth: 0,
-        ownerGroupId: defaultGroupId,
-        visibility: 'organization',
-        writePolicy: 'group_members',
         createdAt: new Date(session.createdAt),
         updatedAt: new Date(session.updatedAt),
         lastActivityAt: new Date(session.updatedAt),
@@ -2547,9 +2267,6 @@ describe('core API', () => {
         ...session,
         status: 'idle',
         spawnDepth: 0,
-        ownerGroupId: defaultGroupId,
-        visibility: 'organization',
-        writePolicy: 'group_members',
         createdAt: new Date(session.createdAt),
         updatedAt: new Date(session.updatedAt),
         lastActivityAt: new Date(session.updatedAt),
@@ -2737,100 +2454,6 @@ describe('core API', () => {
     expect(overMaxBody.hasMore).toBe(true);
   });
 
-  it('advances global event cursors past events filtered by authorization', async () => {
-    await closeServer(server);
-    store = new MemoryStore();
-    services = createServices(store);
-    server = createServer(
-      loadConfig({
-        API_AUTH_MODE: 'session',
-        AUTH_SESSION_SECRET: 'test-secret',
-        AUTH_STATIC_USERNAME: 'admin',
-        AUTH_STATIC_PASSWORD: 'password',
-      }),
-      services,
-    );
-    baseUrl = await listen(server);
-
-    const now = new Date();
-    const user = await store.upsertAuthUserForAccount({
-      userId: '00000000-0000-4000-8000-000000000040',
-      accountId: '00000000-0000-4000-8000-000000000041',
-      provider: 'test',
-      providerAccountId: 'limited-reader',
-      username: 'limited-reader',
-      role: 'user',
-      profile: {},
-      now,
-    });
-    await store.createAuthSession({
-      id: 'limited-reader-session',
-      userId: user.id,
-      createdAt: now,
-      expiresAt: new Date(now.getTime() + 60_000),
-    });
-    const privateGroup = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000042',
-      name: 'Private global events',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await services.sessions.create({
-      title: 'Hidden first',
-      ownerGroupId: privateGroup.id,
-      visibility: 'group',
-      writePolicy: 'group_members',
-    });
-    const visibleFirst = await services.sessions.create({ title: 'Visible first' });
-    await services.sessions.create({
-      title: 'Hidden second',
-      ownerGroupId: privateGroup.id,
-      visibility: 'group',
-      writePolicy: 'group_members',
-    });
-    const visibleSecond = await services.sessions.create({ title: 'Visible second' });
-
-    const cookie = 'dev_deputies_session=limited-reader-session';
-    const firstPage = await fetch(`${baseUrl}/events?limit=2`, { headers: { cookie } });
-
-    expect(firstPage.status).toBe(200);
-    const firstBody = (await firstPage.json()) as {
-      events: Array<{ id: number; sessionId: string }>;
-      cursor: number;
-      hasMore: boolean;
-    };
-    expectGlobalEventsResponse(firstBody);
-    expect(firstBody.events).toMatchObject([{ id: 2, sessionId: visibleFirst.id }]);
-    expect(firstBody.events).toHaveLength(1);
-    expect(firstBody.cursor).toBe(2);
-    expect(firstBody.hasMore).toBe(true);
-
-    const secondPage = await fetch(`${baseUrl}/events?after=${firstBody.cursor}&limit=2`, { headers: { cookie } });
-    expect(secondPage.status).toBe(200);
-    const secondBody = (await secondPage.json()) as {
-      events: Array<{ id: number; sessionId: string }>;
-      cursor: number;
-      hasMore: boolean;
-    };
-    expectGlobalEventsResponse(secondBody);
-    expect(secondBody.events).toMatchObject([{ id: 4, sessionId: visibleSecond.id }]);
-    expect(secondBody.events).toHaveLength(1);
-    expect(secondBody.cursor).toBe(4);
-    expect(secondBody.hasMore).toBe(true);
-
-    const lastPage = await fetch(`${baseUrl}/events?after=${secondBody.cursor}&limit=2`, { headers: { cookie } });
-    expect(lastPage.status).toBe(200);
-    const lastBody = (await lastPage.json()) as { events: unknown[]; cursor: number; hasMore: boolean };
-    expectGlobalEventsResponse(lastBody);
-    expect(lastBody.events).toEqual([]);
-    expect(lastBody.cursor).toBe(4);
-    expect(lastBody.hasMore).toBe(false);
-  });
-
   it('rejects invalid global event limits', async () => {
     const response = await fetch(`${baseUrl}/events?limit=abc`);
 
@@ -2874,74 +2497,6 @@ describe('core API', () => {
     expect(createMessage.status).toBe(202);
 
     await expect(nextEvent).resolves.toMatchObject({ type: 'message_created', sessionId: session.id, id: 2 });
-  });
-
-  it('re-evaluates global stream access when session visibility changes mid-stream', async () => {
-    await closeServer(server);
-    store = new MemoryStore();
-    services = createServices(store);
-    server = createServer(
-      loadConfig({
-        API_AUTH_MODE: 'session',
-        AUTH_SESSION_SECRET: 'test-secret',
-        AUTH_STATIC_USERNAME: 'admin',
-        AUTH_STATIC_PASSWORD: 'password',
-      }),
-      services,
-    );
-    baseUrl = await listen(server);
-
-    const now = new Date();
-    const user = await store.upsertAuthUserForAccount({
-      userId: '00000000-0000-4000-8000-000000000030',
-      accountId: '00000000-0000-4000-8000-000000000031',
-      provider: 'test',
-      providerAccountId: 'outsider',
-      username: 'outsider',
-      role: 'user',
-      profile: {},
-      now,
-    });
-    await store.createAuthSession({
-      id: 'outsider-session',
-      userId: user.id,
-      createdAt: now,
-      expiresAt: new Date(now.getTime() + 60_000),
-    });
-    const group = await store.createGroup({
-      id: '00000000-0000-4000-8000-000000000032',
-      name: 'Private team',
-      defaultVisibility: 'group',
-      defaultWritePolicy: 'group_members',
-      automationCreateRequiredRole: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
-    const watched = await services.sessions.create({
-      title: 'Tightens later',
-      ownerGroupId: group.id,
-      visibility: 'organization',
-      writePolicy: 'group_members',
-    });
-
-    const abort = new AbortController();
-    const streamResponse = await fetch(`${baseUrl}/events/stream?after=0&include=all`, {
-      headers: { cookie: 'dev_deputies_session=outsider-session' },
-      signal: abort.signal,
-    });
-    expect(streamResponse.status).toBe(200);
-
-    const events = readSseEvents(streamResponse, 2, abort);
-    await services.sessions.update({ id: watched.id, visibility: 'group' });
-    await services.messages.enqueue({ sessionId: watched.id, prompt: 'hidden from outsiders' });
-    const visible = await services.sessions.create({ title: 'Outsider visible' });
-
-    // The outsider sees the organization-visible creation, none of the events
-    // emitted after the watched session became group-only, then the new session.
-    await expect(events).resolves.toMatchObject([
-      { type: 'session_created', sessionId: watched.id },
-      { type: 'session_created', sessionId: visible.id },
-    ]);
   });
 
   it('cleans up SSE subscribers when clients disconnect', async () => {
@@ -3237,7 +2792,6 @@ describe('core API', () => {
           id: '00000000-0000-4000-8000-000000000001',
           status: 'active' as const,
           spawnDepth: 0,
-          ownerGroupId: defaultGroupId,
           visibility: 'organization' as const,
           writePolicy: 'group_members' as const,
           createdAt: new Date('2026-05-01T00:00:00.000Z'),
@@ -3577,43 +3131,6 @@ async function waitForZero(readValue: () => number, timeoutMs = 1_000): Promise<
   const deadline = Date.now() + timeoutMs;
   while (readValue() !== 0 && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-async function readSseEvents(
-  response: Response,
-  count: number,
-  abort: AbortController,
-): Promise<Array<{ id: number; type: string; sequence: number; sessionId: string }>> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('Expected response body');
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-  const events: Array<{ id: number; type: string; sequence: number; sessionId: string }> = [];
-
-  try {
-    while (events.length < count) {
-      const { value, done } = await reader.read();
-      if (done) throw new Error('SSE stream ended before events');
-      buffer += decoder.decode(value, { stream: true });
-
-      let eventEnd = buffer.indexOf('\n\n');
-      while (eventEnd !== -1 && events.length < count) {
-        const frame = buffer.slice(0, eventEnd);
-        buffer = buffer.slice(eventEnd + 2);
-        const data = frame
-          .split('\n')
-          .find((line) => line.startsWith('data: '))
-          ?.slice('data: '.length);
-        if (data) events.push(JSON.parse(data) as (typeof events)[number]);
-        eventEnd = buffer.indexOf('\n\n');
-      }
-    }
-    return events;
-  } finally {
-    abort.abort();
-    void response.body?.cancel().catch(() => undefined);
   }
 }
 

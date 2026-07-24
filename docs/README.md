@@ -15,7 +15,7 @@ The goal is a deployable background coding-agent service that can start as a sin
 - [Web UI](./web-ui.md): separate Vite React operator UI, browser auth, and static deployment notes.
 - [Deputies App Preview](./deputies-app-preview.md): agent runbook for running the Deputies app from a branch inside a sandbox behind the outer service preview.
 - [Repository Setup Scripts](./repository-setup-scripts.md): `.agents/setup` convention for repo-owned sandbox preparation before agent work begins.
-- [Access Groups](./access-groups.md): RBAC roles, session access policies, group management, and GitHub auth allowlists.
+- [Tenant Access](./tenant-access.md): tenant-wide viewer/member/admin roles, resource access, and GitHub auth allowlists.
 - [Local Development](./contributing-local-development.md): contributor setup, Postgres, Portless, Docker Compose, Pi runner setup, and local integrations.
 - [Development Tasks](./development-tasks.md): where to put `package.json` scripts versus `mise` tasks in this monorepo.
 - [Deployment](./deployment.md): provider-agnostic deployment topology, env vars, integrations, sandbox providers, and operations checklist.

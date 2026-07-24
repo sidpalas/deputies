@@ -8,7 +8,6 @@ import {
 import { GitHubWebhookService } from '../../src/integrations/github/webhook-service.js';
 import { GitHubCompletionCallbackSender } from '../../src/integrations/github/callback-sender.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId } from '../../src/store/types.js';
 
 const secret = 'dev-github-webhook-secret';
 
@@ -72,7 +71,6 @@ describe('GitHub webhook integration', () => {
       name: 'review-code',
       description: 'Review code',
       body: 'Review carefully',
-      ownerGroupId: defaultGroupId,
     });
     const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       skillsEnabled: true,
@@ -100,7 +98,6 @@ describe('GitHub webhook integration', () => {
       name: 'review-code',
       description: 'Review code',
       body: 'Review carefully',
-      ownerGroupId: defaultGroupId,
     });
     const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       skillsEnabled: true,
@@ -125,7 +122,6 @@ describe('GitHub webhook integration', () => {
       name: 'review-code',
       description: 'Review code',
       body: 'Review carefully',
-      ownerGroupId: defaultGroupId,
     });
     const github = new GitHubWebhookService(store, services.sessions, services.messages, services.skills, {
       skillsEnabled: true,

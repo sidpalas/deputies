@@ -3,12 +3,7 @@ import { EventService } from '../../src/events/service.js';
 import { sandboxRuntimeId } from '../../src/sandbox/runtime.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import type { SandboxCapabilities, SandboxHandle, SandboxProvider } from '../../src/sandbox/types.js';
-import {
-  defaultGroupId,
-  type CreateSandboxRecord,
-  type SandboxRecord,
-  type SandboxStore,
-} from '../../src/store/types.js';
+import { type CreateSandboxRecord, type SandboxRecord, type SandboxStore } from '../../src/store/types.js';
 
 const capabilities: SandboxCapabilities = {
   persistentFilesystem: true,
@@ -179,9 +174,6 @@ describe('SandboxLifecycleService', () => {
     await store.createSession({
       id: 'session-1',
       status: 'idle',
-      ownerGroupId: defaultGroupId,
-      visibility: 'organization',
-      writePolicy: 'group_members',
       createdAt: now,
       updatedAt: now,
     });

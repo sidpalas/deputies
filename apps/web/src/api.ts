@@ -31,10 +31,6 @@ export type Session = {
   parentSessionId?: string;
   spawnDepth: number;
   directChildCount?: number;
-  ownerGroupId: string;
-  ownerGroupName?: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
   createdByUserId?: string;
   createdAt: string;
   updatedAt: string;
@@ -75,17 +71,21 @@ export type SessionNotepadMetadata = Omit<SessionNotepad, 'content'>;
 export type ExplicitNotepad = {
   id: string;
   title: string;
-  ownerGroupId: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
   revision: number;
   content: string;
   sizeBytes: number;
   createdByUserId?: string;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
 };
 export type ExplicitNotepadMetadata = Omit<ExplicitNotepad, 'content'>;
+export type ExplicitNotepadSearchResult = ExplicitNotepadMetadata & { snippet: string };
+export type ExplicitNotepadPage = {
+  items: ExplicitNotepadMetadata[];
+  hasMore: boolean;
+  nextCursor: string | null;
+};
 export type NotepadRevision = {
   notepadKind: 'session' | 'explicit';
   notepadId: string;
@@ -109,7 +109,6 @@ export type NotepadAssociation = {
 };
 export type SessionNotepadAssociation = NotepadAssociation & {
   notepad: ExplicitNotepadMetadata;
-  canWrite: boolean;
 };
 export type SessionNotepadAssociationPage = {
   items: SessionNotepadAssociation[];
@@ -155,11 +154,6 @@ export type Automation = {
   scheduleCron: string;
   scheduleTimezone: 'UTC';
   enabled: boolean;
-  ownerGroupId: string;
-  ownerGroupName?: string;
-  ownerGroupArchivedAt?: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
   createdByUserId?: string;
   environmentId?: string;
   environmentRevisionPolicy?: 'follow_latest' | 'pinned';
@@ -200,35 +194,6 @@ export type AutomationInvocationPage = {
   nextCursor?: string;
 };
 
-export type GroupRole = 'viewer' | 'member' | 'admin';
-export type AutomationCreateRequiredRole = 'member' | 'admin';
-export type SessionVisibility = 'group' | 'organization';
-export type SessionWritePolicy = 'group_members' | 'creator_only';
-
-export type Group = {
-  id: string;
-  name: string;
-  defaultVisibility: SessionVisibility;
-  defaultWritePolicy: SessionWritePolicy;
-  automationCreateRequiredRole: AutomationCreateRequiredRole;
-  archivedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-  membershipRole?: GroupRole | null;
-  canCreateSessions: boolean;
-  canCreateAutomations: boolean;
-  canManage: boolean;
-};
-
-export type GroupMember = {
-  groupId: string;
-  userId: string;
-  role: GroupRole;
-  createdAt: string;
-  updatedAt: string;
-  user?: AuthUser;
-};
-
 export type Message = {
   id: string;
   sessionId: string;
@@ -260,41 +225,30 @@ export type RepositoryOption = {
   defaultBranch?: string;
 };
 
-export type EnvironmentShareMode = 'private' | 'selected_groups' | 'all_groups';
-
-export type SkillShareMode = 'none' | 'specific' | 'all_groups';
-
 export type Snippet = {
   id: string;
-  ownerUserId: string;
+  createdByUserId?: string;
   name: string;
   body: string;
   archivedAt?: string;
   createdAt: string;
   updatedAt: string;
 };
-export type SkillSource = 'personal' | 'group' | 'shared' | 'repo';
+export type SkillSource = 'managed' | 'repo';
 
-export type SkillProvenance =
-  | { kind: 'personal'; ownerUserId?: string }
-  | { kind: 'group' | 'shared'; ownerGroupId?: string; ownerGroupName?: string }
-  | { kind: 'repo'; repo: string };
+export type SkillProvenance = { kind: 'managed'; scope?: 'tenant' | 'personal' } | { kind: 'repo'; repo: string };
 
 export type Skill = {
   id: string;
+  scope?: 'tenant' | 'personal';
   name: string;
   description: string;
   body?: string;
   currentRevisionId?: string;
   currentRevisionNumber?: number;
-  ownerKind?: 'user' | 'group';
-  ownerUserId?: string;
-  ownerGroupId?: string;
-  ownerGroupName?: string;
+  createdByUserId?: string;
   autoLoad: boolean;
   enabled: boolean;
-  shareMode: SkillShareMode;
-  shareGroupIds?: string[];
   source?: SkillSource;
   provenance?: SkillProvenance;
   repo?: string;
@@ -345,12 +299,8 @@ export type EnvironmentRevision = {
 export type Environment = {
   id: string;
   name: string;
-  ownerGroupId: string;
-  ownerGroupName?: string;
-  shareMode: EnvironmentShareMode;
   currentRevisionId: string;
   currentRevisionNumber: number;
-  sharedGroupIds: string[];
   repositories: EnvironmentRepository[];
   archivedAt?: string;
   createdAt: string;
@@ -511,10 +461,9 @@ export type CallbackDelivery = {
 export type AuthUser = {
   id: string;
   username: string;
-  role: 'user' | 'super_admin';
+  role: 'viewer' | 'member' | 'admin';
   displayName?: string;
   avatarUrl?: string;
-  memberships?: GroupMember[];
 };
 
 export async function getHealth(): Promise<Health> {
@@ -548,7 +497,6 @@ export async function listSessions(
     cursor?: string;
     limit?: number;
     archived?: boolean;
-    groupId?: string;
     parentSessionId?: string;
   } & SessionListFilters = {},
 ): Promise<SessionPage> {
@@ -556,7 +504,6 @@ export async function listSessions(
   if (options.cursor) query.set('cursor', options.cursor);
   if (options.limit !== undefined) query.set('limit', String(options.limit));
   if (options.archived !== undefined) query.set('archived', String(options.archived));
-  if (options.groupId) query.set('groupId', options.groupId);
   if (options.parentSessionId) query.set('parentSessionId', options.parentSessionId);
   appendSessionFilterParams(query, options);
   const suffix = query.toString() ? `?${query.toString()}` : '';
@@ -566,12 +513,11 @@ export async function listSessions(
 
 export async function searchSessions(
   token: string,
-  options: { query: string; cursor?: string; limit?: number; groupId?: string } & SessionListFilters,
+  options: { query: string; cursor?: string; limit?: number } & SessionListFilters,
 ): Promise<SessionSearchPage> {
   const query = new URLSearchParams({ q: options.query });
   if (options.cursor) query.set('cursor', options.cursor);
   if (options.limit !== undefined) query.set('limit', String(options.limit));
-  if (options.groupId) query.set('groupId', options.groupId);
   appendSessionFilterParams(query, options);
   const body = await request<{ results: SessionSearchResult[]; nextCursor?: string | null }>(
     `/sessions/search?${query.toString()}`,
@@ -590,7 +536,6 @@ export async function createAutomation(input: {
   prompt: string;
   scheduleCron: string;
   token: string;
-  ownerGroupId?: string;
   enabled?: boolean;
   environmentId?: string;
   environmentRevisionPolicy?: 'follow_latest' | 'pinned';
@@ -616,7 +561,6 @@ export async function updateAutomation(input: {
   prompt?: string;
   scheduleCron?: string;
   enabled?: boolean;
-  ownerGroupId?: string;
   environmentId?: string;
   environmentRevisionPolicy?: 'follow_latest' | 'pinned';
   environmentRevisionId?: string;
@@ -708,9 +652,6 @@ export async function listEnvironmentRevisions(input: {
 
 export async function createEnvironment(input: {
   name: string;
-  ownerGroupId: string;
-  shareMode: EnvironmentShareMode;
-  sharedGroupIds: string[];
   repositories: EnvironmentRepositoryInput[];
   token: string;
 }): Promise<Environment> {
@@ -725,9 +666,6 @@ export async function createEnvironment(input: {
 export async function updateEnvironment(input: {
   environmentId: string;
   name: string;
-  ownerGroupId: string;
-  shareMode: EnvironmentShareMode;
-  sharedGroupIds: string[];
   repositories: EnvironmentRepositoryInput[];
   token: string;
 }): Promise<Environment> {
@@ -757,14 +695,9 @@ export async function unarchiveEnvironment(input: { environmentId: string; token
   return body.environment;
 }
 
-export async function listSkills(input: {
-  token: string;
-  scope: 'personal' | 'group' | 'shared';
-  groupId?: string;
-}): Promise<Skill[]> {
-  const query = new URLSearchParams({ scope: input.scope });
-  if (input.groupId) query.set('groupId', input.groupId);
-  const body = await request<{ skills: Skill[] }>(`/skills?${query.toString()}`, { token: input.token });
+export async function listSkills(input: { token: string; archived?: boolean }): Promise<Skill[]> {
+  const query = input.archived === undefined ? '' : `?archived=${String(input.archived)}`;
+  const body = await request<{ skills: Skill[] }>(`/skills${query}`, { token: input.token });
   return body.skills;
 }
 
@@ -821,9 +754,8 @@ export async function listSessionSkills(input: { sessionId: string; token: strin
   return body.skills;
 }
 
-export async function listSkillInvocationCandidates(input: { ownerGroupId: string; token: string }): Promise<Skill[]> {
-  const query = new URLSearchParams({ ownerGroupId: input.ownerGroupId });
-  const body = await request<{ skills: Skill[] }>(`/skills/invocation-candidates?${query.toString()}`, {
+export async function listSkillInvocationCandidates(input: { token: string }): Promise<Skill[]> {
+  const body = await request<{ skills: Skill[] }>('/skills/invocation-candidates', {
     token: input.token,
   });
   return body.skills;
@@ -843,25 +775,21 @@ export async function listSkillRevisions(input: { skillId: string; token: string
 
 export async function createSkill(input: {
   token: string;
+  scope?: 'tenant' | 'personal';
   name: string;
   description: string;
   body: string;
   autoLoad?: boolean;
-  ownerGroupId?: string;
-  shareMode?: SkillShareMode;
-  groupIds?: string[];
 }): Promise<Skill> {
   const body = await request<{ skill: Skill }>('/skills', {
     method: 'POST',
     token: input.token,
     body: {
+      ...(input.scope ? { scope: input.scope } : {}),
       name: input.name,
       description: input.description,
       body: input.body,
       ...(input.autoLoad !== undefined ? { autoLoad: input.autoLoad } : {}),
-      ...(input.ownerGroupId ? { ownerGroupId: input.ownerGroupId } : {}),
-      ...(input.shareMode !== undefined ? { shareMode: input.shareMode } : {}),
-      ...(input.shareMode === 'specific' ? { groupIds: input.groupIds ?? [] } : {}),
     },
   });
   return body.skill;
@@ -875,8 +803,6 @@ export async function updateSkill(input: {
   body?: string;
   autoLoad?: boolean;
   enabled?: boolean;
-  shareMode?: SkillShareMode;
-  groupIds?: string[];
   expectedCurrentRevisionId?: string;
 }): Promise<Skill> {
   const body = await request<{ skill: Skill }>(`/skills/${input.skillId}`, {
@@ -888,8 +814,6 @@ export async function updateSkill(input: {
       ...(input.body !== undefined ? { body: input.body } : {}),
       ...(input.autoLoad !== undefined ? { autoLoad: input.autoLoad } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-      ...(input.shareMode !== undefined ? { shareMode: input.shareMode } : {}),
-      ...(input.shareMode === 'specific' ? { groupIds: input.groupIds ?? [] } : {}),
       ...(input.expectedCurrentRevisionId ? { expectedCurrentRevisionId: input.expectedCurrentRevisionId } : {}),
     },
   });
@@ -914,37 +838,10 @@ export async function restoreSkill(input: { skillId: string; token: string }): P
   return body.skill;
 }
 
-export async function promoteSkill(input: { skillId: string; groupId: string; token: string }): Promise<Skill> {
-  const body = await request<{ skill: Skill }>(`/skills/${input.skillId}/promote`, {
-    method: 'POST',
-    token: input.token,
-    body: { groupId: input.groupId },
-  });
-  return body.skill;
-}
-
-export async function setSkillShares(input: {
-  skillId: string;
-  shareMode: SkillShareMode;
-  groupIds?: string[];
-  token: string;
-}): Promise<Skill> {
-  const body = await request<{ skill: Skill }>(`/skills/${input.skillId}/shares`, {
-    method: 'PUT',
-    token: input.token,
-    body: {
-      shareMode: input.shareMode,
-      ...(input.shareMode === 'specific' ? { groupIds: input.groupIds ?? [] } : {}),
-    },
-  });
-  return body.skill;
-}
-
 function automationRequestBody(input: {
   name?: string;
   prompt?: string;
   scheduleCron?: string;
-  ownerGroupId?: string;
   enabled?: boolean;
   environmentId?: string;
   environmentRevisionPolicy?: 'follow_latest' | 'pinned';
@@ -960,7 +857,6 @@ function automationRequestBody(input: {
     ...(input.name !== undefined ? { name: input.name } : {}),
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
     ...(input.scheduleCron !== undefined ? { scheduleCron: input.scheduleCron } : {}),
-    ...(input.ownerGroupId ? { ownerGroupId: input.ownerGroupId } : {}),
     ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
     ...(input.environmentId !== undefined ? { environmentId: input.environmentId } : {}),
     ...(input.environmentRevisionPolicy !== undefined
@@ -979,16 +875,10 @@ function automationRequestBody(input: {
 
 function environmentRequestBody(input: {
   name: string;
-  ownerGroupId: string;
-  shareMode: EnvironmentShareMode;
-  sharedGroupIds: string[];
   repositories: EnvironmentRepositoryInput[];
 }): Record<string, unknown> {
   return {
     name: input.name,
-    ownerGroupId: input.ownerGroupId,
-    shareMode: input.shareMode,
-    sharedGroupIds: input.sharedGroupIds,
     repositories: input.repositories,
   };
 }
@@ -1011,89 +901,6 @@ export async function getSetupStatus(token: string): Promise<SetupStatus> {
   return request<SetupStatus>('/setup/status', { token });
 }
 
-export async function listGroups(token: string): Promise<Group[]> {
-  const body = await request<{ groups: Group[] }>('/groups', { token });
-  return body.groups;
-}
-
-export async function createGroup(input: {
-  name: string;
-  defaultVisibility: SessionVisibility;
-  defaultWritePolicy: SessionWritePolicy;
-  automationCreateRequiredRole: AutomationCreateRequiredRole;
-  token: string;
-}): Promise<Group> {
-  const body = await request<{ group: Group }>('/groups', {
-    method: 'POST',
-    token: input.token,
-    body: {
-      name: input.name,
-      defaultVisibility: input.defaultVisibility,
-      defaultWritePolicy: input.defaultWritePolicy,
-      automationCreateRequiredRole: input.automationCreateRequiredRole,
-    },
-  });
-  return body.group;
-}
-
-export async function updateGroup(input: {
-  groupId: string;
-  name: string;
-  defaultVisibility: SessionVisibility;
-  defaultWritePolicy: SessionWritePolicy;
-  automationCreateRequiredRole: AutomationCreateRequiredRole;
-  archived?: boolean;
-  token: string;
-}): Promise<Group> {
-  const body = await request<{ group: Group }>(`/groups/${input.groupId}`, {
-    method: 'PATCH',
-    token: input.token,
-    body: {
-      name: input.name,
-      defaultVisibility: input.defaultVisibility,
-      defaultWritePolicy: input.defaultWritePolicy,
-      automationCreateRequiredRole: input.automationCreateRequiredRole,
-      ...(input.archived === undefined ? {} : { archived: input.archived }),
-    },
-  });
-  return body.group;
-}
-
-export async function archiveGroup(input: { groupId: string; archived: boolean; token: string }): Promise<Group> {
-  const body = await request<{ group: Group }>(`/groups/${input.groupId}`, {
-    method: 'PATCH',
-    token: input.token,
-    body: { archived: input.archived },
-  });
-  return body.group;
-}
-
-export async function listGroupMembers(input: { groupId: string; token: string }): Promise<GroupMember[]> {
-  const body = await request<{ members: GroupMember[] }>(`/groups/${input.groupId}/members`, { token: input.token });
-  return body.members;
-}
-
-export async function upsertGroupMember(input: {
-  groupId: string;
-  userId: string;
-  role: GroupRole;
-  token: string;
-}): Promise<GroupMember> {
-  const body = await request<{ member: GroupMember }>(`/groups/${input.groupId}/members`, {
-    method: 'POST',
-    token: input.token,
-    body: { userId: input.userId, role: input.role },
-  });
-  return body.member;
-}
-
-export async function removeGroupMember(input: { groupId: string; userId: string; token: string }): Promise<void> {
-  await request<{ ok: true }>(`/groups/${input.groupId}/members/${input.userId}`, {
-    method: 'DELETE',
-    token: input.token,
-  });
-}
-
 export async function listUsers(input: { query?: string; token: string }): Promise<AuthUser[]> {
   const query = input.query ? `?query=${encodeURIComponent(input.query)}` : '';
   const body = await request<{ users: AuthUser[] }>(`/users${query}`, { token: input.token });
@@ -1113,21 +920,12 @@ export async function updateUserRole(input: {
   return body.user;
 }
 
-export async function createSession(input: {
-  title?: string;
-  token: string;
-  ownerGroupId?: string;
-  visibility?: SessionVisibility;
-  writePolicy?: SessionWritePolicy;
-}): Promise<Session> {
+export async function createSession(input: { title?: string; token: string }): Promise<Session> {
   const body = await request<{ session: Session }>('/sessions', {
     method: 'POST',
     token: input.token,
     body: {
       ...(input.title ? { title: input.title } : {}),
-      ...(input.ownerGroupId ? { ownerGroupId: input.ownerGroupId } : {}),
-      ...(input.visibility ? { visibility: input.visibility } : {}),
-      ...(input.writePolicy ? { writePolicy: input.writePolicy } : {}),
     },
   });
   return body.session;
@@ -1238,7 +1036,6 @@ export async function listSessionNotepadAssociations(input: {
 export async function createExplicitNotepad(input: {
   title: string;
   content?: string;
-  ownerGroupId: string;
   initialWritableSessionId?: string;
   token: string;
 }) {
@@ -1248,11 +1045,74 @@ export async function createExplicitNotepad(input: {
     body: {
       title: input.title,
       ...(input.content !== undefined ? { content: input.content } : {}),
-      ownerGroupId: input.ownerGroupId,
       ...(input.initialWritableSessionId ? { initialWritableSessionId: input.initialWritableSessionId } : {}),
     },
   });
   return body.notepad;
+}
+export async function listExplicitNotepads(input: {
+  token: string;
+  cursor?: string;
+  limit?: number;
+  archived?: boolean;
+}) {
+  const query = notepadCollectionQuery(input);
+  const body = await request<{ notepads: ExplicitNotepadPage }>(`/notepads${query}`, input);
+  return body.notepads;
+}
+export async function inventoryExplicitNotepads(input: {
+  token: string;
+  cursor?: string;
+  limit?: number;
+  archived?: boolean;
+}) {
+  const query = notepadCollectionQuery(input);
+  const body = await request<{ notepads: ExplicitNotepadPage }>(`/notepads/inventory${query}`, input);
+  return body.notepads;
+}
+export async function searchExplicitNotepads(input: {
+  token: string;
+  query: string;
+  limit?: number;
+  archived?: boolean;
+}) {
+  const query = new URLSearchParams({ q: input.query });
+  if (input.limit !== undefined) query.set('limit', String(input.limit));
+  if (input.archived) query.set('archived', 'true');
+  const body = await request<{ results: ExplicitNotepadSearchResult[] }>(`/notepads/search?${query}`, input);
+  return body.results;
+}
+export async function updateExplicitNotepad(input: { id: string; title: string; token: string }) {
+  const body = await request<{ notepad: ExplicitNotepad }>(`/notepads/${input.id}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: { title: input.title },
+  });
+  return body.notepad;
+}
+export async function archiveExplicitNotepad(input: { id: string; token: string }) {
+  const body = await request<{ notepad: ExplicitNotepad }>(`/notepads/${input.id}/archive`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.notepad;
+}
+export async function restoreExplicitNotepad(input: { id: string; token: string }) {
+  const body = await request<{ notepad: ExplicitNotepad }>(`/notepads/${input.id}/restore`, {
+    method: 'POST',
+    token: input.token,
+    body: {},
+  });
+  return body.notepad;
+}
+
+function notepadCollectionQuery(input: { cursor?: string; limit?: number; archived?: boolean }) {
+  const query = new URLSearchParams();
+  if (input.cursor !== undefined) query.set('cursor', input.cursor);
+  if (input.limit !== undefined) query.set('limit', String(input.limit));
+  if (input.archived) query.set('archived', 'true');
+  return query.size ? `?${query}` : '';
 }
 export async function getExplicitNotepad(input: { id: string; token: string; associatedSessionId?: string }) {
   const query = input.associatedSessionId ? `?sessionId=${encodeURIComponent(input.associatedSessionId)}` : '';

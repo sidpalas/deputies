@@ -2,7 +2,9 @@
 
 ## Status
 
-Building
+Superseded
+
+The durable session-control implementation remains, but this specification's group ownership and session-policy authorization model was replaced by tenant-wide roles. See [Tenant Access](../../tenant-access.md), [Architecture](../../architecture.md), and [Deployment](../../deployment.md).
 
 ## Context
 

@@ -22,7 +22,7 @@ export type ApiAuthMode = 'none' | 'bearer' | 'session';
 export type AuthProviderKind = 'static' | 'github';
 export type AuthCookieSameSite = 'lax' | 'none';
 export type ArtifactStorageKind = 'disabled' | 'filesystem' | 's3';
-export type AuthGithubDefaultGroupRole = 'viewer' | 'member' | 'admin';
+export type AuthGithubDefaultRole = 'viewer' | 'member' | 'admin';
 export type WebSearchProviderKind = 'disabled' | 'auto' | 'brave' | 'duckduckgo';
 
 const MODEL_PROVIDER_AUTH: Array<{ provider: KnownProvider; env: string[] }> = [
@@ -103,7 +103,7 @@ export type AppConfig = {
   authGithubAdminUsers: string[];
   authGithubAllowedUsers: string[];
   authGithubAllowedOrganizations: string[];
-  authGithubDefaultGroupRole: AuthGithubDefaultGroupRole;
+  authGithubDefaultRole: AuthGithubDefaultRole;
   unsafeAuthGithubAllowAll: boolean;
   databaseUrl?: string;
   runnerStateStore: 'postgres' | 'memory';
@@ -273,7 +273,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     authGithubAdminUsers: parseStringList(env.AUTH_GITHUB_ADMIN_USERS),
     authGithubAllowedUsers: parseStringList(env.AUTH_GITHUB_ALLOWED_USERS),
     authGithubAllowedOrganizations: parseStringList(env.AUTH_GITHUB_ALLOWED_ORGANIZATIONS),
-    authGithubDefaultGroupRole: parseEnum(env.AUTH_GITHUB_DEFAULT_GROUP_ROLE, ['viewer', 'member', 'admin'], 'member'),
+    authGithubDefaultRole: parseEnum(env.AUTH_GITHUB_DEFAULT_ROLE, ['viewer', 'member', 'admin'], 'member'),
     unsafeAuthGithubAllowAll: parseBoolean(env.UNSAFE_AUTH_GITHUB_ALLOW_ALL, false, 'UNSAFE_AUTH_GITHUB_ALLOW_ALL'),
     runnerStateStore: parseEnum(env.RUNNER_STATE_STORE, ['postgres', 'memory'], 'postgres'),
     runnerModelChoices: parseStringList(env.RUNNER_MODEL_CHOICES),

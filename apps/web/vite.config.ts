@@ -57,7 +57,6 @@ export default defineConfig({
       '/environments': apiProxy,
       '/sessions': apiProxy,
       '/events': apiProxy,
-      '/groups': apiProxy,
       '/repositories': apiProxy,
       '/models': apiProxy,
       '/notepads': apiProxy,

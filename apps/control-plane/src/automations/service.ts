@@ -11,8 +11,6 @@ import type {
   EnvironmentRevisionPolicy,
   MessageRecord,
   SessionRecord,
-  SessionVisibility,
-  SessionWritePolicy,
 } from '../store/types.js';
 import { CronExpressionError, nextUtcCronInvocation, validateUtcCronExpression } from './cron.js';
 
@@ -20,9 +18,6 @@ export type CreateScheduledAutomationInput = {
   name: string;
   prompt: string;
   scheduleCron: string;
-  ownerGroupId: string;
-  visibility: SessionVisibility;
-  writePolicy: SessionWritePolicy;
   enabled?: boolean;
   createdByUserId?: string;
   context?: Record<string, unknown>;
@@ -37,9 +32,6 @@ export type UpdateScheduledAutomationInput = {
   prompt?: string;
   scheduleCron?: string;
   enabled?: boolean;
-  ownerGroupId?: string;
-  visibility?: SessionVisibility;
-  writePolicy?: SessionWritePolicy;
   context?: Record<string, unknown> | null;
   environmentId?: string | null;
   environmentRevisionPolicy?: EnvironmentRevisionPolicy | null;
@@ -71,14 +63,7 @@ type InvocationReservation = {
 
 export class AutomationServiceError extends Error {
   constructor(
-    readonly code:
-      | 'not_found'
-      | 'invalid_schedule'
-      | 'invalid_request'
-      | 'disabled'
-      | 'archived'
-      | 'archived_group'
-      | 'overlap',
+    readonly code: 'not_found' | 'invalid_schedule' | 'invalid_request' | 'disabled' | 'archived' | 'overlap',
     message: string,
     readonly details: Record<string, unknown> = {},
   ) {
@@ -112,9 +97,6 @@ export class AutomationService {
       prompt,
       scheduleCron,
       enabled: input.enabled ?? true,
-      ownerGroupId: input.ownerGroupId,
-      visibility: input.visibility,
-      writePolicy: input.writePolicy,
       createdAt: now,
       updatedAt: now,
       nextInvocationAt,
@@ -172,9 +154,6 @@ export class AutomationService {
       ...(input.prompt !== undefined ? { prompt: requiredTrimmed(input.prompt, 'prompt') } : {}),
       ...(input.scheduleCron !== undefined ? { scheduleCron } : {}),
       ...(input.enabled !== undefined ? { enabled } : {}),
-      ...(input.ownerGroupId !== undefined ? { ownerGroupId: input.ownerGroupId } : {}),
-      ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
-      ...(input.writePolicy !== undefined ? { writePolicy: input.writePolicy } : {}),
       ...(input.environmentId !== undefined ? { environmentId: input.environmentId } : {}),
       ...(input.environmentId !== undefined ||
       input.environmentRevisionPolicy !== undefined ||
@@ -235,7 +214,6 @@ export class AutomationService {
     if (automation.archivedAt) {
       throw new AutomationServiceError('archived', 'Restore this automation before invoking it');
     }
-    await this.assertAutomationOwnerGroupActive(automation);
     if (!automation.enabled && !input.allowDisabled) {
       throw new AutomationServiceError('disabled', 'Automation is disabled', { requiresAllowDisabled: true });
     }
@@ -251,7 +229,6 @@ export class AutomationService {
       const current = await this.store.getAutomation(automation.id);
       if (current?.archivedAt)
         throw new AutomationServiceError('archived', 'Restore this automation before invoking it');
-      if (current) await this.assertAutomationOwnerGroupActive(current);
       if (current && !current.enabled && !input.allowDisabled) {
         throw new AutomationServiceError('disabled', 'Automation is disabled', { requiresAllowDisabled: true });
       }
@@ -262,7 +239,6 @@ export class AutomationService {
 
     try {
       if (locked.archivedAt) throw new AutomationServiceError('archived', 'Restore this automation before invoking it');
-      await this.assertAutomationOwnerGroupActive(locked);
       if (!locked.enabled && !input.allowDisabled) {
         throw new AutomationServiceError('disabled', 'Automation is disabled', { requiresAllowDisabled: true });
       }
@@ -308,17 +284,8 @@ export class AutomationService {
         automationId: automation.id,
         scheduledAt,
       });
-      const ownerGroup = await this.store.getGroup(automation.ownerGroupId);
       if (existingInvocation && existingInvocation.status !== 'creating') {
         // A prior scheduler attempt may have created the invocation but crashed before advancing the schedule.
-      } else if (ownerGroup?.archivedAt) {
-        await this.recordOrUpdateSkippedInvocation({
-          automation,
-          scheduledAt,
-          reason: 'owner_group_archived',
-          metadata: { ownerGroupId: ownerGroup.id, archivedAt: ownerGroup.archivedAt.toISOString() },
-          ...(existingInvocation ? { invocation: existingInvocation } : {}),
-        });
       } else if (existingInvocation?.status === 'creating') {
         await this.createSessionInvocation({
           automation,
@@ -413,9 +380,6 @@ export class AutomationService {
         (await this.sessions.create({
           id: sessionId,
           title: automationSessionTitle(input.automation, input.scheduledAt ?? now),
-          ownerGroupId: input.automation.ownerGroupId,
-          visibility: input.automation.visibility,
-          writePolicy: input.automation.writePolicy,
           tags: ['automation'],
           ...effectiveSessionCreator(input.automation, input.requestedByUserId),
         }));
@@ -558,19 +522,6 @@ export class AutomationService {
     if (current.archivedAt) throw new Error('Cannot invoke an archived automation');
     if (!current.enabled && !options.allowDisabled)
       throw new Error('Cannot automatically invoke a disabled automation');
-    const group = await this.store.getGroup(current.ownerGroupId);
-    if (!group) throw new Error(`Group not found: ${automation.ownerGroupId}`);
-    if (group.archivedAt) throw new Error('Cannot invoke automation owned by an archived group');
-  }
-
-  private async assertAutomationOwnerGroupActive(automation: AutomationRecord): Promise<void> {
-    const group = await this.store.getGroup(automation.ownerGroupId);
-    if (!group) throw new AutomationServiceError('not_found', `Group not found: ${automation.ownerGroupId}`);
-    if (group.archivedAt) {
-      throw new AutomationServiceError('archived_group', 'Cannot invoke automation owned by an archived group', {
-        ownerGroupId: group.id,
-      });
-    }
   }
 
   private async resolveAutomationMessageContext(
@@ -579,9 +530,8 @@ export class AutomationService {
   ): Promise<Record<string, unknown> | undefined> {
     if (!automation.environmentId) return automation.context;
     const context = automation.context ?? {};
-    const environment = await this.environments.resolveForGroup({
+    const environment = await this.environments.resolve({
       environmentId: automation.environmentId,
-      groupId: automation.ownerGroupId,
       ...(environmentRevisionId ? { revisionId: environmentRevisionId } : {}),
       branchOverrides: storedEnvironmentBranchOverrides(context.environmentBranchOverrides),
     });

@@ -1,10 +1,9 @@
 import { executeRepositoryTool, type RepositoryToolServices } from '../repositories/tool.js';
 import { parseRepositoryContext, sameRepositoryIdentity } from '../repositories/setup.js';
-import { environmentAvailableToGroup, EnvironmentServiceError, type EnvironmentService } from './service.js';
+import { EnvironmentServiceError, type EnvironmentService } from './service.js';
 
 export type EnvironmentToolServices = {
   environments: EnvironmentService;
-  ownerGroupId: string;
   repository: RepositoryToolServices;
 };
 
@@ -49,11 +48,7 @@ async function environmentStatus(services: EnvironmentToolServices): Promise<str
   if (!isEnvironmentSnapshot(environment)) {
     return 'No environment is selected. Use environment({ action: "auto" }) when a direct repository is active, or environment({ action: "list" }) to choose one.';
   }
-  const warning = await validateEnvironmentContext(
-    services.environments,
-    services.ownerGroupId,
-    services.repository.state.context,
-  );
+  const warning = await validateEnvironmentContext(services.environments, services.repository.state.context);
   return [
     `Environment: ${environment.name} (revision ${environment.revisionNumber})`,
     ...(warning ? [warning] : []),
@@ -63,7 +58,7 @@ async function environmentStatus(services: EnvironmentToolServices): Promise<str
 
 async function environmentList(services: EnvironmentToolServices): Promise<string> {
   const environments = await accessibleEnvironments(services);
-  if (!environments.length) return 'No environments are available to this session access group.';
+  if (!environments.length) return 'No environments are available to this tenant.';
   return [
     'Available environments:',
     ...environments.map(
@@ -97,7 +92,7 @@ async function selectEnvironment(
   signal?: AbortSignal,
   prefix = 'Selected',
 ): Promise<string> {
-  const snapshot = await services.environments.resolveForGroup({ environmentId, groupId: services.ownerGroupId });
+  const snapshot = await services.environments.resolve({ environmentId });
   const nextContext = environmentContext(services.repository.state.context, snapshot);
   const persistedContext = services.repository.updateSessionContext
     ? await services.repository.updateSessionContext(nextContext)
@@ -110,9 +105,7 @@ async function selectEnvironment(
 }
 
 async function accessibleEnvironments(services: EnvironmentToolServices) {
-  return (await services.environments.list()).filter(
-    (environment) => !environment.archivedAt && environmentAvailableToGroup(environment, services.ownerGroupId),
-  );
+  return (await services.environments.list()).filter((environment) => !environment.archivedAt);
 }
 
 function environmentContext(
@@ -147,16 +140,14 @@ function isEnvironmentSnapshot(value: unknown): value is {
 
 export async function validateEnvironmentContext(
   environments: EnvironmentService | undefined,
-  ownerGroupId: string | undefined,
   context: Record<string, unknown>,
 ): Promise<string | null> {
   if (context.environment === undefined) return null;
   if (!isEnvironmentSnapshot(context.environment)) throw new Error('Invalid environment session context');
-  if (!environments || !ownerGroupId) return null;
+  if (!environments) return null;
   try {
-    await environments.resolveForGroup({
+    await environments.resolve({
       environmentId: context.environment.id,
-      groupId: ownerGroupId,
       revisionId: context.environment.revisionId,
     });
     return null;
@@ -167,24 +158,17 @@ export async function validateEnvironmentContext(
 }
 
 function isUnavailableEnvironmentError(error: unknown): error is EnvironmentServiceError & {
-  code: 'archived' | 'not_found' | 'group_not_found' | 'archived_group';
+  code: 'archived' | 'not_found';
 } {
-  return (
-    error instanceof EnvironmentServiceError &&
-    ['archived', 'not_found', 'group_not_found', 'archived_group'].includes(error.code)
-  );
+  return error instanceof EnvironmentServiceError && ['archived', 'not_found'].includes(error.code);
 }
 
-function environmentUnavailableReason(code: 'archived' | 'not_found' | 'group_not_found' | 'archived_group'): string {
+function environmentUnavailableReason(code: 'archived' | 'not_found'): string {
   switch (code) {
     case 'archived':
       return 'it has been archived';
     case 'not_found':
-      return 'it is unavailable or this group no longer has access';
-    case 'group_not_found':
-      return 'the session owner group no longer exists';
-    case 'archived_group':
-      return 'the session owner group is archived';
+      return 'it is unavailable';
   }
 }
 

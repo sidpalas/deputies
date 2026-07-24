@@ -57,8 +57,12 @@ export function useSnippetPicker(input: {
   const activeRef = useRef<HTMLButtonElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pendingSelectionRef = useRef<number | null>(null);
-  useEffect(() => setActiveIndex(0), [input.prompt, selectionStart]);
-  useEffect(() => activeRef.current?.scrollIntoView({ block: 'nearest' }), [activeIndex]);
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [input.prompt, selectionStart]);
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex]);
   useEffect(() => {
     const pendingSelection = pendingSelectionRef.current;
     if (pendingSelection === null) return;

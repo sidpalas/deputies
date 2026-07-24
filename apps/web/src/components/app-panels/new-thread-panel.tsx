@@ -3,7 +3,6 @@ import { PanelLeftOpen } from 'lucide-react';
 import type {
   BranchOption,
   Environment,
-  Group,
   ModelChoice,
   ReasoningLevel,
   RepositoryOption,
@@ -36,8 +35,6 @@ export function NewThreadPanel(props: {
   canCallApi: boolean;
   readOnly: boolean;
   loading: boolean;
-  groupId: string;
-  groups: Group[];
   prompt: string;
   environmentId: string;
   environmentBranchOverrides: EnvironmentBranchOverrides;
@@ -66,7 +63,6 @@ export function NewThreadPanel(props: {
   showOpenSidebar: boolean;
   openSidebarLabel?: string;
   onOpenSidebar: () => void;
-  onGroupChange: (value: string) => void;
   onPromptChange: (value: string) => void;
   onCodebaseChange: (value: string) => void;
   onEnvironmentBranchOverridesChange: (value: EnvironmentBranchOverrides) => void;
@@ -161,22 +157,6 @@ export function NewThreadPanel(props: {
               void submit();
             }}
           >
-            {props.groups.length > 1 ? (
-              <div className="min-w-0">
-                <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="new-thread-group">
-                  Access group
-                </label>
-                <OptionPicker
-                  id="new-thread-group"
-                  label="Access group"
-                  value={props.groupId}
-                  options={props.groups.map((group) => ({ value: group.id, label: group.name }))}
-                  emptyLabel="Select access group..."
-                  onChange={props.onGroupChange}
-                  disabled={!props.canCallApi}
-                />
-              </div>
-            ) : null}
             <div className="relative flex min-w-0 flex-wrap gap-2">
               <div className="min-w-0 flex-[1.4_1_18rem]">
                 <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="new-thread-codebase">

@@ -214,7 +214,7 @@ export function MessageComposer(props: {
             props.archived
               ? 'Restore this archived session before sending new work.'
               : props.readOnly
-                ? 'You have read-only access to this session. You can inspect messages, artifacts, and service metadata, but only group members and admins can send follow-ups.'
+                ? 'You have read-only access to this session. You can inspect messages, artifacts, and service metadata, but only members and admins can send follow-ups.'
                 : 'Ask your deputy to investigate, change code, or follow up...'
           }
           disabled={props.archived || props.readOnly}

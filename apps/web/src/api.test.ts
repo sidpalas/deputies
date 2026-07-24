@@ -5,7 +5,6 @@ import {
   listEnvironmentRevisions,
   listSkillInvocationCandidates,
   listSkillRevisions,
-  setSkillShares,
   updateAutomation,
   createSnippet,
   archiveSnippet,
@@ -14,6 +13,11 @@ import {
   updateMessageSteering,
   updateSnippet,
   createExplicitNotepad,
+  archiveExplicitNotepad,
+  inventoryExplicitNotepads,
+  listExplicitNotepads,
+  restoreExplicitNotepad,
+  searchExplicitNotepads,
   getExplicitNotepadHistory,
   getExplicitNotepadRevision,
   getSessionNotepad,
@@ -59,7 +63,6 @@ describe('Notepad API requests', () => {
     await createExplicitNotepad({
       title: 'Notes',
       content: 'Initial notes',
-      ownerGroupId: 'group-1',
       initialWritableSessionId: 'session-1',
       token: 'token',
     });
@@ -82,7 +85,6 @@ describe('Notepad API requests', () => {
         body: {
           title: 'Notes',
           content: 'Initial notes',
-          ownerGroupId: 'group-1',
           initialWritableSessionId: 'session-1',
         },
       },
@@ -90,6 +92,42 @@ describe('Notepad API requests', () => {
       { path: '/notepads/pad-1/history/1/restore', method: 'POST', body: { expectedRevision: 4 } },
       { path: '/notepads/pad-1/associations/session-1', method: 'PUT', body: undefined },
       { path: '/notepads/pad-1/associations/session-1', method: 'DELETE', body: undefined },
+    ]);
+  });
+
+  it('lists, searches, inventories, archives, and restores explicit Notepads', async () => {
+    const page = { items: [], hasMore: false, nextCursor: null };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      const path = new URL(String(request), window.location.href).pathname;
+      return new Response(
+        JSON.stringify(
+          path === '/notepads/search'
+            ? { results: [] }
+            : path.includes('/archive') || path.includes('/restore')
+              ? { notepad: {} }
+              : { notepads: page },
+        ),
+      );
+    });
+
+    await expect(listExplicitNotepads({ token: 'token', cursor: '50 / next', archived: true })).resolves.toEqual(page);
+    await expect(searchExplicitNotepads({ token: 'token', query: 'release notes', archived: true })).resolves.toEqual(
+      [],
+    );
+    await expect(inventoryExplicitNotepads({ token: 'token', limit: 25, archived: true })).resolves.toEqual(page);
+    await archiveExplicitNotepad({ id: 'pad-1', token: 'token' });
+    await restoreExplicitNotepad({ id: 'pad-1', token: 'token' });
+
+    const calls = fetchMock.mock.calls.map(([request, init]) => {
+      const url = new URL(String(request), window.location.href);
+      return { path: `${url.pathname}${url.search}`, method: init?.method ?? 'GET' };
+    });
+    expect(calls).toEqual([
+      { path: '/notepads?cursor=50+%2F+next&archived=true', method: 'GET' },
+      { path: '/notepads/search?q=release+notes&archived=true', method: 'GET' },
+      { path: '/notepads/inventory?limit=25&archived=true', method: 'GET' },
+      { path: '/notepads/pad-1/archive', method: 'POST' },
+      { path: '/notepads/pad-1/restore', method: 'POST' },
     ]);
   });
 
@@ -296,42 +334,15 @@ describe('skill API requests', () => {
     );
   });
 
-  it('lists server-authorized invocation candidates for a session owner group', async () => {
+  it('lists server-authorized tenant invocation candidates', async () => {
     const skills = [{ id: 'skill-1', name: 'review-change' }];
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(JSON.stringify({ skills }), { status: 200 }));
 
-    await expect(listSkillInvocationCandidates({ ownerGroupId: 'group-1', token: 'test-token' })).resolves.toEqual(
-      skills,
-    );
+    await expect(listSkillInvocationCandidates({ token: 'test-token' })).resolves.toEqual(skills);
     const url = new URL(String(fetchMock.mock.calls[0]?.[0]), window.location.href);
     expect(url.pathname).toBe('/skills/invocation-candidates');
-    expect(url.searchParams.get('ownerGroupId')).toBe('group-1');
-  });
-
-  it('only sends group ids for specific sharing', async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockImplementation(async () => new Response(JSON.stringify({ skill: { id: 'skill-1' } }), { status: 200 }));
-
-    await setSkillShares({
-      skillId: 'skill-1',
-      shareMode: 'all_groups',
-      groupIds: ['ignored'],
-      token: 'test-token',
-    });
-    await setSkillShares({
-      skillId: 'skill-1',
-      shareMode: 'specific',
-      groupIds: ['group-1'],
-      token: 'test-token',
-    });
-
-    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({ shareMode: 'all_groups' });
-    expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toEqual({
-      shareMode: 'specific',
-      groupIds: ['group-1'],
-    });
+    expect(url.searchParams.has('ownerGroupId')).toBe(false);
   });
 });

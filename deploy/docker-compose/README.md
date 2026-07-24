@@ -92,7 +92,7 @@ curl http://localhost:5173/health
 
 ## Product Auth
 
-Compose loads the repository-root `.env.local` through `env_file` for the control-plane services, unless `DEPUTIES_ENV_FILE` points at a resolved replacement file. For GitHub login with access groups, set the GitHub OAuth credentials and allowlists there:
+Compose loads the repository-root `.env.local` through `env_file` for the control-plane services, unless `DEPUTIES_ENV_FILE` points at a resolved replacement file. For GitHub login with tenant roles, set the GitHub OAuth credentials and allowlists there:
 
 ```txt
 API_AUTH_MODE=session
@@ -103,7 +103,7 @@ GITHUB_OAUTH_CLIENT_SECRET=<client-secret>
 AUTH_GITHUB_ADMIN_USERS=<github-login>
 AUTH_GITHUB_ALLOWED_USERS=
 AUTH_GITHUB_ALLOWED_ORGANIZATIONS=<github-org>
-AUTH_GITHUB_DEFAULT_GROUP_ROLE=member
+AUTH_GITHUB_DEFAULT_ROLE=member
 UNSAFE_AUTH_GITHUB_ALLOW_ALL=false
 ```
 

@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Group, Skill } from './api.js';
-import {
-  groupsPanelOpenStorageKey,
-  selectedSkillStorageKey,
-  setupGuideOpenStorageKey,
-  sidebarPanelStorageKey,
-} from './app-helpers.js';
+import type { Skill } from './api.js';
+import { selectedSkillStorageKey, setupGuideOpenStorageKey, sidebarPanelStorageKey } from './app-helpers.js';
 import { useAppNavigation, type SidebarPanel } from './app-navigation.js';
 import { useSessionSkillCatalog } from './session-skill-catalog.js';
 import { useSkillInvocationCandidates } from './skill-invocation-candidates.js';
@@ -15,7 +10,7 @@ type StateUpdate<T> = T | ((current: T) => T);
 
 export type SkillWorkspaceNavigation = {
   setupGuideOpen: boolean;
-  groupsPanelOpen: boolean;
+  instanceAccessOpen: boolean;
   sidebarPanel: SidebarPanel;
   isCreatingThread: boolean;
   selectedEnvironmentId: string;
@@ -27,10 +22,9 @@ export type SkillWorkspaceNavigation = {
 
 export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
   token: string;
-  groups: Group[];
+  canManage: boolean;
   canCallApi: boolean;
   canCreateThread: boolean;
-  newThreadOwnerGroupId: string;
   selectedSessionId: string;
   navigation: T;
   setNavigation: (update: (current: T) => T) => void;
@@ -56,7 +50,6 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
 
   const admin = useSkillsAdmin({
     token: input.token,
-    groups: input.groups,
     canCallApi: input.canCallApi,
     selectedSkillId,
     setSelectedSkillId,
@@ -70,11 +63,10 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
   });
   const newSessionCatalog = useSkillInvocationCandidates({
     enabled: input.canCreateThread && (input.navigation.isCreatingThread || !input.selectedSessionId),
-    ownerGroupId: input.newThreadOwnerGroupId,
     token: input.token,
   });
   const openableManagedSkillIds = useMemo(
-    () => new Set(admin.skills.filter((skill) => skill.source !== 'repo' && skill.canManage).map((skill) => skill.id)),
+    () => new Set(admin.skills.filter((skill) => skill.source !== 'repo').map((skill) => skill.id)),
     [admin.skills],
   );
 
@@ -106,11 +98,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
   useEffect(() => {
     if (!input.canCallApi) return;
     void admin.refresh();
-  }, [
-    input.canCallApi,
-    input.token,
-    input.groups.map((group) => `${group.id}:${group.membershipRole ?? ''}:${group.archivedAt ?? ''}`).join('|'),
-  ]);
+  }, [input.canCallApi, input.token]);
 
   useEffect(() => {
     if (admin.available !== false || input.navigation.sidebarPanel !== 'skills') return;
@@ -129,7 +117,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
     const nextNavigation = {
       ...input.navigation,
       setupGuideOpen: false,
-      groupsPanelOpen: false,
+      instanceAccessOpen: false,
       sidebarPanel: 'skills' as const,
       isCreatingThread: false,
       selectedSkillId: skillId,
@@ -142,7 +130,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
     const nextNavigation = {
       ...input.navigation,
       setupGuideOpen: false,
-      groupsPanelOpen: false,
+      instanceAccessOpen: false,
       sidebarPanel: 'environments' as const,
       isCreatingThread: false,
       selectedEnvironmentId: environmentId,
@@ -163,7 +151,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
     const nextNavigation = {
       ...input.navigation,
       setupGuideOpen: false,
-      groupsPanelOpen: false,
+      instanceAccessOpen: false,
       sidebarPanel: 'snippets' as const,
       isCreatingThread: false,
       selectedSnippetId: snippetId,
@@ -176,7 +164,6 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
     if (input.navigation.sidebarPanel !== 'skills' && !confirmDiscard()) return;
     const desktop = isDesktopViewport();
     sessionStorage.removeItem(setupGuideOpenStorageKey);
-    sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'skills');
     if (selectedSkillId) {
       if (!navigateToSkill(selectedSkillId)) return;
@@ -185,7 +172,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
       input.setNavigation((current) => ({
         ...current,
         setupGuideOpen: false,
-        groupsPanelOpen: false,
+        instanceAccessOpen: false,
         sidebarPanel: 'skills',
         isCreatingThread: false,
       }));
@@ -195,14 +182,14 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
   }
 
   function create() {
-    if (!input.canCallApi || !confirmDiscard()) return;
+    if (!input.canManage || !confirmDiscard()) return;
     sessionStorage.removeItem(selectedSkillStorageKey);
     clearResourceSearchParams();
     sessionStorage.setItem(sidebarPanelStorageKey, 'skills');
     input.setNavigation((current) => ({
       ...current,
       setupGuideOpen: false,
-      groupsPanelOpen: false,
+      instanceAccessOpen: false,
       sidebarPanel: 'skills',
       isCreatingThread: false,
       selectedSkillId: '',
@@ -214,7 +201,6 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
   function select(skillId: string, revisionId = '') {
     if (!canView) return;
     sessionStorage.removeItem(setupGuideOpenStorageKey);
-    sessionStorage.removeItem(groupsPanelOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'skills');
     sessionStorage.setItem(selectedSkillStorageKey, skillId);
     if (!navigateToSkill(skillId, revisionId)) return;
@@ -260,7 +246,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
       selectedSkill: admin.selectedSkill,
       available: admin.available,
       canView,
-      canCreate: input.canCallApi,
+      canCreate: input.canManage,
       loading: admin.loading,
       loaded: admin.loaded,
       selectedSkillId,

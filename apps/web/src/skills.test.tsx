@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { Group, Skill, Snippet } from './api.js';
+import type { Skill, Snippet } from './api.js';
 import { MessageComposer } from './components/app-panels/message-composer.js';
 import { NewThreadPanel } from './components/app-panels/new-thread-panel.js';
 import {
@@ -23,12 +23,10 @@ const skill: Skill = {
   name: 'review-change',
   description: 'Review a change carefully.',
   body: '# Review',
-  ownerKind: 'user',
   autoLoad: false,
   enabled: true,
-  shareMode: 'none',
-  source: 'personal',
-  provenance: { kind: 'personal' },
+  source: 'managed',
+  provenance: { kind: 'managed' },
   canManage: true,
   createdAt: '2026-07-15T10:00:00.000Z',
   updatedAt: '2026-07-15T10:00:00.000Z',
@@ -42,26 +40,14 @@ const revisionedSkill: Skill = {
 
 const snippet: Snippet = {
   id: 'snippet-1',
-  ownerUserId: 'user-1',
+  createdByUserId: 'user-1',
   name: 'review-pr',
   body: 'Review this pull request',
   createdAt: '2026-07-15T10:00:00.000Z',
   updatedAt: '2026-07-15T10:00:00.000Z',
 };
 
-const group: Group = {
-  id: 'group-1',
-  name: 'Platform',
-  defaultVisibility: 'organization',
-  defaultWritePolicy: 'group_members',
-  automationCreateRequiredRole: 'member',
-  membershipRole: 'admin',
-  canCreateSessions: true,
-  canCreateAutomations: true,
-  canManage: true,
-  createdAt: '2026-07-15T10:00:00.000Z',
-  updatedAt: '2026-07-15T10:00:00.000Z',
-};
+const group = { id: 'group-1', name: 'Platform' };
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -122,6 +108,34 @@ it('opens the picker from a slash at position zero and supports chip removal', (
   expect(screen.getByText('review-change')).toHaveClass('truncate');
   fireEvent.click(screen.getByRole('button', { name: 'Remove review-change skill' }));
   expect(screen.queryByText('review-change')).not.toBeInTheDocument();
+});
+
+it('does not treat a Promise-returning picker scroll as an effect cleanup', () => {
+  const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+  const scrollIntoView = vi.fn(() => Promise.resolve());
+  Object.defineProperty(Element.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: scrollIntoView,
+  });
+
+  try {
+    const secondSkill = { ...skill, id: 'skill-2', name: 'review-security', description: 'Review security.' };
+    const composer = render(
+      <MessageComposer {...messageComposerProps(vi.fn(async () => true))} skills={[revisionedSkill, secondSkill]} />,
+    );
+    const textarea = screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
+    fireEvent.change(textarea, { target: { value: '/rev' } });
+    fireEvent.keyDown(textarea, { key: 'ArrowDown' });
+
+    expect(scrollIntoView).toHaveBeenCalled();
+    composer.unmount();
+  } finally {
+    if (scrollIntoViewDescriptor) {
+      Object.defineProperty(Element.prototype, 'scrollIntoView', scrollIntoViewDescriptor);
+    } else {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+    }
+  }
 });
 
 it('positions the mobile picker from the complete visual viewport rectangle', () => {
@@ -449,9 +463,7 @@ it('removes selected chips when the available skill identity changes', async () 
     ...skill,
     id: 'skill-2',
     description: 'Replacement from another group.',
-    ownerKind: 'group' as const,
-    ownerGroupId: 'group-2',
-    source: 'group' as const,
+    source: 'managed' as const,
   };
 
   function Harness(props: { available: Skill[] }) {
@@ -528,7 +540,7 @@ it('retains the pinned managed revision when the catalog refreshes to a newer de
   expect(screen.getByRole('button', { name: 'Remove review-change skill' })).toBeInTheDocument();
 });
 
-it('shows every available candidate for a duplicate name with provenance', () => {
+it('shows every available managed and repository candidate for a duplicate name with provenance', () => {
   render(
     <SkillPicker
       availableCount={2}
@@ -536,11 +548,8 @@ it('shows every available candidate for a duplicate name with provenance', () =>
         {
           ...skill,
           description: 'Managed skill takes precedence.',
-          ownerKind: 'group',
-          ownerGroupId: 'group-1',
-          ownerGroupName: 'Platform',
-          source: 'group',
-          provenance: { kind: 'group', ownerGroupId: 'group-1', ownerGroupName: 'Platform' },
+          source: 'managed',
+          provenance: { kind: 'managed' },
         },
         {
           ...skill,
@@ -560,12 +569,12 @@ it('shows every available candidate for a duplicate name with provenance', () =>
 
   expect(screen.getAllByRole('option', { name: /review-change/i })).toHaveLength(2);
   expect(screen.getByText('Managed skill takes precedence.')).toBeInTheDocument();
-  expect(screen.getByText('group · Platform')).toBeInTheDocument();
+  expect(screen.getByText('managed')).toBeInTheDocument();
   expect(screen.getByText('Repository duplicate.')).toBeInTheDocument();
   expect(screen.getByText('owner/repo')).toBeInTheDocument();
 });
 
-it('allows selecting distinct same-name candidates by identity', () => {
+it('allows selecting distinct same-name managed and repository candidates by identity', () => {
   const repositorySkill = {
     ...skill,
     id: 'repo:owner/repo:review-change',
@@ -606,7 +615,7 @@ it('allows selecting distinct same-name candidates by identity', () => {
   fireEvent.click(screen.getByText('Repository duplicate.').closest('button')!);
 
   expect(screen.getAllByText('review-change')).toHaveLength(2);
-  expect(screen.getByText('personal')).toBeInTheDocument();
+  expect(screen.getByText('managed')).toBeInTheDocument();
   expect(screen.getByText('owner/repo')).toBeInTheDocument();
 });
 
@@ -865,9 +874,34 @@ it('opens an invoked historical revision and returns to the current definition',
   expect(new URLSearchParams(window.location.search).has('revision')).toBe(false);
 });
 
-it('shows a read-only current body without requesting revision history', () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch');
-  render(
+it('lets a viewer browse revision history while keeping the skill read-only', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    jsonResponse({
+      revisions: [
+        {
+          id: 'revision-2',
+          skillId: 'skill-1',
+          revisionNumber: 2,
+          name: 'review-change',
+          description: 'Current definition.',
+          body: '# Shared body',
+          actorType: 'user',
+          createdAt: '2026-07-16T10:00:00.000Z',
+        },
+        {
+          id: 'revision-1',
+          skillId: 'skill-1',
+          revisionNumber: 1,
+          name: 'review-change-old',
+          description: 'Invoked definition.',
+          body: '# Invoked',
+          actorType: 'user',
+          createdAt: '2026-07-15T10:00:00.000Z',
+        },
+      ],
+    }),
+  );
+  const panel = render(
     <SkillsPanel
       {...skillsPanelProps({ ...revisionedSkill, canManage: false, body: '# Shared body' }, () => undefined)}
       selectedRevisionId="revision-1"
@@ -876,8 +910,10 @@ it('shows a read-only current body without requesting revision history', () => {
 
   expect(screen.getByLabelText(/^Markdown body/)).toHaveValue('# Shared body');
   expect(screen.getByLabelText(/^Markdown body/)).toBeDisabled();
-  expect(screen.queryByRole('heading', { name: 'Revision history' })).not.toBeInTheDocument();
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(await screen.findByLabelText('Revision')).toHaveTextContent('Revision 1');
+  expect(fetchMock).toHaveBeenCalledOnce();
+  panel.unmount();
+  await Promise.resolve();
 });
 
 it('contains a revision-history 403 instead of escalating it to the app error handler', async () => {
@@ -885,148 +921,51 @@ it('contains a revision-history 403 instead of escalating it to the app error ha
     jsonResponse({ error: 'forbidden', message: 'Skill management access is required' }, 403),
   );
   const onError = vi.fn();
-  render(<SkillsPanel {...skillsPanelProps(revisionedSkill, () => undefined)} onError={onError} />);
+  const panel = render(<SkillsPanel {...skillsPanelProps(revisionedSkill, () => undefined)} onError={onError} />);
 
   await waitFor(() => expect(screen.getByText('Revision history is unavailable.')).toBeInTheDocument());
   expect(onError).not.toHaveBeenCalled();
+  panel.unmount();
+  await Promise.resolve();
 });
 
-it('creates a managed skill and moves a personal skill with confirmation', async () => {
+it('lets a member edit managed skills regardless of creator and creates without ownership fields', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = new URL(input instanceof Request ? input.url : String(input), window.location.href).pathname;
     const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
-    if (path === '/skills') return jsonResponse({ skill: { ...skill, ...body } }, 201);
-    if (path === '/skills/skill-1/promote') {
-      return jsonResponse({ skill: { ...skill, ownerKind: 'group', ownerGroupId: body.groupId, source: 'group' } });
-    }
-    return jsonResponse({}, 404);
+    return jsonResponse({ skill: { ...skill, ...body, id: path === '/skills' ? 'skill-new' : skill.id } });
   });
   const onSaved = vi.fn();
-  const panel = render(<SkillsPanel {...skillsPanelProps(null, onSaved)} />);
-  fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'test-skill' } });
-  fireEvent.change(screen.getByLabelText(/^Description/), { target: { value: 'Test the implementation.' } });
-  fireEvent.change(screen.getByLabelText(/^Markdown body/), { target: { value: '# Test' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Create skill' }));
+  const memberEditableSkill = { ...skill, createdByUserId: 'another-member', canManage: true };
+  const panel = render(<SkillsPanel {...skillsPanelProps(memberEditableSkill, onSaved)} />);
 
-  await waitFor(() => expect(onSaved).toHaveBeenCalled());
-  expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({
-    name: 'test-skill',
-    description: 'Test the implementation.',
-    body: '# Test',
+  fireEvent.change(screen.getByLabelText(/^Description/), { target: { value: 'Edited by another member.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save skill' }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+  const updateInput = fetchMock.mock.calls[0]![0];
+  const updatePath = new URL(
+    updateInput instanceof Request ? updateInput.url : String(updateInput),
+    window.location.href,
+  ).pathname;
+  expect(updatePath).toBe('/skills/skill-1');
+
+  panel.rerender(<SkillsPanel {...skillsPanelProps(null, onSaved)} />);
+  fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'tenant-skill' } });
+  fireEvent.change(screen.getByLabelText(/^Description/), { target: { value: 'Available to the tenant.' } });
+  fireEvent.change(screen.getByLabelText(/^Markdown body/), { target: { value: '# Tenant skill' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create skill' }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(2));
+
+  const createPayload = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
+  expect(createPayload).toMatchObject({
+    name: 'tenant-skill',
+    description: 'Available to the tenant.',
+    body: '# Tenant skill',
     autoLoad: true,
   });
-
-  panel.rerender(<SkillsPanel {...skillsPanelProps(skill, onSaved)} />);
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
-  const promoteSelect = await screen.findByRole('combobox');
-  fireEvent.change(promoteSelect, { target: { value: group.id } });
-  fireEvent.click(screen.getByRole('button', { name: 'Move skill' }));
-
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-  expect(window.confirm).toHaveBeenCalledWith(
-    'Move this skill to Platform? It will stop loading as a personal skill and cannot be moved back.',
+  expect(Object.keys(createPayload)).not.toEqual(
+    expect.arrayContaining(['ownerKind', 'ownerGroupId', 'shareMode', 'groupIds']),
   );
-  expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toEqual({ groupId: group.id });
-});
-
-it('includes sharing in the create form only for group-owned skills', async () => {
-  const onSaved = vi.fn();
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    jsonResponse({
-      skill: {
-        ...skill,
-        ownerKind: 'group',
-        ownerGroupId: group.id,
-        source: 'group',
-        shareMode: 'all_groups',
-      },
-    }),
-  );
-  render(<SkillsPanel {...skillsPanelProps(null, onSaved)} />);
-
-  expect(screen.queryByRole('heading', { name: 'Sharing' })).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText('Owner'), { target: { value: group.id } });
-  expect(screen.getByRole('heading', { name: 'Sharing' })).toBeInTheDocument();
-  fireEvent.click(screen.getByLabelText('All groups'));
-  fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'shared-skill' } });
-  fireEvent.change(screen.getByLabelText(/^Description/), { target: { value: 'Share this skill.' } });
-  fireEvent.change(screen.getByLabelText(/^Markdown body/), { target: { value: '# Shared' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Create skill' }));
-
-  await waitFor(() => expect(onSaved).toHaveBeenCalled());
-  expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({
-    ownerGroupId: group.id,
-    shareMode: 'all_groups',
-  });
-});
-
-it('saves group sharing with the skill and keeps shared-in skills read only', async () => {
-  const groupSkill: Skill = {
-    ...skill,
-    ownerKind: 'group',
-    ownerGroupId: group.id,
-    source: 'group',
-    shareMode: 'none',
-  };
-  const onSaved = vi.fn();
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
-    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    return jsonResponse({ skill: { ...groupSkill, ...body } });
-  });
-  const panel = render(<SkillsPanel {...skillsPanelProps(groupSkill, onSaved)} />);
-
-  fireEvent.click(screen.getByLabelText('Specific groups'));
-  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
-  expect(screen.getByRole('checkbox', { name: 'Platform (owner)' })).toBeChecked();
-  expect(screen.getByRole('checkbox', { name: 'Platform (owner)' })).toBeDisabled();
-  expect(screen.getByText('1 selected')).toBeInTheDocument();
-
-  fireEvent.click(screen.getByLabelText('All groups'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save skill' }));
-  await waitFor(() => expect(onSaved).toHaveBeenCalled());
-  expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({ shareMode: 'all_groups' });
-
-  panel.rerender(
-    <SkillsPanel
-      {...skillsPanelProps(
-        { ...groupSkill, source: 'shared', shareMode: 'specific', canManage: false },
-        () => undefined,
-      )}
-    />,
-  );
-  expect(await screen.findByText('Read only')).toBeInTheDocument();
-  expect(screen.getByLabelText(/^Name/)).toBeDisabled();
-  expect(screen.getByText('Shared with specific groups.')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Save skill' })).toBeDisabled();
-});
-
-it('retains an inaccessible existing share when adding a visible group', async () => {
-  const inaccessibleGroupId = 'inaccessible-group';
-  const visibleTarget = { ...group, id: 'group-2', name: 'Product' };
-  const groupSkill: Skill = {
-    ...skill,
-    ownerKind: 'group',
-    ownerGroupId: group.id,
-    source: 'group',
-    shareMode: 'specific',
-    shareGroupIds: [inaccessibleGroupId],
-  };
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    jsonResponse({
-      skill: { ...groupSkill, shareGroupIds: [inaccessibleGroupId, visibleTarget.id] },
-    }),
-  );
-  render(<SkillsPanel {...skillsPanelProps(groupSkill, () => undefined)} groups={[group, visibleTarget]} />);
-
-  expect(screen.getByRole('checkbox', { name: /Unavailable group/ })).toBeChecked();
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Product' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save skill' }));
-
-  await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-  expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({
-    shareMode: 'specific',
-    groupIds: [inaccessibleGroupId, visibleTarget.id],
-  });
 });
 
 it('validates and counts skill bodies using UTF-8 bytes', () => {
@@ -1102,7 +1041,6 @@ it('separates archived skills into a collapsible sidebar section', () => {
         onSignOut: () => undefined,
         onThemeChange: () => undefined,
       }}
-      groups={[group]}
       loading={false}
       skills={[skill, archived]}
       selectedSkillId=""

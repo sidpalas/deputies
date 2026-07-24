@@ -13,7 +13,7 @@
 		}
 	}
 
-	@api path /health /auth* /automations* /environments* /sessions* /events* /groups* /repositories* /models* /notepads* /setup* /skills* /snippets* /telemetry* /users* /webhooks*
+	@api path /health /auth* /automations* /environments* /sessions* /events* /repositories* /models* /notepads* /setup* /skills* /snippets* /telemetry* /users* /webhooks*
 	handle @api {
 		reverse_proxy {$API_UPSTREAM:http://control-plane:3583} {
 			header_up X-Original-Host {host}

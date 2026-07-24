@@ -15,9 +15,6 @@ const session = {
   status: 'idle',
   spawnDepth: 0,
   title: 'Existing session',
-  ownerGroupId: '00000000-0000-4000-8000-000000000010',
-  visibility: 'organization',
-  writePolicy: 'group_members',
   createdByUserId: '00000000-0000-4000-8000-000000000020',
   createdAt: '2026-05-05T12:00:00.000Z',
   updatedAt: '2026-05-05T12:00:00.000Z',
@@ -26,24 +23,10 @@ const session = {
   starred: false,
 };
 
-const group = {
-  id: '00000000-0000-4000-8000-000000000010',
-  name: 'Default group',
-  defaultVisibility: 'organization',
-  defaultWritePolicy: 'group_members',
-  automationCreateRequiredRole: 'member',
-  membershipRole: 'admin',
-  canCreateSessions: true,
-  canCreateAutomations: true,
-  canManage: true,
-  createdAt: '2026-05-05T12:00:00.000Z',
-  updatedAt: '2026-05-05T12:00:00.000Z',
-};
-
 const user = {
   id: '00000000-0000-4000-8000-000000000020',
   username: 'dev',
-  role: 'super_admin',
+  role: 'admin',
 };
 
 type StreamEventPusher = (event: unknown) => void;
@@ -72,7 +55,6 @@ type MockApiOptions = {
   removedGroupMembers?: string[];
   groupUpdateStatus?: number;
   groupUpdateError?: unknown;
-  groupMembers?: unknown[];
   users?: unknown[];
   userRoleUpdates?: unknown[];
   artifactPreview?: unknown;
@@ -124,16 +106,14 @@ type MockApiOptions = {
   hangSessionsAfterFirst?: boolean;
   authMode?: 'none' | 'bearer' | 'session';
   sandboxProvider?: string;
-  currentUser?: (typeof user & { memberships?: unknown[] }) | null;
+  currentUser?: typeof user | null;
   notices?: unknown[];
   environments?: unknown[];
   environmentRevisions?: Record<string, unknown[]>;
   skills?: unknown[];
   snippets?: unknown[];
   invocationSkills?: unknown[];
-  invocationCandidateOwnerGroupIds?: string[];
   invocationCandidateStatus?: number;
-  skillListStatusByScope?: Partial<Record<'personal' | 'group' | 'shared', number>>;
   onListSessionSkillsRequest?: (request: {
     count: number;
     sessionId: string;
@@ -353,7 +333,7 @@ it('loads an exact historical environment revision from the URL', async () => {
 
   render(<App />);
 
-  expect(await screen.findByText(/Name, owner, and sharing reflect the current environment/)).toBeInTheDocument();
+  expect(await screen.findByText(/The name reflects the current environment/)).toBeInTheDocument();
   await waitFor(() => expect(screen.getByLabelText('Repository 1')).toHaveTextContent('owner/historical-repo'));
   expect(screen.getByLabelText('Name')).toHaveValue('Production');
   expect(screen.getByLabelText('Name')).toBeDisabled();
@@ -412,14 +392,6 @@ it('does not prompt to discard changes after saving an environment', async () =>
 
   await waitFor(() => expect(name).toHaveValue('Updated production'));
   expect(confirm).not.toHaveBeenCalled();
-});
-
-it('keeps skills navigation available when one group skill list fails', async () => {
-  mockApi({ skills: [], skillListStatusByScope: { group: 403 } });
-  render(<App />);
-
-  fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
-  expect(screen.getByRole('menuitem', { name: /Skills/ })).toBeInTheDocument();
 });
 
 it('confirms before leaving a skill with unsaved changes', async () => {
@@ -498,43 +470,6 @@ it('does not prompt to discard changes after saving a skill', async () => {
   expect(confirm).not.toHaveBeenCalled();
 });
 
-it('does not prompt to discard changes after saving skill sharing', async () => {
-  mockApi({
-    skills: [
-      {
-        id: 'skill-1',
-        name: 'review-change',
-        description: 'Review a change carefully.',
-        currentRevisionId: 'revision-2',
-        currentRevisionNumber: 2,
-        body: '# Review',
-        ownerKind: 'group',
-        ownerGroupId: group.id,
-        autoLoad: true,
-        enabled: true,
-        shareMode: 'none',
-        source: 'group',
-        canManage: true,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-      },
-    ],
-  });
-  const confirm = vi.spyOn(window, 'confirm');
-  render(<App />);
-
-  fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: /Skills/ }));
-  fireEvent.click((await screen.findByText('review-change')).closest('button')!);
-  fireEvent.click(await screen.findByLabelText('All groups'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save skill' }));
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Save skill' })).toBeDisabled());
-  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Skills' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: /Sessions/ }));
-
-  expect(confirm).not.toHaveBeenCalled();
-});
-
 it('protects dirty skill edits when archiving from the sidebar and allows restore after success', async () => {
   const archivedSkillIds: string[] = [];
   mockApi({
@@ -594,7 +529,6 @@ it('converts an exact leading slash skill into message context and renders the s
         shareMode: 'none',
         source: 'personal',
         provenance: { kind: 'personal' },
-        canManage: true,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
       },
@@ -620,51 +554,6 @@ it('converts an exact leading slash skill into message context and renders the s
   fireEvent.click(screen.getByRole('button', { name: 'Open invoked review-change skill revision' }));
   expect(await screen.findByRole('heading', { name: 'Agent skills' })).toBeInTheDocument();
   expect(new URLSearchParams(window.location.search).get('revision')).toBe('revision-2');
-});
-
-it('loads new-session invocation candidates from the owner-group endpoint instead of the admin catalog', async () => {
-  const requestedOwnerGroupIds: string[] = [];
-  mockApi({
-    invocationCandidateOwnerGroupIds: requestedOwnerGroupIds,
-    skills: [
-      {
-        id: 'admin-only',
-        name: 'admin-only',
-        description: 'Visible in management only.',
-        autoLoad: false,
-        enabled: true,
-        shareMode: 'none',
-        source: 'personal',
-        provenance: { kind: 'personal' },
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-      },
-    ],
-    invocationSkills: [
-      {
-        id: 'candidate-only',
-        name: 'candidate-only',
-        description: 'Authorized for this new session.',
-        currentRevisionId: 'revision-1',
-        autoLoad: false,
-        enabled: true,
-        shareMode: 'none',
-        source: 'shared',
-        provenance: { kind: 'shared', ownerGroupId: group.id, ownerGroupName: group.name },
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-      },
-    ],
-  });
-  render(<App />);
-
-  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
-  const composer = screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...');
-  fireEvent.change(composer, { target: { value: '/candidate' } });
-
-  expect(await screen.findByRole('option', { name: /candidate-only/i })).toBeInTheDocument();
-  expect(screen.queryByRole('option', { name: /admin-only/i })).not.toBeInTheDocument();
-  expect(requestedOwnerGroupIds).toContain(group.id);
 });
 
 it('shows an unknown_skill response inline and restores the composer selection', async () => {
@@ -823,9 +712,9 @@ it('shows no repository skills when the session skills response contains managed
         description: 'Managed skill only.',
         autoLoad: false,
         enabled: true,
-        shareMode: 'none',
-        source: 'personal',
-        provenance: { kind: 'personal' },
+        source: 'managed',
+        provenance: { kind: 'managed' },
+        canManage: true,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
       },
@@ -836,7 +725,7 @@ it('shows no repository skills when the session skills response contains managed
   const composer = await screen.findByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
   fireEvent.change(composer, { target: { value: '/' } });
   const picker = screen.getByRole('listbox', { name: 'Available skills' });
-  expect(within(picker).getByRole('option', { name: /review-change/i })).toHaveTextContent('personal');
+  expect(within(picker).getByRole('option', { name: /review-change/i })).toHaveTextContent('managed');
   expect(within(picker).queryByText('repo')).not.toBeInTheDocument();
 });
 
@@ -1077,30 +966,6 @@ it('backfills fast responses for newly-created sessions when the global stream m
   }
   expect(requests.filter((request) => request === 'GET /sessions?limit=50')).toHaveLength(0);
   expect(createdIncrementalRequests).toBe(1);
-});
-
-it('aborts newly-created session backfill when signing out', async () => {
-  const newSessionId = '00000000-0000-4000-8000-000000000102';
-  const abortedRequests: string[] = [];
-  mockApi({
-    abortedRequests,
-    authMode: 'session',
-    currentUser: user,
-    hangIncrementalEventsForSessions: [newSessionId],
-  });
-  render(<App />);
-
-  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
-  fireEvent.change(screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...'), {
-    target: { value: 'start work' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
-
-  expect(await screen.findAllByText('start work')).not.toHaveLength(0);
-  fireEvent.click(screen.getAllByRole('button', { name: 'Sign out' })[0]!);
-
-  await waitFor(() => expect(abortedRequests).toContain(`GET /sessions/${newSessionId}/events`));
-  expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument();
 });
 
 it('performs one incremental submission fallback and then reconciles only messages and summary', async () => {
@@ -1542,42 +1407,6 @@ it('groups header session actions in a generic actions menu', async () => {
   expect(headerQueries.getByRole('menuitem', { name: 'Archive session' })).toBeInTheDocument();
 });
 
-it('reopens the sessions side panel when navigating back to sessions from the footer on desktop', async () => {
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Access' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: /Sessions/ }));
-
-  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
-  expect(screen.getByPlaceholderText('Search sessions...')).toBeInTheDocument();
-  expect(screen.getByText('Archived')).toBeInTheDocument();
-  expect(screen.queryByPlaceholderText('Search groups...')).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Sessions' }));
-  expect(screen.getByRole('menuitem', { name: /Access/ })).toBeInTheDocument();
-});
-
-it('keeps page navigation collapsed until the page switcher is opened', async () => {
-  mockApi({ authMode: 'session', currentUser: user });
-  render(<App />);
-
-  const switcher = await screen.findByRole('button', { name: 'Switch page, current page Sessions' });
-  expect(screen.queryByRole('menu', { name: 'Pages' })).not.toBeInTheDocument();
-
-  fireEvent.click(switcher);
-  expect(screen.getByRole('menuitem', { name: /Sessions/ })).toHaveAttribute('aria-current', 'page');
-  expect(screen.getByRole('menuitem', { name: /Automations/ })).toBeInTheDocument();
-  expect(screen.getByRole('menuitem', { name: /Access/ })).toBeInTheDocument();
-  expect(screen.getByRole('menuitem', { name: /Environments/ })).toBeInTheDocument();
-  expect(screen.getByRole('menuitem', { name: /Setup/ })).toBeInTheDocument();
-
-  fireEvent.keyDown(document, { key: 'Escape' });
-  expect(screen.queryByRole('menu', { name: 'Pages' })).not.toBeInTheDocument();
-  expect(switcher).toHaveFocus();
-});
-
 it('cycles the compact theme action through every theme preference', async () => {
   mockApi();
   render(<App />);
@@ -1589,90 +1418,6 @@ it('cycles the compact theme action through every theme preference', async () =>
   fireEvent.click(screen.getByRole('button', { name: 'Theme: Light. Change theme' }));
   expect(localStorage.getItem('deputies-theme')).toBe('dark');
   expect(screen.getByRole('button', { name: 'Theme: Dark. Change theme' })).toBeInTheDocument();
-});
-
-it('keeps the groups page open until a session is selected', async () => {
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({
-    authMode: 'session',
-    currentUser: {
-      ...user,
-      memberships: [
-        {
-          groupId: group.id,
-          userId: user.id,
-          role: 'admin',
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-        },
-      ],
-    },
-  });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  expect(screen.queryByText('Your access')).not.toBeInTheDocument();
-  expect(screen.getByText('Manage super admins (you are one)')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
-  expect(screen.queryByPlaceholderText('Search sessions...')).not.toBeInTheDocument();
-
-  fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
-  fireEvent.click(screen.getByRole('button', { name: /Existing session/ }));
-
-  expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
-  expect(sessionStorage.getItem('deputies-groups-panel-open')).toBeNull();
-});
-
-it('persists and restores the selected access group on groups page refresh', async () => {
-  const clientGroup = {
-    ...group,
-    id: '00000000-0000-4000-8000-000000000011',
-    name: 'Client access',
-  };
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user, groups: [group, clientGroup] });
-
-  const rendered = render(<App />);
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-
-  fireEvent.click(screen.getByRole('button', { name: /Client access/ }));
-  expect(sessionStorage.getItem('deputies-groups-panel-selected-group-id')).toBe(clientGroup.id);
-
-  rendered.unmount();
-  render(<App />);
-
-  expect(await screen.findByDisplayValue('Client access')).toBeInTheDocument();
-});
-
-it('persists and restores the super admins groups page view on refresh', async () => {
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user });
-
-  const rendered = render(<App />);
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-
-  fireEvent.click(screen.getByRole('button', { name: /Manage super admins/ }));
-  expect(sessionStorage.getItem('deputies-groups-panel-view')).toBe('super_admins');
-
-  rendered.unmount();
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Super admins' })).toBeInTheDocument();
-});
-
-it('persists and restores the setup page view on refresh', async () => {
-  sessionStorage.setItem('deputies-setup-guide-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user });
-
-  const rendered = render(<App />);
-  expect(await screen.findByRole('heading', { name: 'Setup guide' })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Setup' }));
-  expect(screen.getByRole('menuitem', { name: /Setup/ })).toHaveAttribute('aria-current', 'page');
-
-  rendered.unmount();
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Setup guide' })).toBeInTheDocument();
 });
 
 it('opens the sessions sidebar from the setup page', async () => {
@@ -1687,314 +1432,6 @@ it('opens the sessions sidebar from the setup page', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Setup' }));
   fireEvent.click(screen.getByRole('menuitem', { name: /Sessions/ }));
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
-});
-
-it('opens the access sidebar from the setup page when access is the active sidebar', async () => {
-  sessionStorage.setItem('deputies-setup-guide-open', 'true');
-  sessionStorage.setItem('deputies-sidebar-panel', 'groups');
-  mockApi({ authMode: 'session', currentUser: user });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Setup guide' })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Open access' }));
-
-  expect(screen.getByPlaceholderText('Search groups...')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Switch page, current page Setup' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: /Access/ }));
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-});
-
-it('opens the groups page when selecting an access group from setup', async () => {
-  sessionStorage.setItem('deputies-setup-guide-open', 'true');
-  sessionStorage.setItem('deputies-sidebar-panel', 'groups');
-  mockApi({ authMode: 'session', currentUser: user });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Setup guide' })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Open access' }));
-  fireEvent.click(screen.getByRole('button', { name: /Default group/ }));
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  expect(sessionStorage.getItem('deputies-setup-guide-open')).toBeNull();
-  expect(sessionStorage.getItem('deputies-groups-panel-open')).toBe('true');
-  expect(sessionStorage.getItem('deputies-groups-panel-selected-group-id')).toBe(group.id);
-});
-
-it('collapses member search results after selecting a user', async () => {
-  const teammate = {
-    id: '00000000-0000-4000-8000-000000000030',
-    username: 'teammate',
-    displayName: 'Teammate',
-    role: 'user',
-  };
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user, users: [teammate] });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  const search = screen.getByPlaceholderText('Search by username, display name, or exact user ID');
-  fireEvent.change(search, { target: { value: 'team' } });
-  fireEvent.click(await screen.findByRole('button', { name: /Teammate/ }));
-
-  expect(screen.getByPlaceholderText('Select a user or paste user ID')).toHaveValue(teammate.id);
-  expect(screen.getByText('Selected user: Teammate')).toBeInTheDocument();
-  expect(search).toHaveValue('');
-  expect(screen.queryByRole('button', { name: /Teammate/ })).not.toBeInTheDocument();
-});
-
-it('adds, updates, and removes group members', async () => {
-  const teammate = {
-    id: '00000000-0000-4000-8000-000000000030',
-    username: 'teammate',
-    displayName: 'Teammate',
-    role: 'user',
-  };
-  const existingMember = {
-    groupId: group.id,
-    userId: '00000000-0000-4000-8000-000000000031',
-    role: 'viewer',
-    user: { id: '00000000-0000-4000-8000-000000000031', username: 'member', displayName: 'Existing member' },
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-  };
-  const groupMemberUpdates: unknown[] = [];
-  const removedGroupMembers: string[] = [];
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({
-    authMode: 'session',
-    currentUser: user,
-    groupMembers: [existingMember],
-    groupMemberUpdates,
-    removedGroupMembers,
-    users: [teammate],
-  });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  const memberSearch = screen.getByPlaceholderText('Search by username, display name, or exact user ID');
-  fireEvent.change(memberSearch, { target: { value: 'team' } });
-  fireEvent.click(await screen.findByRole('button', { name: /Teammate/ }));
-  const addMemberRole = screen.getByText('Role').closest('label')?.querySelector('select');
-  if (!addMemberRole) throw new Error('Expected add-member role select');
-  fireEvent.change(addMemberRole, { target: { value: 'member' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
-
-  await waitFor(() => expect(groupMemberUpdates).toContainEqual({ userId: teammate.id, role: 'member' }));
-  expect(await screen.findByText('Teammate')).toBeInTheDocument();
-
-  const existingMemberRow = screen.getByText('Existing member').closest('div')?.parentElement;
-  if (!existingMemberRow) throw new Error('Expected existing member row');
-  fireEvent.change(within(existingMemberRow).getByRole('combobox'), { target: { value: 'admin' } });
-
-  await waitFor(() => expect(groupMemberUpdates).toContainEqual({ userId: existingMember.userId, role: 'admin' }));
-  fireEvent.click(within(existingMemberRow).getByRole('button', { name: 'Remove' }));
-
-  await waitFor(() => expect(removedGroupMembers).toEqual([existingMember.userId]));
-  expect(screen.queryByText('Existing member')).not.toBeInTheDocument();
-});
-
-it('promotes and removes super admins', async () => {
-  const candidate = {
-    id: '00000000-0000-4000-8000-000000000040',
-    username: 'candidate',
-    displayName: 'Candidate Admin',
-    role: 'user',
-  };
-  const existingSuperAdmin = {
-    id: '00000000-0000-4000-8000-000000000041',
-    username: 'boss',
-    displayName: 'Boss Admin',
-    role: 'super_admin',
-  };
-  const userRoleUpdates: unknown[] = [];
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user, users: [candidate, existingSuperAdmin], userRoleUpdates });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: /Manage super admins/ }));
-  expect(await screen.findByRole('heading', { name: 'Super admins' })).toBeInTheDocument();
-
-  const search = screen.getByPlaceholderText('Search by username, display name, or exact user ID');
-  fireEvent.change(search, { target: { value: 'cand' } });
-  fireEvent.click(await screen.findByRole('button', { name: /Candidate Admin/ }));
-  fireEvent.click(screen.getByRole('button', { name: 'Promote' }));
-
-  await waitFor(() => expect(userRoleUpdates).toContainEqual({ userId: candidate.id, role: 'super_admin' }));
-  expect(await screen.findByText('Candidate Admin')).toBeInTheDocument();
-
-  const bossRow = screen.getByText('Boss Admin').closest('div')?.parentElement;
-  if (!bossRow) throw new Error('Expected existing super-admin row');
-  fireEvent.click(within(bossRow).getByRole('button', { name: 'Remove' }));
-
-  await waitFor(() => expect(userRoleUpdates).toContainEqual({ userId: existingSuperAdmin.id, role: 'user' }));
-});
-
-it('moves archived groups below the archived groups toggle', async () => {
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  const archiveButton = screen.getByText('Archive group').closest('button');
-  if (!archiveButton) throw new Error('Expected archive group button');
-  fireEvent.click(archiveButton);
-
-  const archivedSummary = await screen.findByText('Archived groups · 1');
-  const archivedDetails = archivedSummary.closest('details')!;
-  archivedDetails.open = true;
-  fireEvent(archivedDetails, new Event('toggle', { bubbles: true }));
-
-  expect(archivedDetails).toHaveAttribute('open');
-  expect(sessionStorage.getItem('deputies-archived-groups-open')).toBe('true');
-});
-
-it('restores the archived groups toggle after refresh', async () => {
-  const archivedGroup = { ...group, archivedAt: session.updatedAt };
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  sessionStorage.setItem('deputies-archived-groups-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user, groups: [archivedGroup] });
-  render(<App />);
-
-  const archivedSummary = await screen.findByText('Archived groups · 1');
-  expect(archivedSummary.closest('details')).toHaveAttribute('open');
-});
-
-it('filters groups in the groups sidebar search', async () => {
-  const clientGroup = {
-    ...group,
-    id: '00000000-0000-4000-8000-000000000011',
-    name: 'Client access',
-  };
-  const archivedGroup = {
-    ...group,
-    id: '00000000-0000-4000-8000-000000000012',
-    name: 'Legacy access',
-    archivedAt: session.updatedAt,
-  };
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user, groups: [group, clientGroup, archivedGroup] });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  const search = screen.getByPlaceholderText('Search groups...');
-  const sidebar = search.closest('aside')!;
-
-  fireEvent.change(search, { target: { value: 'legacy' } });
-
-  expect(within(sidebar).getByRole('button', { name: /Manage super admins/ })).toBeInTheDocument();
-  expect(within(sidebar).queryByRole('button', { name: /Default group/ })).not.toBeInTheDocument();
-  expect(within(sidebar).queryByRole('button', { name: /Client access/ })).not.toBeInTheDocument();
-  expect(within(sidebar).getByText('Archived groups · 1').closest('details')).toHaveAttribute('open');
-  expect(within(sidebar).getByRole('button', { name: /Legacy access/ })).toBeInTheDocument();
-
-  fireEvent.change(search, { target: { value: 'missing' } });
-  expect(within(sidebar).getByText('No matching groups.')).toBeInTheDocument();
-});
-
-it('uses the next available default name when creating access groups', async () => {
-  const createdGroups: unknown[] = [];
-  const newGroup = { ...group, name: 'New access group' };
-  const newGroupTwo = {
-    ...group,
-    id: '00000000-0000-4000-8000-000000000011',
-    name: 'New access group 2',
-  };
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user, groups: [newGroup, newGroupTwo], createdGroups });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'New group' }));
-
-  expect(createdGroups).toHaveLength(0);
-  expect(await screen.findByRole('heading', { name: 'New access group' })).toBeInTheDocument();
-  expect(screen.getByLabelText('Name')).toHaveValue('New access group 3');
-  fireEvent.click(screen.getByRole('button', { name: 'Create group' }));
-
-  await waitFor(() => expect(createdGroups).toHaveLength(1));
-  expect(createdGroups[0]).toMatchObject({ name: 'New access group 3' });
-});
-
-it('archives access groups from the sidebar', async () => {
-  const groupUpdates: unknown[] = [];
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user, groupUpdates });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  const sidebar = screen.getByPlaceholderText('Search groups...').closest('aside')!;
-  fireEvent.click(within(sidebar).getByRole('button', { name: 'Archive group' }));
-
-  await waitFor(() => expect(groupUpdates).toHaveLength(1));
-  expect(groupUpdates[0]).toMatchObject({ archived: true });
-});
-
-it('shows an inline error for duplicate access group names before saving', async () => {
-  const clientGroup = {
-    ...group,
-    id: '00000000-0000-4000-8000-000000000011',
-    name: 'Client access',
-  };
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user, groups: [group, clientGroup] });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: ' client ACCESS ' } });
-
-  expect(screen.getByText('An access group with this name already exists.')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Save group' })).toBeDisabled();
-});
-
-it('shows an inline error when the server rejects a duplicate access group name', async () => {
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({
-    authMode: 'session',
-    currentUser: user,
-    groupUpdateStatus: 409,
-    groupUpdateError: { error: 'group_name_exists', message: 'Group name already exists' },
-  });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Race access' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save group' }));
-
-  expect(await screen.findByText('An access group with this name already exists.')).toBeInTheDocument();
-});
-
-it('saves the group automation creation policy', async () => {
-  const groupUpdates: unknown[] = [];
-  sessionStorage.setItem('deputies-groups-panel-open', 'true');
-  mockApi({ authMode: 'session', currentUser: user, groupUpdates });
-  render(<App />);
-
-  expect(await screen.findByRole('heading', { name: 'Access groups', level: 1 })).toBeInTheDocument();
-  const policyHelp = await screen.findByText('Controls who can create new scheduled automations in this group.');
-  const policySelect = policyHelp.closest('label')?.querySelector('select');
-  if (!policySelect) throw new Error('Expected automation creation policy select');
-  fireEvent.change(policySelect, { target: { value: 'admin' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save group' }));
-
-  await waitFor(() => expect(groupUpdates).toHaveLength(1));
-  expect(groupUpdates[0]).toMatchObject({ automationCreateRequiredRole: 'admin' });
-});
-
-it('shows the session access group as immutable', async () => {
-  const accessUpdates: unknown[] = [];
-  const clientGroup = {
-    ...group,
-    id: '00000000-0000-4000-8000-000000000011',
-    name: 'Client access',
-  };
-  mockApi({ accessUpdates, authMode: 'session', currentUser: user, groups: [group, clientGroup] });
-  render(<App />);
-
-  const contextPanel = within(await screen.findByLabelText('Session details'));
-  expect(await contextPanel.findByText('Default group')).toBeInTheDocument();
-  expect(contextPanel.queryByLabelText('Access group')).not.toBeInTheDocument();
-  expect(accessUpdates).toEqual([]);
 });
 
 it('shows the codebase before Notepads in Session details', async () => {
@@ -2044,25 +1481,6 @@ it('does not let an older title mutation response overwrite a newer title', asyn
   });
   expect(await screen.findByRole('heading', { name: 'Second title' })).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'First title' })).not.toBeInTheDocument();
-});
-
-it('shows an organization-visible session owner group name for non-members', async () => {
-  const clientGroupId = '00000000-0000-4000-8000-000000000011';
-  mockApi({
-    authMode: 'session',
-    currentUser: { ...user, role: 'user', memberships: [] },
-    groups: [],
-    sessionOverride: {
-      ownerGroupId: clientGroupId,
-      ownerGroupName: 'Client access',
-      visibility: 'organization',
-    },
-  });
-  render(<App />);
-
-  const contextPanel = within(await screen.findByLabelText('Session details'));
-  expect(await contextPanel.findByText('Client access')).toBeInTheDocument();
-  expect(contextPanel.queryByText(clientGroupId)).not.toBeInTheDocument();
 });
 
 it('persists the mobile session details panel after refresh', async () => {
@@ -5352,12 +4770,28 @@ it('shows health notices from the API', async () => {
   expect(screen.getByText(/Re-authenticate Codex/)).toBeInTheDocument();
 });
 
+it('shows Instance access and Setup only to admins', async () => {
+  mockApi({ authMode: 'session', currentUser: { ...user, role: 'admin' } });
+  const rendered = render(<App />);
+
+  const switcher = await screen.findByRole('button', { name: 'Switch page, current page Sessions' });
+  fireEvent.click(switcher);
+  fireEvent.click(screen.getByRole('menuitem', { name: /Instance access/ }));
+  expect(await screen.findByRole('heading', { name: 'Instance access' })).toBeInTheDocument();
+
+  rendered.unmount();
+  mockApi({ authMode: 'session', currentUser: { ...user, role: 'member' } });
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
+  expect(screen.queryByRole('menuitem', { name: /Instance access/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole('menuitem', { name: /Setup/ })).not.toBeInTheDocument();
+});
+
 function mockApi(options: MockApiOptions = {}) {
   let currentSession = { ...session, ...options.sessionOverride };
   let currentUser = options.currentUser;
   let callbacks = options.callbacks ?? [];
   let messages = options.messages ?? [];
-  let groupMembers = options.groupMembers ?? [];
   let sessionsRequestCount = 0;
   let sessionSkillsRequestCount = 0;
   let servicesRequestCount = 0;
@@ -5486,10 +4920,6 @@ function mockApi(options: MockApiOptions = {}) {
       return jsonResponse({ checkedAt: session.updatedAt, items: [] });
     }
 
-    if (url.pathname === '/groups' && method === 'GET') {
-      return jsonResponse({ groups: options.groups ?? [group] });
-    }
-
     if (url.pathname === '/environments' && method === 'GET') {
       return jsonResponse({ environments: options.environments ?? [] });
     }
@@ -5540,14 +4970,10 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === '/skills' && method === 'GET') {
       if (skills === undefined) return jsonResponse({ error: 'not_found', message: 'Not found' }, 404);
-      const scope = url.searchParams.get('scope') as 'personal' | 'group' | 'shared' | null;
-      const status = scope ? options.skillListStatusByScope?.[scope] : undefined;
-      if (status) return jsonResponse({ error: 'forbidden', message: 'Skill list unavailable' }, status);
       return jsonResponse({ skills });
     }
 
     if (url.pathname === '/skills/invocation-candidates' && method === 'GET') {
-      options.invocationCandidateOwnerGroupIds?.push(url.searchParams.get('ownerGroupId') ?? '');
       if (options.invocationCandidateStatus) {
         return jsonResponse(
           { error: 'forbidden', message: 'Invocation candidates unavailable' },
@@ -5664,81 +5090,6 @@ function mockApi(options: MockApiOptions = {}) {
             typeof candidate === 'object' && candidate !== null && 'id' in candidate && candidate.id === skillId,
         ),
       });
-    }
-
-    if (url.pathname === '/groups' && method === 'POST') {
-      const body = JSON.parse(String(init?.body)) as { name: string };
-      options.createdGroups?.push(body);
-      return jsonResponse({ group: { ...group, id: '00000000-0000-4000-8000-000000000011', name: body.name } }, 201);
-    }
-
-    if (url.pathname.match(/^\/groups\/[^/]+$/) && method === 'PATCH') {
-      if (options.groupUpdateStatus) {
-        return jsonResponse(
-          options.groupUpdateError ?? { error: 'group_name_exists', message: 'Group name already exists' },
-          options.groupUpdateStatus,
-        );
-      }
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      options.groupUpdates?.push(body);
-      const archivedAt = body.archived === true ? session.updatedAt : undefined;
-      const archivedPatch = body.archived === undefined ? {} : archivedAt ? { archivedAt } : { archivedAt: undefined };
-      return jsonResponse({ group: { ...group, ...body, ...archivedPatch } });
-    }
-
-    if (url.pathname.match(/^\/groups\/[^/]+\/members$/) && method === 'GET') {
-      return jsonResponse({ members: groupMembers });
-    }
-
-    if (url.pathname.match(/^\/groups\/[^/]+\/members$/) && method === 'POST') {
-      const body = JSON.parse(String(init?.body)) as { userId: string; role: string };
-      options.groupMemberUpdates?.push(body);
-      const selectedUser = options.users?.find(
-        (candidate): candidate is typeof user =>
-          Boolean(candidate) && typeof candidate === 'object' && (candidate as { id?: unknown }).id === body.userId,
-      );
-      const member = {
-        groupId: group.id,
-        userId: body.userId,
-        role: body.role,
-        ...(selectedUser ? { user: selectedUser } : {}),
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-      };
-      groupMembers = [
-        member,
-        ...groupMembers.filter((candidate) => (candidate as { userId?: string }).userId !== body.userId),
-      ];
-      return jsonResponse({ member });
-    }
-
-    if (url.pathname.match(/^\/groups\/[^/]+\/members\/[^/]+$/) && method === 'PATCH') {
-      const body = JSON.parse(String(init?.body)) as { role: string };
-      const userId = url.pathname.split('/').pop()!;
-      options.groupMemberUpdates?.push({ userId, role: body.role });
-      const selectedUser = options.users?.find(
-        (candidate): candidate is typeof user =>
-          Boolean(candidate) && typeof candidate === 'object' && (candidate as { id?: unknown }).id === userId,
-      );
-      const member = {
-        groupId: group.id,
-        userId,
-        role: body.role,
-        ...(selectedUser ? { user: selectedUser } : {}),
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-      };
-      groupMembers = groupMembers.map((candidate) =>
-        (candidate as { userId?: string }).userId === userId ? member : candidate,
-      );
-      return jsonResponse({ member });
-    }
-
-    if (url.pathname.match(/^\/groups\/[^/]+\/members\/[^/]+$/) && method === 'DELETE') {
-      const userId = url.pathname.split('/').pop()!;
-      options.removedGroupMembers?.push(userId);
-      groupMembers = groupMembers.filter((candidate) => (candidate as { userId?: string }).userId !== userId);
-      return jsonResponse({ ok: true });
     }
 
     if (url.pathname === '/users' && method === 'GET') {
@@ -6134,12 +5485,8 @@ function environmentFixture() {
   return {
     id: 'environment-1',
     name: 'Production',
-    ownerGroupId: group.id,
-    ownerGroupName: group.name,
-    shareMode: 'private',
     currentRevisionId: 'environment-revision-2',
     currentRevisionNumber: 2,
-    sharedGroupIds: [],
     repositories: [
       {
         id: 'repository-current',

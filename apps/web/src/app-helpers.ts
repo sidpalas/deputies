@@ -2,10 +2,7 @@ export const tokenStorageKey = 'deputies-api-token';
 export const selectedSessionStorageKey = 'deputies-selected-session-id';
 export const newSessionSelectedStorageKey = 'deputies-new-session-selected';
 export const setupGuideOpenStorageKey = 'deputies-setup-guide-open';
-export const groupsPanelOpenStorageKey = 'deputies-groups-panel-open';
 export const sidebarPanelStorageKey = 'deputies-sidebar-panel';
-export const groupsPanelViewStorageKey = 'deputies-groups-panel-view';
-export const groupsPanelSelectedGroupStorageKey = 'deputies-groups-panel-selected-group-id';
 export const selectedAutomationStorageKey = 'deputies-selected-automation-id';
 export const selectedEnvironmentStorageKey = 'deputies-selected-environment-id';
 export const selectedSkillStorageKey = 'deputies-selected-skill-id';
@@ -45,21 +42,13 @@ export function loadStoredToken(): string {
 
 export function loadInitialSelectedSessionId(): string {
   const query = new URLSearchParams(window.location.search);
-  if (
-    query.get('group') ||
-    query.get('automation') ||
-    query.get('environment') ||
-    query.get('skill') ||
-    query.get('snippet')
-  )
-    return '';
+  if (query.get('automation') || query.get('environment') || query.get('skill') || query.get('snippet')) return '';
   return query.get('session') ?? sessionStorage.getItem(selectedSessionStorageKey) ?? '';
 }
 
 export function loadInitialIsCreatingThread(): boolean {
   return (
     !new URLSearchParams(window.location.search).get('session') &&
-    !new URLSearchParams(window.location.search).get('group') &&
     !new URLSearchParams(window.location.search).get('automation') &&
     !new URLSearchParams(window.location.search).get('environment') &&
     !new URLSearchParams(window.location.search).get('skill') &&
@@ -72,7 +61,6 @@ export function loadInitialSetupGuideOpen(): boolean {
   const query = new URLSearchParams(window.location.search);
   if (
     query.get('session') ||
-    query.get('group') ||
     query.get('automation') ||
     query.get('environment') ||
     query.get('skill') ||
@@ -82,38 +70,16 @@ export function loadInitialSetupGuideOpen(): boolean {
   return sessionStorage.getItem(setupGuideOpenStorageKey) === 'true';
 }
 
-export function loadInitialGroupsPanelOpen(): boolean {
-  const query = new URLSearchParams(window.location.search);
-  if (
-    query.get('session') ||
-    query.get('automation') ||
-    query.get('environment') ||
-    query.get('skill') ||
-    query.get('snippet')
-  )
-    return false;
-  if (query.get('group')) return true;
-  return sessionStorage.getItem(groupsPanelOpenStorageKey) === 'true';
-}
-
-export function loadInitialSidebarPanel():
-  | 'sessions'
-  | 'groups'
-  | 'automations'
-  | 'environments'
-  | 'skills'
-  | 'snippets' {
+export function loadInitialSidebarPanel(): 'sessions' | 'automations' | 'environments' | 'skills' | 'snippets' {
   const query = new URLSearchParams(window.location.search);
   if (query.get('session')) return 'sessions';
   if (query.get('automation')) return 'automations';
   if (query.get('environment')) return 'environments';
   if (query.get('skill')) return 'skills';
   if (query.get('snippet')) return 'snippets';
-  if (query.get('group')) return 'groups';
   const stored = sessionStorage.getItem(sidebarPanelStorageKey);
   if (
     stored === 'sessions' ||
-    stored === 'groups' ||
     stored === 'automations' ||
     stored === 'environments' ||
     stored === 'snippets' ||
@@ -121,18 +87,7 @@ export function loadInitialSidebarPanel():
   ) {
     return stored;
   }
-  return loadInitialGroupsPanelOpen() ? 'groups' : 'sessions';
-}
-
-export function loadInitialGroupsPanelView(): 'group' | 'super_admins' {
-  if (new URLSearchParams(window.location.search).get('group')) return 'group';
-  return sessionStorage.getItem(groupsPanelViewStorageKey) === 'super_admins' ? 'super_admins' : 'group';
-}
-
-export function loadInitialGroupsPanelSelectedGroupId(): string {
-  const groupId = new URLSearchParams(window.location.search).get('group');
-  if (groupId) return groupId;
-  return sessionStorage.getItem(groupsPanelSelectedGroupStorageKey) ?? '';
+  return 'sessions';
 }
 
 export function loadInitialSelectedAutomationId(): string {

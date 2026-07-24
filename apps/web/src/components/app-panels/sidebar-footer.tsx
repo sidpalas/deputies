@@ -33,7 +33,7 @@ const navigationPages: Array<{
   { id: 'automations', label: 'Automations', description: 'Schedule recurring work', icon: Bot },
   { id: 'skills', label: 'Skills', description: 'Manage reusable agent instructions', icon: BookOpenCheck },
   { id: 'snippets', label: 'Snippets', description: 'Manage personal prompt snippets', icon: TextQuote },
-  { id: 'groups', label: 'Access', description: 'Manage groups and permissions', icon: UsersRound },
+  { id: 'groups', label: 'Instance access', description: 'Manage tenant-wide user roles', icon: UsersRound },
   { id: 'environments', label: 'Environments', description: 'Configure execution environments', icon: Layers3 },
   { id: 'setup', label: 'Setup', description: 'Review deployment configuration', icon: Settings2 },
 ];

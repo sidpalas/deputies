@@ -22,13 +22,12 @@ type InvocationSkills = Pick<SkillService, 'listInvocationCandidates'>;
 export async function listSkillInvocationCandidates(input: {
   skills: InvocationSkills;
   events: Pick<EventStore, 'getLatestEventByType'>;
-  ownerGroupId: string;
   userId?: string;
   sessionId?: string;
   repoSkillsEnabled: boolean;
   canUse?: (skill: SkillRunCandidate) => boolean;
 }): Promise<SkillInvocationCandidate[]> {
-  const managed = await input.skills.listInvocationCandidates(input.ownerGroupId, input.userId, input.canUse);
+  const managed = await input.skills.listInvocationCandidates(input.userId, input.canUse);
   if (!input.repoSkillsEnabled || !input.sessionId) return managed;
 
   const latest = await input.events.getLatestEventByType(input.sessionId, 'skills_loaded');
@@ -42,7 +41,6 @@ export async function listSkillInvocationCandidates(input: {
 export async function canonicalizeMessageSkillContext(input: {
   skills: InvocationSkills;
   events: Pick<EventStore, 'getLatestEventByType'>;
-  ownerGroupId: string;
   userId?: string;
   sessionId: string;
   skillsEnabled: boolean;
@@ -83,7 +81,6 @@ export async function canonicalizeMessageSkillContext(input: {
 export async function resolveIntegrationSkillInvocation(input: {
   skills: InvocationSkills;
   events: Pick<EventStore, 'getLatestEventByType'>;
-  ownerGroupId: string;
   sessionId: string;
   repoSkillsEnabled: boolean;
   skillsEnabled: boolean;
@@ -103,7 +100,6 @@ export async function resolveIntegrationSkillInvocation(input: {
   const candidates = await listSkillInvocationCandidates({
     skills: input.skills,
     events: input.events,
-    ownerGroupId: input.ownerGroupId,
     sessionId: input.sessionId,
     repoSkillsEnabled: input.repoSkillsEnabled,
   });

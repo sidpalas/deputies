@@ -255,10 +255,10 @@ GITHUB_OAUTH_CALLBACK_URL=https://app.example.com/auth/oauth/github/callback
 AUTH_GITHUB_ADMIN_USERS=octocat
 AUTH_GITHUB_ALLOWED_USERS=
 AUTH_GITHUB_ALLOWED_ORGANIZATIONS=
-AUTH_GITHUB_DEFAULT_GROUP_ROLE=member
+AUTH_GITHUB_DEFAULT_ROLE=member
 ```
 
-`AUTH_GITHUB_ADMIN_USERS` grants super-admin access and is restored on login. `AUTH_GITHUB_ALLOWED_*` controls which non-admin GitHub users can sign in, and `AUTH_GITHUB_DEFAULT_GROUP_ROLE` sets their default access group role. See [Access Groups](./access-groups.md) for RBAC behavior and role semantics.
+`AUTH_GITHUB_ADMIN_USERS` gives matching users the admin role when their account is created. `AUTH_GITHUB_ALLOWED_*` controls who can sign in, and `AUTH_GITHUB_DEFAULT_ROLE` sets the initial role for other new accounts. Login does not restore roles after an admin changes them. See [Tenant Access](./tenant-access.md).
 
 ## Web Entrypoint, Proxying, And Cookies
 
@@ -271,7 +271,6 @@ The web entrypoint should proxy these paths to the control-plane API:
 /environments*
 /sessions*
 /events*
-/groups*
 /repositories*
 /skills*
 /snippets*
@@ -379,13 +378,13 @@ SKILLS_ENABLED=true
 REPO_SKILLS_ENABLED=true
 ```
 
-`SKILLS_ENABLED=false` is the master switch. API processes do not register skills routes, the web UI hides skills administration and composer invocation, and workers skip managed and repository skill resolution. `REPO_SKILLS_ENABLED=false` disables only scanning prepared repositories at `.agents/skills/`, `.claude/skills/`, and `.pi/skills/`; managed personal, group, and shared skills continue to work.
+`SKILLS_ENABLED=false` is the master switch. API processes do not register skills routes, the web UI hides skills administration and composer invocation, and workers skip managed and repository skill resolution. `REPO_SKILLS_ENABLED=false` disables only repository scanning; tenant managed skills continue to work.
 
 In split-service deployments, configure both flags consistently on API and worker processes so the available UI/API matches runner behavior. Repository skills are repo-authored instructions: their names and descriptions enter the agent system prompt and their bodies can be read from the sandbox. Disable repository scanning when checked-out repositories should not contribute agent instructions. Individual loading failures are non-fatal and are reported through the run's `skills_loaded` event.
 
 Agent Skills requires `017_skills.sql`. Apply migrations before rolling revision-aware API and worker processes. The application creates revision 1 for every new managed skill and publishes a later revision only for a real name/description/body change.
 
-Managed auto-load resolves current at run start. Manual managed invocations are pinned by the API to current when a message is enqueued; persisted historical pins continue to resolve only while live ownership, sharing, enabled, archive, and owner-group authorization permits them. Repository refs remain repository-scoped and revisionless. `skills_loaded` is the canonical run audit record, including managed revision IDs/numbers and repository discovery; do not expect a duplicate resolved-skill list in run metadata.
+Managed auto-load resolves current at run start. Manual managed invocations are pinned by the API to current when a message is enqueued; persisted historical pins continue to resolve only while the tenant skill is enabled and non-archived. Repository refs remain repository-scoped and revisionless. `skills_loaded` is the canonical run audit record.
 
 ## Repository Setup Scripts
 
@@ -443,7 +442,7 @@ DEPUTY_MAX_SPAWNS_PER_RUN=3
 
 Set `DEPUTY_TOOL_ENABLED=false` to hide the tool for a conservative deployment.
 
-When enabled for `RUNNER=pi`, the tool runs in the trusted worker process and writes product sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions inherit the parent's owner group, visibility, and write policy, and copy the triggering message's author user as creator attribution when present. They can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`. Successful completion follow-ups are informational and output-free; agents can explicitly request bounded newest-first transcript pages with `get_session` when the child result matters.
+When enabled for `RUNNER=pi`, the tool runs in the trusted worker process and writes tenant-wide sessions/messages through the control-plane store. It does not grant sandbox credentials to the model. Spawned child sessions copy the triggering message's author as audit-only creator attribution when present. They can optionally enqueue one deputy-authored parent follow-up on terminal completion, failure, or cancellation with `notifyOnComplete=true`.
 
 Before relying on the default in production, review the organization-level coordination policy, worker capacity, and session-spawn limits. Use `DEPUTY_TOOL_ENABLED=false` if the deployment needs a conservative rollout.
 

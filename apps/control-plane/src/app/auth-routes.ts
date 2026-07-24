@@ -18,8 +18,7 @@ import {
   requireStaticCredentials,
   type AppConfig,
 } from '../config/index.js';
-import { defaultGroupId, type AppStore, type AuthRole, type AuthUserRecord, type GroupRole } from '../store/types.js';
-import { serializeGroupMember } from './group-routes.js';
+import type { AppStore, AuthRole, AuthUserRecord } from '../store/types.js';
 import { writeError } from './http-error.js';
 import { optionalString, readJsonBody } from './request.js';
 import type { AppServices, AppVariables } from './server.js';
@@ -55,13 +54,12 @@ export function registerAuthRoutes(
       provider: 'static',
       providerAccountId: username,
       username,
-      role: 'super_admin',
+      role: 'admin',
       profile: {},
       now: new Date(),
     });
-    await ensureDefaultGroupMembership(services.store, user.id, 'admin');
     await setAuthSessionCookie(c, config, services.store, user.id);
-    return c.json({ user: await serializeAuthUser(services.store, user) });
+    return c.json({ user: serializeBasicAuthUser(user) });
   });
 
   app.get('/auth/oauth/github/start', (c) => {
@@ -121,7 +119,6 @@ export function registerAuthRoutes(
       profile: { login: githubUser.login, id: githubUser.id },
       now: new Date(),
     });
-    await ensureDefaultGroupMembership(services.store, user.id, authAssignment.defaultGroupRole);
     await setAuthSessionCookie(c, config, services.store, user.id);
     return c.html(oauthSuccessHtml(config.webBaseUrl ?? '/'));
   });
@@ -146,7 +143,7 @@ export function registerAuthRoutes(
     const sessionId = readSessionId(config, c);
     const user = sessionId ? await services.store.getAuthUserBySession({ sessionId, now: new Date() }) : null;
     if (!user) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    return c.json({ user: await serializeAuthUser(services.store, user) });
+    return c.json({ user: serializeBasicAuthUser(user) });
   });
 }
 
@@ -160,13 +157,6 @@ async function setAuthSessionCookie(c: Context, config: AppConfig, store: AppSto
     expiresAt: new Date(now.getTime() + sessionMaxAgeSeconds * 1000),
   });
   c.header('set-cookie', createSessionCookie(config, sessionId));
-}
-
-async function serializeAuthUser(store: AppStore, user: AuthUserRecord) {
-  return {
-    ...serializeBasicAuthUser(user),
-    memberships: (await store.listUserGroupMemberships(user.id)).map(serializeGroupMember),
-  };
 }
 
 export function serializeBasicAuthUser(user: AuthUserRecord) {
@@ -183,23 +173,14 @@ function clearSessionCookies(c: Context, config: AppConfig): void {
   c.header('set-cookie', clearSessionCookie(config));
 }
 
-async function ensureDefaultGroupMembership(store: AppStore, userId: string, role: GroupRole): Promise<void> {
-  const now = new Date();
-  await store.upsertGroupMember({ groupId: defaultGroupId, userId, role, createdAt: now, updatedAt: now });
-}
-
 function githubOAuthCallbackUrl(c: Context, config: AppConfig): string {
   if (config.githubOAuthCallbackUrl) return config.githubOAuthCallbackUrl;
   return new URL('/auth/oauth/github/callback', c.req.url).toString();
 }
 
-function githubAuthAssignment(
-  username: string,
-  organizations: string[],
-  config: AppConfig,
-): { role: AuthRole; defaultGroupRole: GroupRole } | null {
+function githubAuthAssignment(username: string, organizations: string[], config: AppConfig): { role: AuthRole } | null {
   if (matchesGitHubUserAllowlist(username, config.authGithubAdminUsers)) {
-    return { role: 'super_admin', defaultGroupRole: 'admin' };
+    return { role: 'admin' };
   }
   if (
     matchesGitHubAllowlist(
@@ -209,9 +190,9 @@ function githubAuthAssignment(
       config.authGithubAllowedOrganizations,
     )
   ) {
-    return { role: 'user', defaultGroupRole: config.authGithubDefaultGroupRole };
+    return { role: config.authGithubDefaultRole };
   }
-  if (config.unsafeAuthGithubAllowAll) return { role: 'user', defaultGroupRole: 'member' };
+  if (config.unsafeAuthGithubAllowAll) return { role: 'member' };
   return null;
 }
 

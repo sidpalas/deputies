@@ -95,8 +95,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ $root.Values.config.authGithubAllowedUsers | quote }}
 - name: AUTH_GITHUB_ALLOWED_ORGANIZATIONS
   value: {{ $root.Values.config.authGithubAllowedOrganizations | quote }}
-- name: AUTH_GITHUB_DEFAULT_GROUP_ROLE
-  value: {{ $root.Values.config.authGithubDefaultGroupRole | quote }}
+- name: AUTH_GITHUB_DEFAULT_ROLE
+  value: {{ $root.Values.config.authGithubDefaultRole | quote }}
 - name: UNSAFE_AUTH_GITHUB_ALLOW_ALL
   value: {{ $root.Values.config.unsafeAuthGithubAllowAll | quote }}
 - name: WEB_BASE_URL

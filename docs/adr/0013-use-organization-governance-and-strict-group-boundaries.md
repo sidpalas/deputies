@@ -1,5 +1,0 @@
-# Use organization governance and strict group boundaries
-
-Deputies treats one deployment as one organization and makes access groups the ordinary security boundary for work. Groups have viewer and member access, group resources never share laterally, and reusable organization resources and external capabilities are made available to groups through organization-controlled grants that groups may only suppress; this replaces peer-group sharing because governance should flow from the organization into groups rather than between groups.
-
-Sessions and automations remain permanently group-owned, while skills and environments may be promoted irreversibly from group to organization ownership without changing identity or history. Super admins govern group membership, organization resources, grants, and break-glass access; group members and agents govern all work inside their group. This supersedes the lateral environment-sharing and environment-implies-codebase-access decisions in ADRs 0007 and 0008 while preserving ADR 0004's rule that the group launching work owns its sessions.

@@ -101,8 +101,5 @@ function skillProvenance(skill: Skill): string {
   const provenance = skill.provenance;
   if (!provenance) return 'skill';
   if (provenance.kind === 'repo') return provenance.repo;
-  if (provenance.kind !== 'personal' && provenance.ownerGroupName) {
-    return `${provenance.kind} · ${provenance.ownerGroupName}`;
-  }
-  return provenance.kind;
+  return 'managed';
 }

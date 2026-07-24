@@ -126,8 +126,12 @@ export function useSkillInvocationDraft(input: {
     });
   }, [input.available, input.enabled]);
 
-  useEffect(() => setActiveIndex(0), [input.prompt, selectionStart]);
-  useEffect(() => activeOptionRef.current?.scrollIntoView?.({ block: 'nearest' }), [activeIndex]);
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [input.prompt, selectionStart]);
+  useEffect(() => {
+    activeOptionRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeIndex]);
 
   useEffect(() => {
     const pendingSelection = pendingSelectionRef.current;

@@ -35,9 +35,6 @@ import type {
   EventRecord,
   ExternalResourceRecord,
   ExternalThreadRecord,
-  GroupMemberRecord,
-  GroupMemberWithUserRecord,
-  GroupRecord,
   IntegrationDeliveryRecord,
   ListAutomationInvocationsOptions,
   MessageRecord,
@@ -66,13 +63,11 @@ import type {
   SessionTranscriptOptions,
   SessionTranscriptPage,
   SessionTagSummary,
-  SessionVisibilityFilter,
   SessionWithSandboxPage,
   SkillRecord,
   SkillRevisionRecord,
   SkillRevisionSelection,
   SkillRunCandidate,
-  SkillShareMode,
   SnippetRecord,
   UpdateAutomationRecord,
   UpdateEnvironmentRecord,
@@ -90,7 +85,6 @@ import {
   environmentActivitySelectColumns,
   environmentSelectColumns,
   getRunMessageIds,
-  groupSelectColumns,
   sessionSelectColumns,
   toArtifact,
   toAutomation,
@@ -105,9 +99,6 @@ import {
   toEnvironmentRevision,
   toExternalResource,
   toExternalThread,
-  toGroup,
-  toGroupMember,
-  toGroupMemberWithUser,
   toIntegrationDelivery,
   toMessage,
   toRun,
@@ -128,9 +119,6 @@ import {
   type EnvironmentRow,
   type ExternalResourceRow,
   type ExternalThreadRow,
-  type GroupMemberRow,
-  type GroupMemberWithUserRow,
-  type GroupRow,
   type IntegrationDeliveryRow,
   type MessageRow,
   type PgInteger,
@@ -295,39 +283,30 @@ export class PostgresStore implements AppStore {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      // Group is always locked before Sessions/Notepads. This serializes
-      // creation with group archival without reversing the Notepad write lock order.
-      const group = await client.query('SELECT archived_at FROM groups WHERE id=$1 FOR UPDATE', [n.ownerGroupId]);
-      if (!group.rows[0]) throw new StoreConflictError('not_found', 'Group not found');
-      if (group.rows[0].archived_at)
-        throw new StoreConflictError('archived_group', 'Cannot create notepads in an archived group');
       await this.lockLiveSessions(client, [
         ...(input.actor.kind === 'agent' ? [input.actor.sessionId] : []),
         ...(input.initialAssociation ? [input.initialAssociation.sessionId] : []),
       ]);
       if (input.initialAssociation) {
-        const session = await client.query('SELECT owner_group_id,status FROM sessions WHERE id=$1', [
+        const session = await client.query('SELECT status FROM sessions WHERE id=$1', [
           input.initialAssociation.sessionId,
         ]);
-        if (!session.rows[0] || session.rows[0].owner_group_id !== n.ownerGroupId)
-          throw new StoreConflictError('not_found', 'Notepad and Session must belong to the same group');
+        if (!session.rows[0]) throw new StoreConflictError('not_found', 'Session not found');
         if (session.rows[0].status === 'archived')
           throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
       }
       const r = await client.query(
-        `INSERT INTO explicit_notepads(id,title,owner_group_id,visibility,write_policy,revision,content,size_bytes,created_by_user_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        `INSERT INTO explicit_notepads(id,title,revision,content,size_bytes,created_by_user_id,created_at,updated_at,archived_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
         [
           n.id,
           n.title,
-          n.ownerGroupId,
-          n.visibility,
-          n.writePolicy,
           n.revision,
           n.content,
           sizeBytes,
           n.createdByUserId ?? null,
           n.createdAt,
           n.updatedAt,
+          n.archivedAt ?? null,
         ],
       );
       if (n.revision === 1) {
@@ -342,7 +321,7 @@ export class PostgresStore implements AppStore {
         n.id,
         input.actor,
         'created',
-        { title: n.title, ownerGroupId: n.ownerGroupId, visibility: n.visibility, writePolicy: n.writePolicy },
+        { title: n.title },
         n.createdAt,
       );
       if (input.initialAssociation) {
@@ -376,87 +355,56 @@ export class PostgresStore implements AppStore {
   }
   async getExplicitNotepadMetadata(id: string) {
     const r = await this.pool.query(
-      'SELECT id,title,owner_group_id,visibility,write_policy,revision,size_bytes,created_by_user_id,created_at,updated_at FROM explicit_notepads WHERE id=$1',
+      'SELECT id,title,revision,size_bytes,created_by_user_id,created_at,updated_at,archived_at FROM explicit_notepads WHERE id=$1',
       [id],
     );
     return r.rows[0] ? toExplicitMetadata(r.rows[0]) : null;
   }
-  async listExplicitNotepads(input: {
-    groupId?: string;
-    authorizedGroupIds?: string[];
-    limit: number;
-    offset: number;
-    includeDormant?: boolean;
-  }) {
+  async listExplicitNotepads(input: { limit: number; offset: number; includeDormant?: boolean; archived?: boolean }) {
     const conditions: string[] = [];
     const values: unknown[] = [];
-    if (input.groupId) {
-      values.push(input.groupId);
-      conditions.push(`n.owner_group_id=$${values.length}`);
-    }
-    if (input.authorizedGroupIds !== undefined) {
-      values.push(input.authorizedGroupIds);
-      conditions.push(`(n.visibility='organization' OR n.owner_group_id=ANY($${values.length}::uuid[]))`);
-    }
+    conditions.push(input.archived ? 'n.archived_at IS NOT NULL' : 'n.archived_at IS NULL');
     if (!input.includeDormant)
       conditions.push(
         "EXISTS (SELECT 1 FROM notepad_associations a JOIN sessions s ON s.id=a.session_id WHERE a.notepad_id=n.id AND s.status<>'archived')",
       );
     values.push(input.limit + 1, input.offset);
     const r = await this.pool.query(
-      `SELECT n.id,n.title,n.owner_group_id,n.visibility,n.write_policy,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at FROM explicit_notepads n ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY n.updated_at DESC,n.id ASC LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      `SELECT n.id,n.title,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at,n.archived_at FROM explicit_notepads n WHERE ${conditions.join(' AND ')} ORDER BY n.updated_at DESC,n.id ASC LIMIT $${values.length - 1} OFFSET $${values.length}`,
       values,
     );
     return sqlPage(r.rows.map(toExplicitMetadata), input.limit, input.offset);
   }
-  async searchExplicitNotepads(input: {
-    groupId: string;
-    authorizedGroupIds?: string[];
-    query: string;
-    limit: number;
-  }) {
+  async searchExplicitNotepads(input: { query: string; limit: number; archived?: boolean }) {
     const literal = input.query.replace(/[\\%_]/g, '\\$&');
-    const visibility =
-      input.authorizedGroupIds === undefined
-        ? { sql: '', values: [] }
-        : {
-            sql: " AND (n.visibility='organization' OR n.owner_group_id=ANY($5::uuid[]))",
-            values: [input.authorizedGroupIds],
-          };
     const r = await this.pool.query(
-      `SELECT n.id,n.title,n.owner_group_id,n.visibility,n.write_policy,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at,
-        substring(n.content FROM greatest(1, strpos(lower(n.content),lower($3))-80) FOR 240) AS snippet
-       FROM explicit_notepads n WHERE n.owner_group_id=$1${visibility.sql}
+      `SELECT n.id,n.title,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at,n.archived_at,
+        substring(n.content FROM greatest(1, strpos(lower(n.content),lower($2))-80) FOR 240) AS snippet
+       FROM explicit_notepads n WHERE n.archived_at IS ${input.archived ? 'NOT ' : ''}NULL
          AND EXISTS (SELECT 1 FROM notepad_associations a JOIN sessions s ON s.id=a.session_id WHERE a.notepad_id=n.id AND s.status<>'archived')
-         AND (n.title ILIKE $2 ESCAPE '\\' OR n.content ILIKE $2 ESCAPE '\\') ORDER BY n.updated_at DESC,n.id ASC LIMIT $4`,
-      [input.groupId, `%${literal}%`, input.query, input.limit, ...visibility.values],
+         AND (n.title ILIKE $1 ESCAPE '\\' OR n.content ILIKE $1 ESCAPE '\\') ORDER BY n.updated_at DESC,n.id ASC LIMIT $3`,
+      [`%${literal}%`, input.query, input.limit],
     );
     return r.rows.map((row) => ({ ...toExplicitMetadata(row), snippet: row.snippet }));
   }
   async searchExplicitNotepadsWithCapability(input: {
     actorSessionId: string;
     expectedGrantorUserId: string;
-    groupId: string;
     query: string;
     limit: number;
   }) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await this.requirePgExplicitSearchAuthority(
-        client,
-        input.actorSessionId,
-        input.expectedGrantorUserId,
-        input.groupId,
-      );
+      await this.requirePgExplicitSearchAuthority(client, input.actorSessionId, input.expectedGrantorUserId);
       const literal = input.query.replace(/[\\%_]/g, '\\$&');
       const r = await client.query(
-        `SELECT n.id,n.title,n.owner_group_id,n.visibility,n.write_policy,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at,
-          substring(n.content FROM greatest(1, strpos(lower(n.content),lower($3))-80) FOR 240) AS snippet
-         FROM explicit_notepads n WHERE n.owner_group_id=$1
+        `SELECT n.id,n.title,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at,n.archived_at,
+          substring(n.content FROM greatest(1, strpos(lower(n.content),lower($2))-80) FOR 240) AS snippet
+         FROM explicit_notepads n WHERE n.archived_at IS NULL
            AND EXISTS (SELECT 1 FROM notepad_associations a JOIN sessions s ON s.id=a.session_id WHERE a.notepad_id=n.id AND s.status<>'archived')
-           AND (n.title ILIKE $2 ESCAPE '\\' OR n.content ILIKE $2 ESCAPE '\\') ORDER BY n.updated_at DESC,n.id ASC LIMIT $4`,
-        [input.groupId, `%${literal}%`, input.query, input.limit],
+           AND (n.title ILIKE $1 ESCAPE '\\' OR n.content ILIKE $1 ESCAPE '\\') ORDER BY n.updated_at DESC,n.id ASC LIMIT $3`,
+        [`%${literal}%`, input.query, input.limit],
       );
       await client.query('COMMIT');
       return r.rows.map((row) => ({ ...toExplicitMetadata(row), snippet: row.snippet }));
@@ -475,16 +423,9 @@ export class PostgresStore implements AppStore {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const discovered = (
-        await client.query('SELECT owner_group_id FROM explicit_notepads WHERE id=$1', [input.notepadId])
-      ).rows[0];
+      const discovered = (await client.query('SELECT 1 FROM explicit_notepads WHERE id=$1', [input.notepadId])).rows[0];
       if (!discovered) throw new StoreConflictError('not_found', 'Notepad access denied');
-      await this.requirePgExplicitSearchAuthority(
-        client,
-        input.actorSessionId,
-        input.expectedGrantorUserId,
-        discovered.owner_group_id,
-      );
+      await this.requirePgExplicitSearchAuthority(client, input.actorSessionId, input.expectedGrantorUserId);
       // Do not lock the Notepad after locking the acting Session: association
       // mutations lock those rows in the opposite order. MVCC gives this read
       // a coherent snapshot while the authority locks prevent revocation.
@@ -501,21 +442,18 @@ export class PostgresStore implements AppStore {
   }
   async updateExplicitNotepadMetadata(input: {
     id: string;
-    ownerGroupId: string;
     title?: string;
-    visibility?: ExplicitNotepadRecord['visibility'];
-    writePolicy?: ExplicitNotepadRecord['writePolicy'];
     actor: NotepadActor;
     activityId: string;
     now: Date;
   }): Promise<ExplicitNotepadRecord> {
     return this.withExplicitNotepadLock(input.id, async (client, old) => {
+      if (old.archived_at) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
       await this.lockLiveSessions(client, input.actor.kind === 'agent' ? [input.actor.sessionId] : []);
       await this.requirePgExplicitWriteAuthority(client, input.id, input.actor);
-      if (old.owner_group_id !== input.ownerGroupId) throw new StoreConflictError('not_found', 'Notepad not found');
       const r = await client.query(
-        `UPDATE explicit_notepads SET title=COALESCE($2,title),visibility=COALESCE($3,visibility),write_policy=COALESCE($4,write_policy),updated_at=$5 WHERE id=$1 RETURNING *`,
-        [input.id, input.title ?? null, input.visibility ?? null, input.writePolicy ?? null, input.now],
+        `UPDATE explicit_notepads SET title=COALESCE($2,title),updated_at=$3 WHERE id=$1 RETURNING *`,
+        [input.id, input.title ?? null, input.now],
       );
       const n = toExplicitNotepad(r.rows[0]);
       await this.insertNotepadActivity(
@@ -524,11 +462,25 @@ export class PostgresStore implements AppStore {
         input.id,
         input.actor,
         'metadata_changed',
-        { title: n.title, visibility: n.visibility, writePolicy: n.writePolicy },
+        { title: n.title },
         input.now,
       );
       return n;
     });
+  }
+  async archiveExplicitNotepad(input: { id: string; archivedAt: Date }) {
+    const result = await this.pool.query(
+      'UPDATE explicit_notepads SET archived_at=$2,updated_at=$2 WHERE id=$1 RETURNING *',
+      [input.id, input.archivedAt],
+    );
+    return result.rows[0] ? toExplicitNotepad(result.rows[0]) : null;
+  }
+  async restoreExplicitNotepad(input: { id: string; updatedAt: Date }) {
+    const result = await this.pool.query(
+      'UPDATE explicit_notepads SET archived_at=NULL,updated_at=$2 WHERE id=$1 RETURNING *',
+      [input.id, input.updatedAt],
+    );
+    return result.rows[0] ? toExplicitNotepad(result.rows[0]) : null;
   }
   async mutateExplicitNotepad(input: {
     id: string;
@@ -552,6 +504,7 @@ export class PostgresStore implements AppStore {
     now: Date;
   }): Promise<ExplicitNotepadRecord> {
     return this.withExplicitNotepadLock(input.id, async (client, old) => {
+      if (old.archived_at) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
       if (input.associatedAuthority)
         await this.requirePgAssociatedAuthority(client, input.id, input.associatedAuthority);
       await this.lockLiveSessions(client, input.actor.kind === 'agent' ? [input.actor.sessionId] : []);
@@ -616,16 +569,25 @@ export class PostgresStore implements AppStore {
   }): Promise<NotepadAssociationRecord> {
     const a = input.record;
     return this.withExplicitNotepadLock(a.notepadId, async (client, notepad) => {
+      if (notepad.archived_at) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
       // Global lock order for lifecycle commands: Explicit Notepad, then Session.
       await this.lockLiveSessions(client, [
         a.sessionId,
         ...(input.actor.kind === 'agent' ? [input.actor.sessionId] : []),
       ]);
       await this.requirePgExplicitWriteAuthority(client, a.notepadId, input.actor);
-      const session = (await client.query('SELECT owner_group_id,status FROM sessions WHERE id=$1', [a.sessionId]))
+      const session = (await client.query('SELECT status,parent_session_id FROM sessions WHERE id=$1', [a.sessionId]))
         .rows[0];
-      if (!session || session.owner_group_id !== notepad.owner_group_id)
-        throw new StoreConflictError('not_found', 'Notepad and Session must belong to the same group');
+      if (!session) throw new StoreConflictError('not_found', 'Session not found');
+      if (
+        input.actor.kind === 'agent' &&
+        a.sessionId !== input.actor.sessionId &&
+        session.parent_session_id !== input.actor.sessionId
+      )
+        throw new StoreConflictError(
+          'notepad_association_forbidden',
+          'Agents may associate notepads only with themselves or direct children',
+        );
       if (session.status === 'archived')
         throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
       const existed =
@@ -659,13 +621,25 @@ export class PostgresStore implements AppStore {
     now: Date;
   }): Promise<boolean> {
     return this.withExplicitNotepadLock(input.notepadId, async (client, _notepad) => {
+      if (_notepad.archived_at) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
       await this.lockLiveSessions(client, [
         input.sessionId,
         ...(input.actor.kind === 'agent' ? [input.actor.sessionId] : []),
       ]);
       await this.requirePgExplicitWriteAuthority(client, input.notepadId, input.actor);
-      const session = (await client.query('SELECT status FROM sessions WHERE id=$1', [input.sessionId])).rows[0];
+      const session = (
+        await client.query('SELECT status,parent_session_id FROM sessions WHERE id=$1', [input.sessionId])
+      ).rows[0];
       if (!session) throw new StoreConflictError('not_found', 'Session not found');
+      if (
+        input.actor.kind === 'agent' &&
+        input.sessionId !== input.actor.sessionId &&
+        session.parent_session_id !== input.actor.sessionId
+      )
+        throw new StoreConflictError(
+          'notepad_association_forbidden',
+          'Agents may associate notepads only with themselves or direct children',
+        );
       if (session.status === 'archived')
         throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
       const removed =
@@ -718,8 +692,8 @@ export class PostgresStore implements AppStore {
   async listSessionNotepadAssociations(id: string, limit: number, offset: number) {
     const rows = (
       await this.pool.query(
-        `SELECT a.*,n.title,n.owner_group_id,n.visibility,n.write_policy,n.revision,n.size_bytes,
-          n.created_by_user_id,n.created_at AS notepad_created_at,n.updated_at
+        `SELECT a.*,n.title,n.revision,n.size_bytes,
+          n.created_by_user_id,n.created_at AS notepad_created_at,n.updated_at,n.archived_at
          FROM notepad_associations a JOIN explicit_notepads n ON n.id=a.notepad_id
          WHERE a.session_id=$1 ORDER BY a.created_at ASC,a.notepad_id ASC LIMIT $2 OFFSET $3`,
         [id, limit + 1, offset],
@@ -829,65 +803,26 @@ export class PostgresStore implements AppStore {
     notepadId: string,
     authority: import('./types.js').AssociatedNotepadAuthority,
   ) {
-    const discovered = (
-      await client.query('SELECT owner_group_id FROM sessions WHERE id=$1', [authority.associatedSessionId])
-    ).rows[0];
-    if (!discovered) throw new StoreConflictError('not_found', 'Associated Session authority is no longer valid');
-    const group = (
-      await client.query('SELECT archived_at FROM groups WHERE id=$1 FOR SHARE', [discovered.owner_group_id])
-    ).rows[0];
     const user = (await client.query('SELECT role FROM auth_users WHERE id=$1 FOR SHARE', [authority.expectedUserId]))
       .rows[0];
-    const membership = (
-      await client.query('SELECT role FROM group_members WHERE group_id=$1 AND user_id=$2 FOR SHARE', [
-        discovered.owner_group_id,
-        authority.expectedUserId,
-      ])
-    ).rows[0];
     await this.lockLiveSessions(client, [authority.associatedSessionId]);
-    const session = (
-      await client.query('SELECT owner_group_id,created_by_user_id,write_policy,status FROM sessions WHERE id=$1', [
-        authority.associatedSessionId,
-      ])
-    ).rows[0];
     const association = await client.query(
       'SELECT 1 FROM notepad_associations WHERE notepad_id=$1 AND session_id=$2 FOR SHARE',
       [notepadId, authority.associatedSessionId],
     );
-    const authorized =
-      user?.role === 'super_admin' ||
-      (session?.write_policy === 'creator_only' && session?.created_by_user_id === authority.expectedUserId) ||
-      (!group?.archived_at &&
-        (membership?.role === 'admin' || (session?.write_policy === 'group_members' && membership?.role === 'member')));
-    if (!session || session.owner_group_id !== discovered.owner_group_id || association.rowCount !== 1 || !authorized)
+    if (association.rowCount !== 1 || (user?.role !== 'member' && user?.role !== 'admin'))
       throw new StoreConflictError('not_found', 'Associated Session authority is no longer valid');
   }
-  private async requirePgExplicitSearchAuthority(
-    client: PoolClient,
-    actorSessionId: string,
-    userId: string,
-    groupId: string,
-  ) {
-    const group = (await client.query('SELECT archived_at FROM groups WHERE id=$1 FOR SHARE', [groupId])).rows[0];
+  private async requirePgExplicitSearchAuthority(client: PoolClient, actorSessionId: string, userId: string) {
     const user = (await client.query('SELECT role FROM auth_users WHERE id=$1 FOR SHARE', [userId])).rows[0];
-    const membership = (
-      await client.query('SELECT role FROM group_members WHERE group_id=$1 AND user_id=$2 FOR SHARE', [groupId, userId])
-    ).rows[0];
     await this.lockLiveSessions(client, [actorSessionId]);
-    const actor = (await client.query('SELECT owner_group_id FROM sessions WHERE id=$1', [actorSessionId])).rows[0];
     const grant = (
       await client.query(
         "SELECT granted_by_user_id FROM session_notepad_capabilities WHERE session_id=$1 AND kind='explicit_search' FOR SHARE",
         [actorSessionId],
       )
     ).rows[0];
-    if (
-      !group ||
-      !user ||
-      actor?.owner_group_id !== groupId ||
-      grant?.granted_by_user_id !== userId ||
-      (user.role !== 'super_admin' && (group.archived_at || !membership || membership.role === 'viewer'))
-    )
+    if (!user || grant?.granted_by_user_id !== userId || (user.role !== 'admin' && user.role !== 'member'))
       throw new StoreConflictError('not_found', 'Notepad access denied');
   }
 
@@ -899,46 +834,16 @@ export class PostgresStore implements AppStore {
   ) {
     if (!expectedGrantorUserId)
       throw new StoreConflictError('not_found', 'Session Notepad coordination capability is required');
-    // Coordination mutations share this global authority lock order with the
-    // corresponding UPDATE/DELETE operations: group -> auth user -> existing
-    // membership -> sorted Sessions -> capability -> Notepad. The target is
-    // first read only to discover the group; every authority value is re-read
-    // after its row has been locked.
-    const discovered = (await client.query('SELECT owner_group_id FROM sessions WHERE id=$1', [targetSessionId]))
-      .rows[0];
-    if (!discovered) throw new StoreConflictError('not_found', 'Session not found');
-    const group = (
-      await client.query('SELECT archived_at FROM groups WHERE id=$1 FOR SHARE', [discovered.owner_group_id])
-    ).rows[0];
     const user = (await client.query('SELECT role FROM auth_users WHERE id=$1 FOR SHARE', [expectedGrantorUserId]))
       .rows[0];
-    const membership = (
-      await client.query('SELECT role FROM group_members WHERE group_id=$1 AND user_id=$2 FOR SHARE', [
-        discovered.owner_group_id,
-        expectedGrantorUserId,
-      ])
-    ).rows[0];
     await this.lockLiveSessions(client, [actorSessionId, targetSessionId]);
-    const sessions = await client.query(
-      'SELECT id,owner_group_id,created_by_user_id,write_policy,status FROM sessions WHERE id=ANY($1::uuid[])',
-      [[actorSessionId, targetSessionId]],
-    );
-    const actor = sessions.rows.find((candidate) => candidate.id === actorSessionId);
-    const target = sessions.rows.find((candidate) => candidate.id === targetSessionId);
     const capability = (
       await client.query(
         "SELECT granted_by_user_id FROM session_notepad_capabilities WHERE session_id=$1 AND kind='session_notepad_coordination' FOR SHARE",
         [actorSessionId],
       )
     ).rows[0];
-    const sameGroup =
-      actor?.owner_group_id === target?.owner_group_id && target?.owner_group_id === discovered.owner_group_id;
-    const authorized =
-      user?.role === 'super_admin' ||
-      (target?.write_policy === 'creator_only' && target?.created_by_user_id === expectedGrantorUserId) ||
-      (!group?.archived_at &&
-        (membership?.role === 'admin' || (target?.write_policy === 'group_members' && membership?.role === 'member')));
-    if (!sameGroup || capability?.granted_by_user_id !== expectedGrantorUserId || !authorized)
+    if (capability?.granted_by_user_id !== expectedGrantorUserId || (user?.role !== 'member' && user?.role !== 'admin'))
       throw new StoreConflictError('not_found', 'Coordination grantor is no longer authorized');
   }
 
@@ -998,6 +903,8 @@ export class PostgresStore implements AppStore {
         await this.requirePgAssociatedAuthority(client, id, input.associatedAuthority);
       if (kind === 'explicit') await this.requirePgExplicitWriteAuthority(client, id, input.actor);
       if (kind === 'explicit' && !old) throw new StoreConflictError('not_found', 'Notepad not found');
+      if (kind === 'explicit' && old.archived_at)
+        throw new StoreConflictError('not_found', 'Archived notepads are read-only');
       const revision = old?.revision ?? 0;
       if (input.append === undefined && input.expectedRevision !== revision)
         throw new StoreConflictError('stale_revision', 'Stale notepad revision');
@@ -1071,8 +978,8 @@ export class PostgresStore implements AppStore {
 
   async updateSnippet(record: UpdateSnippetRecord): Promise<SnippetRecord | null> {
     try {
-      const assignments = ['updated_at = $3'];
-      const values: unknown[] = [record.id, record.ownerUserId, record.updatedAt];
+      const assignments = ['updated_at = $2'];
+      const values: unknown[] = [record.id, record.updatedAt];
       if (record.name !== undefined) {
         values.push(record.name);
         assignments.push(`name = $${values.length}`);
@@ -1083,7 +990,7 @@ export class PostgresStore implements AppStore {
       }
       const result = await this.pool.query(
         `UPDATE snippets SET ${assignments.join(', ')}
-         WHERE id=$1 AND owner_user_id=$2 AND archived_at IS NULL RETURNING *`,
+         WHERE id=$1 AND owner_user_id=$${values.push(record.ownerUserId)} AND archived_at IS NULL RETURNING *`,
         values,
       );
       return result.rows[0] ? toSnippet(result.rows[0]) : null;
@@ -1095,11 +1002,11 @@ export class PostgresStore implements AppStore {
   async archiveSnippet(id: string, ownerUserId: string, archivedAt: Date): Promise<SnippetRecord | null> {
     const result = await this.pool.query(
       `UPDATE snippets
-       SET archived_at=COALESCE(archived_at, $3),
-           updated_at=CASE WHEN archived_at IS NULL THEN $3 ELSE updated_at END
-       WHERE id=$1 AND owner_user_id=$2
+       SET archived_at=COALESCE(archived_at, $2),
+           updated_at=CASE WHEN archived_at IS NULL THEN $2 ELSE updated_at END
+       WHERE id=$1 AND owner_user_id=$3
        RETURNING *`,
-      [id, ownerUserId, archivedAt],
+      [id, archivedAt, ownerUserId],
     );
     return result.rows[0] ? toSnippet(result.rows[0]) : null;
   }
@@ -1109,10 +1016,10 @@ export class PostgresStore implements AppStore {
       const result = await this.pool.query(
         `UPDATE snippets
          SET archived_at=NULL,
-             updated_at=CASE WHEN archived_at IS NOT NULL THEN $3 ELSE updated_at END
-         WHERE id=$1 AND owner_user_id=$2
+             updated_at=CASE WHEN archived_at IS NOT NULL THEN $2 ELSE updated_at END
+         WHERE id=$1 AND owner_user_id=$3
          RETURNING *`,
-        [id, ownerUserId, updatedAt],
+        [id, updatedAt, ownerUserId],
       );
       return result.rows[0] ? toSnippet(result.rows[0]) : null;
     } catch (error) {
@@ -1183,6 +1090,14 @@ export class PostgresStore implements AppStore {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // The account row does not exist on first login, so a row lock cannot
+      // serialize competing inserts. Stable PostgreSQL text hashes may
+      // collide (which only adds harmless serialization), while the two-key
+      // advisory-lock form keeps provider/account boundaries unambiguous.
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+        record.provider,
+        record.providerAccountId,
+      ]);
       const existing = await client.query<{ user_id: string }>(
         'SELECT user_id FROM auth_accounts WHERE provider = $1 AND provider_account_id = $2',
         [record.provider, record.providerAccountId],
@@ -1191,13 +1106,12 @@ export class PostgresStore implements AppStore {
       const existingUser = await client.query<Pick<AuthUserRow, 'role'>>('SELECT role FROM auth_users WHERE id = $1', [
         userId,
       ]);
-      const role = existingUser.rows[0]?.role === 'super_admin' ? 'super_admin' : record.role;
+      const role = existingUser.rows[0]?.role ?? record.role;
       const userResult = await client.query<AuthUserRow>(
         `INSERT INTO auth_users (id, username, role, display_name, avatar_url, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $6)
          ON CONFLICT (id) DO UPDATE
          SET username = EXCLUDED.username,
-             role = EXCLUDED.role,
              display_name = EXCLUDED.display_name,
              avatar_url = EXCLUDED.avatar_url,
              updated_at = EXCLUDED.updated_at
@@ -1285,193 +1199,22 @@ export class PostgresStore implements AppStore {
   }
 
   async updateAuthUserRole(input: { userId: string; role: AuthUserRecord['role']; updatedAt: Date }) {
-    const result = await this.pool.query<AuthUserRow>(
-      `UPDATE auth_users
-       SET role = $2,
-           updated_at = $3
-       WHERE id = $1
-       RETURNING id, username, role, display_name, avatar_url, created_at, updated_at`,
-      [input.userId, input.role, input.updatedAt],
-    );
-    return result.rows[0] ? toAuthUser(result.rows[0]) : null;
-  }
-
-  async createGroup(record: GroupRecord): Promise<GroupRecord> {
     try {
-      const result = await this.pool.query<GroupRow>(
-        `INSERT INTO groups (id, name, default_visibility, default_write_policy, automation_create_required_role, archived_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING ${groupSelectColumns}`,
-        [
-          record.id,
-          record.name.trim(),
-          record.defaultVisibility,
-          record.defaultWritePolicy,
-          record.automationCreateRequiredRole,
-          record.archivedAt ?? null,
-          record.createdAt,
-          record.updatedAt,
-        ],
+      const result = await this.pool.query<AuthUserRow>(
+        `UPDATE auth_users
+         SET role = $2,
+             updated_at = $3
+         WHERE id = $1
+         RETURNING id, username, role, display_name, avatar_url, created_at, updated_at`,
+        [input.userId, input.role, input.updatedAt],
       );
-      return toGroup(result.rows[0]!);
+      return result.rows[0] ? toAuthUser(result.rows[0]) : null;
     } catch (error) {
-      if (isUniqueViolation(error, 'groups_name_unique_idx')) {
-        throw new StoreConflictError('group_name_exists', 'Group name already exists');
+      if (error instanceof Error && error.message.includes('cannot demote or remove the final administrator')) {
+        throw new StoreConflictError('last_admin', 'Cannot demote the final administrator');
       }
       throw error;
     }
-  }
-
-  async getGroup(id: string): Promise<GroupRecord | null> {
-    const result = await this.pool.query<GroupRow>(
-      `SELECT ${groupSelectColumns}
-       FROM groups
-       WHERE id = $1`,
-      [id],
-    );
-    return result.rows[0] ? toGroup(result.rows[0]) : null;
-  }
-
-  async getGroups(ids: string[]): Promise<GroupRecord[]> {
-    const uniqueIds = [...new Set(ids)];
-    if (!uniqueIds.length) return [];
-    const result = await this.pool.query<GroupRow>(
-      `SELECT ${groupSelectColumns}
-       FROM groups
-       WHERE id = ANY($1::uuid[])`,
-      [uniqueIds],
-    );
-    const groupsById = new Map(result.rows.map((row) => [row.id, toGroup(row)]));
-    return uniqueIds.flatMap((id) => {
-      const group = groupsById.get(id);
-      return group ? [group] : [];
-    });
-  }
-
-  async listGroups(): Promise<GroupRecord[]> {
-    const result = await this.pool.query<GroupRow>(
-      `SELECT ${groupSelectColumns}
-       FROM groups
-       ORDER BY archived_at ASC NULLS FIRST, name ASC`,
-    );
-    return result.rows.map(toGroup);
-  }
-
-  async updateGroup(record: GroupRecord): Promise<GroupRecord> {
-    try {
-      const result = await this.pool.query<GroupRow>(
-        `UPDATE groups
-         SET name = $2,
-              default_visibility = $3,
-              default_write_policy = $4,
-              automation_create_required_role = $5,
-              archived_at = $6,
-              updated_at = $7
-          WHERE id = $1
-          RETURNING ${groupSelectColumns}`,
-        [
-          record.id,
-          record.name.trim(),
-          record.defaultVisibility,
-          record.defaultWritePolicy,
-          record.automationCreateRequiredRole,
-          record.archivedAt ?? null,
-          record.updatedAt,
-        ],
-      );
-      if (!result.rows[0]) throw new Error(`Group does not exist: ${record.id}`);
-      return toGroup(result.rows[0]);
-    } catch (error) {
-      if (isUniqueViolation(error, 'groups_name_unique_idx')) {
-        throw new StoreConflictError('group_name_exists', 'Group name already exists');
-      }
-      throw error;
-    }
-  }
-
-  async upsertGroupMember(record: GroupMemberRecord): Promise<GroupMemberRecord> {
-    const result = await this.pool.query<GroupMemberRow>(
-      `INSERT INTO group_members (group_id, user_id, role, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (group_id, user_id) DO UPDATE
-       SET role = EXCLUDED.role,
-           updated_at = EXCLUDED.updated_at
-       RETURNING group_id, user_id, role, created_at, updated_at`,
-      [record.groupId, record.userId, record.role, record.createdAt, record.updatedAt],
-    );
-    return toGroupMember(result.rows[0]!);
-  }
-
-  async deleteGroupMember(input: { groupId: string; userId: string }): Promise<void> {
-    await this.pool.query('DELETE FROM group_members WHERE group_id = $1 AND user_id = $2', [
-      input.groupId,
-      input.userId,
-    ]);
-  }
-
-  async getGroupMember(input: { groupId: string; userId: string }): Promise<GroupMemberRecord | null> {
-    const result = await this.pool.query<GroupMemberRow>(
-      `SELECT group_id, user_id, role, created_at, updated_at
-       FROM group_members
-       WHERE group_id = $1 AND user_id = $2`,
-      [input.groupId, input.userId],
-    );
-    return result.rows[0] ? toGroupMember(result.rows[0]) : null;
-  }
-
-  async listGroupMembers(groupId: string): Promise<GroupMemberWithUserRecord[]> {
-    const result = await this.pool.query<GroupMemberWithUserRow>(
-      `SELECT m.group_id,
-              m.user_id,
-              m.role,
-              m.created_at,
-              m.updated_at,
-              u.username,
-              u.role AS user_role,
-              u.display_name,
-              u.avatar_url,
-              u.created_at AS user_created_at,
-              u.updated_at AS user_updated_at
-       FROM group_members m
-       JOIN auth_users u ON u.id = m.user_id
-       WHERE m.group_id = $1
-       ORDER BY u.username ASC`,
-      [groupId],
-    );
-    return result.rows.map(toGroupMemberWithUser);
-  }
-
-  async listGroupMembersForGroups(groupIds: string[]): Promise<GroupMemberWithUserRecord[]> {
-    if (groupIds.length === 0) return [];
-    const result = await this.pool.query<GroupMemberWithUserRow>(
-      `SELECT m.group_id,
-              m.user_id,
-              m.role,
-              m.created_at,
-              m.updated_at,
-              u.username,
-              u.role AS user_role,
-              u.display_name,
-              u.avatar_url,
-              u.created_at AS user_created_at,
-              u.updated_at AS user_updated_at
-       FROM group_members m
-       JOIN auth_users u ON u.id = m.user_id
-       WHERE m.group_id = ANY($1::uuid[])
-       ORDER BY u.username ASC`,
-      [groupIds],
-    );
-    return result.rows.map(toGroupMemberWithUser);
-  }
-
-  async listUserGroupMemberships(userId: string): Promise<GroupMemberRecord[]> {
-    const result = await this.pool.query<GroupMemberRow>(
-      `SELECT group_id, user_id, role, created_at, updated_at
-       FROM group_members
-       WHERE user_id = $1`,
-      [userId],
-    );
-    return result.rows.map(toGroupMember);
   }
 
   async createSession(record: CreateSessionRecord): Promise<SessionRecord> {
@@ -1483,16 +1226,13 @@ export class PostgresStore implements AppStore {
          context,
          parent_session_id,
          spawn_depth,
-         owner_group_id,
-         visibility,
-         write_policy,
-          created_by_user_id,
+         created_by_user_id,
           created_at,
           updated_at,
           last_activity_at,
           tags
         )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING ${sessionSelectColumns}`,
       [
         record.id,
@@ -1501,9 +1241,6 @@ export class PostgresStore implements AppStore {
         record.context ?? null,
         record.parentSessionId ?? null,
         record.spawnDepth ?? 0,
-        record.ownerGroupId,
-        record.visibility,
-        record.writePolicy,
         record.createdByUserId ?? null,
         record.createdAt,
         record.updatedAt,
@@ -1574,16 +1311,13 @@ export class PostgresStore implements AppStore {
            context,
            parent_session_id,
            spawn_depth,
-           owner_group_id,
-           visibility,
-           write_policy,
-            created_by_user_id,
+           created_by_user_id,
             created_at,
             updated_at,
             last_activity_at,
             tags
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
           RETURNING ${sessionSelectColumns}`,
         [
           input.session.id,
@@ -1592,9 +1326,6 @@ export class PostgresStore implements AppStore {
           input.session.context ?? null,
           input.session.parentSessionId ?? null,
           input.session.spawnDepth ?? 0,
-          input.session.ownerGroupId,
-          input.session.visibility,
-          input.session.writePolicy,
           input.session.createdByUserId ?? null,
           input.session.createdAt,
           input.session.updatedAt,
@@ -1722,20 +1453,15 @@ export class PostgresStore implements AppStore {
   }
 
   async listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]> {
-    const scopePredicate =
-      input.scope === 'children'
-        ? `parent_session_id = $2 AND (visibility = 'organization' OR owner_group_id = $1)`
-        : input.scope === 'group'
-          ? `owner_group_id = $1`
-          : `(visibility = 'organization' OR owner_group_id = $1)`;
+    const scopePredicate = input.scope === 'children' ? `parent_session_id = $1` : `TRUE`;
     const result = await this.pool.query<SessionRow>(
       `SELECT ${sessionSelectColumns}
        FROM sessions
          WHERE ${scopePredicate}
-           AND ($3::text IS NULL OR status = $3)
+           AND ($2::text IS NULL OR status = $2)
         ORDER BY last_activity_at DESC, created_at DESC, id DESC
-        LIMIT $4`,
-      [input.ownerGroupId, input.actingSessionId, input.status ?? null, input.limit],
+        LIMIT $3`,
+      [input.actingSessionId, input.status ?? null, input.limit],
     );
     return result.rows.map(toSession);
   }
@@ -1745,29 +1471,20 @@ export class PostgresStore implements AppStore {
       `SELECT ${sessionSelectColumns}
        FROM sessions
         WHERE parent_session_id = $1
-          AND (visibility = 'organization' OR owner_group_id = $2)
         ORDER BY last_activity_at DESC, created_at DESC, id DESC
-        LIMIT $3`,
-      [input.parentSessionId, input.ownerGroupId, input.limit],
+        LIMIT $2`,
+      [input.parentSessionId, input.limit],
     );
     return result.rows.map(toSession);
   }
 
   async listSessionsWithLatestSandbox(provider: string, options: SessionListOptions): Promise<SessionWithSandboxPage> {
     const values: unknown[] = [provider];
-    const where = sessionVisibilityWhereClauses(options.visibleTo, values);
+    const where: string[] = [];
     where.push(options.archived ? `sessions.status = 'archived'` : `sessions.status <> 'archived'`);
-    if (options.groupId) {
-      values.push(options.groupId);
-      where.push(`sessions.owner_group_id = $${values.length}::uuid`);
-    }
     appendSessionFilterWhereClauses(options, values, where);
-    const childWhere = sessionVisibilityWhereClauses(options.visibleTo, values, 'child');
+    const childWhere: string[] = [];
     childWhere.push(options.archived ? `child.status = 'archived'` : `child.status <> 'archived'`);
-    if (options.groupId) {
-      values.push(options.groupId);
-      childWhere.push(`child.owner_group_id = $${values.length}::uuid`);
-    }
     appendSessionFilterWhereClauses(options, values, childWhere, 'child');
     childWhere.push(`child.parent_session_id = sessions.id`);
     if (options.parentSessionId) {
@@ -1830,11 +1547,7 @@ export class PostgresStore implements AppStore {
       options.limit + 1,
       options.cursor ?? 0,
     ];
-    const where = sessionVisibilityWhereClauses(options.visibleTo, values);
-    if (options.groupId) {
-      values.push(options.groupId);
-      where.push(`sessions.owner_group_id = $${values.length}::uuid`);
-    }
+    const where: string[] = [];
     appendSessionFilterWhereClauses(options, values, where);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const result = await this.pool.query<SessionSearchRow>(
@@ -1916,9 +1629,9 @@ export class PostgresStore implements AppStore {
     };
   }
 
-  async listSessionTags(options: { visibleTo?: SessionVisibilityFilter; limit: number }): Promise<SessionTagSummary[]> {
+  async listSessionTags(options: { limit: number }): Promise<SessionTagSummary[]> {
     const values: unknown[] = [];
-    const where = sessionVisibilityWhereClauses(options.visibleTo, values);
+    const where: string[] = [];
     values.push(options.limit);
     const limitIndex = values.length;
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -2007,11 +1720,9 @@ export class PostgresStore implements AppStore {
             updated_at = $6,
              parent_session_id = $7,
              spawn_depth = $8,
-             visibility = $9,
-             write_policy = $10,
-             created_by_user_id = $11,
-             last_activity_at = $12,
-             tags = $13
+             created_by_user_id = $9,
+             last_activity_at = $10,
+             tags = $11
         WHERE id = $1
         RETURNING ${sessionSelectColumns}`,
       [
@@ -2023,8 +1734,6 @@ export class PostgresStore implements AppStore {
         record.updatedAt,
         record.parentSessionId ?? null,
         record.spawnDepth,
-        record.visibility,
-        record.writePolicy,
         record.createdByUserId ?? null,
         record.lastActivityAt,
         record.tags,
@@ -2037,18 +1746,24 @@ export class PostgresStore implements AppStore {
   }
 
   async updateSessionContext(input: SessionContextUpdateInput): Promise<SessionRecord> {
-    const result = await this.pool.query<SessionRow>(
-      `UPDATE sessions
-       SET context = $2,
-           updated_at = $3
-       WHERE id = $1
-       RETURNING ${sessionSelectColumns}`,
-      [input.id, input.context ?? null, input.updatedAt],
-    );
-
-    const row = result.rows[0];
-    if (!row) throw new Error(`Session does not exist: ${input.id}`);
-    return toSession(row);
+    return this.transaction(async (client) => {
+      const existing = await client.query<{ status: string }>('SELECT status FROM sessions WHERE id = $1 FOR UPDATE', [
+        input.id,
+      ]);
+      if (!existing.rows[0]) throw new Error(`Session does not exist: ${input.id}`);
+      if (existing.rows[0].status === 'archived') {
+        throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+      }
+      const result = await client.query<SessionRow>(
+        `UPDATE sessions
+         SET context = $2,
+             updated_at = $3
+         WHERE id = $1
+         RETURNING ${sessionSelectColumns}`,
+        [input.id, input.context ?? null, input.updatedAt],
+      );
+      return toSession(result.rows[0]!);
+    });
   }
 
   async updateSessionWithEvent(
@@ -2059,18 +1774,16 @@ export class PostgresStore implements AppStore {
     return this.transaction(async (client) => {
       const updated = await client.query<SessionRow>(
         `UPDATE sessions
-         SET status = CASE WHEN last_activity_at > $12 THEN status ELSE $2 END,
+         SET status = CASE WHEN last_activity_at > $10 THEN status ELSE $2 END,
              title = $3,
-              context = CASE WHEN last_activity_at > $12 THEN context ELSE $4 END,
+              context = CASE WHEN last_activity_at > $10 THEN context ELSE $4 END,
               created_at = $5,
               updated_at = $6,
                parent_session_id = $7,
                spawn_depth = $8,
-               visibility = $9,
-               write_policy = $10,
-               created_by_user_id = $11,
-               last_activity_at = GREATEST(last_activity_at, $12),
-               tags = CASE WHEN $14 THEN tags ELSE $13 END
+               created_by_user_id = $9,
+               last_activity_at = GREATEST(last_activity_at, $10),
+               tags = CASE WHEN $12 THEN tags ELSE $11 END
             WHERE id = $1
            RETURNING ${sessionSelectColumns}`,
         [
@@ -2082,8 +1795,6 @@ export class PostgresStore implements AppStore {
           record.updatedAt,
           record.parentSessionId ?? null,
           record.spawnDepth,
-          record.visibility,
-          record.writePolicy,
           record.createdByUserId ?? null,
           record.lastActivityAt,
           record.tags,
@@ -2132,10 +1843,8 @@ export class PostgresStore implements AppStore {
         `UPDATE sessions
          SET title = CASE WHEN $3 THEN $4 ELSE title END,
              updated_at = $2,
-             tags = CASE WHEN $5 THEN $6::text[] ELSE tags END,
-             visibility = CASE WHEN $7 THEN $8::text ELSE visibility END,
-             write_policy = CASE WHEN $9 THEN $10::text ELSE write_policy END
-         WHERE id = $1 AND (NOT $11 OR status <> 'archived')
+             tags = CASE WHEN $5 THEN $6::text[] ELSE tags END
+         WHERE id = $1 AND (NOT $7 OR status <> 'archived')
          RETURNING ${sessionSelectColumns}`,
         [
           input.id,
@@ -2144,10 +1853,6 @@ export class PostgresStore implements AppStore {
           input.title ?? null,
           input.tags !== undefined,
           input.tags ?? [],
-          input.visibility !== undefined,
-          input.visibility ?? null,
-          input.writePolicy !== undefined,
-          input.writePolicy ?? null,
           input.requireNonArchived ?? false,
         ],
       );
@@ -2161,9 +1866,6 @@ export class PostgresStore implements AppStore {
       const payload = {
         title: session.title ?? null,
         ...(input.tags !== undefined ? { tags: session.tags } : {}),
-        ownerGroupId: session.ownerGroupId,
-        visibility: session.visibility,
-        writePolicy: session.writePolicy,
       };
       const inserted = await client.query<EventRow>(
         `WITH next_sequence AS (
@@ -2216,12 +1918,7 @@ export class PostgresStore implements AppStore {
       const event = await insertLifecycleEvent(client, {
         sessionId: session.id,
         type: 'session_updated',
-        payload: {
-          title: session.title ?? null,
-          ownerGroupId: session.ownerGroupId,
-          visibility: session.visibility,
-          writePolicy: session.writePolicy,
-        },
+        payload: { title: session.title ?? null },
         createdAt: input.updatedAt,
       });
       return { session, event };
@@ -2336,6 +2033,7 @@ export class PostgresStore implements AppStore {
        SET context = $2,
            updated_at = $3
          WHERE id = $1
+           AND status <> 'archived'
            AND EXISTS (
              SELECT 1 FROM runs
              WHERE id = $4
@@ -2352,24 +2050,43 @@ export class PostgresStore implements AppStore {
   }
 
   async pauseSessionQueue(input: { sessionId: string; pausedAt: Date }): Promise<SessionRecord> {
-    const result = await this.pool.query<SessionRow>(
-      `UPDATE sessions SET queue_paused_at = $2, updated_at = $2, last_activity_at = $2 WHERE id = $1
-       RETURNING ${sessionSelectColumns}`,
-      [input.sessionId, input.pausedAt],
-    );
-    if (!result.rows[0]) throw new Error(`Session does not exist: ${input.sessionId}`);
-    return toSession(result.rows[0]);
+    return this.transaction(async (client) => {
+      const result = await client.query<SessionRow>(
+        `UPDATE sessions SET queue_paused_at = $2, updated_at = $2, last_activity_at = $2
+         WHERE id = $1 AND status <> 'archived'
+         RETURNING ${sessionSelectColumns}`,
+        [input.sessionId, input.pausedAt],
+      );
+      const row = result.rows[0];
+      if (!row) return this.rejectMissingOrArchivedSession(client, input.sessionId);
+      return toSession(row);
+    });
   }
 
   async resumeSessionQueue(input: { sessionId: string }): Promise<SessionRecord> {
     const now = new Date();
-    const result = await this.pool.query<SessionRow>(
-      `UPDATE sessions SET queue_paused_at = NULL, updated_at = $2, last_activity_at = $2 WHERE id = $1
-       RETURNING ${sessionSelectColumns}`,
-      [input.sessionId, now],
+    return this.transaction(async (client) => {
+      const result = await client.query<SessionRow>(
+        `UPDATE sessions SET queue_paused_at = NULL, updated_at = $2, last_activity_at = $2
+         WHERE id = $1 AND status <> 'archived'
+         RETURNING ${sessionSelectColumns}`,
+        [input.sessionId, now],
+      );
+      const row = result.rows[0];
+      if (!row) return this.rejectMissingOrArchivedSession(client, input.sessionId);
+      return toSession(row);
+    });
+  }
+
+  private async rejectMissingOrArchivedSession(client: PoolClient, sessionId: string): Promise<never> {
+    const result = await client.query<Pick<SessionRow, 'status'>>(
+      'SELECT status FROM sessions WHERE id = $1 FOR UPDATE',
+      [sessionId],
     );
-    if (!result.rows[0]) throw new Error(`Session does not exist: ${input.sessionId}`);
-    return toSession(result.rows[0]);
+    if (result.rows[0]?.status === 'archived') {
+      throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    }
+    throw new Error(`Session does not exist: ${sessionId}`);
   }
 
   async createSkill(record: CreateSkillRecord): Promise<SkillRecord> {
@@ -2396,38 +2113,16 @@ export class PostgresStore implements AppStore {
     return this.skillStore.restoreSkill(input);
   }
 
-  async promoteSkill(id: string, groupId: string, now: Date): Promise<SkillRecord | null> {
-    return this.skillStore.promoteSkill(id, groupId, now);
+  async listSkills(input: { userId?: string }): Promise<SkillRecord[]> {
+    return this.skillStore.listSkills(input);
   }
 
-  async setSkillShares(
-    id: string,
-    shareMode: SkillShareMode,
-    groupIds: string[],
-    now: Date,
-  ): Promise<SkillRecord | null> {
-    return this.skillStore.setSkillShares(id, shareMode, groupIds, now);
-  }
-
-  async listSkillsForUser(userId: string): Promise<SkillRecord[]> {
-    return this.skillStore.listSkillsForUser(userId);
-  }
-
-  async listSkillsForGroups(groupIds: string[]): Promise<SkillRecord[]> {
-    return this.skillStore.listSkillsForGroups(groupIds);
-  }
-
-  async listSkillsSharedIntoGroups(groupIds: string[]): Promise<SkillRecord[]> {
-    return this.skillStore.listSkillsSharedIntoGroups(groupIds);
-  }
-
-  async listSkillInvocationCandidates(input: { ownerGroupId: string; userId?: string }): Promise<SkillRunCandidate[]> {
+  async listSkillInvocationCandidates(input: { userId?: string }): Promise<SkillRunCandidate[]> {
     return this.skillStore.listSkillInvocationCandidates(input);
   }
 
   async listSkillsForRun(input: {
-    ownerGroupId: string;
-    createdByUserId?: string;
+    userId?: string;
     invokedNames?: string[];
     invokedRevisions?: SkillRevisionSelection[];
   }): Promise<SkillRunCandidate[]> {
@@ -2439,16 +2134,13 @@ export class PostgresStore implements AppStore {
       return await this.transaction(async (client) => {
         const environmentResult = await client.query<EnvironmentRow>(
           `INSERT INTO environments (
-             id, name, owner_group_id, share_mode, current_revision_id, current_revision_number,
-             archived_at, created_at, updated_at
+             id, name, current_revision_id, current_revision_number, archived_at, created_at, updated_at
            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
            RETURNING ${environmentSelectColumns}`,
           [
             record.environment.id,
             record.environment.name.trim(),
-            record.environment.ownerGroupId,
-            record.environment.shareMode,
             record.environment.currentRevisionId,
             record.environment.currentRevisionNumber,
             record.environment.archivedAt ?? null,
@@ -2458,21 +2150,14 @@ export class PostgresStore implements AppStore {
         );
         await insertEnvironmentRevision(client, record.revision);
         const repositories = await insertEnvironmentRepositories(client, record.repositories);
-        await insertEnvironmentShares(
-          client,
-          record.environment.id,
-          record.sharedGroupIds,
-          record.environment.createdAt,
-        );
         await insertEnvironmentActivities(client, record.activities);
         return {
           ...toEnvironment(environmentResult.rows[0]!),
           repositories,
-          sharedGroupIds: [...record.sharedGroupIds].sort(compareStringAsc),
         };
       });
     } catch (error) {
-      if (isUniqueViolation(error, 'environments_owner_group_name_active_unique_idx')) {
+      if (isUniqueViolation(error, 'environments_name_unique_idx')) {
         throw new StoreConflictError('environment_name_exists', 'Environment name already exists');
       }
       throw error;
@@ -2488,7 +2173,6 @@ export class PostgresStore implements AppStore {
     return {
       ...toEnvironment(result.rows[0]),
       repositories: await this.listEnvironmentRepositories(id),
-      sharedGroupIds: await this.listEnvironmentSharedGroupIds(id),
     };
   }
 
@@ -2508,29 +2192,15 @@ export class PostgresStore implements AppStore {
        ORDER BY e.id ASC, r.position ASC`,
       [environmentIds],
     );
-    const shareResult = await this.pool.query<{ environment_id: string; group_id: string }>(
-      `SELECT environment_id, group_id
-       FROM environment_group_shares
-       WHERE environment_id = ANY($1::uuid[])
-       ORDER BY environment_id ASC, group_id ASC`,
-      [environmentIds],
-    );
     const repositoriesByEnvironment = new Map<string, EnvironmentRepositoryRow[]>();
     for (const row of repositoryResult.rows) {
       const repositories = repositoriesByEnvironment.get(row.environment_id) ?? [];
       repositories.push(row);
       repositoriesByEnvironment.set(row.environment_id, repositories);
     }
-    const sharesByEnvironment = new Map<string, string[]>();
-    for (const row of shareResult.rows) {
-      const groupIds = sharesByEnvironment.get(row.environment_id) ?? [];
-      groupIds.push(row.group_id);
-      sharesByEnvironment.set(row.environment_id, groupIds);
-    }
     return result.rows.map((row) => ({
       ...toEnvironment(row),
       repositories: (repositoriesByEnvironment.get(row.id) ?? []).map(toEnvironmentRepository),
-      sharedGroupIds: sharesByEnvironment.get(row.id) ?? [],
     }));
   }
 
@@ -2598,54 +2268,29 @@ export class PostgresStore implements AppStore {
   async updateEnvironment(record: UpdateEnvironmentRecord): Promise<EnvironmentWithDetailsRecord> {
     try {
       return await this.transaction(async (client) => {
-        const locked = await client.query<{ updated_at: Date }>(
-          'SELECT updated_at FROM environments WHERE id = $1 FOR UPDATE',
+        const locked = await client.query<{ updated_at: Date; archived_at: Date | null }>(
+          'SELECT updated_at, archived_at FROM environments WHERE id = $1 FOR UPDATE',
           [record.environment.id],
         );
         if (!locked.rows[0]) throw new Error(`Environment does not exist: ${record.environment.id}`);
+        if (locked.rows[0].archived_at) {
+          throw new StoreConflictError('environment_archived', 'Restore this environment before editing it');
+        }
         if (locked.rows[0].updated_at.getTime() !== record.expectedUpdatedAt.getTime()) {
           throw new StoreConflictError('environment_update_conflict', 'Environment changed while it was being edited');
-        }
-        if (record.automationAccessAllowedGroupIds) {
-          const conflicts = await client.query<{ id: string; name: string; owner_group_id: string }>(
-            `SELECT id, name, owner_group_id
-             FROM automations
-             WHERE environment_id = $1
-               AND archived_at IS NULL
-               AND NOT (owner_group_id = ANY($2::uuid[]))
-             ORDER BY created_at`,
-            [record.environment.id, record.automationAccessAllowedGroupIds],
-          );
-          if (conflicts.rows.length) {
-            throw new StoreConflictError(
-              'environment_automation_conflict',
-              'Environment access is used by active automations',
-              {
-                automations: conflicts.rows.map((automation) => ({
-                  id: automation.id,
-                  name: automation.name,
-                  ownerGroupId: automation.owner_group_id,
-                })),
-              },
-            );
-          }
         }
         const environmentResult = await client.query<EnvironmentRow>(
           `UPDATE environments
            SET name = $2,
-               owner_group_id = $3,
-               share_mode = $4,
-               current_revision_id = $5,
-               current_revision_number = $6,
-               archived_at = $7,
-               updated_at = $8
+               current_revision_id = $3,
+               current_revision_number = $4,
+               archived_at = $5,
+               updated_at = $6
            WHERE id = $1
            RETURNING ${environmentSelectColumns}`,
           [
             record.environment.id,
             record.environment.name.trim(),
-            record.environment.ownerGroupId,
-            record.environment.shareMode,
             record.environment.currentRevisionId,
             record.environment.currentRevisionNumber,
             record.environment.archivedAt ?? null,
@@ -2654,25 +2299,17 @@ export class PostgresStore implements AppStore {
         );
         if (!environmentResult.rows[0]) throw new Error(`Environment does not exist: ${record.environment.id}`);
         if (record.revision) await insertEnvironmentRevision(client, record.revision);
-        await client.query('DELETE FROM environment_group_shares WHERE environment_id = $1', [record.environment.id]);
         const repositories = record.revision
           ? await insertEnvironmentRepositories(client, record.repositories)
           : await listEnvironmentRepositoriesWithClient(client, record.environment.id);
-        await insertEnvironmentShares(
-          client,
-          record.environment.id,
-          record.sharedGroupIds,
-          record.environment.updatedAt,
-        );
         await insertEnvironmentActivities(client, record.activities);
         return {
           ...toEnvironment(environmentResult.rows[0]),
           repositories,
-          sharedGroupIds: [...record.sharedGroupIds].sort(compareStringAsc),
         };
       });
     } catch (error) {
-      if (isUniqueViolation(error, 'environments_owner_group_name_active_unique_idx')) {
+      if (isUniqueViolation(error, 'environments_name_unique_idx')) {
         throw new StoreConflictError('environment_name_exists', 'Environment name already exists');
       }
       throw error;
@@ -2694,11 +2331,10 @@ export class PostgresStore implements AppStore {
         return {
           ...toEnvironment(locked.rows[0]),
           repositories: await listEnvironmentRepositoriesWithClient(client, input.environmentId),
-          sharedGroupIds: await listEnvironmentSharedGroupIdsWithClient(client, input.environmentId),
         };
       }
-      const conflicts = await client.query<{ id: string; name: string; owner_group_id: string }>(
-        `SELECT id, name, owner_group_id
+      const conflicts = await client.query<{ id: string; name: string }>(
+        `SELECT id, name
          FROM automations
          WHERE environment_id = $1 AND archived_at IS NULL
          ORDER BY created_at`,
@@ -2709,7 +2345,6 @@ export class PostgresStore implements AppStore {
           automations: conflicts.rows.map((automation) => ({
             id: automation.id,
             name: automation.name,
-            ownerGroupId: automation.owner_group_id,
           })),
         });
       }
@@ -2723,7 +2358,6 @@ export class PostgresStore implements AppStore {
       return {
         ...toEnvironment(result.rows[0]!),
         repositories: await listEnvironmentRepositoriesWithClient(client, input.environmentId),
-        sharedGroupIds: await listEnvironmentSharedGroupIdsWithClient(client, input.environmentId),
       };
     });
   }
@@ -2744,7 +2378,6 @@ export class PostgresStore implements AppStore {
           return {
             ...toEnvironment(locked.rows[0]),
             repositories: await listEnvironmentRepositoriesWithClient(client, input.environmentId),
-            sharedGroupIds: await listEnvironmentSharedGroupIdsWithClient(client, input.environmentId),
           };
         }
         const result = await client.query<EnvironmentRow>(
@@ -2757,11 +2390,10 @@ export class PostgresStore implements AppStore {
         return {
           ...toEnvironment(result.rows[0]!),
           repositories: await listEnvironmentRepositoriesWithClient(client, input.environmentId),
-          sharedGroupIds: await listEnvironmentSharedGroupIdsWithClient(client, input.environmentId),
         };
       });
     } catch (error) {
-      if (isUniqueViolation(error, 'environments_owner_group_name_active_unique_idx')) {
+      if (isUniqueViolation(error, 'environments_name_unique_idx')) {
         throw new StoreConflictError('environment_name_exists', 'Environment name already exists');
       }
       throw error;
@@ -2770,7 +2402,7 @@ export class PostgresStore implements AppStore {
 
   async createAutomation(record: CreateAutomationRecord): Promise<AutomationRecord> {
     return this.transaction(async (client) => {
-      await assertAutomationEnvironmentAvailableWithClient(client, record.environmentId, record.ownerGroupId);
+      await assertAutomationEnvironmentAvailableWithClient(client, record.environmentId, record.environmentRevisionId);
       const result = await client.query<AutomationRow>(
         `INSERT INTO automations (
          id,
@@ -2779,9 +2411,6 @@ export class PostgresStore implements AppStore {
          prompt,
          schedule_cron,
          enabled,
-         owner_group_id,
-         visibility,
-         write_policy,
          context,
          created_by_user_id,
          environment_id,
@@ -2791,7 +2420,7 @@ export class PostgresStore implements AppStore {
          created_at,
          updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING ${automationSelectColumns}`,
         [
           record.id,
@@ -2800,9 +2429,6 @@ export class PostgresStore implements AppStore {
           record.prompt,
           record.scheduleCron,
           record.enabled,
-          record.ownerGroupId,
-          record.visibility,
-          record.writePolicy,
           record.context ?? null,
           record.createdByUserId ?? null,
           record.environmentId ?? null,
@@ -2840,10 +2466,15 @@ export class PostgresStore implements AppStore {
       );
       if (!existing.rows[0]) throw new Error(`Automation does not exist: ${input.id}`);
       const current = toAutomation(existing.rows[0]);
+      if (current.archivedAt) {
+        throw new StoreConflictError('automation_archived', 'Restore this automation before editing it');
+      }
       await assertAutomationEnvironmentAvailableWithClient(
         client,
         input.environmentId === undefined ? current.environmentId : (input.environmentId ?? undefined),
-        input.ownerGroupId ?? current.ownerGroupId,
+        input.environmentRevisionId === undefined
+          ? current.environmentRevisionId
+          : (input.environmentRevisionId ?? undefined),
       );
 
       const updates = ['updated_at = $2'];
@@ -2858,9 +2489,6 @@ export class PostgresStore implements AppStore {
       if (input.prompt !== undefined) addUpdate('prompt', input.prompt);
       if (input.scheduleCron !== undefined) addUpdate('schedule_cron', input.scheduleCron);
       if (input.enabled !== undefined) addUpdate('enabled', input.enabled);
-      if (input.ownerGroupId !== undefined) addUpdate('owner_group_id', input.ownerGroupId);
-      if (input.visibility !== undefined) addUpdate('visibility', input.visibility);
-      if (input.writePolicy !== undefined) addUpdate('write_policy', input.writePolicy);
       if (input.context !== undefined) addUpdate('context', input.context);
       if (input.environmentId !== undefined) addUpdate('environment_id', input.environmentId);
       if (input.environmentRevisionPolicy !== undefined)
@@ -2880,18 +2508,31 @@ export class PostgresStore implements AppStore {
   }
 
   async archiveAutomation(input: { automationId: string; archivedAt: Date }): Promise<AutomationRecord | null> {
-    const result = await this.pool.query<AutomationRow>(
-      `UPDATE automations
-       SET archived_at = COALESCE(archived_at, $2),
-           enabled = false,
-           scheduler_lock_owner = NULL,
-           scheduler_locked_until = NULL,
-           updated_at = $2
-       WHERE id = $1
-       RETURNING ${automationSelectColumns}`,
-      [input.automationId, input.archivedAt],
-    );
-    return result.rows[0] ? toAutomation(result.rows[0]) : null;
+    return this.transaction(async (client) => {
+      const existing = await client.query('SELECT id FROM automations WHERE id = $1 FOR UPDATE', [input.automationId]);
+      if (!existing.rows[0]) return null;
+      const active = await client.query(
+        `SELECT 1 FROM automation_invocations
+         WHERE automation_id = $1 AND status = 'creating'
+         LIMIT 1`,
+        [input.automationId],
+      );
+      if (active.rows[0]) {
+        throw new StoreConflictError('automation_invocation_active', 'Wait for the active invocation before archiving');
+      }
+      const result = await client.query<AutomationRow>(
+        `UPDATE automations
+         SET archived_at = COALESCE(archived_at, $2),
+             enabled = false,
+             scheduler_lock_owner = NULL,
+             scheduler_locked_until = NULL,
+             updated_at = $2
+         WHERE id = $1
+         RETURNING ${automationSelectColumns}`,
+        [input.automationId, input.archivedAt],
+      );
+      return toAutomation(result.rows[0]!);
+    });
   }
 
   async unarchiveAutomation(input: { automationId: string; updatedAt: Date }): Promise<AutomationRecord | null> {
@@ -2902,7 +2543,11 @@ export class PostgresStore implements AppStore {
       );
       if (!existing.rows[0]) return null;
       const automation = toAutomation(existing.rows[0]);
-      await assertAutomationEnvironmentAvailableWithClient(client, automation.environmentId, automation.ownerGroupId);
+      await assertAutomationEnvironmentAvailableWithClient(
+        client,
+        automation.environmentId,
+        automation.environmentRevisionId,
+      );
       const result = await client.query<AutomationRow>(
         `UPDATE automations
        SET archived_at = NULL,
@@ -3003,8 +2648,17 @@ export class PostgresStore implements AppStore {
   }
 
   async createAutomationInvocation(record: CreateAutomationInvocationRecord): Promise<AutomationInvocationRecord> {
-    const result = await this.pool.query<AutomationInvocationRow>(
-      `INSERT INTO automation_invocations (
+    return this.transaction(async (client) => {
+      const automation = await client.query<{ archived_at: Date | null }>(
+        'SELECT archived_at FROM automations WHERE id = $1 FOR UPDATE',
+        [record.automationId],
+      );
+      if (!automation.rows[0]) throw new Error(`Automation does not exist: ${record.automationId}`);
+      if (automation.rows[0].archived_at) {
+        throw new StoreConflictError('automation_archived', 'Restore this automation before invoking it');
+      }
+      const result = await client.query<AutomationInvocationRow>(
+        `INSERT INTO automation_invocations (
          id,
          automation_id,
          trigger,
@@ -3025,27 +2679,28 @@ export class PostgresStore implements AppStore {
        )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         RETURNING ${automationInvocationSelectColumns}`,
-      [
-        record.id,
-        record.automationId,
-        record.trigger,
-        record.status,
-        record.scheduledAt ?? null,
-        record.sessionId ?? null,
-        record.messageId ?? null,
-        record.reservedSessionId ?? null,
-        record.reservedMessageId ?? null,
-        record.requestedByUserId ?? null,
-        record.environmentId ?? null,
-        record.environmentRevisionId ?? null,
-        record.reason ?? null,
-        record.error ?? null,
-        record.metadata,
-        record.createdAt,
-        record.completedAt ?? null,
-      ],
-    );
-    return toAutomationInvocation(result.rows[0]!);
+        [
+          record.id,
+          record.automationId,
+          record.trigger,
+          record.status,
+          record.scheduledAt ?? null,
+          record.sessionId ?? null,
+          record.messageId ?? null,
+          record.reservedSessionId ?? null,
+          record.reservedMessageId ?? null,
+          record.requestedByUserId ?? null,
+          record.environmentId ?? null,
+          record.environmentRevisionId ?? null,
+          record.reason ?? null,
+          record.error ?? null,
+          record.metadata,
+          record.createdAt,
+          record.completedAt ?? null,
+        ],
+      );
+      return toAutomationInvocation(result.rows[0]!);
+    });
   }
 
   async updateAutomationInvocation(record: AutomationInvocationRecord): Promise<AutomationInvocationRecord> {
@@ -3151,6 +2806,13 @@ export class PostgresStore implements AppStore {
 
   async createMessage(record: CreateMessageRecord): Promise<MessageRecord> {
     return this.transaction(async (client) => {
+      const session = await client.query<{ status: string }>('SELECT status FROM sessions WHERE id = $1 FOR UPDATE', [
+        record.sessionId,
+      ]);
+      if (!session.rows[0]) throw new Error(`Session does not exist: ${record.sessionId}`);
+      if (session.rows[0].status === 'archived' && record.status === 'pending') {
+        throw new StoreConflictError('session_archived', 'Cannot enqueue messages to an archived session');
+      }
       const result = await client.query<MessageRow>(
         `INSERT INTO messages (id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -4597,17 +4259,6 @@ export class PostgresStore implements AppStore {
       };
     });
   }
-
-  private async listEnvironmentSharedGroupIds(environmentId: string): Promise<string[]> {
-    const result = await this.pool.query<{ group_id: string }>(
-      `SELECT group_id
-       FROM environment_group_shares
-       WHERE environment_id = $1
-       ORDER BY group_id ASC`,
-      [environmentId],
-    );
-    return result.rows.map((row) => row.group_id);
-  }
 }
 
 async function insertEnvironmentRepositories(
@@ -4663,17 +4314,6 @@ async function listEnvironmentRepositoriesWithClient(
   return result.rows.map(toEnvironmentRepository);
 }
 
-async function listEnvironmentSharedGroupIdsWithClient(client: PoolClient, environmentId: string): Promise<string[]> {
-  const result = await client.query<{ group_id: string }>(
-    `SELECT group_id
-     FROM environment_group_shares
-     WHERE environment_id = $1
-     ORDER BY group_id ASC`,
-    [environmentId],
-  );
-  return result.rows.map((row) => row.group_id);
-}
-
 async function insertEnvironmentRevision(client: PoolClient, revision: EnvironmentRevisionRecord): Promise<void> {
   await client.query(
     `INSERT INTO environment_revisions (
@@ -4710,36 +4350,6 @@ async function insertEnvironmentActivities(client: PoolClient, activities: Envir
       ],
     );
   }
-}
-
-async function insertEnvironmentShares(
-  client: PoolClient,
-  environmentId: string,
-  sharedGroupIds: string[],
-  createdAt: Date,
-): Promise<void> {
-  for (const groupId of sharedGroupIds) {
-    await client.query(
-      `INSERT INTO environment_group_shares (environment_id, group_id, created_at)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (environment_id, group_id) DO NOTHING`,
-      [environmentId, groupId, createdAt],
-    );
-  }
-}
-
-function compareStringAsc(left: string, right: string): number {
-  return left.localeCompare(right);
-}
-
-function sessionVisibilityWhereClauses(
-  visibleTo: SessionVisibilityFilter | undefined,
-  values: unknown[],
-  alias = 'sessions',
-): string[] {
-  if (!visibleTo) return [];
-  values.push(visibleTo.groupIds);
-  return [`(${alias}.visibility = 'organization' OR ${alias}.owner_group_id = ANY($${values.length}::uuid[]))`];
 }
 
 function appendSessionFilterWhereClauses(
@@ -4834,44 +4444,23 @@ async function insertLifecycleEvent(client: PoolClient, event: NormalizedEvent):
 async function assertAutomationEnvironmentAvailableWithClient(
   client: PoolClient,
   environmentId: string | undefined,
-  ownerGroupId: string,
+  environmentRevisionId: string | undefined,
 ): Promise<void> {
   if (!environmentId) return;
-  const locked = await client.query<{ id: string }>('SELECT id FROM environments WHERE id = $1 FOR SHARE', [
-    environmentId,
-  ]);
-  if (!locked.rows[0]) {
-    throw new StoreConflictError(
-      'automation_environment_unavailable',
-      'Environment is no longer available to the automation owner group',
-    );
-  }
-  const environment = await client.query<{
-    owner_group_id: string;
-    share_mode: string;
-    archived_at: Date | null;
-    shared: boolean;
-  }>(
-    `SELECT e.owner_group_id,
-            e.share_mode,
-            e.archived_at,
-            EXISTS (
-              SELECT 1
-              FROM environment_group_shares s
-              WHERE s.environment_id = e.id AND s.group_id = $2
-            ) AS shared
-     FROM environments e
-     WHERE e.id = $1`,
-    [environmentId, ownerGroupId],
+  const environment = await client.query<{ id: string }>(
+    `SELECT id
+     FROM environments
+     WHERE id = $1 AND archived_at IS NULL
+       AND ($2::uuid IS NULL OR EXISTS (
+         SELECT 1
+         FROM environment_revisions
+         WHERE environment_id = $1 AND id = $2
+       ))
+     FOR SHARE`,
+    [environmentId, environmentRevisionId ?? null],
   );
-  const row = environment.rows[0];
-  const available =
-    row && !row.archived_at && (row.owner_group_id === ownerGroupId || row.share_mode === 'all_groups' || row.shared);
-  if (!available) {
-    throw new StoreConflictError(
-      'automation_environment_unavailable',
-      'Environment is no longer available to the automation owner group',
-    );
+  if (!environment.rows[0]) {
+    throw new StoreConflictError('automation_environment_unavailable', 'Environment is no longer available');
   }
 }
 
@@ -4918,7 +4507,7 @@ function toSnippet(row: SnippetRow): SnippetRecord {
 
 function throwSnippetConflict(error: unknown): never {
   if (isUniqueViolation(error, 'snippets_active_owner_name_unique')) {
-    throw new StoreConflictError('snippet_name_exists', 'An active snippet with this name already exists');
+    throw new StoreConflictError('snippet_name_exists', 'A snippet with this name already exists');
   }
   throw error;
 }
@@ -4934,10 +4523,8 @@ type SessionNotepadRow = {
 type ExplicitNotepadRow = Omit<SessionNotepadRow, 'session_id'> & {
   id: string;
   title: string;
-  owner_group_id: string;
-  visibility: ExplicitNotepadRecord['visibility'];
-  write_policy: ExplicitNotepadRecord['writePolicy'];
   created_by_user_id: string | null;
+  archived_at: Date | null;
 };
 type NotepadRevisionRow = {
   notepad_kind: NotepadRevisionRecord['notepadKind'];
@@ -4976,29 +4563,25 @@ function toExplicitNotepad(r: ExplicitNotepadRow): ExplicitNotepadRecord {
   return {
     id: r.id,
     title: r.title,
-    ownerGroupId: r.owner_group_id,
-    visibility: r.visibility,
-    writePolicy: r.write_policy,
     revision: r.revision,
     content: r.content,
     sizeBytes: r.size_bytes,
     ...(r.created_by_user_id ? { createdByUserId: r.created_by_user_id } : {}),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    ...(r.archived_at ? { archivedAt: r.archived_at } : {}),
   };
 }
 function toExplicitMetadata(r: Omit<ExplicitNotepadRow, 'content'>) {
   return {
     id: r.id,
     title: r.title,
-    ownerGroupId: r.owner_group_id,
-    visibility: r.visibility,
-    writePolicy: r.write_policy,
     revision: r.revision,
     sizeBytes: r.size_bytes,
     ...(r.created_by_user_id ? { createdByUserId: r.created_by_user_id } : {}),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    ...(r.archived_at ? { archivedAt: r.archived_at } : {}),
   };
 }
 function toNotepadRevision(r: NotepadRevisionRow): NotepadRevisionRecord {

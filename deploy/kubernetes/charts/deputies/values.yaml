@@ -91,7 +91,7 @@ config:
   authGithubAdminUsers: ''
   authGithubAllowedUsers: ''
   authGithubAllowedOrganizations: ''
-  authGithubDefaultGroupRole: member
+  authGithubDefaultRole: member
   unsafeAuthGithubAllowAll: 'false'
   webBaseUrl: https://deputies-k8s.localhost
   serviceBaseDomain: deputies-k8s.localhost

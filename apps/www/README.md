@@ -46,7 +46,7 @@ URLs are rewritten so image and browser-playable video artifacts render in the s
 Additional showcase sessions and the other product pages use reviewed, hand-authored fixtures from
 `apps/web/src/static-demo/showcase-data.ts`. Keep those examples representative but fictional: they are bundled into
 the public static demo and cover session hierarchies and skill invocations, automations and invocation history,
-environments and revisions, skills, snippets, and access groups. The page switcher exposes every showcase page without
+environments and revisions, skills, snippets, and tenant access. The page switcher exposes every showcase page without
 making API requests or enabling server mutations. Session search, tags, ownership, participation, and starring are
 implemented locally against the bundled fixtures so those interactions remain available in the demo.
 

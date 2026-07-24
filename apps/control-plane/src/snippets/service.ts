@@ -10,6 +10,10 @@ export class SnippetService {
     return this.store.listSnippetsForUser(userId);
   }
 
+  get(id: string, userId: string) {
+    return this.require(id, userId);
+  }
+
   async create(userId: string, input: { name: unknown; body: unknown }): Promise<SnippetRecord> {
     const now = new Date();
     return this.store.createSnippet({
@@ -22,10 +26,10 @@ export class SnippetService {
     });
   }
 
-  async update(userId: string, id: string, input: { name?: unknown; body?: unknown }): Promise<SnippetRecord> {
+  async update(id: string, userId: string, input: { name?: unknown; body?: unknown }): Promise<SnippetRecord> {
     if (input.name === undefined && input.body === undefined)
       throw new SnippetServiceError('invalid', 'Expected at least one of name or body');
-    const existing = await this.require(userId, id);
+    const existing = await this.require(id, userId);
     if (existing.archivedAt) throw new SnippetServiceError('archived', 'Restore this snippet before editing it');
     return (
       (await this.store.updateSnippet({
@@ -38,15 +42,15 @@ export class SnippetService {
     );
   }
 
-  async archive(userId: string, id: string) {
-    await this.require(userId, id);
+  async archive(id: string, userId: string) {
+    await this.require(id, userId);
     return (await this.store.archiveSnippet(id, userId, new Date())) ?? this.notFound();
   }
-  async restore(userId: string, id: string) {
-    await this.require(userId, id);
+  async restore(id: string, userId: string) {
+    await this.require(id, userId);
     return (await this.store.restoreSnippet(id, userId, new Date())) ?? this.notFound();
   }
-  private async require(userId: string, id: string) {
+  private async require(id: string, userId: string) {
     return (await this.store.getSnippetForUser(id, userId)) ?? this.notFound();
   }
   private notFound(): never {

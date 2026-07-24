@@ -19,56 +19,74 @@ export function registerSnippetRoutes(
     return !auth || auth.bypass ? null : auth.user;
   };
   app.get('/snippets', async (c) => {
-    const owner = await user(c);
-    if (!owner) return unauthorized(c);
-    return c.json({ snippets: await services.snippets.list(owner.id) });
+    const actor = await user(c);
+    if (!actor) return unauthorized(c);
+    return c.json({ snippets: (await services.snippets.list(actor.id)).map(serialize) });
+  });
+  app.get('/snippets/:id', async (c) => {
+    const actor = await user(c);
+    if (!actor) return unauthorized(c);
+    const id = c.req.param('id');
+    if (!uuidPattern.test(id)) return invalidId(c);
+    try {
+      return c.json({ snippet: serialize(await services.snippets.get(id, actor.id)) });
+    } catch (e) {
+      return error(c, e);
+    }
   });
   app.post('/snippets', async (c) => {
-    const owner = await user(c);
-    if (!owner) return unauthorized(c);
+    const actor = await user(c);
+    if (!actor) return unauthorized(c);
     try {
       const body = await readJsonBody(c, config.maxJsonBodyBytes);
-      return c.json({ snippet: await services.snippets.create(owner.id, { name: body.name, body: body.body }) }, 201);
+      return c.json(
+        { snippet: serialize(await services.snippets.create(actor.id, { name: body.name, body: body.body })) },
+        201,
+      );
     } catch (e) {
       return error(c, e);
     }
   });
   app.patch('/snippets/:id', async (c) => {
-    const owner = await user(c);
-    if (!owner) return unauthorized(c);
+    const actor = await user(c);
+    if (!actor) return unauthorized(c);
     const id = c.req.param('id');
     if (!uuidPattern.test(id)) return invalidId(c);
     try {
       const body = await readJsonBody(c, config.maxJsonBodyBytes);
-      return c.json({ snippet: await services.snippets.update(owner.id, id, body) });
+      return c.json({ snippet: serialize(await services.snippets.update(id, actor.id, body)) });
     } catch (e) {
       return error(c, e);
     }
   });
   app.post('/snippets/:id/archive', async (c) => {
-    const owner = await user(c);
-    if (!owner) return unauthorized(c);
+    const actor = await user(c);
+    if (!actor) return unauthorized(c);
     const id = c.req.param('id');
     if (!uuidPattern.test(id)) return invalidId(c);
     try {
-      return c.json({ snippet: await services.snippets.archive(owner.id, id) });
+      return c.json({ snippet: serialize(await services.snippets.archive(id, actor.id)) });
     } catch (e) {
       return error(c, e);
     }
   });
   app.post('/snippets/:id/restore', async (c) => {
-    const owner = await user(c);
-    if (!owner) return unauthorized(c);
+    const actor = await user(c);
+    if (!actor) return unauthorized(c);
     const id = c.req.param('id');
     if (!uuidPattern.test(id)) return invalidId(c);
     try {
-      return c.json({ snippet: await services.snippets.restore(owner.id, id) });
+      return c.json({ snippet: serialize(await services.snippets.restore(id, actor.id)) });
     } catch (e) {
       return error(c, e);
     }
   });
 }
 type SnippetContext = Context<{ Variables: AppVariables }>;
+
+function serialize({ ownerUserId: _, ...snippet }: Awaited<ReturnType<AppServices['snippets']['get']>>) {
+  return snippet;
+}
 
 function unauthorized(c: SnippetContext) {
   return writeError(c, 401, 'unauthorized', 'Snippets require an authenticated user session');

@@ -19,7 +19,7 @@ const execFileAsync = promisify(execFile);
 describe('Pi skill resolution and materialization', () => {
   it('uses typed runner invocations instead of parsing persisted message context', async () => {
     const listForRun = vi.fn(async (request: { invokedNames: string[] }) =>
-      request.invokedNames.length ? [managed('legacy', 'Legacy', 'legacy body', 'group', false)] : [],
+      request.invokedNames.length ? [managed('legacy', 'Legacy', 'legacy body', 'managed', false)] : [],
     );
 
     const prepared = await preparePiSkills({
@@ -34,25 +34,17 @@ describe('Pi skill resolution and materialization', () => {
     expect(prepared.userInvocations).toEqual([]);
   });
 
-  it('resolves precedence, safely materializes managed skills, and prefixes only their messages', async () => {
+  it('selects managed revisions, safely materializes skills, and prefixes only their messages', async () => {
     const fs = new MemorySandboxFileSystem('/custom/workspace');
     await fs.writeFile('/custom/workspace/.deputies-skills/stale/SKILL.md', 'stale');
     const listForRun = vi.fn(async () => [
-      managed('shared-name', 'new shared', 'new body', 'shared', false, '2026-02-01T00:00:00Z'),
-      managed('shared-name', 'old shared', 'old body', 'shared', true, '2026-01-01T00:00:00Z'),
-      managed('collision', 'shared collision', 'shared', 'shared'),
-      {
-        ...managed('collision', 'group collision', 'group', 'group'),
-        ownerGroupId: 'group-1',
-        ownerGroupName: 'Platform',
-      },
-      managed('collision', 'personal collision', 'personal', 'personal'),
-      managed('manual', 'line one\nline two: quoted', 'manual body', 'group', false),
-      managed('dormant', 'not advertised', 'dormant body', 'group', false),
+      managed('shared-name', 'new shared', 'new body', 'managed', false, '2026-02-01T00:00:00Z'),
+      managed('shared-name', 'old shared', 'old body', 'managed', true, '2026-01-01T00:00:00Z'),
+      managed('manual', 'line one\nline two: quoted', 'manual body', 'managed', false),
+      managed('dormant', 'not advertised', 'dormant body', 'managed', false),
     ]);
     const runnerInput = input({
       createdByUserId: 'user-1',
-      ownerGroupId: 'group-1',
       sandbox: sandbox(fs, undefined, '/custom/workspace'),
       messages: [
         {
@@ -72,50 +64,39 @@ describe('Pi skill resolution and materialization', () => {
     });
 
     expect(listForRun).toHaveBeenCalledWith({
-      ownerGroupId: 'group-1',
-      createdByUserId: 'user-1',
+      userId: 'user-1',
       invokedNames: ['manual', 'missing'],
       invokedRevisions: [],
     });
     expect(prepared.event.skills).toEqual([
-      expect.objectContaining({ name: 'shared-name', source: 'shared', revisionNumber: 1 }),
-      expect.objectContaining({ name: 'collision', source: 'personal', revisionNumber: 1 }),
+      expect.objectContaining({ name: 'shared-name', source: 'managed', revisionNumber: 1 }),
       {
         name: 'manual',
-        source: 'group',
-        skillId: 'skill-group-manual-1768435200000',
-        revisionId: 'revision-group-manual-1768435200000',
+        source: 'managed',
+        skillId: 'skill-managed-manual-1768435200000',
+        revisionId: 'revision-managed-manual-1768435200000',
         revisionNumber: 1,
-        ref: 'skill-group-manual-1768435200000',
+        ref: 'skill-managed-manual-1768435200000',
         invoked: true,
         advertised: false,
       },
     ]);
-    expect(prepared.event.shadowed).toEqual([
-      expect.objectContaining({
-        name: 'collision',
-        source: 'group',
-        ownerGroupId: 'group-1',
-        ownerGroupName: 'Platform',
-        revisionNumber: 1,
-      }),
-      expect.objectContaining({ name: 'collision', source: 'shared', revisionNumber: 1 }),
-    ]);
+    expect(prepared.event.shadowed).toEqual([]);
     expect(prepared.skills.find((skill) => skill.name === 'manual')).toBeUndefined();
     expect(prepared.skills.find((skill) => skill.name === 'dormant')).toBeUndefined();
     expect(
       await fs.readFile(
-        '/custom/workspace/.deputies-skills/shared/skill-shared-shared-name-1767225600000/revision-shared-shared-name-1767225600000/shared-name/SKILL.md',
+        '/custom/workspace/.deputies-skills/managed/skill-managed-shared-name-1767225600000/revision-managed-shared-name-1767225600000/shared-name/SKILL.md',
       ),
     ).toContain('old body');
     expect(await fs.exists('/custom/workspace/.deputies-skills/stale/SKILL.md')).toBe(false);
     expect(
       await fs.readFile(
-        '/custom/workspace/.deputies-skills/group/skill-group-manual-1768435200000/revision-group-manual-1768435200000/manual/SKILL.md',
+        '/custom/workspace/.deputies-skills/managed/skill-managed-manual-1768435200000/revision-managed-manual-1768435200000/manual/SKILL.md',
       ),
     ).toBe(serializeManagedSkill({ name: 'manual', description: 'line one\nline two: quoted', body: 'manual body' }));
-    expect(prepared.prompt).toContain('<skill name="manual" location="/custom/workspace/.deputies-skills/group/');
-    expect(prepared.prompt).toContain('References are relative to /custom/workspace/.deputies-skills/group/');
+    expect(prepared.prompt).toContain('<skill name="manual" location="/custom/workspace/.deputies-skills/managed/');
+    expect(prepared.prompt).toContain('References are relative to /custom/workspace/.deputies-skills/managed/');
     expect(prepared.prompt).toContain('manual body\n</skill>');
     expect(prepared.prompt).not.toContain('description: "line one');
     expect(prepared.prompt).not.toContain('Read /custom/workspace/.deputies-skills');
@@ -125,21 +106,21 @@ describe('Pi skill resolution and materialization', () => {
     expect(prepared.prompt).not.toContain('Message 2:\n<skill');
   });
 
-  it('resolves explicit personal invocations against each claimed message author', async () => {
-    const ownerSkill = managed('same-name', 'Owner personal', 'owner body', 'personal', true);
+  it('resolves explicit managed invocations against each claimed message author', async () => {
+    const ownerSkill = managed('same-name', 'Owner managed skill', 'owner body', 'managed', true);
     const writerSkill = managed(
       'same-name',
-      'Writer personal',
+      'Writer managed skill',
       'writer body',
-      'personal',
+      'managed',
       false,
       '2026-01-16T00:00:00Z',
     );
-    const groupSkill = managed('same-name', 'Group candidate', 'group body', 'group', false);
-    const listForRun = vi.fn(async (request: { createdByUserId?: string; invokedNames: string[] }) => {
-      if (!request.invokedNames.length) return request.createdByUserId === 'owner' ? [ownerSkill] : [];
-      if (request.createdByUserId === 'owner') return [ownerSkill, groupSkill];
-      if (request.createdByUserId === 'writer') return [writerSkill, groupSkill];
+    const groupSkill = managed('same-name', 'Group candidate', 'group body', 'managed', false, '2026-01-17T00:00:00Z');
+    const listForRun = vi.fn(async (request: { userId?: string; invokedNames: string[] }) => {
+      if (!request.invokedNames.length) return [groupSkill];
+      if (request.userId === 'owner') return [ownerSkill, groupSkill];
+      if (request.userId === 'writer') return [writerSkill, groupSkill];
       return [groupSkill];
     });
     const prepared = await preparePiSkills({
@@ -179,25 +160,24 @@ describe('Pi skill resolution and materialization', () => {
       repositories: [],
     });
 
-    expect(listForRun.mock.calls.map(([request]) => request.createdByUserId)).toEqual([
-      'owner',
+    expect(listForRun.mock.calls.map(([request]) => request.userId)).toEqual([
+      undefined,
       'owner',
       'writer',
       'outsider',
       'owner',
     ]);
     expect(prepared.prompt).toContain(
-      `Message 1:\n<skill name="same-name" location="/workspace/.deputies-skills/personal/${ownerSkill.id}`,
+      `Message 1:\n<skill name="same-name" location="/workspace/.deputies-skills/managed/${ownerSkill.id}`,
     );
     expect(prepared.prompt).toContain('owner body\n</skill>');
     expect(prepared.prompt).toContain(
-      `Message 2:\n<skill name="same-name" location="/workspace/.deputies-skills/personal/${writerSkill.id}`,
+      `Message 2:\n<skill name="same-name" location="/workspace/.deputies-skills/managed/${writerSkill.id}`,
     );
     expect(prepared.prompt).toContain('writer body\n</skill>');
     expect(prepared.prompt).toContain(
-      `<skill name="same-name" location="/workspace/.deputies-skills/group/${groupSkill.id}`,
+      `<skill name="same-name" location="/workspace/.deputies-skills/managed/${groupSkill.id}`,
     );
-    expect(prepared.prompt).toContain('group body\n</skill>');
     expect(prepared.prompt).toContain(
       'Message 3:\nThe user invoked the skill "same-name", but it is unavailable for this run.',
     );
@@ -207,19 +187,18 @@ describe('Pi skill resolution and materialization', () => {
       ['message-writer', groupSkill.id],
       ['message-group-repeat', groupSkill.id],
     ]);
-    expect(prepared.skills).toHaveLength(1);
-    expect(prepared.skills[0]).toMatchObject({ name: 'same-name', description: 'Owner personal' });
+    expect(prepared.skills).toEqual([]);
   });
 
   it('materializes two pinned revisions of one managed skill at distinct paths in one batch', async () => {
     const first = {
-      ...managed('same-skill', 'First revision', 'first body', 'group', false),
+      ...managed('same-skill', 'First revision', 'first body', 'managed', false),
       id: 'managed-skill-id',
       revisionId: 'managed-revision-1',
       revisionNumber: 1,
     };
     const second = {
-      ...managed('same-skill', 'Second revision', 'second body', 'group', false),
+      ...managed('same-skill', 'Second revision', 'second body', 'managed', false),
       id: 'managed-skill-id',
       revisionId: 'managed-revision-2',
       revisionNumber: 2,
@@ -541,7 +520,7 @@ describe('Pi skill resolution and materialization', () => {
     );
     const materialized = await preparePiSkills({
       runnerInput: input({ sandbox: noFsSandbox }),
-      provider: { repoScanEnabled: false, listForRun: async () => [managed('safe', 'Safe skill', 'body', 'group')] },
+      provider: { repoScanEnabled: false, listForRun: async () => [managed('safe', 'Safe skill', 'body', 'managed')] },
       repositories: [],
     });
 
@@ -550,7 +529,7 @@ describe('Pi skill resolution and materialization', () => {
     expect(calls[1]?.command).toContain('description: "Safe skill"');
     expect(calls[1]).not.toHaveProperty('stdin');
     expect(materialized.skills[0]?.filePath).toBe(
-      '/agent/workspace/.deputies-skills/group/skill-group-safe-1768435200000/revision-group-safe-1768435200000/safe/SKILL.md',
+      '/agent/workspace/.deputies-skills/managed/skill-managed-safe-1768435200000/revision-managed-safe-1768435200000/safe/SKILL.md',
     );
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -576,10 +555,10 @@ describe('Pi skill resolution and materialization', () => {
     }
   });
 
-  it('keeps auto-loaded personal skills associated with the session creator', async () => {
+  it('resolves tenant auto-loaded managed skills without exposing a personal owner context', async () => {
     const listForRun = vi.fn(async () => [
-      managed('private', 'Private', 'private', 'personal'),
-      managed('group-safe', 'Group safe', 'group', 'group'),
+      managed('private', 'Private', 'private', 'managed'),
+      managed('group-safe', 'Group safe', 'managed', 'managed'),
     ]);
     const prepared = await preparePiSkills({
       runnerInput: input({
@@ -594,14 +573,12 @@ describe('Pi skill resolution and materialization', () => {
     });
 
     expect(listForRun).toHaveBeenCalledWith({
-      ownerGroupId: 'group-1',
-      createdByUserId: 'owner',
       invokedNames: [],
       invokedRevisions: [],
     });
     expect(prepared.event.skills).toEqual([
-      expect.objectContaining({ name: 'private', source: 'personal', revisionNumber: 1 }),
-      expect.objectContaining({ name: 'group-safe', source: 'group', revisionNumber: 1 }),
+      expect.objectContaining({ name: 'private', source: 'managed', revisionNumber: 1 }),
+      expect.objectContaining({ name: 'group-safe', source: 'managed', revisionNumber: 1 }),
     ]);
   });
 
@@ -613,12 +590,12 @@ describe('Pi skill resolution and materialization', () => {
     const cleanupExec = vi.fn(async () => execResult(0));
     const cleaned = await preparePiSkills({
       runnerInput: input({ sandbox: sandbox(cleanupFs, cleanupExec) }),
-      provider: { repoScanEnabled: false, listForRun: async () => [managed('cleaned', 'Cleaned', 'body', 'group')] },
+      provider: { repoScanEnabled: false, listForRun: async () => [managed('cleaned', 'Cleaned', 'body', 'managed')] },
       repositories: [],
     });
     expect(cleanupExec).toHaveBeenCalledTimes(1);
     expect(cleaned.skills[0]?.filePath).toBe(
-      '/workspace/.deputies-skills/group/skill-group-cleaned-1768435200000/revision-group-cleaned-1768435200000/cleaned/SKILL.md',
+      '/workspace/.deputies-skills/managed/skill-managed-cleaned-1768435200000/revision-managed-cleaned-1768435200000/cleaned/SKILL.md',
     );
 
     const isolatedFs = new MemorySandboxFileSystem('/workspace');
@@ -627,11 +604,14 @@ describe('Pi skill resolution and materialization', () => {
     });
     const isolated = await preparePiSkills({
       runnerInput: input({ sandbox: sandbox(isolatedFs, async () => execResult(1)) }),
-      provider: { repoScanEnabled: false, listForRun: async () => [managed('isolated', 'Isolated', 'body', 'group')] },
+      provider: {
+        repoScanEnabled: false,
+        listForRun: async () => [managed('isolated', 'Isolated', 'body', 'managed')],
+      },
       repositories: [],
     });
     expect(isolated.skills[0]?.filePath).toMatch(
-      /^\/workspace\/\.deputies-skills-run-1-[0-9a-f-]+\/group\/skill-group-isolated-1768435200000\/revision-group-isolated-1768435200000\/isolated\/SKILL\.md$/,
+      /^\/workspace\/\.deputies-skills-run-1-[0-9a-f-]+\/managed\/skill-managed-isolated-1768435200000\/revision-managed-isolated-1768435200000\/isolated\/SKILL\.md$/,
     );
     expect(isolated.event.diagnostics).toContain(
       'The managed skill directory could not be cleared; an isolated run directory was used.',
@@ -644,7 +624,7 @@ describe('Pi skill resolution and materialization', () => {
     const writeExec = vi.fn(async (_request: Parameters<SandboxHandle['exec']>[0]) => execResult(0));
     const written = await preparePiSkills({
       runnerInput: input({ sandbox: sandbox(writeFs, writeExec) }),
-      provider: { repoScanEnabled: false, listForRun: async () => [managed('written', 'Written', 'body', 'group')] },
+      provider: { repoScanEnabled: false, listForRun: async () => [managed('written', 'Written', 'body', 'managed')] },
       repositories: [],
     });
     expect(writeExec).toHaveBeenCalledWith(
@@ -652,7 +632,7 @@ describe('Pi skill resolution and materialization', () => {
     );
     expect(writeExec.mock.calls[0]?.[0].stdin).toBeUndefined();
     expect(written.skills[0]?.filePath).toBe(
-      '/workspace/.deputies-skills/group/skill-group-written-1768435200000/revision-group-written-1768435200000/written/SKILL.md',
+      '/workspace/.deputies-skills/managed/skill-managed-written-1768435200000/revision-managed-written-1768435200000/written/SKILL.md',
     );
   });
 

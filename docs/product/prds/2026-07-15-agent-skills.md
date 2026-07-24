@@ -2,7 +2,9 @@
 
 ## Status
 
-Building
+Superseded
+
+The Agent Skills feature remains, but this document's group ownership, sharing, promotion, and personal auto-load model was replaced by tenant skills plus owner-only, manually invoked personal skills. See [Tenant Access](../../tenant-access.md) and [Web UI](../../web-ui.md#skills).
 
 ## Problem
 

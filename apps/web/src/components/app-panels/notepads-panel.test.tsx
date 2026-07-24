@@ -7,9 +7,6 @@ const session: Session = {
   id: 's1',
   status: 'idle',
   spawnDepth: 0,
-  ownerGroupId: 'g1',
-  visibility: 'organization',
-  writePolicy: 'group_members',
   createdAt: '2026-07-21T10:00:00Z',
   updatedAt: '2026-07-21T10:00:00Z',
   lastActivityAt: '2026-07-21T10:00:00Z',
@@ -26,9 +23,6 @@ const empty: SessionNotepad = {
 const pad: ExplicitNotepad = {
   id: 'p1',
   title: 'Launch notes',
-  ownerGroupId: 'g1',
-  visibility: 'organization',
-  writePolicy: 'group_members',
   revision: 3,
   content: 'Linked content',
   sizeBytes: 14,
@@ -539,7 +533,7 @@ it('shows normal row title/access metadata and loads selected content', async ()
     if (path.endsWith('/notepad-associations'))
       return json({
         associations: {
-          items: [{ notepadId: 'p1', sessionId: 's1', canWrite: true, notepad: pad }],
+          items: [{ notepadId: 'p1', sessionId: 's1', notepad: pad }],
           hasMore: false,
           nextCursor: null,
         },
@@ -560,7 +554,7 @@ it('refreshes an Explicit Notepad while reopening without discarding a closed dr
     if (path.endsWith('/notepad-associations'))
       return json({
         associations: {
-          items: [{ notepadId: 'p1', sessionId: 's1', canWrite: true, notepad: pad }],
+          items: [{ notepadId: 'p1', sessionId: 's1', notepad: pad }],
           hasMore: false,
           nextCursor: null,
         },
@@ -591,7 +585,7 @@ it('makes the compact associated metadata card clickable without allowing horizo
     path.endsWith('/notepad-associations')
       ? json({
           associations: {
-            items: [{ notepadId: 'p1', sessionId: 's1', canWrite: true, notepad: pad }],
+            items: [{ notepadId: 'p1', sessionId: 's1', notepad: pad }],
             hasMore: false,
             nextCursor: null,
           },
@@ -615,7 +609,7 @@ it('ignores an older Explicit Notepad open response that resolves last', async (
     if (path.endsWith('/notepad-associations'))
       return json({
         associations: {
-          items: [{ notepadId: 'p1', sessionId: 's1', canWrite: false, notepad: pad }],
+          items: [{ notepadId: 'p1', sessionId: 's1', notepad: pad }],
           hasMore: false,
           nextCursor: null,
         },

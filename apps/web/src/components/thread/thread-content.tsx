@@ -461,7 +461,9 @@ function ContextPanelContent(props: {
   return (
     <div className="p-4 pt-0 xl:p-0 xl:pt-0">
       {props.accessPanel ? <div className="mt-3 border-b border-border pb-3">{props.accessPanel}</div> : null}
-      <div className="mt-3 border-b border-border pb-3 text-sm text-muted-foreground">
+      <div
+        className={cn('mt-3 pb-3 text-sm text-muted-foreground', !props.notepadsHostRef && 'border-b border-border')}
+      >
         <strong className="block font-medium text-foreground">Codebase</strong>
         {props.environment ? (
           <EnvironmentCodebaseSummary environment={props.environment} canWriteSession={props.canWriteSession} />

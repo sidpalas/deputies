@@ -20,14 +20,10 @@ export type NormalizedEventPayloadMap = {
     parentSessionId?: string;
     spawnDepth?: number;
     spawnedBy?: { sessionId: string; runId: string; messageId: string };
-    ownerGroupId?: string;
-    visibility?: 'group' | 'organization';
-    writePolicy?: 'group_members' | 'creator_only';
   };
   session_spawned: {
     childSessionId: string;
     title: string | null;
-    ownerGroupId: string;
     spawnDepth: number;
   };
   session_archived: EmptyEventPayload;
@@ -36,9 +32,6 @@ export type NormalizedEventPayloadMap = {
     title: string | null;
     tags?: string[];
     context?: Record<string, unknown> | null;
-    ownerGroupId?: string;
-    visibility?: 'group' | 'organization';
-    writePolicy?: 'group_members' | 'creator_only';
   };
   session_queue_paused: EmptyEventPayload;
   session_queue_resumed: EmptyEventPayload;
@@ -83,13 +76,11 @@ export type NormalizedEventPayloadMap = {
   };
   skill_invoked: {
     name: string;
-    source: 'personal' | 'group' | 'shared' | 'repo';
+    source: 'managed' | 'repo';
     trigger: 'user' | 'model';
     ref: string;
     filePath: string;
     repo?: string;
-    ownerGroupId?: string;
-    ownerGroupName?: string;
     skillId?: string;
     revisionId?: string;
     revisionNumber?: number;
@@ -132,10 +123,8 @@ export type NormalizedEventPayloadMap = {
 
 type SkillLoadEventItem = {
   name: string;
-  source: 'personal' | 'group' | 'shared' | 'repo';
+  source: 'managed' | 'repo';
   repo?: string;
-  ownerGroupId?: string;
-  ownerGroupName?: string;
   skillId?: string;
   revisionId?: string;
   revisionNumber?: number;

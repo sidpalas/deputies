@@ -86,7 +86,7 @@ describe('loadConfig', () => {
       authGithubAdminUsers: [],
       authGithubAllowedUsers: [],
       authGithubAllowedOrganizations: [],
-      authGithubDefaultGroupRole: 'member',
+      authGithubDefaultRole: 'member',
       unsafeAuthGithubAllowAll: false,
       runnerStateStore: 'postgres',
       runnerModelChoices: [],
@@ -202,7 +202,7 @@ describe('loadConfig', () => {
         AUTH_GITHUB_ADMIN_USERS: 'admin1, admin2',
         AUTH_GITHUB_ALLOWED_USERS: 'user1, user2',
         AUTH_GITHUB_ALLOWED_ORGANIZATIONS: 'users',
-        AUTH_GITHUB_DEFAULT_GROUP_ROLE: 'member',
+        AUTH_GITHUB_DEFAULT_ROLE: 'member',
         UNSAFE_AUTH_GITHUB_ALLOW_ALL: 'true',
         DATABASE_URL: 'postgres://example',
         RUNNER_MODEL_DEFAULT: 'anthropic/claude-haiku-4-5',
@@ -345,7 +345,7 @@ describe('loadConfig', () => {
       authGithubAdminUsers: ['admin1', 'admin2'],
       authGithubAllowedUsers: ['user1', 'user2'],
       authGithubAllowedOrganizations: ['users'],
-      authGithubDefaultGroupRole: 'member',
+      authGithubDefaultRole: 'member',
       unsafeAuthGithubAllowAll: true,
       databaseUrl: 'postgres://example',
       runnerModelDefault: 'anthropic/claude-haiku-4-5',
@@ -936,7 +936,7 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_COOKIE_SAME_SITE: 'strict' })).toThrow(
       'Expected one of lax, none',
     );
-    expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_GITHUB_DEFAULT_GROUP_ROLE: 'owner' })).toThrow(
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', AUTH_GITHUB_DEFAULT_ROLE: 'owner' })).toThrow(
       'Expected one of viewer, member, admin',
     );
     expect(() => loadConfig({ API_AUTH_MODE: 'none', WEB_SEARCH_PROVIDER: 'bing' })).toThrow(

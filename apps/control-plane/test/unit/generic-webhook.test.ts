@@ -1,7 +1,6 @@
 import { createServices } from '../../src/app/server.js';
 import { markIntegrationDeliveryProcessed } from '../../src/integrations/shared-utils.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId } from '../../src/store/types.js';
 
 describe('GenericWebhookService', () => {
   it('applies source prompt prefix and reuses external threads', async () => {
@@ -440,14 +439,12 @@ describe('GenericWebhookService', () => {
       name: 'archived-webhook',
       description: 'Archived',
       body: '',
-      ownerGroupId: defaultGroupId,
     });
     await services.skills.archive(archived.id);
     const disabled = await services.skills.create({
       name: 'disabled-webhook',
       description: 'Disabled',
       body: '',
-      ownerGroupId: defaultGroupId,
     });
     await services.skills.update({ id: disabled.id, enabled: false });
 

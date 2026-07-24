@@ -172,14 +172,14 @@ Concepts:
 
 Invariants:
 
-- Automations are owned by access groups.
+- Automations are tenant-wide ordinary resources.
 - Automation invocations are distinct from agent runs.
 - Scheduled automations do not overlap automatically by default.
 - Skipped and failed invocations are recorded durably.
-- Each access group controls whether members or only admins can create new automations in that group.
+- Members and admins can create and manage automations; viewers have read-only access.
 - Archiving an automation disables it; archived automations cannot be enabled or invoked until restored.
 - Restoring an automation leaves it disabled until explicitly enabled.
-- Archiving an access group suspends owned automation invocations without changing the automation's enabled state.
+- Archived automations cannot be invoked until restored.
 
 Modules:
 

@@ -1,6 +1,5 @@
 import { SkillService, SkillServiceError } from '../../src/skills/service.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId } from '../../src/store/types.js';
 
 const now = new Date('2026-07-15T00:00:00.000Z');
 
@@ -13,18 +12,17 @@ describe('SkillService', () => {
       name: 'review-code',
       description: '  Review code carefully  ',
       body: '# Instructions',
-      ownerUserId: 'user-1',
     });
     expect(created).toMatchObject({ description: 'Review code carefully', autoLoad: true, enabled: true });
 
+    await expect(service.create({ name: 'Review_Code', description: 'valid', body: '' })).rejects.toMatchObject({
+      code: 'invalid_name',
+    });
+    await expect(service.create({ name: 'valid', description: ' ', body: '' })).rejects.toMatchObject({
+      code: 'invalid_description',
+    });
     await expect(
-      service.create({ name: 'Review_Code', description: 'valid', body: '', ownerUserId: 'user-1' }),
-    ).rejects.toMatchObject({ code: 'invalid_name' });
-    await expect(
-      service.create({ name: 'valid', description: ' ', body: '', ownerUserId: 'user-1' }),
-    ).rejects.toMatchObject({ code: 'invalid_description' });
-    await expect(
-      service.create({ name: 'valid', description: 'valid', body: 'x'.repeat(64 * 1024 + 1), ownerUserId: 'user-1' }),
+      service.create({ name: 'valid', description: 'valid', body: 'x'.repeat(64 * 1024 + 1) }),
     ).rejects.toMatchObject({ code: 'invalid_body' });
   });
 
@@ -36,14 +34,12 @@ describe('SkillService', () => {
       name: 'review-code',
       description: 'Review code',
       body: 'Instructions',
-      ownerUserId: 'user-1',
     });
     await service.archive(skill.id);
 
     await expect(service.update({ id: skill.id, enabled: false })).rejects.toEqual(
       expect.objectContaining<Partial<SkillServiceError>>({ code: 'skill_archived' }),
     );
-    await expect(service.promote(skill.id, 'group-1')).rejects.toMatchObject({ code: 'skill_archived' });
     expect(await service.restore(skill.id)).not.toHaveProperty('archivedAt');
   });
 
@@ -55,7 +51,6 @@ describe('SkillService', () => {
       name: 'normalized',
       description: 'Description',
       body: 'Line one\r\nLine two',
-      ownerUserId: 'user-1',
       createdByUserId: 'user-1',
       actor: { type: 'user', userId: 'user-1' },
     });
@@ -87,54 +82,60 @@ describe('SkillService', () => {
     ]);
   });
 
-  it('rechecks membership and super-admin status when resolving persisted invocations', async () => {
+  it('resolves persisted pinned invocations tenant-wide and rejects archived pins', async () => {
     const store = new MemoryStore();
     const memberId = '00000000-0000-4000-8000-000000000111';
-    const adminId = '00000000-0000-4000-8000-000000000112';
     await createUser(store, memberId);
-    await createUser(store, adminId, 'super_admin');
-    await store.upsertGroupMember({
-      groupId: defaultGroupId,
-      userId: memberId,
-      role: 'member',
-      createdAt: now,
-      updatedAt: now,
-    });
     const service = new SkillService(store);
     const skill = await service.create({
       name: 'pinned-review',
       description: 'Review pinned work',
       body: 'Review carefully',
-      ownerGroupId: defaultGroupId,
       autoLoad: false,
     });
-    const request = (createdByUserId?: string) => ({
-      ownerGroupId: defaultGroupId,
-      ...(createdByUserId ? { createdByUserId } : {}),
+    const request = (userId?: string) => ({
+      ...(userId ? { userId } : {}),
       invokedNames: [],
       invokedRevisions: [{ skillId: skill.id, revisionId: skill.currentRevisionId }],
     });
 
     await expect(service.listForRun(request(memberId))).resolves.toHaveLength(1);
-    await store.deleteGroupMember({ groupId: defaultGroupId, userId: memberId });
-    await expect(service.listForRun(request(memberId))).resolves.toEqual([]);
-
-    await expect(service.listForRun(request(adminId))).resolves.toHaveLength(1);
-    await store.updateAuthUserRole({ userId: adminId, role: 'user', updatedAt: new Date(now.getTime() + 1) });
-    await expect(service.listForRun(request(adminId))).resolves.toEqual([]);
-
     await expect(service.listForRun(request())).resolves.toHaveLength(1);
+    await service.archive(skill.id);
+    await expect(service.listForRun(request(memberId))).resolves.toEqual([]);
+  });
+
+  it('resolves personal skills only for explicit invocations by their owner', async () => {
+    const store = new MemoryStore();
+    await createUser(store, 'owner');
+    await createUser(store, 'other');
+    const service = new SkillService(store);
+    const personal = await service.create({
+      scope: 'personal',
+      name: 'my-review',
+      description: 'Review my work',
+      body: 'Review carefully',
+      createdByUserId: 'owner',
+    });
+
+    await expect(service.listForRun({ userId: 'owner', invokedNames: [], invokedRevisions: [] })).resolves.toEqual([]);
+    await expect(
+      service.listForRun({ userId: 'other', invokedNames: [personal.name], invokedRevisions: [] }),
+    ).resolves.toEqual([]);
+    await expect(
+      service.listForRun({ userId: 'owner', invokedNames: [personal.name], invokedRevisions: [] }),
+    ).resolves.toEqual([expect.objectContaining({ id: personal.id, scope: 'personal', autoLoad: false })]);
   });
 });
 
-async function createUser(store: MemoryStore, username: string, role: 'user' | 'super_admin' = 'user'): Promise<void> {
+async function createUser(store: MemoryStore, username: string): Promise<void> {
   await store.upsertAuthUserForAccount({
     userId: username,
     accountId: `${username}-account`,
     provider: 'test',
     providerAccountId: username,
     username,
-    role,
+    role: 'member',
     profile: {},
     now,
   });

@@ -14,7 +14,7 @@ Deputies is a control plane for delegating engineering work to [background agent
 - Lets users star, tag, filter, search, archive, and resume sessions.
 - Built on [Pi](https://pi.dev/) for real agent work, with a fake runner for deterministic smoke tests.
 - Supports Slack, GitHub, generic webhook, and scheduled automation workflows with callback delivery tracking.
-- Supports GitHub OAuth login, static login, access groups, and session ownership controls for browser access.
+- Supports GitHub OAuth login, static login, and tenant-wide viewer/member/admin access control.
 - Works with [Daytona](https://www.daytona.io/), Docker, Tensorlake, Kubernetes Agent Sandbox, and AWS Lambda MicroVM sandbox providers, plus fake and unsafe local providers for tests and trusted development.
 - Runs repo-owned `.agents/setup` scripts to prepare sandbox workspaces before agents start.
 - Supports standard LLM API-key configuration and OpenAI Codex/ChatGPT subscriptions.

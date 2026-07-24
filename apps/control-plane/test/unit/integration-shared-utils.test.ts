@@ -3,7 +3,6 @@ import { enqueueIntegrationIngress, getOrCreateExternalThreadSession } from '../
 import { boundPromptText } from '../../src/integrations/prompt-bounds.js';
 import { MemoryStore } from '../../src/store/memory.js';
 import type { AppStore, ExternalThreadRecord } from '../../src/store/types.js';
-import { defaultGroupId } from '../../src/store/types.js';
 
 describe('integration shared utils', () => {
   it('uses the session from the winning external-thread row after a concurrent create', async () => {
@@ -90,14 +89,13 @@ describe('integration shared utils', () => {
     ).rejects.toThrow('Integration thread source must match message source');
   });
 
-  it('converts an exact leading managed group skill token through the shared funnel', async () => {
+  it('converts an exact leading managed skill token through the shared funnel', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
     await services.skills.create({
       name: 'review-code',
       description: 'Review the code',
       body: 'Review carefully.',
-      ownerGroupId: defaultGroupId,
     });
 
     const result = await enqueueIntegrationIngress(store, services.skills, services.sessions, services.messages, {
@@ -118,7 +116,7 @@ describe('integration shared utils', () => {
     expect(result.message.context?.skillRefs).toEqual([
       expect.objectContaining({ name: 'review-code', revisionId: expect.any(String) }),
     ]);
-    expect(result.message.context?.skillProvenance).toEqual([{ name: 'review-code', source: 'group' }]);
+    expect(result.message.context?.skillProvenance).toEqual([{ name: 'review-code', source: 'managed' }]);
   });
 
   it('strips a validated skill token without restoring text removed by prompt bounds', async () => {
@@ -128,7 +126,6 @@ describe('integration shared utils', () => {
       name: 'review-code',
       description: 'Review the code',
       body: 'Review carefully.',
-      ownerGroupId: defaultGroupId,
     });
     const rawMessageText = `/review-code ${'x'.repeat(9_000)}`;
     const rendered = `Current tagged message:\n${boundPromptText(rawMessageText)}`;
@@ -158,7 +155,6 @@ describe('integration shared utils', () => {
       name: 'review-code',
       description: 'Review the code',
       body: 'Review carefully.',
-      ownerGroupId: defaultGroupId,
     });
 
     const result = await enqueueIntegrationIngress(store, services.skills, services.sessions, services.messages, {
@@ -175,46 +171,24 @@ describe('integration shared utils', () => {
     expect(result.message.context).not.toHaveProperty('skills');
   });
 
-  it('does not invoke personal, archived, or disabled skills from integrations', async () => {
+  it('does not invoke archived or disabled skills from integrations', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
-    const now = new Date();
-    await store.upsertAuthUserForAccount({
-      userId: 'user-1',
-      accountId: 'user-1-account',
-      provider: 'test',
-      providerAccountId: 'user-1',
-      username: 'user-1',
-      role: 'user',
-      profile: {},
-      now,
-    });
-    await services.skills.create({
-      name: 'personal-only',
-      description: 'Personal',
-      body: 'Private.',
-      ownerUserId: 'user-1',
-    });
     const archived = await services.skills.create({
       name: 'archived-skill',
       description: 'Archived',
       body: 'Old.',
-      ownerGroupId: defaultGroupId,
     });
     await services.skills.archive(archived.id);
-    await services.skills.create({
+    const disabled = await services.skills.create({
       name: 'disabled-skill',
       description: 'Disabled',
       body: 'Off.',
-      ownerGroupId: defaultGroupId,
       autoLoad: false,
     });
-    const disabled = (await store.listSkillsForGroups([defaultGroupId])).find(
-      (skill) => skill.name === 'disabled-skill',
-    )!;
     await services.skills.update({ id: disabled.id, enabled: false });
 
-    for (const name of ['personal-only', 'archived-skill', 'disabled-skill']) {
+    for (const name of ['archived-skill', 'disabled-skill']) {
       const result = await enqueueIntegrationIngress(store, services.skills, services.sessions, services.messages, {
         source: 'generic',
         thread: { source: 'generic', externalId: `thread-${name}`, metadata: {} },

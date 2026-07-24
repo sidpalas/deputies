@@ -339,7 +339,7 @@ function ExplicitRow(props: {
   useEffect(() => () => void ++readGeneration.current, [props.association.notepad.id, props.sessionId, props.token]);
   const n = props.association.notepad;
   const metadata = value ?? n;
-  const writable = props.writable && props.association.canWrite;
+  const writable = props.writable && !metadata.archivedAt;
   const changed = (props.remoteRevision ?? 0) > metadata.revision;
   return (
     <div className="group relative min-w-0">
@@ -359,7 +359,9 @@ function ExplicitRow(props: {
               aria-hidden={changed ? undefined : true}
               title={changed ? 'Newer revision available' : undefined}
             />
-            <span className="text-[10px] uppercase text-muted-foreground">{writable ? 'Editable' : 'Read only'}</span>
+            <span className="text-[10px] uppercase text-muted-foreground">
+              {metadata.archivedAt ? 'Archived' : writable ? 'Editable' : 'Read only'}
+            </span>
           </span>
         </span>
         <span className="block truncate whitespace-nowrap text-[10px] text-muted-foreground">

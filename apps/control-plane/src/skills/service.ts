@@ -1,13 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { canCreateSessionInGroup, canInvokeSkillInSession, type RequestAuthorization } from '../auth/authorization.js';
 import type {
-  AuthStore,
-  GroupStore,
   SkillRecord,
   SkillRevisionRecord,
   SkillRevisionWrite,
   SkillRunCandidate,
-  SkillShareMode,
   SkillStore,
 } from '../store/types.js';
 import { compareManagedSkillCatalogEntries } from './catalog.js';
@@ -18,18 +14,16 @@ const maxSkillDescriptionLength = 1024;
 const maxSkillBodyBytes = 64 * 1024;
 
 type CreateSkillInputBase = {
+  scope?: 'tenant' | 'personal';
   name: string;
   description: string;
   body: string;
   autoLoad?: boolean;
-  shareMode?: SkillShareMode;
-  shareGroupIds?: string[];
   createdByUserId?: string;
   actor?: SkillMutationActor;
 };
 
-export type CreateSkillInput = CreateSkillInputBase &
-  ({ ownerGroupId: string; ownerUserId?: never } | { ownerUserId: string; ownerGroupId?: never });
+export type CreateSkillInput = CreateSkillInputBase;
 
 export type UpdateSkillInput = {
   id: string;
@@ -39,14 +33,12 @@ export type UpdateSkillInput = {
   body?: string;
   autoLoad?: boolean;
   enabled?: boolean;
-  shareMode?: SkillShareMode;
-  shareGroupIds?: string[];
   actor?: SkillMutationActor;
 };
 
 export type SkillMutationActor = { type: 'user'; userId: string } | { type: 'system'; userId?: never };
 
-export type SkillServiceStore = SkillStore & AuthStore & GroupStore;
+export type SkillServiceStore = SkillStore;
 
 export class SkillService {
   constructor(private readonly store: SkillServiceStore) {}
@@ -57,9 +49,19 @@ export class SkillService {
     const name = validateSkillName(input.name);
     const description = validateSkillDescription(input.description);
     const body = validateSkillBody(input.body);
-    const sharing = createSkillSharing(input);
+    const scope = input.scope ?? 'tenant';
+    const ownerUserId = scope === 'personal' ? input.createdByUserId : undefined;
+    if (scope === 'personal' && !ownerUserId) {
+      throw new SkillServiceError('invalid_scope', 'Personal skills require an authenticated owner');
+    }
+    if (scope === 'personal' && input.autoLoad === true) {
+      throw new SkillServiceError('invalid_scope', 'Personal skills cannot be auto-loaded');
+    }
+    const ownership =
+      scope === 'personal' ? { scope: 'personal' as const, ownerUserId: ownerUserId! } : { scope: 'tenant' as const };
     const record = {
       id,
+      ...ownership,
       revision: skillRevision({
         id: randomUUID(),
         name,
@@ -68,18 +70,13 @@ export class SkillService {
         actor: input.actor ?? actorFromUserId(input.createdByUserId),
         createdAt: now,
       }),
-      autoLoad: input.autoLoad ?? true,
+      autoLoad: scope === 'personal' ? false : (input.autoLoad ?? true),
       enabled: true,
-      shareMode: sharing.shareMode,
-      shareGroupIds: sharing.shareGroupIds,
       ...(input.createdByUserId ? { createdByUserId: input.createdByUserId } : {}),
       createdAt: now,
       updatedAt: now,
     };
-    if ('ownerGroupId' in input && input.ownerGroupId !== undefined) {
-      return this.store.createSkill({ ...record, ownerKind: 'group', ownerGroupId: input.ownerGroupId });
-    }
-    return this.store.createSkill({ ...record, ownerKind: 'user', ownerUserId: input.ownerUserId });
+    return this.store.createSkill(record);
   }
 
   get(id: string): Promise<SkillRecord | null> {
@@ -93,16 +90,17 @@ export class SkillService {
   async update(input: UpdateSkillInput): Promise<SkillRecord> {
     const existing = await this.requireSkill(input.id);
     assertMutable(existing);
+    if (existing.scope === 'personal' && input.autoLoad === true) {
+      throw new SkillServiceError('invalid_scope', 'Personal skills cannot be auto-loaded');
+    }
     const fields = validateSkillFields(input);
     const name = fields.name ?? existing.name;
     const description = fields.description ?? existing.description;
     const body = fields.body ?? existing.body;
     const contentChanged = name !== existing.name || description !== existing.description || body !== existing.body;
-    const sharing = skillSharingUpdate(existing, input);
     const liveChanged =
       (input.autoLoad !== undefined && input.autoLoad !== existing.autoLoad) ||
-      (input.enabled !== undefined && input.enabled !== existing.enabled) ||
-      sharing?.changed;
+      (input.enabled !== undefined && input.enabled !== existing.enabled);
     if (!contentChanged && !liveChanged) return existing;
     const now = new Date(Math.max(Date.now(), existing.updatedAt.getTime() + 1));
     return this.store.updateSkill({
@@ -123,7 +121,6 @@ export class SkillService {
         : {}),
       ...(input.autoLoad !== undefined ? { autoLoad: input.autoLoad } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-      ...(sharing?.changed ? { sharing: { shareMode: sharing.shareMode, groupIds: sharing.shareGroupIds } } : {}),
     });
   }
 
@@ -138,77 +135,25 @@ export class SkillService {
     return (await this.store.restoreSkill({ skillId: id, updatedAt: new Date() })) ?? this.notFound(id);
   }
 
-  async promote(id: string, groupId: string): Promise<SkillRecord> {
-    const existing = await this.requireSkill(id);
-    assertMutable(existing);
-    if (existing.ownerKind !== 'user') {
-      throw new SkillServiceError('invalid_owner', 'Only personal skills can be promoted');
-    }
-    return (await this.store.promoteSkill(id, groupId, new Date())) ?? this.notFound(id);
-  }
-
-  async setShares(id: string, shareMode: SkillShareMode, groupIds: string[]): Promise<SkillRecord> {
-    return this.update({ id, shareMode, ...(shareMode === 'specific' ? { shareGroupIds: groupIds } : {}) });
-  }
-
-  listPersonal(userId: string): Promise<SkillRecord[]> {
-    return this.store.listSkillsForUser(userId);
-  }
-
-  listGroup(groupId: string): Promise<SkillRecord[]> {
-    return this.store.listSkillsForGroups([groupId]);
-  }
-
-  listSharedInto(groupId: string): Promise<SkillRecord[]> {
-    return this.store.listSkillsSharedIntoGroups([groupId]);
+  list(userId?: string): Promise<SkillRecord[]> {
+    return this.store.listSkills(userId ? { userId } : {});
   }
 
   async listInvocationCandidates(
-    ownerGroupId: string,
     userId?: string,
     canUse: (skill: SkillRunCandidate) => boolean = () => true,
   ): Promise<SkillRunCandidate[]> {
-    const candidates = await this.store.listSkillInvocationCandidates({
-      ownerGroupId,
-      ...(userId ? { userId } : {}),
-    });
+    const candidates = await this.store.listSkillInvocationCandidates(userId ? { userId } : {});
     return candidates.filter(canUse).sort(compareManagedSkillCatalogEntries);
   }
 
   async listForRun(input: {
-    ownerGroupId: string;
-    createdByUserId?: string;
+    userId?: string;
     invokedNames: string[];
     invokedRevisions: Array<{ skillId: string; revisionId: string }>;
   }): Promise<SkillRunCandidate[]> {
-    const authorization = input.createdByUserId
-      ? await this.liveInvocationAuthorization(input.createdByUserId, input.ownerGroupId)
-      : null;
-    if (input.createdByUserId && !authorization) return [];
     const candidates = await this.store.listSkillsForRun(input);
-    return candidates
-      .filter((skill) =>
-        authorization ? canInvokeSkillInSession(authorization, skill, { ownerGroupId: input.ownerGroupId }) : true,
-      )
-      .sort(compareManagedSkillCatalogEntries);
-  }
-
-  private async liveInvocationAuthorization(
-    userId: string,
-    ownerGroupId: string,
-  ): Promise<RequestAuthorization | null> {
-    const [user, memberships] = await Promise.all([
-      this.store.getAuthUser(userId),
-      this.store.listUserGroupMemberships(userId),
-    ]);
-    if (!user) return null;
-    const groups = await Promise.all(memberships.map((membership) => this.store.getGroup(membership.groupId)));
-    const auth: RequestAuthorization = {
-      bypass: false,
-      user,
-      memberships: memberships.filter((_, index) => !groups[index]?.archivedAt),
-    };
-    return canCreateSessionInGroup(auth, ownerGroupId) ? auth : null;
+    return candidates.sort(compareManagedSkillCatalogEntries);
   }
 
   private async requireSkill(id: string): Promise<SkillRecord> {
@@ -218,50 +163,6 @@ export class SkillService {
   private notFound(id: string): never {
     throw new SkillServiceError('not_found', `Skill not found: ${id}`);
   }
-}
-
-function createSkillSharing(input: CreateSkillInput): { shareMode: SkillShareMode; shareGroupIds: string[] } {
-  if (!('ownerGroupId' in input) || input.ownerGroupId === undefined) {
-    if (input.shareMode !== undefined || input.shareGroupIds !== undefined) {
-      throw new SkillServiceError('invalid_owner', 'Personal skills cannot be shared');
-    }
-    return { shareMode: 'none', shareGroupIds: [] };
-  }
-  const shareMode = input.shareMode ?? 'none';
-  if (shareMode !== 'specific' && input.shareGroupIds !== undefined) {
-    throw new SkillServiceError('invalid_sharing', 'Share groups are only valid for specific sharing');
-  }
-  const shareGroupIds = shareMode === 'specific' ? [...new Set(input.shareGroupIds ?? [])].sort() : [];
-  if (shareMode === 'specific' && !shareGroupIds.length) {
-    throw new SkillServiceError('invalid_sharing', 'Specific sharing requires at least one group');
-  }
-  return { shareMode, shareGroupIds };
-}
-
-function skillSharingUpdate(
-  existing: SkillRecord,
-  input: Pick<UpdateSkillInput, 'shareMode' | 'shareGroupIds'>,
-): { shareMode: SkillShareMode; shareGroupIds: string[]; changed: boolean } | undefined {
-  if (input.shareMode === undefined && input.shareGroupIds === undefined) return undefined;
-  if (existing.ownerKind !== 'group') {
-    throw new SkillServiceError('invalid_owner', 'Personal skills cannot be shared');
-  }
-  const shareMode = input.shareMode ?? existing.shareMode;
-  if (shareMode !== 'specific' && input.shareGroupIds !== undefined) {
-    throw new SkillServiceError('invalid_sharing', 'Share groups are only valid for specific sharing');
-  }
-  const shareGroupIds =
-    shareMode === 'specific' ? [...new Set(input.shareGroupIds ?? existing.shareGroupIds)].sort() : [];
-  if (shareMode === 'specific' && !shareGroupIds.length) {
-    throw new SkillServiceError('invalid_sharing', 'Specific sharing requires at least one group');
-  }
-  return {
-    shareMode,
-    shareGroupIds,
-    changed:
-      shareMode !== existing.shareMode ||
-      (shareMode === 'specific' && shareGroupIds.join('\0') !== [...existing.shareGroupIds].sort().join('\0')),
-  };
 }
 
 function validateSkillFields(input: { name?: unknown; description?: unknown; body?: unknown }): {
@@ -352,6 +253,7 @@ export class SkillServiceError extends Error {
       | 'invalid_name'
       | 'invalid_description'
       | 'invalid_body'
+      | 'invalid_scope'
       | 'invalid_sharing'
       | 'skill_archived',
     message: string,

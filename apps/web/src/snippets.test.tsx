@@ -8,7 +8,7 @@ import { SnippetsSidebar } from './components/app-panels/snippets-sidebar.js';
 
 const active: Snippet = {
   id: 'one',
-  ownerUserId: 'u',
+  createdByUserId: 'u',
   name: 'review-pr',
   body: 'Review pull request',
   createdAt: 'now',
@@ -16,7 +16,7 @@ const active: Snippet = {
 };
 const archived: Snippet = {
   id: 'two',
-  ownerUserId: 'u',
+  createdByUserId: 'u',
   name: 'old-deploy',
   body: 'Deploy old app',
   archivedAt: 'then',
@@ -221,6 +221,37 @@ it('offers archive and restore actions', () => {
   view.rerender(<SnippetsPanel {...common} selectedId="two" snippet={archived} />);
   fireEvent.click(screen.getByRole('button', { name: 'Restore snippet' }));
   expect(onRestore).toHaveBeenCalledWith('two');
+});
+
+it('keeps snippet browsing available while viewer controls are read-only', () => {
+  const onSelect = vi.fn();
+  const sidebar = render(
+    <SnippetsSidebar
+      snippets={[active, archived]}
+      selectedId="one"
+      loading={false}
+      mutationPending={false}
+      readOnly
+      footerProps={{} as never}
+      onSelect={onSelect}
+      onCreate={() => undefined}
+      onBack={() => undefined}
+      onCollapse={() => undefined}
+      onArchive={() => undefined}
+      onRestore={() => undefined}
+    />,
+  );
+  fireEvent.click(screen.getByText('review-pr'));
+  expect(onSelect).toHaveBeenCalledWith('one');
+  expect(screen.getByRole('button', { name: 'New snippet' })).toBeDisabled();
+  expect(screen.queryByRole('button', { name: /Archive .* snippet/ })).not.toBeInTheDocument();
+  sidebar.unmount();
+
+  render(<SnippetsPanel {...panelProps(vi.fn())} snippet={active} readOnly />);
+  expect(screen.getByLabelText('Name')).toBeDisabled();
+  expect(screen.getByLabelText('Body')).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Save snippet' })).toBeDisabled();
+  expect(screen.queryByRole('button', { name: 'Archive snippet' })).not.toBeInTheDocument();
 });
 
 it('keeps browser API proxy prefixes aligned across Vite, Caddy, and Helm', () => {

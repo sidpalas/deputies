@@ -1,7 +1,7 @@
 import { createSyntheticSourceInfo, stripFrontmatter } from '@earendil-works/pi-coding-agent';
 import type { NormalizedEventPayload } from '../events/types.js';
 import type { RunnerInput, RunnerMessageInput } from '../runner/types.js';
-import { compareManagedSkillPrecedence, skillSourcePrecedence } from '../skills/catalog.js';
+import { skillSourcePrecedence } from '../skills/catalog.js';
 import { clearManagedSkillsRoot, materializeManagedSkill } from './managed-skills.js';
 import { scanRepositorySkills } from './repository-mirror.js';
 import type {
@@ -49,13 +49,9 @@ export async function preparePiSkills(input: {
   if (input.provider) {
     const managedRoot = await clearManagedSkillsRoot(input.runnerInput, diagnostics);
     let managed: Array<{ candidate: ManagedSkillCandidate; invocationKeys: Set<string>; advertised: boolean }> = [];
-    if (!input.runnerInput.ownerGroupId) {
-      diagnostics.push('Managed skills were not resolved because the run has no owner group.');
-    } else {
+    {
       try {
         const autoLoaded = await input.provider.listForRun({
-          ownerGroupId: input.runnerInput.ownerGroupId,
-          ...(input.runnerInput.createdByUserId ? { createdByUserId: input.runnerInput.createdByUserId } : {}),
           invokedNames: [],
           invokedRevisions: [],
         });
@@ -68,8 +64,7 @@ export async function preparePiSkills(input: {
         for (const message of messageInvocations) {
           if (!message.invocations.length) continue;
           const invoked = await input.provider.listForRun({
-            ownerGroupId: input.runnerInput.ownerGroupId,
-            ...(message.authorUserId ? { createdByUserId: message.authorUserId } : {}),
+            ...(message.authorUserId ? { userId: message.authorUserId } : {}),
             invokedNames: [
               ...new Set(
                 message.invocations.filter((invocation) => !invocation.revisionId).map((invocation) => invocation.name),
@@ -118,11 +113,7 @@ export async function preparePiSkills(input: {
       group.push(resolved);
       managedGroups.set(key, group);
     }
-    const orderedManaged = [...managedGroups.values()].flatMap((group) =>
-      group[0]?.candidate.source === 'shared'
-        ? group.sort((left, right) => compareManagedSkillPrecedence(left.candidate, right.candidate))
-        : group,
-    );
+    const orderedManaged = [...managedGroups.values()].flatMap((group) => group);
     for (const resolved of orderedManaged) {
       const candidate = resolved.candidate;
       const materialized = await materializeManagedSkill(
@@ -152,8 +143,6 @@ export async function preparePiSkills(input: {
         skillId: candidate.id,
         revisionId: candidate.revisionId,
         revisionNumber: candidate.revisionNumber,
-        ...(candidate.ownerGroupId ? { ownerGroupId: candidate.ownerGroupId } : {}),
-        ...(candidate.ownerGroupName ? { ownerGroupName: candidate.ownerGroupName } : {}),
         createdAt: candidate.createdAt,
         invocationKeys: resolved.invocationKeys,
         order: order++,
@@ -268,8 +257,6 @@ function skillTrace(candidate: ResolvedSkill): PreparedSkillTrace {
     ref: candidate.ref,
     filePath: candidate.skill.filePath,
     ...(candidate.repo ? { repo: candidate.repo } : {}),
-    ...(candidate.ownerGroupId ? { ownerGroupId: candidate.ownerGroupId } : {}),
-    ...(candidate.ownerGroupName ? { ownerGroupName: candidate.ownerGroupName } : {}),
     ...(candidate.source !== 'repo'
       ? {
           skillId: candidate.skillId,
@@ -288,8 +275,6 @@ function skillLoadEventItem(
     name: candidate.skill.name,
     source: candidate.source,
     ...(candidate.repo ? { repo: candidate.repo } : {}),
-    ...(candidate.ownerGroupId ? { ownerGroupId: candidate.ownerGroupId } : {}),
-    ...(candidate.ownerGroupName ? { ownerGroupName: candidate.ownerGroupName } : {}),
     ...(candidate.source !== 'repo'
       ? {
           skillId: candidate.skillId,
@@ -325,8 +310,6 @@ function dedupeSkills(candidates: ResolvedSkill[]): {
         name: candidate.skill.name,
         source: candidate.source,
         ...(candidate.repo ? { repo: candidate.repo } : {}),
-        ...(candidate.ownerGroupId ? { ownerGroupId: candidate.ownerGroupId } : {}),
-        ...(candidate.ownerGroupName ? { ownerGroupName: candidate.ownerGroupName } : {}),
         ...(candidate.source !== 'repo'
           ? {
               skillId: candidate.skillId,
@@ -344,10 +327,6 @@ function dedupeSkills(candidates: ResolvedSkill[]): {
 function compareCatalogPrecedence(left: ResolvedSkill, right: ResolvedSkill): number {
   const sourceDifference = skillSourcePrecedence(left.source) - skillSourcePrecedence(right.source);
   if (sourceDifference) return sourceDifference;
-  if (left.source === 'shared' && right.source === 'shared') {
-    const createdDifference = left.createdAt.getTime() - right.createdAt.getTime();
-    if (createdDifference) return createdDifference;
-  }
   return left.order - right.order;
 }
 

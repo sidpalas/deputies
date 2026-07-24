@@ -1,11 +1,10 @@
 import { useMemo, useRef, useState } from 'react';
-import { ApiError, archiveSkill, listSkills, restoreSkill, type Group, type Skill } from './api.js';
+import { ApiError, archiveSkill, listSkills, restoreSkill, type Skill } from './api.js';
 
 type StateUpdate<T> = T | ((current: T) => T);
 
 export function useSkillsAdmin(input: {
   token: string;
-  groups: Group[];
   canCallApi: boolean;
   selectedSkillId: string;
   setSelectedSkillId: (next: StateUpdate<string>) => void;
@@ -37,24 +36,10 @@ export function useSkillsAdmin(input: {
     refreshInFlightRef.current = true;
     setLoading(true);
     try {
-      const groupIds = currentInput.groups
-        .filter((group) => !group.archivedAt && (group.membershipRole || group.canManage))
-        .map((group) => group.id);
-      const personal = await listSkills({ token: currentInput.token, scope: 'personal' });
+      const next = await listSkills({ token: currentInput.token });
       if (refreshRequestRef.current !== requestId) return;
       setAvailable(true);
-      const groupResults = await Promise.allSettled([
-        ...groupIds.map((groupId) => listSkills({ token: currentInput.token, scope: 'group', groupId })),
-        ...groupIds.map((groupId) => listSkills({ token: currentInput.token, scope: 'shared', groupId })),
-      ]);
-      if (refreshRequestRef.current !== requestId) return;
-      const failed = groupResults.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-      if (failed) currentInput.onError(failed.reason);
-      const next = dedupeSkills([
-        ...personal,
-        ...groupResults.flatMap((result) => (result.status === 'fulfilled' ? result.value : [])),
-      ]);
-      setSkills(next);
+      setSkills([...next].sort((left, right) => left.name.localeCompare(right.name)));
       currentInput.setSelectedSkillId((current) =>
         current && !next.some((skill) => skill.id === current) ? '' : current,
       );
@@ -126,25 +111,4 @@ export function useSkillsAdmin(input: {
     restore,
     reset,
   };
-}
-
-function dedupeSkills(skills: Skill[]): Skill[] {
-  const byId = new Map<string, Skill>();
-  for (const skill of skills) {
-    const current = byId.get(skill.id);
-    if (!current) {
-      byId.set(skill.id, skill);
-      continue;
-    }
-    const preferred = sourcePriority(skill.source) < sourcePriority(current.source) ? skill : current;
-    byId.set(skill.id, preferred);
-  }
-  return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function sourcePriority(source: Skill['source']): number {
-  if (source === 'personal') return 0;
-  if (source === 'group') return 1;
-  if (source === 'shared') return 2;
-  return 3;
 }

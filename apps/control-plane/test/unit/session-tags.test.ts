@@ -1,11 +1,10 @@
 import { normalizeAppendInput } from '../../src/events/service.js';
 import { normalizeSessionTags } from '../../src/sessions/tags.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import { defaultGroupId, type SessionRecord } from '../../src/store/types.js';
+import type { SessionRecord } from '../../src/store/types.js';
 import { defineSessionTagsStoreContract } from '../support/session-tags-store-contract.js';
 
 const baseTime = new Date('2026-07-08T00:00:00.000Z');
-const otherGroupId = '00000000-0000-4000-8000-000000000202';
 
 describe('session tags and filters', () => {
   it('paginates direct children and counts children matching the list filters', async () => {
@@ -119,13 +118,12 @@ describe('session tags and filters', () => {
     await expect(listIds(store, { starredByUserId: '00000000-0000-4000-8000-000000000105' })).resolves.toEqual([]);
   });
 
-  it('counts visible tags and orders sessions by last activity', async () => {
+  it('counts tenant-wide tags and orders sessions by last activity', async () => {
     const store = new MemoryStore();
     await store.createSession(
       session({
         id: '00000000-0000-4000-8000-000000000011',
         tags: ['infra'],
-        visibility: 'organization',
         lastActivityAt: at(1),
         updatedAt: at(9),
       }),
@@ -134,8 +132,6 @@ describe('session tags and filters', () => {
       session({
         id: '00000000-0000-4000-8000-000000000012',
         tags: ['infra', 'secret'],
-        ownerGroupId: otherGroupId,
-        visibility: 'group',
         lastActivityAt: at(5),
         updatedAt: at(1),
       }),
@@ -145,8 +141,9 @@ describe('session tags and filters', () => {
       '00000000-0000-4000-8000-000000000012',
       '00000000-0000-4000-8000-000000000011',
     ]);
-    await expect(store.listSessionTags({ visibleTo: { groupIds: [defaultGroupId] }, limit: 10 })).resolves.toEqual([
-      { tag: 'infra', sessionCount: 1 },
+    await expect(store.listSessionTags({ limit: 10 })).resolves.toEqual([
+      { tag: 'infra', sessionCount: 2 },
+      { tag: 'secret', sessionCount: 1 },
     ]);
   });
 
@@ -194,9 +191,6 @@ function session(input: Partial<SessionRecord> & { id: string }): SessionRecord 
   return {
     status: 'idle',
     spawnDepth: 0,
-    ownerGroupId: defaultGroupId,
-    visibility: 'organization',
-    writePolicy: 'group_members',
     createdAt,
     updatedAt,
     lastActivityAt: input.lastActivityAt ?? updatedAt,
