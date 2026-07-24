@@ -89,7 +89,7 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
     if (current.status === 'archived' && !readOnly.includes(action))
       throw new NotepadServiceError('archived', 'Archived sessions are read-only');
     const actor: NotepadActor = { kind: 'agent', sessionId: s.sessionId, runId: s.runId };
-    const agentAuth: RequestAuthorization = { bypass: true, user: null };
+    const agentAuth: RequestAuthorization = { bypass: true, user: null, agentSessionId: s.sessionId };
     const capability = async (kind: 'explicit_search' | 'session_notepad_coordination') =>
       (await s.store.listSessionNotepadCapabilities(s.sessionId)).find((c) => c.kind === kind);
     const ownSession = async () => bounded(await s.notepads.readSession(agentAuth, s.sessionId), p);

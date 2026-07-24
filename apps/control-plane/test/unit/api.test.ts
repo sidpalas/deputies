@@ -1665,6 +1665,47 @@ describe('core API', () => {
     }
   });
 
+  it.each([
+    { mode: 'none' as const, token: undefined },
+    { mode: 'bearer' as const, token: 'preview-bearer-token' },
+  ])('does not expose private service hosts in $mode auth mode', async ({ mode, token }) => {
+    await closeServer(server);
+    const services = createServices(store);
+    await store.upsertAuthUserForAccount({
+      userId: '00000000-0000-4000-8000-000000000599',
+      accountId: '00000000-0000-4000-8000-000000000598',
+      provider: 'test',
+      providerAccountId: 'private-preview-owner',
+      username: 'private-preview-owner',
+      role: 'member',
+      profile: {},
+      now: new Date(),
+    });
+    const privateSession = await services.sessions.create({
+      title: 'Private preview',
+      visibility: 'private',
+      ownerUserId: '00000000-0000-4000-8000-000000000599',
+    });
+    server = createServer(
+      loadConfig({
+        API_AUTH_MODE: mode,
+        ...(token ? { API_BEARER_TOKEN: token } : {}),
+        WEB_BASE_URL: 'https://deputies.localhost',
+        SERVICE_TRUST_FORWARDED_HOSTS: 'true',
+      }),
+      services,
+    );
+    baseUrl = await listen(server);
+
+    const response = await fetch(`${baseUrl}/`, {
+      headers: {
+        'x-forwarded-host': `s-3000-${privateSession.id}.deputies.localhost`,
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    expect(response.status).toBe(404);
+  });
+
   it('preserves provider preview URL query parameters when forwarding service paths', async () => {
     const upstream = createPreviewUpstream();
     const upstreamBaseUrl = await listen(upstream);
@@ -2792,8 +2833,7 @@ describe('core API', () => {
           id: '00000000-0000-4000-8000-000000000001',
           status: 'active' as const,
           spawnDepth: 0,
-          visibility: 'organization' as const,
-          writePolicy: 'group_members' as const,
+          visibility: 'tenant' as const,
           createdAt: new Date('2026-05-01T00:00:00.000Z'),
           updatedAt: new Date('2026-05-01T00:00:00.000Z'),
           lastActivityAt: new Date('2026-05-01T00:00:00.000Z'),

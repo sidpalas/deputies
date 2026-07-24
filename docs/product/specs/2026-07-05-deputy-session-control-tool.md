@@ -29,7 +29,7 @@ Deputies has runner-native subagent mechanisms for quick intra-run delegation, b
 ## Proposed Design
 
 - `sessions/deputy-tool.ts` owns schema validation, policy checks, durable session operations, and result serialization.
-- `auth/agent-authorization.ts` defines the session-agent policy: read organization-visible or same-group sessions, spawn only in the acting group, write/cancel only non-archived direct children.
+- `auth/agent-authorization.ts` defines the session-agent policy: read and manage any tenant session plus private sessions owned by the acting private session's owner. Spawned children inherit access initially, but lineage does not constrain later access or promotion.
 - The Pi adapter exposes the `deputies` action surface when `DEPUTY_TOOL_ENABLED=true`.
 - `spawn` creates a child session with status `queued`, parent lineage, inherited access fields, and an initial pending message.
 - `idempotencyKey` deterministically derives child session/message IDs so retrying returns the same child without consuming more quota.

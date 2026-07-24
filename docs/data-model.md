@@ -12,7 +12,7 @@ Viewers can read active and archived tenant resources. Members and admins can ma
 
 ## Tenant Resources
 
-Sessions, automations, environments, tenant-scoped skills, and explicit notepads are tenant-wide. They have no access-group owner or per-resource sharing policy. Members and admins manage them; viewers read them. Ordinary resources are archived/restored rather than hard-deleted, and archived rows remain readable.
+Sessions are tenant-wide by default; members and admins may instead create owner-only private sessions. Automations, environments, tenant-scoped skills, and explicit notepads are tenant-wide and have no access-group owner or per-resource sharing policy. Members and admins manage ordinary tenant resources; viewers read them. Ordinary resources are archived/restored rather than hard-deleted, and archived rows remain readable to the same audience.
 
 Environment and tenant-skill names are trimmed and case-insensitively unique tenant-wide, including archived rows. Personal skill and snippet names are scoped to their owner.
 
@@ -34,9 +34,9 @@ Environment and tenant-skill names are trimmed and case-insensitively unique ten
 
 ## Sessions, Messages, And Runs
 
-`sessions` is the durable unit of work. It stores lifecycle/status, title and execution defaults, optional repository/environment context, parent lineage, spawn depth, timestamps, and nullable `created_by_user_id` audit attribution. It has no owner, visibility, or write-policy columns.
+`sessions` is the durable unit of work. It stores lifecycle/status, title and execution defaults, optional repository/environment context, parent lineage, spawn depth, timestamps, nullable `created_by_user_id` audit attribution, and `visibility`. Private rows require immutable `owner_user_id`; promotion changes only `visibility` to `tenant` and retains the owner as audit history. A database trigger prevents owner mutation and tenant-to-private demotion.
 
-`messages` stores ordered user/deputy content, processing status, source context, and author attribution. Message author IDs support audit and managed request provenance, not private access. Agent-created child sessions are ordinary tenant resources; `parent_session_id` and `spawn_depth` represent coordination lineage only.
+`messages` stores ordered user/deputy content, processing status, source context, and author attribution. Message author IDs support audit and managed request provenance, not private access. Agent-created children initially inherit the acting session's visibility and owner, but may be promoted independently; `parent_session_id` and `spawn_depth` represent coordination lineage rather than an access boundary.
 
 `runs` records each execution attempt, lease ownership, runner/model information, terminal state, and usage. Product session IDs and Pi runtime session IDs remain separate.
 

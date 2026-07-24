@@ -20,6 +20,7 @@ export function planSessionEvent(event: AgentEvent): SessionEventPlan {
     case 'session_created':
     case 'session_archived':
     case 'session_unarchived':
+    case 'session_visibility_changed':
       return plan([], 'list');
     case 'session_spawned':
     case 'session_queue_paused':

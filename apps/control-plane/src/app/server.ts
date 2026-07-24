@@ -43,7 +43,13 @@ import { SkillService } from '../skills/service.js';
 import { canonicalizeMessageSkillContext, SkillContextError } from '../skills/invocation.js';
 import { normalizeSessionTags } from '../sessions/tags.js';
 import { MemoryStore } from '../store/memory.js';
-import type { AppStore, SandboxRecord, SessionListCursor, SessionRecord } from '../store/types.js';
+import {
+  StoreConflictError,
+  type AppStore,
+  type SandboxRecord,
+  type SessionListCursor,
+  type SessionRecord,
+} from '../store/types.js';
 import { registerAuthRoutes } from './auth-routes.js';
 import { registerAutomationRoutes } from './automation-routes.js';
 import { registerEnvironmentRoutes } from './environment-routes.js';
@@ -96,6 +102,7 @@ import {
 export type AppVariables = {
   requestId: string;
   authorizedSession?: SessionRecord;
+  privateWriteLeaseActive?: boolean;
 };
 
 export type AppServices = {
@@ -205,6 +212,7 @@ export function createApp(config: AppConfig, services = createServices()) {
       apiAuthMode: config.apiAuthMode,
       authProvider: config.apiAuthMode === 'session' ? config.authProvider : undefined,
       sandboxProvider: config.sandboxProvider,
+      privateSessionsEnabled: config.privateSessionsEnabled,
       hideSetupPage: config.hideSetupPage,
       ...(notices.length ? { notices } : {}),
     });
@@ -249,10 +257,17 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
     const body = await readJsonBody(c, config.maxJsonBodyBytes);
     const title = optionalString(body.title);
+    const visibility = body.visibility ?? 'tenant';
+    if (visibility !== 'tenant' && visibility !== 'private') {
+      return writeError(c, 400, 'invalid_request', 'Expected visibility to be tenant or private');
+    }
+    if (visibility === 'private' && !config.privateSessionsEnabled) {
+      return writeError(c, 409, 'feature_disabled', 'Private session creation is not enabled');
+    }
     if (
       body.ownerGroupId !== undefined ||
       body.ownerGroupName !== undefined ||
-      body.visibility !== undefined ||
+      body.ownerUserId !== undefined ||
       body.writePolicy !== undefined
     ) {
       return writeError(c, 400, 'invalid_request', 'Session access policy fields are no longer supported');
@@ -260,10 +275,28 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (!auth.bypass && auth.user.role === 'viewer') {
       return writeError(c, 403, 'forbidden', 'Member access is required');
     }
-    const session = await services.sessions.create({
-      ...(title ? { title } : {}),
-      ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
-    });
+    if (visibility === 'private' && auth.bypass) {
+      return writeError(c, 400, 'invalid_request', 'Private sessions require a user session');
+    }
+    const create = () =>
+      services.sessions.create({
+        ...(title ? { title } : {}),
+        ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
+        visibility,
+        ...(visibility === 'private' && !auth.bypass ? { ownerUserId: auth.user.id } : {}),
+      });
+    let session: SessionRecord;
+    try {
+      session =
+        visibility === 'private' && !auth.bypass
+          ? await services.store.withUserWriteLease(auth.user.id, create)
+          : await create();
+    } catch (error) {
+      if (error instanceof StoreConflictError && error.code === 'not_found') {
+        return writeError(c, 403, 'forbidden', 'Member access is required');
+      }
+      throw error;
+    }
     return c.json({ session: await serializeSessionWithSandbox(config, services, session) }, 201);
   });
 
@@ -361,7 +394,10 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.get('/sessions/tags', async (c) => {
     const auth = await requireRequestAuthorization(config, services.store, c);
     if (!auth) return writeError(c, 401, 'unauthorized', 'Missing or invalid session');
-    const tags = await services.store.listSessionTags({ limit: 100 });
+    const tags = await services.store.listSessionTags({
+      limit: 100,
+      ...(auth.bypass ? {} : { visibleToUserId: auth.user.id }),
+    });
     return c.json({ tags });
   });
 
@@ -388,10 +424,19 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (
       body.ownerGroupId !== undefined ||
       body.ownerGroupName !== undefined ||
-      body.visibility !== undefined ||
+      body.ownerUserId !== undefined ||
       body.writePolicy !== undefined
     ) {
       return writeError(c, 400, 'invalid_request', 'Session access policy fields are no longer supported');
+    }
+    if (body.visibility !== undefined && body.visibility !== 'tenant') {
+      return writeError(c, 400, 'invalid_request', 'Sessions can only be promoted to tenant visibility');
+    }
+    if (body.visibility === 'tenant' && session.visibility !== 'private') {
+      return writeError(c, 400, 'invalid_request', 'Tenant session visibility cannot be changed');
+    }
+    if (body.visibility === 'tenant' && (body.title !== undefined || body.tags !== undefined)) {
+      return writeError(c, 400, 'invalid_request', 'Promote session visibility in a separate request');
     }
     const title = optionalString(body.title);
     if (body.title !== undefined && !title)
@@ -416,6 +461,7 @@ export function createApp(config: AppConfig, services = createServices()) {
         requireNonArchived: true,
         ...(title ? { title } : {}),
         ...(tags !== undefined ? { tags } : {}),
+        ...(body.visibility === 'tenant' ? { promoteToTenant: true } : {}),
       });
       const auth = await requireRequestAuthorization(config, services.store, c);
       return c.json({
@@ -980,6 +1026,7 @@ export function createWorkerHealthServer(config: AppConfig) {
       apiAuthMode: config.apiAuthMode,
       authProvider: config.apiAuthMode === 'session' ? config.authProvider : undefined,
       sandboxProvider: config.sandboxProvider,
+      privateSessionsEnabled: config.privateSessionsEnabled,
     }),
   );
 
@@ -1066,6 +1113,9 @@ function servicePreviewMiddleware(
     }
     const session = await services.sessions.get(serviceHost.sessionId);
     if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+    if (session.visibility === 'private' && config.apiAuthMode !== 'session') {
+      return writeError(c, 404, 'not_found', 'Session not found');
+    }
     const service = await getSessionService(config, services, serviceHost.sessionId, serviceHost.port);
     if (!service) return writeError(c, 404, 'not_found', 'Service URL is not available for this sandbox');
     if (config.apiAuthMode === 'bearer') {
@@ -1097,8 +1147,29 @@ function sessionAuthorizationMiddleware(
     const isStarRoute = pathname === `/sessions/${sessionId}/star`;
     const allowed =
       unsafeMethods.has(method) && !isStarRoute ? canWriteSession(auth, session) : canReadSession(auth, session);
-    if (!allowed) return writeError(c, 403, 'forbidden', 'Session access is required');
+    if (!allowed) {
+      if (session.visibility === 'private') return writeError(c, 404, 'not_found', 'Session not found');
+      return writeError(c, 403, 'forbidden', 'Session access is required');
+    }
     c.set('authorizedSession', session);
+    if (
+      unsafeMethods.has(method) &&
+      !isStarRoute &&
+      session.visibility === 'private' &&
+      !auth.bypass &&
+      !c.get('privateWriteLeaseActive')
+    ) {
+      try {
+        c.set('privateWriteLeaseActive', true);
+        await services.store.withPrivateSessionWriteLease(auth.user.id, session.id, next);
+      } catch (error) {
+        if (error instanceof StoreConflictError && error.code === 'not_found') {
+          return writeError(c, 404, 'not_found', 'Session not found');
+        }
+        throw error;
+      }
+      return;
+    }
     await next();
   };
 }
@@ -1290,6 +1361,7 @@ function parseSessionListFilters(c: Context, auth: RequestAuthorization) {
   const participantUserId = parseMeUserFilter(c.req.query('participant'), 'participant', auth);
   const starredByUserId = parseMeUserFilter(c.req.query('starred'), 'starred', auth);
   return {
+    ...(!auth.bypass ? { visibleToUserId: auth.user.id } : {}),
     ...(tags.length ? { tags } : {}),
     ...(createdByUserId ? { createdByUserId } : {}),
     ...(participantUserId ? { participantUserId } : {}),

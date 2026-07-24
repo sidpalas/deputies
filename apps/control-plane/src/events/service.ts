@@ -10,6 +10,7 @@ const globalEventTypes = new Set<NormalizedEventType>([
   'session_created',
   'session_spawned',
   'session_updated',
+  'session_visibility_changed',
   'session_archived',
   'session_unarchived',
   'session_queue_paused',

@@ -25,6 +25,7 @@ export type DeputyToolBaseServices = {
   store: Pick<
     AppStore,
     | 'getSession'
+    | 'withAgentSessionLease'
     | 'getMessage'
     | 'getSessionTranscript'
     | 'listSessionsForAgent'
@@ -36,13 +37,14 @@ export type DeputyToolBaseServices = {
   >;
   events: Pick<EventService, 'publishExternal'>;
   messages: Pick<MessageService, 'enqueue' | 'cancelActiveRun'>;
-  sessions: Pick<SessionService, 'archive' | 'unarchive'>;
+  sessions: Pick<SessionService, 'archive' | 'unarchive' | 'update'>;
   sandboxCleanup?: { destroySessionSandboxes(sessionId: string): Promise<SandboxCleanupResult> };
   github?: RepositoryAccessProvider;
   webBaseUrl?: string;
   maxSpawnDepth: number;
   maxChildrenPerSession: number;
   maxSpawnsPerRun: number;
+  privateSessionsEnabled: boolean;
 };
 
 export type DeputyToolServices = DeputyToolBaseServices & {
@@ -72,7 +74,7 @@ const defaultTranscriptLimit = 10;
 const maxResponseTextLength = 8_000;
 
 export const deputyToolDescription =
-  'Coordinate durable Deputies sessions. Spawn child sessions, list or inspect readable sessions, manage direct children by sending follow-up prompts or cancelling runs, and archive or restore this session or its direct children. Use this for long-running, separately auditable product sessions, not for quick in-run subtasks.';
+  'Coordinate durable Deputies sessions. Spawn child sessions and list, inspect, or manage any session readable to this agent. Use this for long-running, separately auditable product sessions, not for quick in-run subtasks.';
 
 export const deputyToolParameters = {
   type: 'object',
@@ -96,8 +98,7 @@ export const deputyToolParameters = {
     },
     sessionId: {
       type: 'string',
-      description:
-        'Target session ID. Lifecycle actions support this session or a direct child; archive and restore default to the current session when omitted.',
+      description: 'Readable target session ID. Archive and restore default to the current session when omitted.',
     },
     scope: {
       type: 'string',
@@ -163,22 +164,30 @@ export async function executeDeputyTool(services: DeputyToolServices, params: un
     if (isMutatingAction(action) && services.shouldPersist && !(await services.shouldPersist())) {
       throw new Error('Cannot mutate Deputies sessions because the parent run is no longer active');
     }
-    switch (action) {
-      case 'spawn':
-        return { ok: true, action, ...(await spawnSession(services, input)) };
-      case 'list_sessions':
-        return { ok: true, action, ...(await listSessions(services, input)) };
-      case 'get_session':
-        return { ok: true, action, ...(await getSession(services, input)) };
-      case 'send_message':
-        return { ok: true, action, ...(await sendMessage(services, input)) };
-      case 'cancel':
-        return { ok: true, action, ...(await cancelChildRun(services, input)) };
-      case 'archive':
-        return { ok: true, action, ...(await archiveSession(services, input)) };
-      case 'restore':
-        return { ok: true, action, ...(await restoreSession(services, input)) };
-    }
+    const selectedAction = action;
+    return await services.store.withAgentSessionLease(services.sessionId, async () => {
+      if (isMutatingAction(selectedAction) && services.shouldPersist && !(await services.shouldPersist())) {
+        throw new Error('Cannot mutate Deputies sessions because the parent run is no longer active');
+      }
+      switch (selectedAction) {
+        case 'spawn':
+          return { ok: true, action: selectedAction, ...(await spawnSession(services, input)) };
+        case 'list_sessions':
+          return { ok: true, action: selectedAction, ...(await listSessions(services, input)) };
+        case 'get_session':
+          return { ok: true, action: selectedAction, ...(await getSession(services, input)) };
+        case 'send_message':
+          return { ok: true, action: selectedAction, ...(await sendMessage(services, input)) };
+        case 'cancel':
+          return { ok: true, action: selectedAction, ...(await cancelChildRun(services, input)) };
+        case 'archive':
+          return { ok: true, action: selectedAction, ...(await archiveSession(services, input)) };
+        case 'restore':
+          return { ok: true, action: selectedAction, ...(await restoreSession(services, input)) };
+        default:
+          throw new Error('Unsupported deputies action');
+      }
+    });
   } catch (error) {
     return { ok: false, ...(action ? { action } : {}), error: errorMessage(error) };
   }
@@ -209,6 +218,9 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
   const sessionId = idempotencyKey ? deterministicUuid('deputy-session', parent.id, idempotencyKey) : randomUUID();
   const messageId = idempotencyKey ? deterministicUuid('deputy-message', parent.id, idempotencyKey) : randomUUID();
   const existing = idempotencyKey ? await services.store.getSession(sessionId) : null;
+  if (!existing && parent.visibility === 'private' && !services.privateSessionsEnabled) {
+    throw new Error('Private session creation is not enabled');
+  }
   if (!existing && services.runState.spawns >= services.maxSpawnsPerRun) {
     throw new Error(`Cannot spawn more than ${services.maxSpawnsPerRun} child sessions in one run`);
   }
@@ -219,6 +231,8 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
   const now = new Date();
   const child: SessionRecord = {
     id: sessionId,
+    visibility: parent.visibility ?? 'tenant',
+    ...(parent.ownerUserId ? { ownerUserId: parent.ownerUserId } : {}),
     status: 'queued',
     parentSessionId: parent.id,
     spawnDepth: parent.spawnDepth + 1,
@@ -354,7 +368,7 @@ async function getSession(services: DeputyToolServices, params: Record<string, u
       createdByUserId: session.createdByUserId ?? null,
       context: session.context ?? null,
       queuePausedAt: session.queuePausedAt?.toISOString() ?? null,
-      children: children.map(serializeSessionSummary),
+      children: children.filter((child) => agentCanReadSession(agent, child)).map(serializeSessionSummary),
       messageCount: messageSummary.count,
       lastRunStatus: lastRunStatus(latestRun),
       lastCompletedResponseText: lastCompletedResponseText(latestFinalResponse),
@@ -419,7 +433,7 @@ async function restoreSession(services: DeputyToolServices, params: Record<strin
   const sessionId = readOptionalString(params.sessionId, 'sessionId', 128) ?? services.sessionId;
   const target = await services.store.getSession(sessionId);
   if (!target || !agentCanManageSession(agentPrincipal(parent), target) || target.status !== 'archived') {
-    throw new Error(`Can only restore this session or an archived direct child session: ${sessionId}`);
+    throw new Error(`Can only restore readable archived sessions: ${sessionId}`);
   }
   const session = await services.sessions.unarchive(target.id);
   return { session: serializeSessionSummary(session) };
@@ -449,7 +463,7 @@ async function requireWritableChild(
 ): Promise<SessionRecord> {
   const session = await services.store.getSession(sessionId);
   if (!session || !agentCanWriteSession(agent, session)) {
-    throw new Error(`Can only ${operation} non-archived direct child sessions: ${sessionId}`);
+    throw new Error(`Can only ${operation} readable non-archived sessions: ${sessionId}`);
   }
   return session;
 }
@@ -462,7 +476,7 @@ async function requireManagedSession(
 ): Promise<SessionRecord> {
   const session = await services.store.getSession(sessionId);
   if (!session || !agentCanManageSession(agent, session)) {
-    throw new Error(`Can only ${operation} this session or a direct child session: ${sessionId}`);
+    throw new Error(`Can only ${operation} readable sessions: ${sessionId}`);
   }
   return session;
 }
@@ -474,7 +488,7 @@ async function requireCancellableChild(
 ): Promise<SessionRecord> {
   const session = await services.store.getSession(sessionId);
   if (!session || !agentCanCancelSession(agent, session)) {
-    throw new Error(`Can only cancel non-archived direct child sessions: ${sessionId}`);
+    throw new Error(`Can only cancel readable non-archived sessions: ${sessionId}`);
   }
   return session;
 }
@@ -484,6 +498,7 @@ function agentPrincipal(session: SessionRecord): AgentPrincipal {
     kind: 'session_agent',
     sessionId: session.id,
     spawnDepth: session.spawnDepth,
+    ...(session.visibility === 'private' && session.ownerUserId ? { ownerUserId: session.ownerUserId } : {}),
   };
 }
 

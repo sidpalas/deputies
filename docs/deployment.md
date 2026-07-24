@@ -369,6 +369,16 @@ TITLE_GENERATION_ENABLED=false
 
 Leave `TITLE_GENERATION_MODEL` unset to use the session model. When generation is disabled or fails, the initial prompt-derived title is preserved.
 
+## Private Sessions
+
+Private-session creation is disabled by default:
+
+```sh
+PRIVATE_SESSIONS_ENABLED=false
+```
+
+Enabling private-session creation requires a two-phase rollout. First upgrade every API, worker, and combined control-plane process with the flag disabled and apply migrations `021_private_sessions.sql` and `022_validate_private_sessions.sql`. After the first rollout is complete and no older control-plane process remains, enable the flag in a second rollout. Do not enable it during the first rolling upgrade: older API and worker processes do not enforce private visibility and could expose a private session created by a newer process. The Helm setting is `config.privateSessionsEnabled` and also defaults to `false`. Disabling it later prevents direct and Deputy child creation but deliberately leaves one-way promotion available for existing private sessions.
+
 ## Agent Skills
 
 Managed and repository skills are enabled by default:

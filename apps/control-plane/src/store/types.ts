@@ -114,6 +114,8 @@ export type UpsertAuthUserForAccountRecord = {
 
 export type SessionRecord = {
   id: string;
+  visibility?: 'tenant' | 'private';
+  ownerUserId?: string;
   status: SessionStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -517,6 +519,8 @@ export type ListAutomationInvocationsOptions = {
 
 export type CreateSessionRecord = {
   id: string;
+  visibility?: 'tenant' | 'private';
+  ownerUserId?: string;
   status: SessionStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -769,6 +773,7 @@ export type SessionListOptions = {
   createdByUserId?: string;
   participantUserId?: string;
   starredByUserId?: string;
+  visibleToUserId?: string;
   limit: number;
   cursor?: SessionListCursor;
 };
@@ -786,6 +791,7 @@ export type SessionSearchOptions = {
   createdByUserId?: string;
   participantUserId?: string;
   starredByUserId?: string;
+  visibleToUserId?: string;
   limit: number;
   cursor?: number;
 };
@@ -821,6 +827,7 @@ export type SessionMetadataUpdateInput = {
   requireNonArchived?: boolean;
   title?: string;
   tags?: string[];
+  promoteToTenant?: boolean;
 };
 
 export type SessionTitleUpdateInput = {
@@ -845,12 +852,15 @@ export interface SessionStore {
     input: CreateSessionWithFirstMessageInput,
   ): Promise<CreateSessionWithFirstMessageResult>;
   getSession(id: string): Promise<SessionRecord | null>;
+  withAgentSessionLease<T>(actingSessionId: string, operation: () => Promise<T>): Promise<T>;
+  withUserWriteLease<T>(userId: string, operation: () => Promise<T>): Promise<T>;
+  withPrivateSessionWriteLease<T>(userId: string, sessionId: string, operation: () => Promise<T>): Promise<T>;
   listSessions(): Promise<SessionRecord[]>;
   listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]>;
   listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]>;
   listSessionsWithLatestSandbox(provider: string, options: SessionListOptions): Promise<SessionWithSandboxPage>;
   searchSessions(provider: string, options: SessionSearchOptions): Promise<SessionSearchPage>;
-  listSessionTags(options: { limit: number }): Promise<SessionTagSummary[]>;
+  listSessionTags(options: { limit: number; visibleToUserId?: string }): Promise<SessionTagSummary[]>;
   starSession(input: { sessionId: string; userId: string; now: Date }): Promise<void>;
   unstarSession(input: { sessionId: string; userId: string }): Promise<void>;
   listStarredSessionIds(input: { userId: string; sessionIds: string[] }): Promise<Set<string>>;

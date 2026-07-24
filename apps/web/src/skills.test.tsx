@@ -306,7 +306,12 @@ it('expands snippets by mouse in NewThreadPanel while a single slash remains the
   fireEvent.change(textarea, { target: { value: `${snippet.body} edited` } });
   fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
   await waitFor(() =>
-    expect(onSubmit).toHaveBeenCalledWith({ prompt: `${snippet.body} edited`, skills: [], skillRefs: [] }),
+    expect(onSubmit).toHaveBeenCalledWith({
+      prompt: `${snippet.body} edited`,
+      skills: [],
+      skillRefs: [],
+      visibility: 'tenant',
+    }),
   );
 });
 
@@ -405,6 +410,7 @@ it('pins the managed revision from the new-thread composer', async () => {
       prompt: '',
       skills: ['review-change'],
       skillRefs: [{ id: 'skill-1', name: 'review-change', revisionId: 'revision-2' }],
+      visibility: 'tenant',
     }),
   );
 });

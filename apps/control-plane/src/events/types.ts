@@ -33,6 +33,7 @@ export type NormalizedEventPayloadMap = {
     tags?: string[];
     context?: Record<string, unknown> | null;
   };
+  session_visibility_changed: { visibility: 'tenant' };
   session_queue_paused: EmptyEventPayload;
   session_queue_resumed: EmptyEventPayload;
   message_created: { sequence: number; source: string | null; transcriptOnly?: true };
@@ -217,6 +218,7 @@ export type NormalizedEventType =
   | 'session_archived'
   | 'session_unarchived'
   | 'session_updated'
+  | 'session_visibility_changed'
   | 'session_queue_paused'
   | 'session_queue_resumed'
   | 'message_created'

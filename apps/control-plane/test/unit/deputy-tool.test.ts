@@ -127,6 +127,19 @@ describe('deputies tool', () => {
     });
   });
 
+  it('does not spawn a private child while private-session creation is disabled', async () => {
+    const { services } = await createDeputyServices({
+      parent: { visibility: 'private', ownerUserId: creatorUserId },
+      privateSessionsEnabled: false,
+    });
+    await expect(
+      executeDeputyTool(services, { action: 'spawn', prompt: 'blocked private child' }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: 'Private session creation is not enabled',
+    });
+  });
+
   it('returns structured errors for malformed input and disabled persistence', async () => {
     const { services, store } = await createDeputyServices();
 
@@ -167,6 +180,61 @@ describe('deputies tool', () => {
     await expect(store.getEvents(parentId)).resolves.toHaveLength(1);
   });
 
+  it('does not let an agent in a promoted session discover the former owner private sessions', async () => {
+    const { services, store } = await createDeputyServices({
+      parent: { visibility: 'private', ownerUserId: creatorUserId },
+    });
+    const privateSibling = sessionRecord({
+      id: '00000000-0000-4000-8000-000000000106',
+      visibility: 'private',
+      ownerUserId: creatorUserId,
+      title: 'Separate private session',
+    });
+    await store.createSession(privateSibling);
+
+    await services.sessions.update({ id: parentId, promoteToTenant: true });
+    const result = await executeDeputyTool(services, { action: 'list_sessions', scope: 'tenant' });
+    expect(result).toMatchObject({ ok: true, action: 'list_sessions' });
+    if (!result.ok) throw new Error(result.error);
+    expect((result.sessions as Array<{ id: string }>).map((session) => session.id)).not.toContain(privateSibling.id);
+    await expect(
+      executeDeputyTool(services, { action: 'get_session', sessionId: privateSibling.id }),
+    ).resolves.toMatchObject({ ok: false, error: `Session is not readable: ${privateSibling.id}` });
+  });
+
+  it('does not replay a private idempotent spawn after the acting parent is promoted', async () => {
+    const { services } = await createDeputyServices({
+      parent: { visibility: 'private', ownerUserId: creatorUserId },
+    });
+    await expect(
+      executeDeputyTool(services, { action: 'spawn', prompt: 'private child', idempotencyKey: 'private-child' }),
+    ).resolves.toMatchObject({ ok: true, idempotentReplay: false });
+
+    await services.sessions.update({ id: parentId, promoteToTenant: true });
+    await expect(
+      executeDeputyTool(services, { action: 'spawn', prompt: 'private child', idempotencyKey: 'private-child' }),
+    ).resolves.toMatchObject({ ok: false, error: 'Spawned session not found' });
+  });
+
+  it('serializes acting-parent promotion with an in-flight private spawn', async () => {
+    const { services, store } = await createDeputyServices({
+      parent: { visibility: 'private', ownerUserId: creatorUserId },
+    });
+    const create = store.createSessionWithFirstMessage.bind(store);
+    let promotion: Promise<unknown> | undefined;
+    vi.spyOn(store, 'createSessionWithFirstMessage').mockImplementationOnce(async (input) => {
+      promotion = services.sessions.update({ id: parentId, promoteToTenant: true });
+      await Promise.resolve();
+      return create(input);
+    });
+
+    await expect(
+      executeDeputyTool(services, { action: 'spawn', prompt: 'serialized private child' }),
+    ).resolves.toMatchObject({ ok: true });
+    await promotion;
+    await expect(store.getSession(parentId)).resolves.toMatchObject({ visibility: 'tenant' });
+  });
+
   it('exposes the acting session ID and self-archive behavior in model-visible guidance', async () => {
     const { services } = await createDeputyServices();
     const tool = createPiDeputyToolDefinition(services);
@@ -193,22 +261,27 @@ describe('deputies tool', () => {
     });
   });
 
-  it('sends follow-ups only to non-archived direct children', async () => {
+  it('sends follow-ups to readable non-archived sessions', async () => {
     const { services, store } = await createDeputyServices();
     const spawned = await executeDeputyTool(services, { action: 'spawn', prompt: 'child' });
     if (!spawned.ok) throw new Error(spawned.error);
     const childId = (spawned.session as { id: string }).id;
+    const peerId = '00000000-0000-4000-8000-000000000207';
+    await store.createSession(sessionRecord({ id: peerId, title: 'Peer' }));
 
     await expect(
       executeDeputyTool(services, { action: 'send_message', sessionId: childId, prompt: 'follow up' }),
     ).resolves.toMatchObject({ ok: true, message: expect.objectContaining({ sequence: 2, source: 'deputy' }) });
+    await expect(
+      executeDeputyTool(services, { action: 'send_message', sessionId: peerId, prompt: 'coordinate' }),
+    ).resolves.toMatchObject({ ok: true, message: expect.objectContaining({ sequence: 1, source: 'deputy' }) });
 
     await store.updateSession({ ...(await store.getSession(childId))!, status: 'archived' });
     await expect(
       executeDeputyTool(services, { action: 'send_message', sessionId: childId, prompt: 'blocked' }),
     ).resolves.toMatchObject({
       ok: false,
-      error: `Can only send messages to non-archived direct child sessions: ${childId}`,
+      error: `Can only send messages to readable non-archived sessions: ${childId}`,
     });
   });
 
@@ -300,7 +373,7 @@ describe('deputies tool', () => {
     ]);
   });
 
-  it('cancels active direct child runs only', async () => {
+  it('cancels active runs in readable sessions', async () => {
     const { services, store } = await createDeputyServices();
     const spawned = await executeDeputyTool(services, { action: 'spawn', prompt: 'child' });
     if (!spawned.ok) throw new Error(spawned.error);
@@ -319,9 +392,27 @@ describe('deputies tool', () => {
       cancelledMessageIds: [childMessage!.id],
     });
     await expect(store.getMessages(childId)).resolves.toMatchObject([{ status: 'cancelling' }]);
-    await expect(executeDeputyTool(services, { action: 'cancel', sessionId: parentId })).resolves.toMatchObject({
-      ok: false,
-      error: `Can only cancel non-archived direct child sessions: ${parentId}`,
+    const peerId = '00000000-0000-4000-8000-000000000208';
+    const peerMessageId = '00000000-0000-4000-8000-000000000209';
+    await store.createSession(sessionRecord({ id: peerId, title: 'Peer with run' }));
+    await store.createMessage({
+      id: peerMessageId,
+      sessionId: peerId,
+      sequence: 1,
+      status: 'pending',
+      prompt: 'peer work',
+      createdAt: now,
+    });
+    await store.claimNextPendingMessageBatch({
+      runId: '00000000-0000-4000-8000-000000000210',
+      runnerType: 'test',
+      leaseOwner: 'worker',
+      leaseExpiresAt: new Date(now.getTime() + 60_000),
+      now,
+    });
+    await expect(executeDeputyTool(services, { action: 'cancel', sessionId: peerId })).resolves.toMatchObject({
+      ok: true,
+      cancelledMessageIds: [peerMessageId],
     });
   });
 
@@ -421,22 +512,26 @@ describe('deputies tool', () => {
     );
   });
 
-  it('does not manage unrelated sessions or restore sessions in the wrong state', async () => {
+  it('manages unrelated readable sessions and only restores archived sessions', async () => {
     const { services, store } = await createDeputyServices();
     const unrelatedId = '00000000-0000-4000-8000-000000000205';
     await store.createSession(sessionRecord({ id: unrelatedId, title: 'Unrelated' }));
 
     await expect(executeDeputyTool(services, { action: 'archive', sessionId: unrelatedId })).resolves.toMatchObject({
-      ok: false,
-      error: `Can only archive this session or a direct child session: ${unrelatedId}`,
+      ok: true,
+      session: { id: unrelatedId, status: 'archived' },
+    });
+    await expect(executeDeputyTool(services, { action: 'restore', sessionId: unrelatedId })).resolves.toMatchObject({
+      ok: true,
+      session: { id: unrelatedId, status: 'idle' },
     });
     await expect(executeDeputyTool(services, { action: 'restore', sessionId: unrelatedId })).resolves.toMatchObject({
       ok: false,
-      error: `Can only restore this session or an archived direct child session: ${unrelatedId}`,
+      error: `Can only restore readable archived sessions: ${unrelatedId}`,
     });
   });
 
-  it('does not archive or restore grandchildren', async () => {
+  it('archives and restores readable grandchildren', async () => {
     const { services, store } = await createDeputyServices();
     const spawned = await executeDeputyTool(services, { action: 'spawn', prompt: 'child' });
     if (!spawned.ok) throw new Error(spawned.error);
@@ -445,14 +540,20 @@ describe('deputies tool', () => {
     await store.createSession(sessionRecord({ id: grandchildId, title: 'Grandchild', parentSessionId: childId }));
 
     await expect(executeDeputyTool(services, { action: 'archive', sessionId: grandchildId })).resolves.toMatchObject({
-      ok: false,
+      ok: true,
+      session: { id: grandchildId, status: 'archived' },
     });
-    await store.updateSession({ ...(await store.getSession(grandchildId))!, status: 'archived' });
     await expect(executeDeputyTool(services, { action: 'restore', sessionId: grandchildId })).resolves.toMatchObject({
-      ok: false,
+      ok: true,
+      session: { id: grandchildId, status: 'idle' },
     });
-    await expect(store.getSession(grandchildId)).resolves.toMatchObject({ title: 'Grandchild', status: 'archived' });
-    await expect(store.getEvents(grandchildId)).resolves.toHaveLength(0);
+    await expect(store.getSession(grandchildId)).resolves.toMatchObject({ title: 'Grandchild', status: 'idle' });
+    await expect(store.getEvents(grandchildId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'session_archived' }),
+        expect.objectContaining({ type: 'session_unarchived' }),
+      ]),
+    );
   });
 });
 
@@ -490,12 +591,23 @@ async function createDeputyServices(
     maxSpawnDepth?: number;
     maxChildrenPerSession?: number;
     maxSpawnsPerRun?: number;
+    privateSessionsEnabled?: boolean;
   } = {},
 ) {
   const store = new MemoryStore();
   const events = new EventService(store);
   const messages = new MessageService(store, events);
   const sessions = new SessionService(store, events);
+  await store.upsertAuthUserForAccount({
+    userId: creatorUserId,
+    accountId: '00000000-0000-4000-8000-000000000002',
+    provider: 'test',
+    providerAccountId: 'creator',
+    username: 'creator',
+    role: 'member',
+    profile: {},
+    now,
+  });
   const parent: SessionRecord = {
     id: parentId,
     status: 'idle',
@@ -532,6 +644,7 @@ async function createDeputyServices(
     maxSpawnDepth: options.maxSpawnDepth ?? 2,
     maxChildrenPerSession: options.maxChildrenPerSession ?? 5,
     maxSpawnsPerRun: options.maxSpawnsPerRun ?? 3,
+    privateSessionsEnabled: options.privateSessionsEnabled ?? true,
     runState: { spawns: 0 },
   };
   return { services, store, events };

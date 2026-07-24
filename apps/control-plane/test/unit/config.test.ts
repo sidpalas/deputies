@@ -101,6 +101,7 @@ describe('loadConfig', () => {
       mcpToolResultMaxChars: 100000,
       mcpResponseMaxBytes: 5_242_880,
       deputyToolEnabled: true,
+      privateSessionsEnabled: false,
       skillsEnabled: true,
       repoSkillsEnabled: true,
       deputyMaxSpawnDepth: 2,

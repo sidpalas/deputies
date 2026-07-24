@@ -39,6 +39,8 @@ export type PgInteger = number | string;
 
 export type SessionRow = QueryResultRow & {
   id: string;
+  visibility: 'tenant' | 'private';
+  owner_user_id: string | null;
   status: SessionStatus;
   title: string | null;
   context: Record<string, unknown> | null;
@@ -53,7 +55,7 @@ export type SessionRow = QueryResultRow & {
 };
 
 export const sessionSelectColumns =
-  'id, status, title, context, parent_session_id, spawn_depth, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at';
+  'id, visibility, owner_user_id, status, title, context, parent_session_id, spawn_depth, created_by_user_id, created_at, updated_at, last_activity_at, tags, queue_paused_at';
 
 export type AuthUserRow = QueryResultRow & {
   id: string;
@@ -347,6 +349,7 @@ export function toAuthSession(row: AuthSessionRow): AuthSessionRecord {
 export function toSession(row: SessionRow): SessionRecord {
   const record: SessionRecord = {
     id: row.id,
+    visibility: row.visibility,
     status: row.status,
     spawnDepth: Number(row.spawn_depth ?? 0),
     createdAt: row.created_at,
@@ -354,6 +357,7 @@ export function toSession(row: SessionRow): SessionRecord {
     lastActivityAt: row.last_activity_at ?? row.updated_at,
     tags: row.tags ?? [],
   };
+  if (row.owner_user_id) record.ownerUserId = row.owner_user_id;
   if (row.parent_session_id) record.parentSessionId = row.parent_session_id;
   if (row.title) record.title = row.title;
   if (row.queue_paused_at) record.queuePausedAt = row.queue_paused_at;

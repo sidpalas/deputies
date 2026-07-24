@@ -16,7 +16,11 @@ const eventReadCacheMaxSessions = 10_000;
 // Session access events change the outcome of canReadSession, so they bypass the
 // cache; they are ordered before any subsequent events for the same session, which
 // keeps the cached decision current from the moment access changes.
-const eventReadRefreshTypes = new Set<NormalizedEventType>(['session_created', 'session_updated']);
+const eventReadRefreshTypes = new Set<NormalizedEventType>([
+  'session_created',
+  'session_updated',
+  'session_visibility_changed',
+]);
 
 export function registerEventRoutes(
   app: Hono<{ Variables: AppVariables }>,

@@ -18,11 +18,11 @@ import {
 } from '../auth/session.js';
 import { requireApiBearerToken, requireAuthSessionSecret, type AppConfig } from '../config/index.js';
 import type { SandboxProvider, SandboxServiceEndpoint } from '../sandbox/types.js';
-import type { AppStore, AuthUserRecord } from '../store/types.js';
+import type { AppStore, AuthUserRecord, SessionRecord } from '../store/types.js';
 
 type ServiceProxyServices = {
   store: AppStore;
-  sessions: { get(sessionId: string): Promise<unknown | null> };
+  sessions: { get(sessionId: string): Promise<SessionRecord | null> };
   sandboxProvider?: SandboxProvider;
 };
 
@@ -316,13 +316,21 @@ export async function handleServiceUpgrade(
   }
 
   const { sessionId, port } = hostPreview;
-  if (!isTrustedPreviewUpgrade(config, request) || !(await isAuthorizedUpgrade(config, services, request))) {
+  if (!isTrustedPreviewUpgrade(config, request)) {
     rejectUpgrade(socket, 403, 'Forbidden');
     return;
   }
   const session = await services.sessions.get(sessionId);
   if (!session) {
     rejectUpgrade(socket, 404, 'Session not found');
+    return;
+  }
+  if (session.visibility === 'private' && config.apiAuthMode !== 'session') {
+    rejectUpgrade(socket, 404, 'Session not found');
+    return;
+  }
+  if (!(await isAuthorizedUpgrade(config, services, request))) {
+    rejectUpgrade(socket, 403, 'Forbidden');
     return;
   }
   const preview = await getSessionService(config, services, sessionId, port);

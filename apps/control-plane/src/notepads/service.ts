@@ -135,26 +135,31 @@ export class NotepadService {
       createdAt: now,
       updatedAt: now,
     };
-    if (initialWritableSessionId) {
-      const target = await this.requireSession(initialWritableSessionId);
+    const target = initialWritableSessionId ? await this.requireSession(initialWritableSessionId) : undefined;
+    if (target) {
       if (target.status === 'archived' || !canWriteSession(auth, target)) this.notFound('Session');
     }
-    const result = await this.store.createExplicitNotepad({
-      record,
-      actor,
-      activityId: randomUUID(),
-      ...(initialWritableSessionId
-        ? {
-            initialAssociation: {
-              notepadId: record.id,
-              sessionId: initialWritableSessionId,
-              ...(!auth.bypass ? { createdByUserId: auth.user.id } : {}),
-              createdAt: now,
-            },
-            associationActivityId: randomUUID(),
-          }
-        : {}),
-    });
+    const create = () =>
+      this.store.createExplicitNotepad({
+        record,
+        actor,
+        activityId: randomUUID(),
+        ...(initialWritableSessionId
+          ? {
+              initialAssociation: {
+                notepadId: record.id,
+                sessionId: initialWritableSessionId,
+                ...(!auth.bypass ? { createdByUserId: auth.user.id } : {}),
+                createdAt: now,
+              },
+              associationActivityId: randomUUID(),
+            }
+          : {}),
+      });
+    const result =
+      target?.visibility === 'private' && !auth.bypass
+        ? await this.store.withPrivateSessionWriteLease(auth.user.id, target.id, create)
+        : await create();
     if (initialWritableSessionId) await this.publishAssociationChange(initialWritableSessionId);
     return result;
   }
@@ -164,7 +169,12 @@ export class NotepadService {
   async createForSessionAgent(sessionId: string, input: { title?: unknown; content?: unknown }, actor: NotepadActor) {
     const session = await this.requireSession(sessionId);
     if (session.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
-    return this.create({ bypass: true, user: null }, { title: input.title, content: input.content }, actor, sessionId);
+    return this.create(
+      { bypass: true, user: null, agentSessionId: sessionId },
+      { title: input.title, content: input.content },
+      actor,
+      sessionId,
+    );
   }
 
   async requireReadable(auth: RequestAuthorization, id: string, associatedSessionId?: string) {
@@ -270,17 +280,22 @@ export class NotepadService {
     if (n.archivedAt) throw new NotepadServiceError('archived', 'Archived notepads are read-only');
     const s = await this.requireSession(sessionId);
     if (s.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
-    this.allow(canWriteSession(auth, s) && canWriteNotepad(auth, n));
-    const result = await this.store.putNotepadAssociation({
-      record: {
-        notepadId: id,
-        sessionId,
-        ...(!auth.bypass ? { createdByUserId: auth.user.id } : {}),
-        createdAt: new Date(),
-      },
-      actor,
-      activityId: randomUUID(),
-    });
+    this.allow(canWriteNotepad(auth, n) && (actor.kind === 'agent' || canWriteSession(auth, s)));
+    const put = () =>
+      this.store.putNotepadAssociation({
+        record: {
+          notepadId: id,
+          sessionId,
+          ...(!auth.bypass ? { createdByUserId: auth.user.id } : {}),
+          createdAt: new Date(),
+        },
+        actor,
+        activityId: randomUUID(),
+      });
+    const result =
+      s.visibility === 'private' && !auth.bypass
+        ? await this.store.withPrivateSessionWriteLease(auth.user.id, s.id, put)
+        : await put();
     await this.publishAssociationChange(sessionId);
     return result;
   }
@@ -289,14 +304,19 @@ export class NotepadService {
     if (n.archivedAt) throw new NotepadServiceError('archived', 'Archived notepads are read-only');
     const s = await this.requireSession(sessionId);
     if (s.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
-    this.allow(canWriteSession(auth, s) && canWriteNotepad(auth, n));
-    const removed = await this.store.removeNotepadAssociation({
-      notepadId: id,
-      sessionId,
-      actor,
-      activityId: randomUUID(),
-      now: new Date(),
-    });
+    this.allow(canWriteNotepad(auth, n) && (actor.kind === 'agent' || canWriteSession(auth, s)));
+    const remove = () =>
+      this.store.removeNotepadAssociation({
+        notepadId: id,
+        sessionId,
+        actor,
+        activityId: randomUUID(),
+        now: new Date(),
+      });
+    const removed =
+      s.visibility === 'private' && !auth.bypass
+        ? await this.store.withPrivateSessionWriteLease(auth.user.id, s.id, remove)
+        : await remove();
     if (removed) await this.publishAssociationChange(sessionId);
     return removed;
   }

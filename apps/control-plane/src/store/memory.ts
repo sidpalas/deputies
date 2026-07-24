@@ -82,6 +82,7 @@ export class MemoryStore implements AppStore {
   private readonly authUsers = new Map<string, AuthUserRecord>();
   private readonly authAccounts = new Map<string, AuthAccountRecord>();
   private readonly authSessions = new Map<string, AuthSessionRecord>();
+  private readonly operationLocks = new Map<string, Promise<void>>();
   private readonly skillStore = new MemorySkillStore();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly messages = new Map<string, MessageRecord[]>();
@@ -437,15 +438,10 @@ export class MemoryStore implements AppStore {
     const notepad = this.explicitNotepads.get(record.notepadId);
     const session = this.sessions.get(record.sessionId);
     if (!notepad || !session) throw new StoreConflictError('not_found', 'Notepad or Session not found');
-    if (
-      input.actor.kind === 'agent' &&
-      session.id !== input.actor.sessionId &&
-      session.parentSessionId !== input.actor.sessionId
-    )
-      throw new StoreConflictError(
-        'notepad_association_forbidden',
-        'Agents may associate notepads only with themselves or direct children',
-      );
+    const actingSession = input.actor.kind === 'agent' ? this.sessions.get(input.actor.sessionId) : undefined;
+    if (input.actor.kind === 'agent' && (!actingSession || !agentSessionCanRead(actingSession, session))) {
+      throw new StoreConflictError('notepad_association_forbidden', 'Agent cannot access the target session');
+    }
     if (notepad.archivedAt) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
     if (session.status === 'archived')
       throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
@@ -473,15 +469,10 @@ export class MemoryStore implements AppStore {
     const notepad = this.explicitNotepads.get(input.notepadId);
     const session = this.sessions.get(input.sessionId);
     if (!notepad || !session) throw new StoreConflictError('not_found', 'Notepad or Session not found');
-    if (
-      input.actor.kind === 'agent' &&
-      session.id !== input.actor.sessionId &&
-      session.parentSessionId !== input.actor.sessionId
-    )
-      throw new StoreConflictError(
-        'notepad_association_forbidden',
-        'Agents may associate notepads only with themselves or direct children',
-      );
+    const actingSession = input.actor.kind === 'agent' ? this.sessions.get(input.actor.sessionId) : undefined;
+    if (input.actor.kind === 'agent' && (!actingSession || !agentSessionCanRead(actingSession, session))) {
+      throw new StoreConflictError('notepad_association_forbidden', 'Agent cannot access the target session');
+    }
     if (notepad.archivedAt) throw new StoreConflictError('not_found', 'Archived notepads are read-only');
     if (session.status === 'archived')
       throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
@@ -618,7 +609,14 @@ export class MemoryStore implements AppStore {
       throw new StoreConflictError('not_found', 'Session Notepad coordination capability is required');
     const user = this.authUsers.get(expectedGrantorUserId);
     const authorized = user?.role === 'member' || user?.role === 'admin';
-    if (!user || !authorized) throw new StoreConflictError('not_found', 'Coordination grantor is no longer authorized');
+    const privateTargetAuthorized =
+      target.visibility !== 'private' ||
+      (actor.visibility === 'private' &&
+        actor.ownerUserId === target.ownerUserId &&
+        target.ownerUserId === expectedGrantorUserId);
+    if (!user || !authorized || !privateTargetAuthorized) {
+      throw new StoreConflictError('not_found', 'Coordination grantor is no longer authorized');
+    }
   }
   private assertLiveSession(sessionId: string) {
     const session = this.sessions.get(sessionId);
@@ -810,6 +808,10 @@ export class MemoryStore implements AppStore {
   }
 
   async updateAuthUserRole(input: { userId: string; role: AuthUserRecord['role']; updatedAt: Date }) {
+    return this.withOperationLock(`user-write:${input.userId}`, () => this.updateAuthUserRoleUnlocked(input));
+  }
+
+  private async updateAuthUserRoleUnlocked(input: { userId: string; role: AuthUserRecord['role']; updatedAt: Date }) {
     const user = this.authUsers.get(input.userId);
     if (!user) return null;
     if (
@@ -832,6 +834,7 @@ export class MemoryStore implements AppStore {
     if (this.sessions.has(record.id)) {
       throw new Error(`Session already exists: ${record.id}`);
     }
+    this.assertValidSessionOwner(record);
 
     const session = withSessionDefaults(record);
     this.setSession(record.id, session);
@@ -842,14 +845,30 @@ export class MemoryStore implements AppStore {
     input: CreateSessionWithFirstMessageInput,
   ): Promise<CreateSessionWithFirstMessageResult> {
     validateParentChildLimit(input, (parentSessionId) => this.sessions.has(parentSessionId));
+    this.assertValidSessionOwner(input.session);
+    const parent = input.parentChildLimit ? this.sessions.get(input.parentChildLimit.parentSessionId) : undefined;
     const existing = this.sessions.get(input.session.id);
     if (existing) {
+      if (
+        input.parentChildLimit &&
+        (existing.parentSessionId !== input.parentChildLimit.parentSessionId ||
+          (existing.visibility === 'private' &&
+            (parent?.visibility !== 'private' || parent.ownerUserId !== existing.ownerUserId)))
+      ) {
+        throw new StoreConflictError('not_found', 'Spawned session not found');
+      }
       const message = this.messages.get(input.session.id)?.[0];
       if (!message) throw new Error(`First message does not exist for session: ${input.session.id}`);
       return { session: cloneSession(existing), message, events: [], created: false };
     }
 
     if (input.parentChildLimit) {
+      if (
+        (input.session.visibility ?? 'tenant') !== parent!.visibility ||
+        (input.session.ownerUserId ?? null) !== (parent!.ownerUserId ?? null)
+      ) {
+        throw new StoreConflictError('not_found', 'Parent session access changed while spawning child');
+      }
       const childCount = [...this.sessions.values()].filter(
         (session) =>
           session.parentSessionId === input.parentChildLimit!.parentSessionId && session.status !== 'archived',
@@ -890,20 +909,60 @@ export class MemoryStore implements AppStore {
     return session ? cloneSession(session) : null;
   }
 
+  async withAgentSessionLease<T>(actingSessionId: string, operation: () => Promise<T>): Promise<T> {
+    return this.withOperationLock(`agent-session:${actingSessionId}`, operation);
+  }
+
+  async withUserWriteLease<T>(userId: string, operation: () => Promise<T>): Promise<T> {
+    return this.withOperationLock(`user-write:${userId}`, async () => {
+      const user = this.authUsers.get(userId);
+      if (!user || (user.role !== 'member' && user.role !== 'admin')) {
+        throw new StoreConflictError('not_found', 'User write access is required');
+      }
+      return operation();
+    });
+  }
+
+  async withPrivateSessionWriteLease<T>(userId: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
+    return this.withOperationLock(`user-write:${userId}`, async () => {
+      const user = this.authUsers.get(userId);
+      const session = this.sessions.get(sessionId);
+      if (
+        !user ||
+        (user.role !== 'member' && user.role !== 'admin') ||
+        !session ||
+        session.visibility !== 'private' ||
+        session.ownerUserId !== userId
+      ) {
+        throw new StoreConflictError('not_found', 'Private session not found');
+      }
+      return operation();
+    });
+  }
+
   async listSessions(): Promise<SessionRecord[]> {
-    return [...this.sessions.values()].sort(compareSessionsNewestFirst).map(cloneSession);
+    return [...this.sessions.values()]
+      .filter((session) => session.visibility !== 'private')
+      .sort(compareSessionsNewestFirst)
+      .map(cloneSession);
   }
 
   async listSessionsForAgent(input: AgentSessionListOptions): Promise<SessionRecord[]> {
-    return (await this.listSessions())
+    const acting = this.sessions.get(input.actingSessionId);
+    return [...this.sessions.values()]
+      .filter((session) => Boolean(acting && agentSessionCanRead(acting, session)))
+      .sort(compareSessionsNewestFirst)
       .filter((session) => sessionMatchesAgentScope(session, input))
       .filter((session) => !input.status || session.status === input.status)
-      .slice(0, input.limit);
+      .slice(0, input.limit)
+      .map(cloneSession);
   }
 
   async listChildSessions(input: ChildSessionListOptions): Promise<SessionRecord[]> {
-    return (await this.listSessions())
+    return [...this.sessions.values()]
       .filter((session) => session.parentSessionId === input.parentSessionId)
+      .sort(compareSessionsNewestFirst)
+      .map(cloneSession)
       .slice(0, input.limit);
   }
 
@@ -962,9 +1021,10 @@ export class MemoryStore implements AppStore {
     };
   }
 
-  async listSessionTags(options: { limit: number }): Promise<SessionTagSummary[]> {
+  async listSessionTags(options: { limit: number; visibleToUserId?: string }): Promise<SessionTagSummary[]> {
     const counts = new Map<string, number>();
     for (const session of this.sessions.values()) {
+      if (!sessionVisibleToUser(session, options.visibleToUserId)) continue;
       for (const tag of session.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
     }
     return [...counts.entries()]
@@ -1005,13 +1065,28 @@ export class MemoryStore implements AppStore {
   }
 
   private updateSessionSync(record: SessionRecord): SessionRecord {
-    if (!this.sessions.has(record.id)) {
+    const existing = this.sessions.get(record.id);
+    if (!existing) {
       throw new Error(`Session does not exist: ${record.id}`);
     }
 
-    const updated = cloneSession(record);
+    const updated = cloneSession({
+      ...record,
+      visibility: existing.visibility ?? 'tenant',
+      ...(existing.ownerUserId ? { ownerUserId: existing.ownerUserId } : {}),
+    });
+    if (!existing.ownerUserId) delete updated.ownerUserId;
     this.setSession(record.id, updated);
     return cloneSession(updated);
+  }
+
+  private assertValidSessionOwner(record: CreateSessionRecord): void {
+    if (record.visibility === 'private' && !record.ownerUserId) {
+      throw new Error('Private sessions require an owner');
+    }
+    if (record.ownerUserId && !this.authUsers.has(record.ownerUserId)) {
+      throw new Error('Session owner does not exist');
+    }
   }
 
   async updateSessionContext(input: SessionContextUpdateInput): Promise<SessionRecord> {
@@ -1049,10 +1124,36 @@ export class MemoryStore implements AppStore {
   async updateSessionMetadataWithEvent(
     input: SessionMetadataUpdateInput,
   ): Promise<{ session: SessionRecord; event: EventRecord }> {
+    if (input.promoteToTenant) {
+      return this.withOperationLock(`agent-session:${input.id}`, () =>
+        this.updateSessionMetadataWithEventUnlocked(input),
+      );
+    }
+    return this.updateSessionMetadataWithEventUnlocked(input);
+  }
+
+  private async updateSessionMetadataWithEventUnlocked(
+    input: SessionMetadataUpdateInput,
+  ): Promise<{ session: SessionRecord; event: EventRecord }> {
     const existing = this.sessions.get(input.id);
     if (!existing) throw new Error(`Session does not exist: ${input.id}`);
     if (input.requireNonArchived && existing.status === 'archived') {
       throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+    }
+
+    if (input.promoteToTenant) {
+      if (existing.visibility !== 'private') {
+        throw new StoreConflictError('not_found', 'Private session not found');
+      }
+      const promoted = { ...existing, visibility: 'tenant' as const, updatedAt: input.updatedAt };
+      this.setSession(existing.id, promoted);
+      const event = this.appendEventWithNextSequenceSync({
+        sessionId: existing.id,
+        type: 'session_visibility_changed',
+        payload: { visibility: 'tenant' },
+        createdAt: input.updatedAt,
+      });
+      return { session: cloneSession(promoted), event };
     }
 
     const session: SessionRecord = { ...existing, updatedAt: input.updatedAt };
@@ -1063,13 +1164,27 @@ export class MemoryStore implements AppStore {
     const event = this.appendEventWithNextSequenceSync({
       sessionId: session.id,
       type: 'session_updated',
-      payload: {
-        title: session.title ?? null,
-        ...(input.tags !== undefined ? { tags: session.tags } : {}),
-      },
+      payload: { title: session.title ?? null, ...(input.tags !== undefined ? { tags: session.tags } : {}) },
       createdAt: input.updatedAt,
     });
     return { session: cloneSession(session), event };
+  }
+
+  private async withOperationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.operationLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.then(() => current);
+    this.operationLocks.set(key, queued);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.operationLocks.get(key) === queued) this.operationLocks.delete(key);
+    }
   }
 
   async updateSessionTitleIfCurrent(
@@ -2763,10 +2878,12 @@ function sessionMatchesListFilters(
     createdByUserId?: string;
     participantUserId?: string;
     starredByUserId?: string;
+    visibleToUserId?: string;
   },
   messages: Map<string, MessageRecord[]>,
   sessionStars: Map<string, Set<string>>,
 ): boolean {
+  if (!sessionVisibleToUser(session, options.visibleToUserId)) return false;
   if (options.tags?.length && !options.tags.every((tag) => session.tags.includes(tag))) return false;
   if (options.createdByUserId && session.createdByUserId !== options.createdByUserId) return false;
   if (
@@ -2777,6 +2894,17 @@ function sessionMatchesListFilters(
   }
   if (options.starredByUserId && !sessionStars.get(options.starredByUserId)?.has(session.id)) return false;
   return true;
+}
+
+function sessionVisibleToUser(session: SessionRecord, userId: string | undefined): boolean {
+  return session.visibility !== 'private' || Boolean(userId && session.ownerUserId === userId);
+}
+
+function agentSessionCanRead(acting: SessionRecord, target: SessionRecord): boolean {
+  return (
+    target.visibility !== 'private' ||
+    Boolean(acting.visibility === 'private' && acting.ownerUserId && acting.ownerUserId === target.ownerUserId)
+  );
 }
 
 function compareSessionsNewestFirst(a: SessionRecord, b: SessionRecord): number {
@@ -2931,6 +3059,7 @@ function deliveryKey(source: string, dedupeKey: string): string {
 function withSessionDefaults(record: CreateSessionRecord): SessionRecord {
   return {
     ...record,
+    visibility: record.visibility ?? 'tenant',
     spawnDepth: record.spawnDepth ?? 0,
     lastActivityAt: record.lastActivityAt ?? record.updatedAt,
     tags: [...(record.tags ?? [])],

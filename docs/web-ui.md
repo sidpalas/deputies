@@ -156,6 +156,7 @@ The SSE client uses `fetch()` streaming instead of native `EventSource` because 
 ## Current Scope
 
 - List and create sessions.
+- Create owner-only private sessions, identify them with a Private badge, and permanently promote an owned private session to tenant-wide from Session actions.
 - List session messages.
 - Enqueue follow-up messages.
 - Batch queued follow-up messages visually with one deputy response.

@@ -256,10 +256,10 @@ Deputies tool policy:
 - `DEPUTY_TOOL_ENABLED=true` by default. Set it to `false` when a deployment should hide the `deputies` tool from runners.
 - Supported actions are `spawn`, `list_sessions`, `get_session`, `send_message`, and `cancel`.
 - `list_sessions` defaults to all sessions readable by the acting session agent. Pass `scope=children` to narrow to direct children only.
-- Child sessions are tenant-wide resources. They copy `created_by_user_id` from the triggering parent message for audit attribution only.
+- Child sessions initially inherit the parent's visibility and immutable private owner, and can be promoted independently. They copy `created_by_user_id` from the triggering parent message for audit attribution only.
 - Child sessions record `parent_session_id` and `spawn_depth` so the web UI and audit events can show lineage.
 - Parent run cancellation and parent archival do not cancel or archive spawned children. Children are independent durable sessions; cleanup is explicit via direct child cancellation or human UI action.
-- A session agent may read tenant sessions, spawn tenant sessions, and write or cancel only non-archived direct child sessions.
+- A session agent may read and manage any tenant session, regardless of lineage. A private-session agent may additionally access private sessions owned by the same user; lineage never expands access.
 - Spawn is bounded by depth, direct-child count, and per-run spawn limits. `idempotencyKey` produces stable child session/message IDs for retry-safe spawning.
 - `notifyOnComplete=true` stores explicit child context so the worker can enqueue one deputy-authored follow-up message into the parent session after the child reaches a terminal outcome. The worker clears the flag before notification so later child follow-ups do not create parent/child loops.
 - Successful parent notifications are informational and output-free; agents can inspect the child explicitly with `get_session` if the result matters to the current work. Failed notifications still include bounded error text for diagnosis.

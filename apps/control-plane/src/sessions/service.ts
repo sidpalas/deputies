@@ -10,6 +10,8 @@ export type CreateSessionInput = {
   parentSessionId?: string;
   spawnDepth?: number;
   createdByUserId?: string;
+  visibility?: 'tenant' | 'private';
+  ownerUserId?: string;
 };
 
 export type UpdateSessionInput = {
@@ -17,6 +19,7 @@ export type UpdateSessionInput = {
   requireNonArchived?: boolean;
   title?: string;
   tags?: string[];
+  promoteToTenant?: boolean;
 };
 
 export function sessionTitleFromPrompt(prompt: string): string {
@@ -58,6 +61,7 @@ export class SessionService {
     // session timestamps with database now(), or keyset pagination can skip rows.
     const record: SessionRecord = {
       id: input.id ?? randomUUID(),
+      visibility: input.visibility ?? 'tenant',
       status: 'created',
       spawnDepth: input.spawnDepth ?? 0,
       createdAt: now,
@@ -69,6 +73,7 @@ export class SessionService {
     if (input.title) record.title = input.title;
     if (input.parentSessionId) record.parentSessionId = input.parentSessionId;
     if (input.createdByUserId) record.createdByUserId = input.createdByUserId;
+    if (input.ownerUserId) record.ownerUserId = input.ownerUserId;
 
     const session = await this.store.createSession(record);
     await this.events.append({
@@ -104,10 +109,14 @@ export class SessionService {
         ...(input.requireNonArchived ? { requireNonArchived: true } : {}),
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.tags !== undefined ? { tags: input.tags } : {}),
+        ...(input.promoteToTenant ? { promoteToTenant: true } : {}),
       });
     } catch (error) {
       if (error instanceof StoreConflictError && error.code === 'session_archived') {
         throw new SessionServiceError('archived');
+      }
+      if (error instanceof StoreConflictError && error.code === 'not_found') {
+        throw new SessionServiceError('not_found');
       }
       throw error;
     }

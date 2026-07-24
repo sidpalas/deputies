@@ -11,7 +11,10 @@ import type {
 } from '../store/types.js';
 import { readSessionId } from './session.js';
 
-export type RequestAuthorization = { bypass: true; user: null } | { bypass: false; user: AuthUserRecord };
+export type RequestAuthorization =
+  | { bypass: true; user: null; agentSessionId?: undefined }
+  | { bypass: true; user: null; agentSessionId: string }
+  | { bypass: false; user: AuthUserRecord; agentSessionId?: undefined };
 
 // Auth state is resolved by middlewares and handlers independently, so memoize the
 // underlying lookups per request to avoid repeating the same store queries.
@@ -48,11 +51,22 @@ export function readRequestAuthorization(
   return authorization;
 }
 
-export function canReadSession(auth: RequestAuthorization, _session: SessionRecord): boolean {
-  return auth.bypass || auth.user.role === 'viewer' || auth.user.role === 'member' || auth.user.role === 'admin';
+export function canReadSession(auth: RequestAuthorization, session: SessionRecord): boolean {
+  if (session.visibility === 'private') {
+    return auth.agentSessionId === session.id || (!auth.bypass && session.ownerUserId === auth.user.id);
+  }
+  return auth.bypass || Boolean(auth.user);
 }
 
-export function canWriteSession(auth: RequestAuthorization, _session: SessionRecord): boolean {
+export function canWriteSession(auth: RequestAuthorization, session: SessionRecord): boolean {
+  if (session.visibility === 'private') {
+    return (
+      auth.agentSessionId === session.id ||
+      (!auth.bypass &&
+        session.ownerUserId === auth.user.id &&
+        (auth.user.role === 'member' || auth.user.role === 'admin'))
+    );
+  }
   return auth.bypass || auth.user.role === 'member' || auth.user.role === 'admin';
 }
 

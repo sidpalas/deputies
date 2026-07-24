@@ -26,6 +26,7 @@ export const publicApiResponseSchemas = {
       apiAuthMode: 'string',
       authProvider: 'optional:string',
       sandboxProvider: 'string',
+      privateSessionsEnabled: 'boolean',
       hideSetupPage: 'boolean',
     },
   },

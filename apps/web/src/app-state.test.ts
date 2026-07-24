@@ -1,10 +1,11 @@
 import {
   applyFrozenSessionOrder,
+  canWriteSession,
   isSnippetMutationAuthoritative,
   isSnippetMutationCurrent,
   sortSessionsByLastActivity,
 } from './app-state.js';
-import type { Session } from './api.js';
+import type { AuthUser, Session } from './api.js';
 
 describe('session ordering helpers', () => {
   it('sorts by last activity with created/id tiebreakers', () => {
@@ -58,6 +59,21 @@ describe('session ordering helpers', () => {
         (item) => item.id,
       ),
     ).toEqual([active.id, archived.id]);
+  });
+});
+
+describe('session write authority', () => {
+  const privateSession = {
+    ...session('private', '2026-05-05T12:00:00.000Z'),
+    visibility: 'private' as const,
+    ownerUserId: 'owner',
+  };
+
+  it('lets viewer owners read elsewhere but does not expose private write controls', () => {
+    const viewer: AuthUser = { id: 'owner', username: 'owner', role: 'viewer' };
+    const member: AuthUser = { ...viewer, role: 'member' };
+    expect(canWriteSession(viewer, privateSession)).toBe(false);
+    expect(canWriteSession(member, privateSession)).toBe(true);
   });
 });
 

@@ -1,0 +1,2 @@
+ALTER TABLE sessions VALIDATE CONSTRAINT sessions_visibility_check;
+ALTER TABLE sessions VALIDATE CONSTRAINT sessions_private_owner_check;

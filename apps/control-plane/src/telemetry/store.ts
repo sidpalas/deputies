@@ -172,6 +172,9 @@ const storeMethods = [
   'listNotepadActivity',
   'upsertSessionSearchDocs',
   'upsertAuthUserForAccount',
+  'withAgentSessionLease',
+  'withUserWriteLease',
+  'withPrivateSessionWriteLease',
   'withExternalThreadLock',
 ] as const satisfies readonly StoreMethod[];
 

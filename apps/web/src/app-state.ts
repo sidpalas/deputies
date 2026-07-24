@@ -293,8 +293,11 @@ export function isWorkspaceToolPreflightError(err: unknown): boolean {
   return err instanceof ApiError && (err.status === 404 || err.status === 409 || err.status === 401);
 }
 
-export function canWriteSession(user: AuthUser | null, _session: Session): boolean {
+export function canWriteSession(user: AuthUser | null, session: Session): boolean {
   if (!user) return false;
+  if (session.visibility === 'private') {
+    return session.ownerUserId === user.id && (user.role === 'member' || user.role === 'admin');
+  }
   return user.role === 'member' || user.role === 'admin';
 }
 

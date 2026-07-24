@@ -33,6 +33,7 @@ import { SnippetPicker, useSnippetPicker } from './snippet-picker.js';
 
 export function NewThreadPanel(props: {
   canCallApi: boolean;
+  canCreatePrivateSession?: boolean;
   readOnly: boolean;
   loading: boolean;
   prompt: string;
@@ -70,9 +71,15 @@ export function NewThreadPanel(props: {
   onBranchChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onReasoningLevelChange: (value: ReasoningLevel | '') => void;
-  onSubmit: (input: { prompt: string; skills: string[]; skillRefs: SkillInvocationRef[] }) => Promise<boolean>;
+  onSubmit: (input: {
+    prompt: string;
+    skills: string[];
+    skillRefs: SkillInvocationRef[];
+    visibility: 'tenant' | 'private';
+  }) => Promise<boolean>;
 }) {
   const [branchControlsOpen, setBranchControlsOpen] = useState(false);
+  const [privateSession, setPrivateSession] = useState(false);
   const selectedEnvironment =
     props.environmentOptions.find((environment) => environment.id === props.environmentId) ?? null;
   const codebaseValue = props.environmentId
@@ -109,8 +116,11 @@ export function NewThreadPanel(props: {
   async function submit() {
     const prepared = skillDraft.prepareSubmission();
     if (!prepared.prompt.trim() && !prepared.skillRefs.length) return;
-    const sent = await props.onSubmit(prepared);
-    if (sent) skillDraft.clearSelectedSkills();
+    const sent = await props.onSubmit({ ...prepared, visibility: privateSession ? 'private' : 'tenant' });
+    if (sent) {
+      skillDraft.clearSelectedSkills();
+      setPrivateSession(false);
+    }
   }
 
   function handlePromptKeyDown(event: Parameters<typeof skillDraft.handlePromptKeyDown>[0]) {
@@ -271,6 +281,23 @@ export function NewThreadPanel(props: {
               <p className="rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning-foreground dark:text-warning">
                 {props.modelUnavailableReason}
               </p>
+            ) : null}
+            {props.canCreatePrivateSession ? (
+              <label className="flex items-start gap-2 text-sm text-muted-foreground">
+                <input
+                  className="mt-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                  type="checkbox"
+                  checked={privateSession}
+                  onChange={(event) => setPrivateSession(event.target.checked)}
+                  disabled={!props.canCallApi}
+                />
+                <span>
+                  <span className="font-medium text-foreground">Private session</span>
+                  <span className="block text-xs">
+                    Only you can find or access it. You can make it tenant-wide later.
+                  </span>
+                </span>
+              </label>
             ) : null}
             <div className="min-w-0 rounded-md border border-input bg-background/80 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
               <SkillInvocationField

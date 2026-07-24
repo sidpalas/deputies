@@ -6,6 +6,8 @@ import {
   Code2,
   Ellipsis,
   GitCompare,
+  Globe2,
+  LockKeyhole,
   PanelLeftOpen,
   Pencil,
   Plus,
@@ -22,6 +24,8 @@ import { sessionDisplayStatus, sessionDisplayTooltip, statusTextClass } from './
 
 type ThreadHeaderProps = {
   canWriteSession: boolean;
+  canPromoteSession?: boolean;
+  promotingSession?: boolean;
   canOpenWorkspaceTools?: boolean;
   workspaceToolsDisabled?: boolean;
   selectedSession: Session;
@@ -29,6 +33,7 @@ type ThreadHeaderProps = {
   openSidebarLabel?: string;
   workspaceToolsUnavailableReason?: string;
   onArchive: () => void;
+  onPromoteSession?: () => void;
   onSessionStarChange: (sessionId: string, starred: boolean) => void;
   onOpenSidebar: () => void;
   onUpdateTags: (tags: string[]) => Promise<boolean>;
@@ -182,6 +187,12 @@ export function ThreadHeader(props: ThreadHeaderProps) {
     props.onArchive();
   }
 
+  function promoteSession() {
+    setActionsOpen(false);
+    if (!props.canPromoteSession || props.promotingSession) return;
+    props.onPromoteSession?.();
+  }
+
   function updateTagPopoverPosition() {
     const row = tagEditorRef.current;
     const button = tagButtonRef.current;
@@ -237,6 +248,14 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               <h2 className="min-w-0 truncate text-base font-semibold text-foreground">
                 {props.selectedSession.title || 'Untitled session'}
               </h2>
+              {props.selectedSession.visibility === 'private' ? (
+                <Badge
+                  className="shrink-0 gap-1 border border-border bg-background text-muted-foreground"
+                  title="Visible only to you"
+                >
+                  <LockKeyhole className="h-3 w-3" /> Private
+                </Badge>
+              ) : null}
               {props.canWriteSession ? (
                 <Button
                   className="h-7 w-7 shrink-0 p-0"
@@ -339,6 +358,25 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                       </button>
                     ))
                   )}
+                </>
+              ) : null}
+              {props.canPromoteSession && props.selectedSession.status !== 'archived' ? (
+                <>
+                  <div className="my-1 h-px bg-border" />
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={props.promotingSession}
+                    role="menuitem"
+                    onClick={promoteSession}
+                    title="Promotion is permanent"
+                  >
+                    <Globe2 className="h-4 w-4" />
+                    <span className="min-w-0 flex-1">
+                      {props.promotingSession ? 'Making tenant-wide...' : 'Make tenant-wide'}
+                    </span>
+                  </button>
+                  <p className="px-2 pb-1 text-xs text-muted-foreground">This cannot be made private again.</p>
                 </>
               ) : null}
               {props.selectedSession.status !== 'archived' ? (

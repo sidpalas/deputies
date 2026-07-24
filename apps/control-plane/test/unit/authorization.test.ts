@@ -40,6 +40,17 @@ describe('tenant authorization rules', () => {
     }
   });
 
+  it('restricts private sessions to their owner without an admin or bypass exception', () => {
+    const privateSession = session({ visibility: 'private', ownerUserId: 'member' });
+    expect(canReadSession(authFor('member'), privateSession)).toBe(true);
+    expect(canWriteSession(authFor('member'), privateSession)).toBe(true);
+    expect(canReadSession(authFor('admin'), privateSession)).toBe(false);
+    expect(canWriteSession(authFor('admin'), privateSession)).toBe(false);
+    expect(canReadSession({ bypass: true, user: null }, privateSession)).toBe(false);
+    expect(canReadSession(authFor('viewer'), session({ visibility: 'private', ownerUserId: 'viewer' }))).toBe(true);
+    expect(canWriteSession(authFor('viewer'), session({ visibility: 'private', ownerUserId: 'viewer' }))).toBe(false);
+  });
+
   it('reserves user and configuration administration for admins', () => {
     expect(canAdministerTenant(authFor('viewer'))).toBe(false);
     expect(canAdministerTenant(authFor('member'))).toBe(false);
@@ -51,18 +62,22 @@ describe('tenant authorization rules', () => {
 describe('agent authorization rules', () => {
   const agent: AgentPrincipal = { kind: 'session_agent', sessionId: 'parent-session', spawnDepth: 1 };
 
-  it('reads tenant sessions and writes only to active direct children', () => {
+  it('reads and writes tenant sessions regardless of lineage', () => {
     expect(agentCanReadSession(agent, session())).toBe(true);
     expect(agentCanReadSession(agent, session({ status: 'archived' }))).toBe(true);
+    expect(agentCanReadSession(agent, session({ visibility: 'private', ownerUserId: 'other' }))).toBe(false);
+    expect(
+      agentCanReadSession({ ...agent, ownerUserId: 'owner' }, session({ visibility: 'private', ownerUserId: 'owner' })),
+    ).toBe(true);
     expect(agentCanWriteSession(agent, session({ parentSessionId: agent.sessionId }))).toBe(true);
-    expect(agentCanWriteSession(agent, session({ parentSessionId: 'other-parent' }))).toBe(false);
+    expect(agentCanWriteSession(agent, session({ parentSessionId: 'other-parent' }))).toBe(true);
     expect(agentCanWriteSession(agent, session({ parentSessionId: agent.sessionId, status: 'archived' }))).toBe(false);
   });
 
-  it('manages itself and direct children, but cancels only active direct children', () => {
+  it('manages and cancels any readable session, subject to lifecycle state', () => {
     expect(agentCanManageSession(agent, session({ id: agent.sessionId }))).toBe(true);
-    expect(agentCanManageSession(agent, session({ parentSessionId: agent.sessionId, status: 'archived' }))).toBe(true);
-    expect(agentCanCancelSession(agent, session({ parentSessionId: agent.sessionId }))).toBe(true);
+    expect(agentCanManageSession(agent, session({ parentSessionId: 'unrelated', status: 'archived' }))).toBe(true);
+    expect(agentCanCancelSession(agent, session({ parentSessionId: 'unrelated' }))).toBe(true);
     expect(agentCanCancelSession(agent, session({ parentSessionId: agent.sessionId, status: 'archived' }))).toBe(false);
   });
 });

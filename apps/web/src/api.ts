@@ -12,6 +12,7 @@ export type Health = {
   apiAuthMode: ApiAuthMode;
   authProvider?: AuthProvider;
   sandboxProvider?: string;
+  privateSessionsEnabled?: boolean;
   hideSetupPage?: boolean;
   notices?: AppNotice[];
 };
@@ -25,6 +26,8 @@ export type AppNotice = {
 
 export type Session = {
   id: string;
+  visibility?: 'tenant' | 'private';
+  ownerUserId?: string;
   status: string;
   displayStatus?: string;
   displayStatusTooltip?: string;
@@ -920,12 +923,17 @@ export async function updateUserRole(input: {
   return body.user;
 }
 
-export async function createSession(input: { title?: string; token: string }): Promise<Session> {
+export async function createSession(input: {
+  title?: string;
+  visibility?: 'tenant' | 'private';
+  token: string;
+}): Promise<Session> {
   const body = await request<{ session: Session }>('/sessions', {
     method: 'POST',
     token: input.token,
     body: {
       ...(input.title ? { title: input.title } : {}),
+      ...(input.visibility ? { visibility: input.visibility } : {}),
     },
   });
   return body.session;
@@ -950,6 +958,15 @@ export async function updateSessionTags(input: { sessionId: string; tags: string
     method: 'PATCH',
     token: input.token,
     body: { tags: input.tags },
+  });
+  return body.session;
+}
+
+export async function promoteSession(input: { sessionId: string; token: string }): Promise<Session> {
+  const body = await request<{ session: Session }>(`/sessions/${input.sessionId}`, {
+    method: 'PATCH',
+    token: input.token,
+    body: { visibility: 'tenant' },
   });
   return body.session;
 }

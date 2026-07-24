@@ -101,6 +101,7 @@ config:
   runnerModelDefault: anthropic/claude-haiku-4-5
   titleGenerationEnabled: 'true'
   titleGenerationModel: ''
+  privateSessionsEnabled: 'false'
   repositorySetupScriptEnabled: 'true'
   repositorySetupScriptTimeoutSeconds: '600'
   artifactStorageProvider: s3

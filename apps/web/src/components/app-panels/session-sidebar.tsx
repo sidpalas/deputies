@@ -4,6 +4,7 @@ import {
   ChevronDown,
   FilePlus2,
   ListTree,
+  LockKeyhole,
   MessageCircle,
   PanelLeftClose,
   Plus,
@@ -753,6 +754,14 @@ function SessionButton(props: {
           )}
         >
           <span className="min-w-0 truncate">{title}</span>
+          {props.session.visibility === 'private' ? (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1 py-px text-[9px] uppercase tracking-wide text-muted-foreground"
+              title="Private session — visible only to you"
+            >
+              <LockKeyhole className="h-2.5 w-2.5" /> Private
+            </span>
+          ) : null}
         </strong>
       </button>
       <div className="flex min-h-6 min-w-0 items-center gap-2">

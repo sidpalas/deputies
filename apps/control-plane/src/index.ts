@@ -456,6 +456,7 @@ function createDeputyToolServices(): DeputyToolBaseServices | undefined {
     maxSpawnDepth: config.deputyMaxSpawnDepth,
     maxChildrenPerSession: config.deputyMaxChildrenPerSession,
     maxSpawnsPerRun: config.deputyMaxSpawnsPerRun,
+    privateSessionsEnabled: config.privateSessionsEnabled,
   };
 }
 

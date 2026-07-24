@@ -35,6 +35,7 @@ type StreamEventPusher = (event: unknown) => void;
 type MockApiOptions = {
   submittedPrompts?: string[];
   submittedMessageBodies?: unknown[];
+  createdSessionBodies?: unknown[];
   requests?: string[];
   accessUpdates?: unknown[];
   repositories?: unknown[];
@@ -73,6 +74,9 @@ type MockApiOptions = {
   searchNextCursor?: string | null;
   callbacks?: unknown[];
   sessionOverride?: Partial<typeof session> & {
+    visibility?: 'tenant' | 'private';
+    ownerUserId?: string;
+    parentSessionId?: string;
     context?: Record<string, unknown>;
     displayStatus?: string;
     displayStatusTooltip?: string;
@@ -790,6 +794,22 @@ it('allows starting a session without repository options', async () => {
   await waitFor(() => expect(submittedMessageBodies).toHaveLength(1));
   expect(submittedMessageBodies[0]).toMatchObject({ prompt: 'start work', generateTitle: true });
   expect(submittedMessageBodies[0]).not.toHaveProperty('repository');
+});
+
+it('creates a private session from the new-session composer', async () => {
+  const createdSessionBodies: unknown[] = [];
+  mockApi({ authMode: 'session', currentUser: user, createdSessionBodies, repositories: [] });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /Private session/ }));
+  fireEvent.change(screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...'), {
+    target: { value: 'secret work' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+  await waitFor(() => expect(createdSessionBodies).toEqual([{ title: 'secret work', visibility: 'private' }]));
+  expect(await screen.findByTitle('Visible only to you')).toBeInTheDocument();
 });
 
 it('archives a newly-created session when its initial message cannot be enqueued', async () => {
@@ -1522,6 +1542,36 @@ it('archives the selected session in place before waiting for the archive reques
   expect(screen.getByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
   expect(sessionStorage.getItem('deputies-selected-session-id')).toBe(session.id);
   expect(sessionStorage.getItem('deputies-new-session-selected')).toBeNull();
+});
+
+it('promotes an owned private session and explains that promotion is permanent', async () => {
+  const updates: unknown[] = [];
+  mockApi({
+    authMode: 'session',
+    currentUser: user,
+    sessionOverride: {
+      visibility: 'private',
+      ownerUserId: user.id,
+      parentSessionId: '00000000-0000-4000-8000-000000000088',
+      spawnDepth: 1,
+    },
+    onUpdateSessionRequest: (body) => {
+      updates.push(body);
+      return undefined;
+    },
+  });
+  render(<App />);
+
+  const heading = await screen.findByRole('heading', { name: 'Existing session' });
+  const header = heading.closest('section');
+  if (!header) throw new Error('Expected session header');
+  expect(within(header).getByTitle('Visible only to you')).toBeInTheDocument();
+  fireEvent.click(within(header).getByRole('button', { name: 'Session actions' }));
+  expect(within(header).getByText('This cannot be made private again.')).toBeInTheDocument();
+  fireEvent.click(within(header).getByRole('menuitem', { name: 'Make tenant-wide' }));
+
+  await waitFor(() => expect(updates).toEqual([{ visibility: 'tenant' }]));
+  await waitFor(() => expect(within(header).queryByTitle('Visible only to you')).not.toBeInTheDocument());
 });
 
 it('refreshes sessions when the global event stream reports an external session', async () => {
@@ -4846,6 +4896,7 @@ function mockApi(options: MockApiOptions = {}) {
         runMode: 'combined',
         apiAuthMode: options.authMode ?? 'none',
         sandboxProvider: options.sandboxProvider ?? 'fake',
+        privateSessionsEnabled: true,
         hideSetupPage: true,
         ...(options.notices ? { notices: options.notices } : {}),
       });
@@ -4892,6 +4943,7 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === '/sessions' && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as Partial<typeof session>;
+      options.createdSessionBodies?.push(body);
       currentSession = {
         ...currentSession,
         ...body,
@@ -5161,13 +5213,18 @@ function mockApi(options: MockApiOptions = {}) {
     }
 
     if (url.pathname === `/sessions/${currentSession.id}` && method === 'PATCH') {
-      const body = JSON.parse(String(init?.body)) as { title?: string; tags?: string[] };
+      const body = JSON.parse(String(init?.body)) as {
+        title?: string;
+        tags?: string[];
+        visibility?: 'tenant';
+      };
       const customResponse = options.onUpdateSessionRequest?.(body);
       if (customResponse) return customResponse;
       currentSession = {
         ...currentSession,
         ...(body.title ? { title: body.title } : {}),
         ...(body.tags ? { tags: body.tags } : {}),
+        ...(body.visibility ? { visibility: body.visibility } : {}),
       };
       return jsonResponse({ session: currentSession });
     }

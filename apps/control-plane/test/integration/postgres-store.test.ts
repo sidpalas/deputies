@@ -503,6 +503,127 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     expect(listedIds).toEqual(expect.arrayContaining([first.id, second.id, third.id]));
   });
 
+  it('persists private ownership, filters discovery, and enforces irreversible promotion', async () => {
+    const owner = await store.upsertAuthUserForAccount(authUser('701', 'private-session-owner'));
+    const other = await store.upsertAuthUserForAccount(authUser('702', 'private-session-other'));
+    const services = createServices(store);
+    const tenant = await services.sessions.create({ title: 'Visible tenant session' });
+    const privateSession = await services.sessions.create({
+      title: 'Hidden private session',
+      tags: ['owner-only'],
+      visibility: 'private',
+      ownerUserId: owner.id,
+      createdByUserId: owner.id,
+    });
+    const privateChild = await store.createSession({
+      id: '00000000-0000-4000-8000-000000000703',
+      visibility: 'private',
+      ownerUserId: owner.id,
+      status: 'idle',
+      parentSessionId: privateSession.id,
+      spawnDepth: 1,
+      createdByUserId: owner.id,
+      createdAt: new Date('2026-07-24T12:01:00.000Z'),
+      updatedAt: new Date('2026-07-24T12:01:00.000Z'),
+      tags: [],
+    });
+    await store.upsertSessionSearchDocs([
+      {
+        sessionId: privateSession.id,
+        kind: 'prompt',
+        sourceId: 'private-search-doc',
+        content: 'confidentialftsneedle',
+        createdAt: new Date('2026-07-24T12:02:00.000Z'),
+      },
+    ]);
+
+    const unauthenticated = await store.listSessionsWithLatestSandbox('fake', { archived: false, limit: 50 });
+    expect(unauthenticated.items.map((item) => item.session.id)).toContain(tenant.id);
+    expect(unauthenticated.items.map((item) => item.session.id)).not.toContain(privateSession.id);
+
+    const ownerList = await store.listSessionsWithLatestSandbox('fake', {
+      archived: false,
+      visibleToUserId: owner.id,
+      limit: 50,
+    });
+    expect(ownerList.items.map((item) => item.session.id)).toEqual(
+      expect.arrayContaining([tenant.id, privateSession.id]),
+    );
+    const otherList = await store.listSessionsWithLatestSandbox('fake', {
+      archived: false,
+      visibleToUserId: other.id,
+      limit: 50,
+    });
+    expect(otherList.items.map((item) => item.session.id)).not.toContain(privateSession.id);
+    await expect(store.searchSessions('fake', { query: 'confidentialftsneedle', limit: 50 })).resolves.toMatchObject({
+      items: [],
+    });
+    await expect(
+      store.searchSessions('fake', { query: 'confidentialftsneedle', visibleToUserId: other.id, limit: 50 }),
+    ).resolves.toMatchObject({ items: [] });
+    await expect(
+      store.searchSessions('fake', { query: 'confidentialftsneedle', visibleToUserId: owner.id, limit: 50 }),
+    ).resolves.toMatchObject({
+      items: [
+        expect.objectContaining({
+          item: expect.objectContaining({ session: expect.objectContaining({ id: privateSession.id }) }),
+        }),
+      ],
+    });
+    await expect(store.listSessionTags({ limit: 50, visibleToUserId: owner.id })).resolves.toContainEqual({
+      tag: 'owner-only',
+      sessionCount: 1,
+    });
+    await expect(store.listSessionTags({ limit: 50, visibleToUserId: other.id })).resolves.not.toContainEqual(
+      expect.objectContaining({ tag: 'owner-only' }),
+    );
+
+    const parsedDatabaseUrl = new URL(databaseUrl);
+    const singleConnectionPool = new Pool({
+      host: parsedDatabaseUrl.hostname,
+      port: Number(parsedDatabaseUrl.port || 5432),
+      user: decodeURIComponent(parsedDatabaseUrl.username),
+      password: decodeURIComponent(parsedDatabaseUrl.password),
+      database: parsedDatabaseUrl.pathname.slice(1),
+      max: 1,
+    });
+    const singleConnectionStore = new PostgresStore(singleConnectionPool);
+    const promotionResult = await singleConnectionStore.withPrivateSessionWriteLease(owner.id, privateChild.id, () =>
+      singleConnectionStore.updateSessionMetadataWithEvent({
+        id: privateChild.id,
+        promoteToTenant: true,
+        updatedAt: new Date(),
+      }),
+    );
+    await singleConnectionStore.close();
+    const promotedChild = promotionResult.session;
+    expect(promotedChild).toMatchObject({ visibility: 'tenant', ownerUserId: owner.id });
+    await expect(store.getSession(privateSession.id)).resolves.toMatchObject({ visibility: 'private' });
+
+    const promoted = await services.sessions.update({ id: privateSession.id, promoteToTenant: true });
+    expect(promoted).toMatchObject({ visibility: 'tenant', ownerUserId: owner.id });
+    await expect(store.getSession(privateChild.id)).resolves.toMatchObject({
+      visibility: 'tenant',
+      ownerUserId: owner.id,
+    });
+    await expect(store.getEvents(privateSession.id)).resolves.toContainEqual(
+      expect.objectContaining({ type: 'session_visibility_changed', payload: { visibility: 'tenant' } }),
+    );
+    await expect(
+      pool.query(`UPDATE sessions SET visibility = 'private' WHERE id = $1`, [privateSession.id]),
+    ).rejects.toThrow('tenant sessions cannot become private');
+    await expect(
+      pool.query(`UPDATE sessions SET owner_user_id = $2 WHERE id = $1`, [privateSession.id, other.id]),
+    ).rejects.toThrow('session owner is immutable');
+    await expect(
+      store.createSession({
+        ...privateChild,
+        id: '00000000-0000-4000-8000-000000000704',
+        visibility: 'private',
+      }),
+    ).resolves.toMatchObject({ visibility: 'private', parentSessionId: privateSession.id });
+  });
+
   it('counts and paginates all tenant direct child sessions', async () => {
     const services = createServices(store);
     const now = new Date('2026-07-19T00:00:00.000Z');
@@ -1037,6 +1158,18 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     const replay = await store.createSessionWithFirstMessage(input);
     expect(replay.created).toBe(false);
     expect(replay.session.id).toBe(childSession.id);
+    await expect(
+      store.createSessionWithFirstMessage({
+        ...input,
+        session: {
+          ...childSession,
+          id: '00000000-0000-4000-8000-000000000938',
+          visibility: 'private',
+          ownerUserId: '00000000-0000-4000-8000-000000000939',
+        },
+        message: { ...input.message, id: '00000000-0000-4000-8000-000000000940' },
+      }),
+    ).rejects.toThrow('Parent session access changed while spawning child');
     await expect(services.messages.enqueue({ sessionId: childSession.id, prompt: 'follow-up' })).resolves.toMatchObject(
       {
         sequence: 2,

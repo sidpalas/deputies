@@ -109,6 +109,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ $root.Values.config.runnerModelDefault | quote }}
 - name: TITLE_GENERATION_ENABLED
   value: {{ $root.Values.config.titleGenerationEnabled | quote }}
+- name: PRIVATE_SESSIONS_ENABLED
+  value: {{ $root.Values.config.privateSessionsEnabled | quote }}
 {{- if $root.Values.config.titleGenerationModel }}
 - name: TITLE_GENERATION_MODEL
   value: {{ $root.Values.config.titleGenerationModel | quote }}

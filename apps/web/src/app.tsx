@@ -42,6 +42,7 @@ import {
   logout,
   openWorkspaceTool,
   pauseQueue,
+  promoteSession,
   replayCallback,
   restoreSnippet,
   resumeQueue,
@@ -356,6 +357,7 @@ function sessionFilterCount(filters: SessionFilters): number {
 export function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [promotingSessionId, setPromotingSessionId] = useState('');
   const [token, setToken] = useState(loadStoredToken);
   const tokenRef = useRef(token);
   tokenRef.current = token;
@@ -955,6 +957,7 @@ export function App() {
     setArchivedSessionsLoading(false);
     setSessionSearchLoading(false);
     setSessionSearchLoadingMore(false);
+    setSessionTagOptions([]);
     setRevealedSessionLineage([]);
     setRevealedSessionLineageSearchQuery('');
     setSelectedSessionParent(null);
@@ -1152,10 +1155,13 @@ export function App() {
 
   useEffect(() => {
     if (!canCallApi || sidebarPanel !== 'sessions') return;
+    const authorityEpoch = sessionSummaryAuthorityEpochRef.current;
     listSessionTags(token)
-      .then(setSessionTagOptions)
+      .then((tags) => {
+        if (sessionSummaryAuthorityEpochRef.current === authorityEpoch) setSessionTagOptions(tags);
+      })
       .catch(() => undefined);
-  }, [canCallApi, sidebarPanel, token]);
+  }, [canCallApi, currentUser?.id, sidebarPanel, token]);
 
   useEffect(() => {
     const query = sessionSearchQuery.trim();
@@ -1753,6 +1759,14 @@ export function App() {
     }
     const activeSessionHasMessages = messagesRef.current.some((message) => message.sessionId === activeSessionId);
     const eventPlan = planSessionEvent(event);
+    if (event.type === 'session_visibility_changed' && sidebarPanel === 'sessions') {
+      const authorityEpoch = sessionSummaryAuthorityEpochRef.current;
+      void listSessionTags(token)
+        .then((tags) => {
+          if (sessionSummaryAuthorityEpochRef.current === authorityEpoch) setSessionTagOptions(tags);
+        })
+        .catch(() => undefined);
+    }
     if (event.sessionId === activeSessionId && !selectedEventAlreadyApplied) {
       const shouldResetPendingDetail =
         pendingCreatedSessionIdRef.current === activeSessionId &&
@@ -2958,6 +2972,7 @@ export function App() {
     prompt: string;
     skills: string[];
     skillRefs: Array<{ id: string; name: string }>;
+    visibility: 'tenant' | 'private';
   }): Promise<boolean> {
     const firstPrompt = input.prompt.trim();
     if (createSessionInFlightRef.current || !canCreateThread || (!firstPrompt && !input.skills.length)) return false;
@@ -2988,6 +3003,7 @@ export function App() {
     try {
       const session = await createSession({
         title: titleFromPrompt(firstPrompt || input.skills.join(', ')),
+        visibility: input.visibility,
         token,
       });
       markSessionSummaryChanged(session.id);
@@ -3410,6 +3426,29 @@ export function App() {
       handleApiError(err);
     } finally {
       finishSessionStatusMutation(sessionId, mutationVersion);
+    }
+  }
+
+  async function handlePromoteSession() {
+    if (
+      !selectedSessionId ||
+      selectedSession?.visibility !== 'private' ||
+      selectedSession.ownerUserId !== currentUser?.id ||
+      promotingSessionId
+    ) {
+      return;
+    }
+    const sessionId = selectedSessionId;
+    setPromotingSessionId(sessionId);
+    setError('');
+    try {
+      const promoted = await promoteSession({ sessionId, token });
+      markSessionSummaryChanged(sessionId);
+      applySessionListUpdate(promoted, { forceKeep: true, supplementalOnly: isSupplementalSession(sessionId) });
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setPromotingSessionId((current) => (current === sessionId ? '' : current));
     }
   }
 
@@ -4807,6 +4846,9 @@ export function App() {
                 ) : isCreatingThread || !selectedSession ? (
                   <NewThreadPanel
                     canCallApi={canCreateThread}
+                    canCreatePrivateSession={
+                      Boolean(health?.privateSessionsEnabled) && sessionAuthRequired && Boolean(currentUser)
+                    }
                     readOnly={!canCreateThread}
                     loading={loading}
                     prompt={newThreadPrompt}
@@ -4851,9 +4893,16 @@ export function App() {
                     <ThreadHeader
                       selectedSession={selectedSession}
                       canWriteSession={canWriteSelectedSession}
+                      canPromoteSession={
+                        selectedSession.visibility === 'private' &&
+                        selectedSession.ownerUserId === currentUser?.id &&
+                        canWriteSelectedSession
+                      }
+                      promotingSession={promotingSessionId === selectedSession.id}
                       showOpenSidebar={!sidebarOpen}
                       openSidebarLabel={sidebarNavigation.openLabel}
                       onArchive={fireAndForget(handleArchiveSession)}
+                      onPromoteSession={fireAndForget(handlePromoteSession)}
                       onSessionStarChange={fireAndForget(handleSetSessionStarred)}
                       onOpenSidebar={expandSidebar}
                       onUpdateTags={handleUpdateSessionTags}

@@ -1,4 +1,5 @@
-import { Pool, type PoolClient } from 'pg';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { Pool, type PoolClient, type PoolConfig } from 'pg';
 import type { NormalizedEvent } from '../events/types.js';
 import { PostgresSkillStore } from './postgres/skills.js';
 import { StoreConflictError } from './types.js';
@@ -148,18 +149,24 @@ export type PostgresEventListener = {
 
 export class PostgresStore implements AppStore {
   private readonly pool: Pool;
+  private readonly coordinationPool: Pool;
+  private readonly heldCoordinationLocks = new AsyncLocalStorage<ReadonlySet<string>>();
   private readonly skillStore: PostgresSkillStore;
   private readonly secretCipher?: SecretCipher;
 
   constructor(databaseUrl: string | Pool, options: { sandboxSecretEncryptionKey?: string } = {}) {
     this.pool = typeof databaseUrl === 'string' ? new Pool({ connectionString: databaseUrl }) : databaseUrl;
+    this.coordinationPool =
+      typeof databaseUrl === 'string'
+        ? new Pool({ connectionString: databaseUrl })
+        : new Pool(Object.defineProperties({}, Object.getOwnPropertyDescriptors(databaseUrl.options)) as PoolConfig);
     this.skillStore = new PostgresSkillStore(this.pool);
     if (options.sandboxSecretEncryptionKey)
       this.secretCipher = new SecretCipher(options.sandboxSecretEncryptionKey, 'sandbox-secrets');
   }
 
   async close(): Promise<void> {
-    await this.pool.end();
+    await Promise.all([this.pool.end(), this.coordinationPool.end()]);
   }
 
   async getSessionNotepad(sessionId: string): Promise<SessionNotepadRecord | null> {
@@ -576,18 +583,9 @@ export class PostgresStore implements AppStore {
         ...(input.actor.kind === 'agent' ? [input.actor.sessionId] : []),
       ]);
       await this.requirePgExplicitWriteAuthority(client, a.notepadId, input.actor);
-      const session = (await client.query('SELECT status,parent_session_id FROM sessions WHERE id=$1', [a.sessionId]))
-        .rows[0];
+      await this.requirePgAgentSessionAccess(client, input.actor, a.sessionId);
+      const session = (await client.query('SELECT status FROM sessions WHERE id=$1', [a.sessionId])).rows[0];
       if (!session) throw new StoreConflictError('not_found', 'Session not found');
-      if (
-        input.actor.kind === 'agent' &&
-        a.sessionId !== input.actor.sessionId &&
-        session.parent_session_id !== input.actor.sessionId
-      )
-        throw new StoreConflictError(
-          'notepad_association_forbidden',
-          'Agents may associate notepads only with themselves or direct children',
-        );
       if (session.status === 'archived')
         throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
       const existed =
@@ -627,19 +625,9 @@ export class PostgresStore implements AppStore {
         ...(input.actor.kind === 'agent' ? [input.actor.sessionId] : []),
       ]);
       await this.requirePgExplicitWriteAuthority(client, input.notepadId, input.actor);
-      const session = (
-        await client.query('SELECT status,parent_session_id FROM sessions WHERE id=$1', [input.sessionId])
-      ).rows[0];
+      await this.requirePgAgentSessionAccess(client, input.actor, input.sessionId);
+      const session = (await client.query('SELECT status FROM sessions WHERE id=$1', [input.sessionId])).rows[0];
       if (!session) throw new StoreConflictError('not_found', 'Session not found');
-      if (
-        input.actor.kind === 'agent' &&
-        input.sessionId !== input.actor.sessionId &&
-        session.parent_session_id !== input.actor.sessionId
-      )
-        throw new StoreConflictError(
-          'notepad_association_forbidden',
-          'Agents may associate notepads only with themselves or direct children',
-        );
       if (session.status === 'archived')
         throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
       const removed =
@@ -798,6 +786,22 @@ export class PostgresStore implements AppStore {
     ]);
     if (association.rowCount !== 1) throw new StoreConflictError('not_found', 'Notepad association is required');
   }
+  private async requirePgAgentSessionAccess(client: PoolClient, actor: NotepadActor, targetSessionId: string) {
+    if (actor.kind !== 'agent') return;
+    const sessions = await client.query<{ id: string; visibility: string; owner_user_id: string | null }>(
+      'SELECT id, visibility, owner_user_id FROM sessions WHERE id = ANY($1::uuid[])',
+      [[actor.sessionId, targetSessionId]],
+    );
+    const acting = sessions.rows.find((session) => session.id === actor.sessionId);
+    const target = sessions.rows.find((session) => session.id === targetSessionId);
+    const readable =
+      target &&
+      (target.visibility !== 'private' ||
+        (acting?.visibility === 'private' && acting.owner_user_id === target.owner_user_id));
+    if (!readable) {
+      throw new StoreConflictError('notepad_association_forbidden', 'Agent cannot access the target session');
+    }
+  }
   private async requirePgAssociatedAuthority(
     client: PoolClient,
     notepadId: string,
@@ -837,13 +841,30 @@ export class PostgresStore implements AppStore {
     const user = (await client.query('SELECT role FROM auth_users WHERE id=$1 FOR SHARE', [expectedGrantorUserId]))
       .rows[0];
     await this.lockLiveSessions(client, [actorSessionId, targetSessionId]);
+    const accessRows = await client.query<{ id: string; visibility: string; owner_user_id: string | null }>(
+      'SELECT id, visibility, owner_user_id FROM sessions WHERE id = ANY($1::uuid[])',
+      [[actorSessionId, targetSessionId]],
+    );
+    const actor = accessRows.rows.find((row) => row.id === actorSessionId);
+    const target = accessRows.rows.find((row) => row.id === targetSessionId);
     const capability = (
       await client.query(
         "SELECT granted_by_user_id FROM session_notepad_capabilities WHERE session_id=$1 AND kind='session_notepad_coordination' FOR SHARE",
         [actorSessionId],
       )
     ).rows[0];
-    if (capability?.granted_by_user_id !== expectedGrantorUserId || (user?.role !== 'member' && user?.role !== 'admin'))
+    const privateTargetAuthorized = Boolean(
+      target &&
+      (target.visibility !== 'private' ||
+        (actor?.visibility === 'private' &&
+          actor.owner_user_id === target.owner_user_id &&
+          target.owner_user_id === expectedGrantorUserId)),
+    );
+    if (
+      capability?.granted_by_user_id !== expectedGrantorUserId ||
+      (user?.role !== 'member' && user?.role !== 'admin') ||
+      !privateTargetAuthorized
+    )
       throw new StoreConflictError('not_found', 'Coordination grantor is no longer authorized');
   }
 
@@ -1200,15 +1221,19 @@ export class PostgresStore implements AppStore {
 
   async updateAuthUserRole(input: { userId: string; role: AuthUserRecord['role']; updatedAt: Date }) {
     try {
-      const result = await this.pool.query<AuthUserRow>(
-        `UPDATE auth_users
-         SET role = $2,
-             updated_at = $3
-         WHERE id = $1
-         RETURNING id, username, role, display_name, avatar_url, created_at, updated_at`,
-        [input.userId, input.role, input.updatedAt],
+      return await this.withCoordinationLock(`user-write:${input.userId}`, () =>
+        this.transaction(async (client) => {
+          const result = await client.query<AuthUserRow>(
+            `UPDATE auth_users
+             SET role = $2,
+                 updated_at = $3
+             WHERE id = $1
+             RETURNING id, username, role, display_name, avatar_url, created_at, updated_at`,
+            [input.userId, input.role, input.updatedAt],
+          );
+          return result.rows[0] ? toAuthUser(result.rows[0]) : null;
+        }),
       );
-      return result.rows[0] ? toAuthUser(result.rows[0]) : null;
     } catch (error) {
       if (error instanceof Error && error.message.includes('cannot demote or remove the final administrator')) {
         throw new StoreConflictError('last_admin', 'Cannot demote the final administrator');
@@ -1221,6 +1246,8 @@ export class PostgresStore implements AppStore {
     const result = await this.pool.query<SessionRow>(
       `INSERT INTO sessions (
          id,
+         visibility,
+         owner_user_id,
          status,
          title,
          context,
@@ -1232,10 +1259,12 @@ export class PostgresStore implements AppStore {
           last_activity_at,
           tags
         )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING ${sessionSelectColumns}`,
       [
         record.id,
+        record.visibility ?? 'tenant',
+        record.ownerUserId ?? null,
         record.status,
         record.title ?? null,
         record.context ?? null,
@@ -1256,21 +1285,32 @@ export class PostgresStore implements AppStore {
     input: CreateSessionWithFirstMessageInput,
   ): Promise<CreateSessionWithFirstMessageResult> {
     return this.transaction(async (client) => {
+      let lockedParent: SessionRow | undefined;
       if (input.parentChildLimit) {
         if (input.session.parentSessionId !== input.parentChildLimit.parentSessionId) {
           throw new Error('Parent child limit must match the session parent');
         }
-        const parent = await client.query('SELECT id FROM sessions WHERE id = $1 FOR UPDATE', [
-          input.parentChildLimit.parentSessionId,
-        ]);
-        if (!parent.rows[0])
-          throw new Error(`Parent session does not exist: ${input.parentChildLimit.parentSessionId}`);
+        const parent = await client.query<SessionRow>(
+          `SELECT ${sessionSelectColumns} FROM sessions WHERE id = $1 FOR UPDATE`,
+          [input.parentChildLimit.parentSessionId],
+        );
+        lockedParent = parent.rows[0];
+        if (!lockedParent) throw new Error(`Parent session does not exist: ${input.parentChildLimit.parentSessionId}`);
       }
 
       const existing = await client.query<SessionRow>(`SELECT ${sessionSelectColumns} FROM sessions WHERE id = $1`, [
         input.session.id,
       ]);
       if (existing.rows[0]) {
+        const existingSession = existing.rows[0];
+        if (
+          input.parentChildLimit &&
+          (existingSession.parent_session_id !== input.parentChildLimit.parentSessionId ||
+            (existingSession.visibility === 'private' &&
+              (lockedParent?.visibility !== 'private' || lockedParent.owner_user_id !== existingSession.owner_user_id)))
+        ) {
+          throw new StoreConflictError('not_found', 'Spawned session not found');
+        }
         const message = await client.query<MessageRow>(
           `SELECT id, session_id, sequence, status, prompt, steering, author_user_id, author_name, source, context, created_at
            FROM messages
@@ -1281,7 +1321,7 @@ export class PostgresStore implements AppStore {
         );
         if (!message.rows[0]) throw new Error(`First message does not exist for session: ${input.session.id}`);
         return {
-          session: toSession(existing.rows[0]),
+          session: toSession(existingSession),
           message: toMessage(message.rows[0]),
           events: [],
           created: false,
@@ -1289,6 +1329,12 @@ export class PostgresStore implements AppStore {
       }
 
       if (input.parentChildLimit) {
+        if (
+          (input.session.visibility ?? 'tenant') !== lockedParent!.visibility ||
+          (input.session.ownerUserId ?? null) !== lockedParent!.owner_user_id
+        ) {
+          throw new StoreConflictError('not_found', 'Parent session access changed while spawning child');
+        }
         const count = await client.query<{ child_count: PgInteger }>(
           `SELECT COUNT(*) AS child_count
            FROM sessions
@@ -1306,6 +1352,8 @@ export class PostgresStore implements AppStore {
       const sessionResult = await client.query<SessionRow>(
         `INSERT INTO sessions (
            id,
+           visibility,
+           owner_user_id,
            status,
            title,
            context,
@@ -1317,10 +1365,12 @@ export class PostgresStore implements AppStore {
             last_activity_at,
             tags
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
           RETURNING ${sessionSelectColumns}`,
         [
           input.session.id,
+          input.session.visibility ?? 'tenant',
+          input.session.ownerUserId ?? null,
           input.session.status,
           input.session.title ?? null,
           input.session.context ?? null,
@@ -1435,6 +1485,37 @@ export class PostgresStore implements AppStore {
     });
   }
 
+  async withAgentSessionLease<T>(actingSessionId: string, operation: () => Promise<T>): Promise<T> {
+    return this.withCoordinationLock(`agent-session:${actingSessionId}`, operation);
+  }
+
+  async withUserWriteLease<T>(userId: string, operation: () => Promise<T>): Promise<T> {
+    return this.withCoordinationLock(`user-write:${userId}`, async () => {
+      const access = await this.pool.query(`SELECT 1 FROM auth_users WHERE id = $1 AND role IN ('member', 'admin')`, [
+        userId,
+      ]);
+      if (access.rowCount !== 1) throw new StoreConflictError('not_found', 'User write access is required');
+      return operation();
+    });
+  }
+
+  async withPrivateSessionWriteLease<T>(userId: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
+    return this.withCoordinationLocks([`user-write:${userId}`, `agent-session:${sessionId}`], async () => {
+      const access = await this.pool.query(
+        `SELECT 1
+         FROM sessions s
+         JOIN auth_users u ON u.id = $1
+         WHERE s.id = $2
+           AND s.visibility = 'private'
+           AND s.owner_user_id = u.id
+           AND u.role IN ('member', 'admin')`,
+        [userId, sessionId],
+      );
+      if (access.rowCount !== 1) throw new StoreConflictError('not_found', 'Private session not found');
+      return operation();
+    });
+  }
+
   async getSession(id: string): Promise<SessionRecord | null> {
     const result = await this.pool.query<SessionRow>(`SELECT ${sessionSelectColumns} FROM sessions WHERE id = $1`, [
       id,
@@ -1446,7 +1527,7 @@ export class PostgresStore implements AppStore {
 
   async listSessions(): Promise<SessionRecord[]> {
     const result = await this.pool.query<SessionRow>(
-      `SELECT ${sessionSelectColumns} FROM sessions ORDER BY last_activity_at DESC, created_at DESC, id DESC`,
+      `SELECT ${sessionSelectColumns} FROM sessions WHERE visibility = 'tenant' ORDER BY last_activity_at DESC, created_at DESC, id DESC`,
     );
 
     return result.rows.map(toSession);
@@ -1458,6 +1539,12 @@ export class PostgresStore implements AppStore {
       `SELECT ${sessionSelectColumns}
        FROM sessions
          WHERE ${scopePredicate}
+           AND (
+             visibility = 'tenant'
+             OR owner_user_id = (
+               SELECT owner_user_id FROM sessions WHERE id = $1 AND visibility = 'private'
+             )
+           )
            AND ($2::text IS NULL OR status = $2)
         ORDER BY last_activity_at DESC, created_at DESC, id DESC
         LIMIT $3`,
@@ -1553,12 +1640,17 @@ export class PostgresStore implements AppStore {
     const result = await this.pool.query<SessionSearchRow>(
       `WITH search_query AS (
          SELECT websearch_to_tsquery('simple', $2) AS tsq
+       ), eligible_sessions AS NOT MATERIALIZED (
+         SELECT sessions.*
+         FROM sessions
+         ${whereSql}
        ), matches AS (
          SELECT docs.session_id,
                 docs.kind,
                 docs.content,
                 ts_rank(docs.tsv, search_query.tsq) AS score
          FROM session_search_docs docs
+         JOIN eligible_sessions sessions ON sessions.id = docs.session_id
          CROSS JOIN search_query
          WHERE docs.tsv @@ search_query.tsq
          UNION ALL
@@ -1566,7 +1658,7 @@ export class PostgresStore implements AppStore {
                 'title'::text AS kind,
                 COALESCE(sessions.title, '') AS content,
                  1.0 AS score
-         FROM sessions
+         FROM eligible_sessions sessions
          WHERE sessions.title ILIKE $3 ESCAPE '\\'
        ), best_match AS (
          SELECT session_id, kind, content, score
@@ -1579,8 +1671,7 @@ export class PostgresStore implements AppStore {
        ), matched_sessions AS (
          SELECT sessions.*, best_match.kind AS match_kind, best_match.content, best_match.score
          FROM best_match
-         JOIN sessions ON sessions.id = best_match.session_id
-         ${whereSql}
+         JOIN eligible_sessions sessions ON sessions.id = best_match.session_id
           ORDER BY best_match.score DESC, sessions.last_activity_at DESC, sessions.created_at DESC, sessions.id DESC
           LIMIT $4 OFFSET $5
        )
@@ -1629,9 +1720,10 @@ export class PostgresStore implements AppStore {
     };
   }
 
-  async listSessionTags(options: { limit: number }): Promise<SessionTagSummary[]> {
+  async listSessionTags(options: { limit: number; visibleToUserId?: string }): Promise<SessionTagSummary[]> {
     const values: unknown[] = [];
     const where: string[] = [];
+    appendSessionVisibilityWhereClause(options.visibleToUserId, values, where);
     values.push(options.limit);
     const limitIndex = values.length;
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -1838,7 +1930,61 @@ export class PostgresStore implements AppStore {
   async updateSessionMetadataWithEvent(
     input: SessionMetadataUpdateInput,
   ): Promise<{ session: SessionRecord; event: EventRecord }> {
+    if (input.promoteToTenant) {
+      return this.withCoordinationLock(`agent-session:${input.id}`, () =>
+        this.updateSessionMetadataWithEventUnlocked(input),
+      );
+    }
+    return this.updateSessionMetadataWithEventUnlocked(input);
+  }
+
+  private async updateSessionMetadataWithEventUnlocked(
+    input: SessionMetadataUpdateInput,
+  ): Promise<{ session: SessionRecord; event: EventRecord }> {
     return this.transaction(async (client) => {
+      if (input.promoteToTenant) {
+        const locked = await client.query<SessionRow>(
+          `SELECT ${sessionSelectColumns} FROM sessions WHERE id = $1 FOR UPDATE`,
+          [input.id],
+        );
+        const root = locked.rows[0];
+        if (!root) throw new StoreConflictError('not_found', 'Session not found');
+        if (root.status === 'archived') {
+          throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
+        }
+        if (root.visibility !== 'private') {
+          throw new StoreConflictError('not_found', 'Private session not found');
+        }
+        const promoted = await client.query<SessionRow>(
+          `UPDATE sessions
+           SET visibility = 'tenant', updated_at = $2
+           WHERE id = $1 AND visibility = 'private'
+           RETURNING ${sessionSelectColumns}`,
+          [input.id, input.updatedAt],
+        );
+        const promotedSession = promoted.rows[0];
+        if (!promotedSession) throw new StoreConflictError('not_found', 'Private session not found');
+        const inserted = await client.query<EventRow>(
+          `WITH next_sequence AS (
+             INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
+             VALUES ($1, 'events', 2)
+             ON CONFLICT (session_id, kind)
+             DO UPDATE SET next_sequence = session_sequence_counters.next_sequence + 1
+             RETURNING next_sequence - 1 AS sequence
+           ), inserted AS (
+             INSERT INTO events (session_id, run_id, message_id, sequence, type, payload, created_at)
+             SELECT $1, NULL, NULL, sequence, 'session_visibility_changed', $2, $3
+             FROM next_sequence
+             RETURNING id, session_id, run_id, message_id, sequence, type, payload, created_at
+           )
+           SELECT id, session_id, run_id, message_id, sequence, type, payload, created_at,
+                  pg_notify($4, json_build_object('id', id)::text)
+           FROM inserted`,
+          [input.id, { visibility: 'tenant' }, input.updatedAt, eventNotificationChannel],
+        );
+        return { session: toSession(promotedSession), event: toEvent(inserted.rows[0]!) };
+      }
+
       const updated = await client.query<SessionRow>(
         `UPDATE sessions
          SET title = CASE WHEN $3 THEN $4 ELSE title END,
@@ -1863,10 +2009,7 @@ export class PostgresStore implements AppStore {
       if (!sessionRow) throw new Error(`Session does not exist: ${input.id}`);
       const session = toSession(sessionRow);
 
-      const payload = {
-        title: session.title ?? null,
-        ...(input.tags !== undefined ? { tags: session.tags } : {}),
-      };
+      const payload = { title: session.title ?? null, ...(input.tags !== undefined ? { tags: session.tags } : {}) };
       const inserted = await client.query<EventRow>(
         `WITH next_sequence AS (
            INSERT INTO session_sequence_counters (session_id, kind, next_sequence)
@@ -4224,6 +4367,38 @@ export class PostgresStore implements AppStore {
     }
   }
 
+  private async withCoordinationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    return this.withCoordinationLocks([key], operation);
+  }
+
+  private async withCoordinationLocks<T>(keys: string[], operation: () => Promise<T>): Promise<T> {
+    const held = this.heldCoordinationLocks.getStore() ?? new Set<string>();
+    const missing = [...new Set(keys)].filter((key) => !held.has(key)).sort();
+    if (!missing.length) return operation();
+    if (held.size) throw new Error('Nested coordination leases must not expand their lock set');
+    const client = await this.coordinationPool.connect();
+    let releaseError: Error | undefined;
+    try {
+      for (const key of missing) await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
+      return await this.heldCoordinationLocks.run(new Set([...held, ...missing]), operation);
+    } finally {
+      for (const key of missing.reverse()) {
+        try {
+          const unlocked = await client.query<{ unlocked: boolean }>(
+            'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked',
+            [key],
+          );
+          if (!unlocked.rows[0]?.unlocked) throw new Error(`Coordination lock was not held: ${key}`);
+        } catch (error) {
+          releaseError = error instanceof Error ? error : new Error(String(error));
+          break;
+        }
+      }
+      client.release(releaseError);
+      if (releaseError) throw releaseError;
+    }
+  }
+
   private async listEnvironmentRepositories(
     environmentId: string,
   ): Promise<EnvironmentWithDetailsRecord['repositories']> {
@@ -4358,11 +4533,13 @@ function appendSessionFilterWhereClauses(
     createdByUserId?: string;
     participantUserId?: string;
     starredByUserId?: string;
+    visibleToUserId?: string;
   },
   values: unknown[],
   where: string[],
   alias = 'sessions',
 ): void {
+  appendSessionVisibilityWhereClause(options.visibleToUserId, values, where, alias);
   if (options.tags?.length) {
     values.push(options.tags);
     where.push(`${alias}.tags @> $${values.length}::text[]`);
@@ -4382,6 +4559,20 @@ function appendSessionFilterWhereClauses(
     where.push(
       `EXISTS (SELECT 1 FROM session_stars WHERE session_stars.session_id = ${alias}.id AND session_stars.user_id = $${values.length}::uuid)`,
     );
+  }
+}
+
+function appendSessionVisibilityWhereClause(
+  visibleToUserId: string | undefined,
+  values: unknown[],
+  where: string[],
+  alias = 'sessions',
+): void {
+  if (visibleToUserId) {
+    values.push(visibleToUserId);
+    where.push(`(${alias}.visibility = 'tenant' OR ${alias}.owner_user_id = $${values.length}::uuid)`);
+  } else {
+    where.push(`${alias}.visibility = 'tenant'`);
   }
 }
 
