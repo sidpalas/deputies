@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { validateToolArguments } from '@earendil-works/pi-ai/compat';
 import { createServices } from '../../src/app/server.js';
+import { createPiScheduledFollowUpsToolDefinition } from '../../src/runner-pi/scheduled-follow-ups-tool.js';
 import { executeScheduledFollowUpsTool } from '../../src/scheduled-follow-ups/tool.js';
 import { MemoryStore } from '../../src/store/memory.js';
 
@@ -70,6 +72,32 @@ describe('scheduled follow-ups tool authorization', () => {
       run({ action: 'create', prompt: 'later', schedule: future(), idempotencyKey: 'key' }, async () => false),
     ).resolves.toMatchObject({ ok: false, error: expect.stringContaining('run_inactive') });
     await expect(services.scheduledFollowUps.list(acting, 10)).resolves.toEqual([]);
+  });
+
+  it('normalizes JSON-encoded schedule arguments before Pi validates them', () => {
+    const tool = createPiScheduledFollowUpsToolDefinition({
+      store,
+      scheduledFollowUps: services.scheduledFollowUps,
+      sessionId: acting,
+      runId: randomUUID(),
+      messageId: randomUUID(),
+    });
+    const schedule = future();
+    const input = { action: 'create', prompt: 'later', schedule: JSON.stringify(schedule), idempotencyKey: 'key' };
+    const validate = (args: Record<string, unknown>) =>
+      validateToolArguments(tool, {
+        type: 'toolCall',
+        id: 'tool-call',
+        name: tool.name,
+        arguments: tool.prepareArguments?.(args) ?? args,
+      });
+
+    expect(validate(input)).toEqual({ ...input, schedule });
+    expect(validate({ ...input, schedule })).toEqual({ ...input, schedule });
+    for (const invalid of ['{invalid', 'null', '[]', '42', '"text"', '{}', '{"kind":"once"}']) {
+      expect(() => validate({ ...input, schedule: invalid })).toThrow();
+    }
+    expect(() => validate({ ...input, schedule: JSON.stringify({ ...schedule, extra: true }) })).toThrow();
   });
 
   function run(value: unknown, shouldPersist?: () => Promise<boolean>) {
