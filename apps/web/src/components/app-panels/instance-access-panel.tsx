@@ -7,16 +7,24 @@ import { Card } from '../ui/card.js';
 export function InstanceAccessPanel(props: {
   token: string;
   currentUser: AuthUser;
+  readOnlyUsers?: AuthUser[];
   showOpenSidebar: boolean;
   onOpenSidebar: () => void;
   onCurrentUserChanged: (user: AuthUser) => void;
 }) {
-  const [users, setUsers] = useState<AuthUser[]>([]);
+  const [users, setUsers] = useState<AuthUser[]>(props.readOnlyUsers ?? []);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!props.readOnlyUsers);
   const [pendingId, setPendingId] = useState('');
 
   useEffect(() => {
+    if (props.readOnlyUsers) {
+      setUsers(props.readOnlyUsers);
+      setError('');
+      setLoading(false);
+      return;
+    }
+
     let active = true;
     setLoading(true);
     listUsers({ token: props.token })
@@ -26,9 +34,10 @@ export function InstanceAccessPanel(props: {
     return () => {
       active = false;
     };
-  }, [props.token]);
+  }, [props.readOnlyUsers, props.token]);
 
   async function changeRole(user: AuthUser, role: AuthUser['role']) {
+    if (props.readOnlyUsers) return;
     setPendingId(user.id);
     setError('');
     try {
@@ -87,7 +96,7 @@ export function InstanceAccessPanel(props: {
                   id={`role-${user.id}`}
                   className="rounded-md border border-input bg-background px-3 py-2 text-sm"
                   value={user.role}
-                  disabled={pendingId === user.id}
+                  disabled={Boolean(props.readOnlyUsers) || pendingId === user.id}
                   onChange={(event) => void changeRole(user, event.target.value as AuthUser['role'])}
                 >
                   <option value="viewer">Viewer</option>

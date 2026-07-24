@@ -6,6 +6,7 @@ import {
   AutomationsSidebar,
   EnvironmentsPanel,
   EnvironmentsSidebar,
+  InstanceAccessPanel,
   MessageComposer,
   SkillsPanel,
   SkillsSidebar,
@@ -25,6 +26,7 @@ import {
   demoShowcaseSessions,
   demoSkills,
   demoSnippets,
+  demoUsers,
   loadDemoAutomationInvocations,
   loadDemoEnvironmentRevisions,
 } from './showcase-data.js';
@@ -229,6 +231,7 @@ export function StaticDemoApp() {
   };
 
   function selectedResourceForPage(nextPage: StaticDemoPage): string {
+    if (nextPage === 'groups') return '';
     if (nextPage === 'automations') return selectedAutomationId;
     if (nextPage === 'environments') return selectedEnvironmentId;
     if (nextPage === 'skills') return selectedSkillId;
@@ -408,7 +411,16 @@ export function StaticDemoApp() {
             )}
           </aside>
         )}
-        {page === 'automations' ? (
+        {page === 'groups' ? (
+          <InstanceAccessPanel
+            token=""
+            currentUser={demoCurrentUser}
+            readOnlyUsers={demoUsers}
+            showOpenSidebar={!sidebarOpen}
+            onOpenSidebar={() => setSidebarOpen(true)}
+            onCurrentUserChanged={() => undefined}
+          />
+        ) : page === 'automations' ? (
           <AutomationsPanel
             automation={selectedAutomation}
             automationsLoaded

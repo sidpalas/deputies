@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { App } from './app.js';
 import { listEvents, listIncrementalEvents, type ReasoningLevel } from './api.js';
 import { request } from './api-request.js';
+import { StaticDemoApp } from './static-demo/app.js';
 
 const { codeToHtmlMock } = vi.hoisted(() => ({
   codeToHtmlMock: vi.fn((code: string) => `<pre class="shiki"><code>${code}</code></pre>`),
@@ -4490,6 +4491,27 @@ it('nests deputy sub-sessions under their originating session in the sidebar', a
   expect(child.closest('.ml-2')).toBeInTheDocument();
 });
 
+it('keeps an unstarred sub-session nested under its starred parent', async () => {
+  const parentSession = { ...session, starred: true, directChildCount: 1 };
+  const childSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000302',
+    title: 'Unstarred child',
+    parentSessionId: session.id,
+    spawnDepth: 1,
+    starred: false,
+  };
+  mockApi({ sessions: [childSession, parentSession] });
+  render(<App />);
+
+  const sidebar = within((await screen.findByRole('heading', { name: 'Sessions' })).closest('aside')!);
+  const starredHeading = sidebar.getByRole('heading', { name: 'Starred' });
+  const child = sidebar.getByRole('button', { name: 'Unstarred child' });
+  expect(starredHeading.parentElement).toContainElement(child);
+  expect(child.closest('.ml-2')).toBeInTheDocument();
+  expect(sidebar.queryByRole('button', { name: 'Load 1 more sub-session' })).not.toBeInTheDocument();
+});
+
 it('loads direct sub-sessions that were not included in the current session page', async () => {
   const parentSession = { ...session, directChildCount: 2 };
   const childSessions = [
@@ -4785,6 +4807,20 @@ it('shows Instance access and Setup only to admins', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
   expect(screen.queryByRole('menuitem', { name: /Instance access/ })).not.toBeInTheDocument();
   expect(screen.queryByRole('menuitem', { name: /Setup/ })).not.toBeInTheDocument();
+});
+
+it('opens read-only instance access in the static demo', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    jsonResponse({ generatedAt: '2026-07-18T00:00:00.000Z', sessions: [] }),
+  );
+  render(<StaticDemoApp />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Switch page, current page Sessions' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Instance access/ }));
+
+  expect(await screen.findByRole('heading', { name: 'Instance access' })).toBeInTheDocument();
+  expect(screen.getByLabelText('Role for user1')).toBeDisabled();
+  expect(window.location.search).toBe('?page=groups');
 });
 
 function mockApi(options: MockApiOptions = {}) {

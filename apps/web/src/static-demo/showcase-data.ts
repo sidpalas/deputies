@@ -20,6 +20,12 @@ export const demoCurrentUser: AuthUser = {
   role: 'admin',
 };
 
+export const demoUsers: AuthUser[] = [
+  demoCurrentUser,
+  { id: 'demo-user-2', username: 'user2', displayName: 'user2', role: 'member' },
+  { id: 'demo-user-3', username: 'user3', displayName: 'user3', role: 'viewer' },
+];
+
 export const demoEnvironments: Environment[] = [
   {
     id: 'demo-environment-product',

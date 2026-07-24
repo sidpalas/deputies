@@ -100,16 +100,16 @@ export function ThreadSidebar(props: {
   const revealedSessionTree = useMemo(() => buildSessionTree(props.revealedLineage), [props.revealedLineage]);
   const searching = Boolean(props.searchQuery.trim());
   const groupStarredSessions = !searching && !props.sessionFilters.starredByMe;
-  const starredSessions = useMemo(
-    () => (groupStarredSessions ? activeSessions.filter((session) => session.starred) : []),
-    [activeSessions, groupStarredSessions],
+  const fullActiveSessionTree = useMemo(() => buildSessionTree(activeSessions), [activeSessions]);
+  const starredSessionTree = useMemo(
+    () => (groupStarredSessions ? fullActiveSessionTree.filter((node) => node.session.starred) : []),
+    [fullActiveSessionTree, groupStarredSessions],
   );
-  const unstarredSessions = useMemo(
-    () => (groupStarredSessions ? activeSessions.filter((session) => !session.starred) : activeSessions),
-    [activeSessions, groupStarredSessions],
+  const activeSessionTree = useMemo(
+    () =>
+      groupStarredSessions ? fullActiveSessionTree.filter((node) => !node.session.starred) : fullActiveSessionTree,
+    [fullActiveSessionTree, groupStarredSessions],
   );
-  const starredSessionTree = useMemo(() => buildSessionTree(starredSessions), [starredSessions]);
-  const activeSessionTree = useMemo(() => buildSessionTree(unstarredSessions), [unstarredSessions]);
   const archivedSessionTree = useMemo(() => buildSessionTree(archivedSessions), [archivedSessions]);
   const archivedOpen = props.archivedSessionsOpen;
 
@@ -243,7 +243,7 @@ export function ThreadSidebar(props: {
                 </div>
               </div>
             ) : null}
-            {starredSessions.length ? (
+            {starredSessionTree.length ? (
               <div className="mb-4 border-b border-border pb-3">
                 <h3 className="mb-1 flex items-center gap-1 text-sm font-medium text-muted-foreground">
                   <Star className="h-3.5 w-3.5 fill-current text-warning" />
