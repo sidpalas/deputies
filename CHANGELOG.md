@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.23.0](https://github.com/sidpalas/deputies/compare/v0.22.0...v0.23.0) (2026-07-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* Access-group APIs, ownership fields, sharing policies, and session visibility/write policies are removed. Existing deployments must run migration 020 during a coordinated application upgrade.
+
+### Features
+
+* make Deputies instances explicitly single-tenant ([fa8313a](https://github.com/sidpalas/deputies/commit/fa8313a55025f9378fe308f84a896dad7e6b7b47))
+
 ## [0.22.0](https://github.com/sidpalas/deputies/compare/v0.21.0...v0.22.0) (2026-07-22)
 
 
