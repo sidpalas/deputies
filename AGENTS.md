@@ -25,6 +25,26 @@ mise task ls --all
 
 Prefer discovered `mise run //path:task` commands for repo workflows. Use direct `pnpm --dir <package> <script>` commands only when no matching `mise` task exists.
 
+## Canonical Repository And Ship Checks
+
+For standard repository verification, run:
+
+```sh
+mise run //:check
+```
+
+This runs formatting checks, linting, package typechecks and unit tests, and infrastructure validation.
+
+For the standard ship workflow, run:
+
+```sh
+mise run //:check:ship
+```
+
+This is the canonical ship check. It includes `//:check`, reuses an available Postgres test database or starts one with Docker/directly as supported, sets `TEST_DATABASE_URL`, and runs the control-plane integration tests. Run additional targeted e2e or build checks when the changed area requires them.
+
+Do not substitute `deploy/sandboxes/daytona/full-check.sh` for either canonical check. That script is only for explicitly validating the Daytona sandbox image and its no-nested-virtualization environment.
+
 ## Postgres In Sandboxes Without Nested Virtualization
 
 Some sandbox providers do not support nested Docker or Docker Compose. For Postgres-backed tests in any sandbox without nested virtualization, start Postgres directly inside the sandbox:
@@ -61,15 +81,15 @@ Run migrations before API integration or UAT checks:
 mise run //apps/control-plane:db:migrate
 ```
 
-## Full Sandbox Verification
+## Daytona Image Verification (Opt-In)
 
-For broad coverage inside a sandbox image that includes the Daytona verification scripts, run:
+Only when explicitly validating the Daytona sandbox image and its bundled toolchain, run:
 
 ```sh
 ./deploy/sandboxes/daytona/full-check.sh
 ```
 
-This starts Postgres, installs dependencies, runs migrations, then runs API typecheck/unit/integration tests and web typecheck/unit/e2e/build checks.
+This is not the standard repository or ship check. It starts Postgres, installs dependencies, runs migrations, then runs API typecheck/unit/integration tests and web typecheck/unit/e2e/build checks.
 
 ## Previewing This Branch As A Sandbox Service
 
@@ -78,9 +98,11 @@ When asked to run or preview the Deputies app from this checkout inside the sand
 ## Common Test Commands
 
 ```sh
+mise run //:check
+mise run //:check:ship
 mise run //apps/control-plane:typecheck
 mise run //apps/control-plane:test
-mise run //apps/control-plane:test:integration
+mise run //:test:integration
 mise run //apps/web:typecheck
 mise run //apps/web:test
 mise run //apps/web:e2e

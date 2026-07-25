@@ -1,3 +1,7 @@
+[tasks."postgres:up"]
+description = "Start local Postgres and wait until it is healthy"
+run = "docker compose -f docker-compose.yml up -d --wait postgres"
+
 [tasks."infra:up"]
 description = "Start local Postgres and SeaweedFS"
 run = "docker compose -f docker-compose.yml up -d postgres seaweedfs"

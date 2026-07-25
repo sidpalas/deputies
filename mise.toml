@@ -42,6 +42,25 @@ run = "pnpm lint"
 description = "Run package unit tests"
 run = "pnpm -r --if-present test"
 
+[tasks."test:integration"]
+description = "Ensure Postgres is running and run control-plane integration tests"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+export PGPORT=${PGPORT:-5432}
+export TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://deputies:deputies@127.0.0.1:$PGPORT/deputies_test}
+
+if command -v pg_isready >/dev/null 2>&1 && pg_isready -d "$TEST_DATABASE_URL" >/dev/null 2>&1; then
+  echo "Using the available Postgres test database"
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  mise run //deploy/local:postgres:up
+else
+  ./deploy/sandboxes/daytona/start-postgres.sh
+fi
+
+mise run //apps/control-plane:test:integration
+"""
+
 [tasks.typecheck]
 description = "Run package TypeScript checks"
 run = "pnpm -r --if-present typecheck"
@@ -73,7 +92,24 @@ docker buildx build --platform "$platforms" -f apps/web/Dockerfile -t "$WEB_IMAG
 
 [tasks.check]
 description = "Run formatting, linting, typechecks, and unit tests"
-depends = ["format:check", "lint", "typecheck", "test", "infra:validate"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mise run //:format:check
+mise run //:lint
+mise run //:typecheck
+mise run //:test
+mise run //:infra:validate
+"""
+
+[tasks."check:ship"]
+description = "Run the canonical checks and Postgres-backed integration tests"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mise run //:check
+mise run //:test:integration
+"""
 
 [tasks."ci:smoke:local"]
 description = "Run smoke GitHub Actions workflow locally with Agent CI"
