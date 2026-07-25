@@ -17,7 +17,7 @@ export function createPiScheduledFollowUpsToolDefinition(services: ScheduledFoll
     ],
     parameters: scheduledFollowUpsToolParameters,
     prepareArguments(args) {
-      if (!args || typeof args !== 'object' || Array.isArray(args)) return args as never;
+      if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
       const prepared = { ...(args as Record<string, unknown>) };
       if (typeof prepared.schedule === 'string') {
         try {
@@ -27,7 +27,7 @@ export function createPiScheduledFollowUpsToolDefinition(services: ScheduledFoll
           // Preserve invalid input so normal schema validation can report it.
         }
       }
-      return prepared as never;
+      return prepared;
     },
     executionMode: 'sequential',
     async execute(_id, params) {
