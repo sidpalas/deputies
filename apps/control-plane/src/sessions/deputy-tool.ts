@@ -165,13 +165,17 @@ export async function executeDeputyTool(services: DeputyToolServices, params: un
       throw new Error('Cannot mutate Deputies sessions because the parent run is no longer active');
     }
     const selectedAction = action;
-    return await services.store.withAgentSessionLease(services.sessionId, async () => {
+    let eventsToPublish: EventRecord[] = [];
+    const result: DeputyToolResult = await services.store.withAgentSessionLease(services.sessionId, async () => {
       if (isMutatingAction(selectedAction) && services.shouldPersist && !(await services.shouldPersist())) {
         throw new Error('Cannot mutate Deputies sessions because the parent run is no longer active');
       }
       switch (selectedAction) {
-        case 'spawn':
-          return { ok: true, action: selectedAction, ...(await spawnSession(services, input)) };
+        case 'spawn': {
+          const { events, ...spawned } = await spawnSession(services, input);
+          eventsToPublish = events;
+          return { ok: true, action: selectedAction, ...spawned };
+        }
         case 'list_sessions':
           return { ok: true, action: selectedAction, ...(await listSessions(services, input)) };
         case 'get_session':
@@ -188,6 +192,11 @@ export async function executeDeputyTool(services: DeputyToolServices, params: un
           throw new Error('Unsupported deputies action');
       }
     });
+    // Publishing message_created wakes the child worker synchronously. Do that only
+    // after releasing the parent's coordination lease so the child cannot inherit
+    // its advisory-lock AsyncLocalStorage context.
+    for (const event of eventsToPublish) services.events.publishExternal(event);
+    return result;
   } catch (error) {
     return { ok: false, ...(action ? { action } : {}), error: errorMessage(error) };
   }
@@ -285,13 +294,13 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
     parentChildLimit: { parentSessionId: parent.id, maxNonArchivedChildren: services.maxChildrenPerSession },
   });
   if (created.created) services.runState.spawns += 1;
-  for (const event of created.events) services.events.publishExternal(event);
 
   return {
     session: serializeSessionSummary(created.session),
     messageId: created.message.id,
     url: sessionUrl(services.webBaseUrl, created.session.id),
     idempotentReplay: !created.created,
+    events: created.events,
   };
 }
 

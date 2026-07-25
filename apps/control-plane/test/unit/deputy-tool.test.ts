@@ -69,6 +69,33 @@ describe('deputies tool', () => {
     expect(services.runState.spawns).toBe(1);
   });
 
+  it('publishes spawned child events after releasing the parent coordination lease', async () => {
+    const { services, events } = await createDeputyServices();
+    const withAgentSessionLease = services.store.withAgentSessionLease.bind(services.store);
+    let leaseActive = false;
+    services.store.withAgentSessionLease = async (sessionId, operation) => {
+      return withAgentSessionLease(sessionId, async () => {
+        leaseActive = true;
+        try {
+          return await operation();
+        } finally {
+          leaseActive = false;
+        }
+      });
+    };
+    const publicationLeaseStates: boolean[] = [];
+    const unsubscribe = events.subscribeAllEvents((event) => {
+      if (event.type === 'message_created') publicationLeaseStates.push(leaseActive);
+    });
+
+    await expect(executeDeputyTool(services, { action: 'spawn', prompt: 'child' })).resolves.toMatchObject({
+      ok: true,
+    });
+    unsubscribe();
+
+    expect(publicationLeaseStates).toEqual([false]);
+  });
+
   it('creates untitled children immediately with a prompt fallback for background title generation', async () => {
     const { services, store } = await createDeputyServices();
     const result = await executeDeputyTool(services, {
