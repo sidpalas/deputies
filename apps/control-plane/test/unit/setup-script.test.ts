@@ -68,7 +68,7 @@ describe('runRepositorySetupScript', () => {
 
     expect(result).toMatchObject({ status: 'ran', exitCode: 0, timedOut: false, stdoutTail: 'installed\n' });
     expect(calls).toHaveLength(2);
-    expect(calls[0]!.command).toContain('script_hash="$3"');
+    expect(calls[0]!.command).toContain('script_hash="${tracked_setup_rest%%[[:space:]]*}"');
     expect(calls[0]!.command).toContain('reason=cloned');
     expect(calls[1]!.command).toContain('git show HEAD:.agents/setup >"$setup_file"');
     expect(calls[1]!.command).toContain('"$setup_file" >"$setup_stdout"');

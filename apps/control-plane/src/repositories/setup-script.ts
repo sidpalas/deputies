@@ -227,9 +227,10 @@ function probeCommand(repositoryWasCloned: boolean): string {
         ;;
     esac
 
-    set -- $tracked_setup
-    script_mode="$1"
-    script_hash="$3"
+    script_mode="\${tracked_setup%% *}"
+    tracked_setup_rest="\${tracked_setup#* }"
+    tracked_setup_rest="\${tracked_setup_rest#* }"
+    script_hash="\${tracked_setup_rest%%[[:space:]]*}"
     stamp_hash=""
     if [ -f ${quoteShell(setupStampPath)} ]; then
       stamp_hash="$(cat ${quoteShell(setupStampPath)} || true)"

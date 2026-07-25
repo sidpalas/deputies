@@ -36,7 +36,7 @@ export type DeputyToolBaseServices = {
     | 'createSessionWithFirstMessage'
   >;
   events: Pick<EventService, 'publishExternal'>;
-  messages: Pick<MessageService, 'enqueue' | 'cancelActiveRun'>;
+  messages: Pick<MessageService, 'enqueueDeferred' | 'cancelActiveRun'>;
   sessions: Pick<SessionService, 'archive' | 'unarchive' | 'update'>;
   sandboxCleanup?: { destroySessionSandboxes(sessionId: string): Promise<SandboxCleanupResult> };
   github?: RepositoryAccessProvider;
@@ -180,8 +180,11 @@ export async function executeDeputyTool(services: DeputyToolServices, params: un
           return { ok: true, action: selectedAction, ...(await listSessions(services, input)) };
         case 'get_session':
           return { ok: true, action: selectedAction, ...(await getSession(services, input)) };
-        case 'send_message':
-          return { ok: true, action: selectedAction, ...(await sendMessage(services, input)) };
+        case 'send_message': {
+          const { events, ...sent } = await sendMessage(services, input);
+          eventsToPublish = events;
+          return { ok: true, action: selectedAction, ...sent };
+        }
         case 'cancel':
           return { ok: true, action: selectedAction, ...(await cancelChildRun(services, input)) };
         case 'archive':
@@ -318,7 +321,13 @@ async function childContext(
     context.repository = { provider: 'github', owner: repository.owner, repo: repository.repo };
   }
   const model = readOptionalString(params.model, 'model', 255);
-  if (model) context.model = model;
+  if (model) {
+    const slash = model.indexOf('/');
+    if (slash <= 0 || slash === model.length - 1) {
+      throw new Error(`model must use provider/model format, received: ${model}`);
+    }
+    context.model = model;
+  }
   if (params.notifyOnComplete === true) {
     context.deputy = {
       notifyParentOnComplete: true,
@@ -392,14 +401,14 @@ async function sendMessage(services: DeputyToolServices, params: Record<string, 
   const agent = agentPrincipal(parent);
   const child = await requireWritableChild(services, agent, readString(params.sessionId, 'sessionId', 128));
   const prompt = readString(params.prompt, 'prompt', maxPromptLength);
-  const message = await services.messages.enqueue({
+  const { message, events } = await services.messages.enqueueDeferred({
     sessionId: child.id,
     prompt,
     source: 'deputy',
     authorName: deputyAuthorName(parent),
     context: { sourceSessionId: parent.id },
   });
-  return { session: serializeSessionSummary(child), message: serializeMessageSummary(message) };
+  return { session: serializeSessionSummary(child), message: serializeMessageSummary(message), events };
 }
 
 async function cancelChildRun(services: DeputyToolServices, params: Record<string, unknown>) {

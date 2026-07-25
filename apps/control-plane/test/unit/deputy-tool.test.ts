@@ -96,6 +96,49 @@ describe('deputies tool', () => {
     expect(publicationLeaseStates).toEqual([false]);
   });
 
+  it('publishes follow-up events after releasing the parent coordination lease', async () => {
+    const { services, events } = await createDeputyServices();
+    const spawned = await executeDeputyTool(services, { action: 'spawn', prompt: 'child' });
+    if (!spawned.ok) throw new Error(spawned.error);
+    const childId = (spawned.session as { id: string }).id;
+    const withAgentSessionLease = services.store.withAgentSessionLease.bind(services.store);
+    let leaseActive = false;
+    services.store.withAgentSessionLease = async (sessionId, operation) => {
+      return withAgentSessionLease(sessionId, async () => {
+        leaseActive = true;
+        try {
+          return await operation();
+        } finally {
+          leaseActive = false;
+        }
+      });
+    };
+    const publicationLeaseStates: boolean[] = [];
+    const unsubscribe = events.subscribeAllEvents((event) => {
+      if (event.sessionId === childId) publicationLeaseStates.push(leaseActive);
+    });
+
+    await expect(
+      executeDeputyTool(services, { action: 'send_message', sessionId: childId, prompt: 'follow up' }),
+    ).resolves.toMatchObject({ ok: true });
+    unsubscribe();
+
+    expect(publicationLeaseStates).toEqual([false]);
+  });
+
+  it('rejects malformed model overrides before creating a child session', async () => {
+    const { services, store } = await createDeputyServices();
+
+    await expect(executeDeputyTool(services, { action: 'spawn', prompt: 'child', model: 'gpt-5.2' })).resolves.toEqual({
+      ok: false,
+      action: 'spawn',
+      error: 'model must use provider/model format, received: gpt-5.2',
+    });
+
+    await expect(store.listSessions()).resolves.toHaveLength(1);
+    expect(services.runState.spawns).toBe(0);
+  });
+
   it('creates untitled children immediately with a prompt fallback for background title generation', async () => {
     const { services, store } = await createDeputyServices();
     const result = await executeDeputyTool(services, {

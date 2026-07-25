@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { EventService } from '../events/service.js';
-import type { MessageRecord, MessageStore } from '../store/types.js';
+import type { EventRecord, MessageRecord, MessageStore } from '../store/types.js';
 
 export type EnqueueMessageInput = {
   id?: string;
@@ -16,6 +16,11 @@ export type RecordTranscriptEntryInput = EnqueueMessageInput & {
   status?: 'cancelled' | 'completed';
 };
 
+export type DeferredEnqueueResult = {
+  message: MessageRecord;
+  events: EventRecord[];
+};
+
 export class MessageService {
   constructor(
     private readonly store: MessageStore,
@@ -23,6 +28,15 @@ export class MessageService {
   ) {}
 
   async enqueue(input: EnqueueMessageInput): Promise<MessageRecord> {
+    return (await this.enqueueInternal(input, true)).message;
+  }
+
+  async enqueueDeferred(input: EnqueueMessageInput): Promise<DeferredEnqueueResult> {
+    return this.enqueueInternal(input, false);
+  }
+
+  private async enqueueInternal(input: EnqueueMessageInput, publish: boolean): Promise<DeferredEnqueueResult> {
+    const events: EventRecord[] = [];
     const session = await this.store.getSession(input.sessionId);
     if (!session) {
       throw new MessageServiceError('not_found', `Session not found: ${input.sessionId}`);
@@ -39,11 +53,16 @@ export class MessageService {
         context: sessionContext,
         updatedAt: new Date(),
       });
-      await this.events.append({
-        sessionId: input.sessionId,
-        type: 'session_updated',
-        payload: { title: updatedSession.title ?? null, context: updatedSession.context ?? null },
-      });
+      events.push(
+        await this.appendEvent(
+          {
+            sessionId: input.sessionId,
+            type: 'session_updated',
+            payload: { title: updatedSession.title ?? null, context: updatedSession.context ?? null },
+          },
+          publish,
+        ),
+      );
     }
 
     const sequence = await this.store.nextMessageSequence(input.sessionId);
@@ -63,14 +82,23 @@ export class MessageService {
     if (context) record.context = context;
 
     const message = await this.store.createMessage(record);
-    await this.events.append({
-      sessionId: input.sessionId,
-      messageId: message.id,
-      type: 'message_created',
-      payload: { sequence: message.sequence, source: message.source ?? null },
-    });
+    events.push(
+      await this.appendEvent(
+        {
+          sessionId: input.sessionId,
+          messageId: message.id,
+          type: 'message_created',
+          payload: { sequence: message.sequence, source: message.source ?? null },
+        },
+        publish,
+      ),
+    );
 
-    return message;
+    return { message, events };
+  }
+
+  private appendEvent(input: Parameters<EventService['append']>[0], publish: boolean): Promise<EventRecord> {
+    return publish ? this.events.append(input) : this.events.appendUnpublished(input);
   }
 
   async list(sessionId: string): Promise<MessageRecord[]> {

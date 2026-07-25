@@ -70,11 +70,14 @@ export class EventService {
   constructor(private readonly store: EventStore) {}
 
   async append<T extends NormalizedEventType>(input: AppendEventInput<T>): Promise<PersistedEvent<T>> {
-    const event = normalizeAppendInput(input);
-
-    const persisted = await this.store.appendEventWithNextSequence(event);
+    const persisted = await this.appendUnpublished(input);
     this.publish(persisted);
     return persisted;
+  }
+
+  async appendUnpublished<T extends NormalizedEventType>(input: AppendEventInput<T>): Promise<PersistedEvent<T>> {
+    const event = normalizeAppendInput(input);
+    return this.store.appendEventWithNextSequence(event);
   }
 
   async appendForRun<T extends NormalizedEventType>(
