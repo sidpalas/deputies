@@ -40,7 +40,11 @@ export function UserMessageCard(props: {
   const sourceSessionId =
     typeof message.context?.sourceSessionId === 'string' ? message.context.sourceSessionId : undefined;
   return (
-    <Card className="border-primary/50 bg-primary/10 p-3" role="article" aria-label={`Message ${message.sequence}`}>
+    <Card
+      className="min-w-0 max-w-full border-primary/50 bg-primary/10 p-3"
+      role="article"
+      aria-label={`Message ${message.sequence}`}
+    >
       <div className="mb-1 flex items-center justify-between gap-2">
         <h3 className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-xs font-medium text-muted-foreground">
           <span className="min-w-0 truncate">
@@ -137,7 +141,9 @@ export function UserMessageCard(props: {
             {...(props.onOpenSkill ? { onOpenSkill: props.onOpenSkill } : {})}
           />
           {message.prompt ? (
-            <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{message.prompt}</p>
+            <p className="whitespace-pre-wrap [overflow-wrap:anywhere] text-sm leading-6 text-foreground">
+              {message.prompt}
+            </p>
           ) : (
             <p className="text-sm text-muted-foreground">No additional instructions.</p>
           )}

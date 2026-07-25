@@ -4999,7 +4999,7 @@ export function App() {
                       <section className="flex min-h-0 min-w-0 flex-col px-3 pt-4 md:px-8 xl:px-20">
                         <div className="relative min-h-0 flex-1">
                           <div
-                            className="h-full overflow-auto pb-4"
+                            className="h-full overflow-y-auto overflow-x-hidden pb-4"
                             ref={threadScrollRef}
                             onScroll={handleThreadScroll}
                             role="log"

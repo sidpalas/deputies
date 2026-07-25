@@ -3728,7 +3728,7 @@ it('uses the session message log as the only vertical thread scroller', async ()
 
   const messageLog = await screen.findByRole('log', { name: 'Session messages' });
 
-  expect(messageLog).toHaveClass('overflow-auto');
+  expect(messageLog).toHaveClass('overflow-y-auto', 'overflow-x-hidden');
   expect(messageLog.querySelector('.overflow-auto')).toBeNull();
 });
 

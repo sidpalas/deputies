@@ -10,7 +10,8 @@ test('keeps session details collapsed by default on narrow screens', async ({ pa
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
 
-  await expect(page.getByRole('log', { name: 'Session messages' })).toBeVisible();
+  const messageLog = page.getByRole('log', { name: 'Session messages' });
+  await expect(messageLog).toBeVisible();
   await expect(page.getByPlaceholder('Ask your deputy to investigate, change code, or follow up...')).toBeVisible();
 
   const contextDisclosure = page.locator('details').filter({ has: page.getByText('Session details', { exact: true }) });
@@ -18,8 +19,36 @@ test('keeps session details collapsed by default on narrow screens', async ({ pa
   await expect(contextDisclosure).not.toHaveAttribute('open', '');
   await expect(contextDisclosure.getByText('Completion reply')).not.toBeVisible();
 
-  const messageLogBox = await page.getByRole('log', { name: 'Session messages' }).boundingBox();
+  const messageLogBox = await messageLog.boundingBox();
   expect(messageLogBox?.height).toBeGreaterThan(300);
+  expect(await messageLog.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(
+    await messageLog.evaluate((element) => element.clientWidth),
+  );
+
+  const message = page.getByRole('article', { name: 'Message 1' });
+  const messageBox = await message.boundingBox();
+  expect(messageBox).not.toBeNull();
+  expect(messageBox?.x).toBeGreaterThanOrEqual(messageLogBox?.x ?? 0);
+  expect((messageBox?.x ?? 0) + (messageBox?.width ?? 0)).toBeLessThanOrEqual(
+    (messageLogBox?.x ?? 0) + (messageLogBox?.width ?? 0),
+  );
+  expect(await message.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(
+    await message.evaluate((element) => element.clientWidth),
+  );
+
+  const tableScroller = page.locator('[data-markdown-table-wrapper="true"]');
+  const codeScroller = page.locator('.highlighted-code');
+  await expect(tableScroller).toBeVisible();
+  await expect(codeScroller).toBeVisible();
+  for (const scroller of [tableScroller, codeScroller]) {
+    expect(await scroller.evaluate((element) => element.scrollWidth)).toBeGreaterThan(
+      await scroller.evaluate((element) => element.clientWidth),
+    );
+    await scroller.evaluate((element) => {
+      element.scrollLeft = 40;
+    });
+    expect(await scroller.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+  }
 });
 
 test('keeps session details collapsed around tablet and small desktop widths', async ({ page }) => {
@@ -202,7 +231,7 @@ const messages = [
     sessionId,
     sequence: 1,
     status: 'completed',
-    prompt: 'Check the responsive context panel behavior.',
+    prompt: `Check the responsive context panel behavior. ${'unbrokensessionidentifier'.repeat(20)}`,
     createdAt: '2026-05-05T12:01:00.000Z',
   },
 ];
@@ -213,7 +242,19 @@ const events = [
     sequence: 1,
     type: 'agent_response_final',
     messageId: '00000000-0000-4000-8000-000000000101',
-    payload: { text: 'Responsive context check complete.' },
+    payload: {
+      text: [
+        'Responsive context check complete.',
+        '',
+        '| Result |',
+        '| --- |',
+        `| ${'wide-table-value'.repeat(30)} |`,
+        '',
+        '```text',
+        'wide-code-value'.repeat(30),
+        '```',
+      ].join('\n'),
+    },
     createdAt: '2026-05-05T12:02:00.000Z',
   },
 ];

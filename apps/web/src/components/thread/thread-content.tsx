@@ -105,7 +105,7 @@ export function ChatPanel(props: {
   const groups = useMemo(() => groupMessagesByRun(props.messages, props.events), [props.messages, props.events]);
 
   return (
-    <section className="grid gap-3">
+    <section className="grid min-w-0 max-w-full gap-3">
       {groups.map((group) => {
         const response = assistantText[group.responseMessageId];
         const inlineArtifacts = artifactsForGroup(props.artifacts, group);
