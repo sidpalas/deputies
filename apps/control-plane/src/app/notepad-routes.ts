@@ -291,29 +291,6 @@ export function registerNotepadRoutes(
       ),
     })),
   );
-  app.get('/sessions/:sessionId/notepad-capabilities', async (c) =>
-    handle(c, async () => ({
-      capabilities: await services.notepads.capabilities(await authorized(c), uuidParam(c, 'sessionId')),
-    })),
-  );
-  app.put('/sessions/:sessionId/notepad-capabilities/:kind', async (c) =>
-    handle(c, async () => ({
-      capability: await services.notepads.putCapability(
-        await authorized(c),
-        uuidParam(c, 'sessionId'),
-        c.req.param('kind'),
-      ),
-    })),
-  );
-  app.delete('/sessions/:sessionId/notepad-capabilities/:kind', async (c) =>
-    handle(c, async () => ({
-      removed: await services.notepads.removeCapability(
-        await authorized(c),
-        uuidParam(c, 'sessionId'),
-        c.req.param('kind') as import('../store/types.js').SessionNotepadCapabilityRecord['kind'],
-      ),
-    })),
-  );
 }
 
 function actor(auth: RequestAuthorization): NotepadActor {

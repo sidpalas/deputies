@@ -31,11 +31,6 @@ CREATE TABLE notepad_associations (
   PRIMARY KEY(notepad_id, session_id)
 );
 CREATE INDEX notepad_associations_session_idx ON notepad_associations(session_id);
-CREATE TABLE session_notepad_capabilities (
-  session_id uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, kind text NOT NULL CHECK (kind IN ('explicit_search','session_notepad_coordination')),
-  granted_by_user_id uuid NOT NULL REFERENCES auth_users(id), created_at timestamptz NOT NULL,
-  PRIMARY KEY(session_id, kind)
-);
 CREATE TABLE notepad_activity (
   id uuid PRIMARY KEY, notepad_id uuid NOT NULL REFERENCES explicit_notepads(id) ON DELETE CASCADE,
   actor jsonb NOT NULL CHECK (jsonb_typeof(actor)='object' AND actor->>'kind' IN ('human','agent','system') AND (actor->>'kind'<>'human' OR actor ? 'userId') AND (actor->>'kind'<>'agent' OR (actor ? 'sessionId' AND actor ? 'runId'))), kind text NOT NULL CHECK (kind IN ('created','metadata_changed','revision_restored','association_granted','association_changed','association_revoked')), metadata jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(metadata)='object'), created_at timestamptz NOT NULL

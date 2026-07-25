@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { normalizeAppendInput } from '../../src/events/service.js';
 import type { RequestAuthorization } from '../../src/auth/authorization.js';
+import { runMigrations } from '../../src/db/migrate.js';
 import { NotepadService, notepadMaxBytes } from '../../src/notepads/service.js';
 import {
   notepadRevisionRetentionLimit,
@@ -17,13 +18,14 @@ const userId = '00000000-0000-4000-8000-000000000802';
 const notepadId = '00000000-0000-4000-8000-000000000803';
 const actor = { kind: 'agent', sessionId, runId: '00000000-0000-4000-8000-000000000804' } as const;
 const targetSessionId = '00000000-0000-4000-8000-000000000806';
-const replacementUserId = '00000000-0000-4000-8000-000000000807';
 
 describe.skipIf(!testDatabaseUrl)('Postgres Notepad persistence', () => {
   let pool: Pool;
   let store: PostgresStore;
+  let databaseUrl: string;
 
   setupPostgresStoreSuite('postgres_notepads', (context) => {
+    databaseUrl = context.databaseUrl;
     pool = context.pool;
     store = context.store;
   });
@@ -54,28 +56,12 @@ describe.skipIf(!testDatabaseUrl)('Postgres Notepad persistence', () => {
     return session;
   }
 
-  async function seedCoordination(options: { targetCreator?: string } = {}) {
+  async function seedCrossSessionNotepad() {
     const acting = await seed();
-    await store.upsertAuthUserForAccount({
-      userId: replacementUserId,
-      accountId: '00000000-0000-4000-8000-000000000817',
-      provider: 'notepad-test',
-      providerAccountId: 'replacement',
-      username: 'replacement',
-      role: 'member',
-      profile: {},
-      now: t(0),
-    });
     const target = await store.createSession({
       ...acting,
       id: targetSessionId,
-      createdByUserId: options.targetCreator ?? userId,
-    });
-    await store.putSessionNotepadCapability({
-      sessionId,
-      kind: 'session_notepad_coordination',
-      grantedByUserId: userId,
-      createdAt: t(1),
+      createdByUserId: userId,
     });
     await store.mutateSessionNotepad({
       sessionId: targetSessionId,
@@ -87,16 +73,6 @@ describe.skipIf(!testDatabaseUrl)('Postgres Notepad persistence', () => {
     });
     return target;
   }
-
-  const coordinatedAppend = () =>
-    store.mutateSessionNotepad({
-      sessionId: targetSessionId,
-      append: ' forbidden',
-      actor,
-      expectedCoordinationGrantorUserId: userId,
-      mutationKind: 'append',
-      now: t(2),
-    });
 
   function explicit(overrides: Partial<ExplicitNotepadRecord> = {}): ExplicitNotepadRecord {
     return {
@@ -123,6 +99,41 @@ describe.skipIf(!testDatabaseUrl)('Postgres Notepad persistence', () => {
         )
       ).rows,
     ).toEqual([{ column_name: 'archived_at' }]);
+  });
+
+  it('drops the legacy capability table when upgrading an existing installation', async () => {
+    await seed();
+    await store.mutateSessionNotepad({
+      sessionId,
+      content: 'preserved',
+      expectedRevision: 0,
+      actor: { kind: 'system' },
+      mutationKind: 'replace',
+      now: t(1),
+    });
+    await pool.query(`
+      CREATE TABLE session_notepad_capabilities (
+        session_id uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        kind text NOT NULL,
+        granted_by_user_id uuid NOT NULL REFERENCES auth_users(id),
+        created_at timestamptz NOT NULL,
+        PRIMARY KEY(session_id, kind)
+      )
+    `);
+    await pool.query(
+      `INSERT INTO session_notepad_capabilities(session_id,kind,granted_by_user_id,created_at)
+       VALUES($1,'explicit_search',$2,$3)`,
+      [sessionId, userId, t(1)],
+    );
+    await pool.query("DELETE FROM app_migrations WHERE id='024_remove_session_notepad_capabilities.sql'");
+
+    await runMigrations(databaseUrl);
+
+    expect(
+      (await pool.query("SELECT id FROM app_migrations WHERE id='024_remove_session_notepad_capabilities.sql'")).rows,
+    ).toEqual([{ id: '024_remove_session_notepad_capabilities.sql' }]);
+    expect((await pool.query("SELECT to_regclass('session_notepad_capabilities') AS name")).rows[0].name).toBeNull();
+    await expect(store.getSessionNotepad(sessionId)).resolves.toMatchObject({ content: 'preserved', revision: 1 });
   });
 
   it('commits updateSessionWithEvent after migration without changing ownership', async () => {
@@ -352,11 +363,21 @@ describe.skipIf(!testDatabaseUrl)('Postgres Notepad persistence', () => {
     await expect(store.searchExplicitNotepads({ query: 'needle', limit: 20 })).resolves.toMatchObject([
       { id: notepadId },
     ]);
+    await expect(
+      store.searchExplicitNotepadsForAgent({ actorSessionId: sessionId, query: 'needle', limit: 20 }),
+    ).resolves.toMatchObject([{ id: notepadId }]);
 
     await store.archiveSession({ sessionId, archivedAt: t(2) });
 
     await expect(store.listExplicitNotepads({ limit: 50, offset: 0 })).resolves.toMatchObject({ items: [] });
     await expect(store.searchExplicitNotepads({ query: 'needle', limit: 20 })).resolves.toEqual([]);
+    await expect(
+      store.searchExplicitNotepadsForAgent({ actorSessionId: sessionId, query: 'needle', limit: 20 }),
+    ).resolves.toEqual([]);
+    await expect(store.readExplicitNotepadForAgent({ actorSessionId: sessionId, notepadId })).resolves.toMatchObject({
+      id: notepadId,
+      content,
+    });
     await expect(store.listExplicitNotepads({ limit: 50, offset: 0, includeDormant: true })).resolves.toMatchObject({
       items: [{ id: notepadId }],
     });
@@ -369,9 +390,17 @@ describe.skipIf(!testDatabaseUrl)('Postgres Notepad persistence', () => {
     await expect(store.listExplicitNotepads({ limit: 50, offset: 0 })).resolves.toMatchObject({
       items: [{ id: notepadId }],
     });
+    await store.archiveExplicitNotepad({ id: notepadId, archivedAt: t(4) });
+    await expect(
+      store.searchExplicitNotepadsForAgent({ actorSessionId: sessionId, query: 'needle', limit: 20 }),
+    ).resolves.toEqual([]);
+    await expect(store.readExplicitNotepadForAgent({ actorSessionId: sessionId, notepadId })).resolves.toMatchObject({
+      id: notepadId,
+      content,
+    });
   });
 
-  it('round-trips explicit records, optional fields, associations, capabilities, activity, ordering, and cascades', async () => {
+  it('round-trips explicit records, optional fields, associations, activity, ordering, and cascades', async () => {
     await seed();
     const created = await store.createExplicitNotepad({
       record: explicit({ createdByUserId: userId }),
@@ -389,24 +418,8 @@ describe.skipIf(!testDatabaseUrl)('Postgres Notepad persistence', () => {
       now: t(4),
     });
     expect(updated).toEqual({ ...created, title: 'Renamed', updatedAt: t(4) });
-    await store.putSessionNotepadCapability({
-      sessionId,
-      kind: 'session_notepad_coordination',
-      grantedByUserId: userId,
-      createdAt: t(2),
-    });
-    await store.putSessionNotepadCapability({
-      sessionId,
-      kind: 'explicit_search',
-      grantedByUserId: userId,
-      createdAt: t(1),
-    });
     expect((await store.listNotepadAssociations(notepadId, 50, 0)).items).toEqual([
       { notepadId, sessionId, createdAt: t(1) },
-    ]);
-    expect((await store.listSessionNotepadCapabilities(sessionId)).map((c) => c.kind)).toEqual([
-      'explicit_search',
-      'session_notepad_coordination',
     ]);
     expect((await store.listNotepadActivity(notepadId, 50, 0)).items.map((a) => a.kind).sort()).toEqual([
       'association_granted',
@@ -416,36 +429,33 @@ describe.skipIf(!testDatabaseUrl)('Postgres Notepad persistence', () => {
 
     await pool.query('DELETE FROM sessions WHERE id=$1', [sessionId]);
     expect((await store.listNotepadAssociations(notepadId, 50, 0)).items).toEqual([]);
-    expect(await store.listSessionNotepadCapabilities(sessionId)).toEqual([]);
     await pool.query('DELETE FROM explicit_notepads WHERE id=$1', [notepadId]);
     expect((await store.listNotepadActivity(notepadId, 50, 0)).items).toEqual([]);
   });
 
-  it('reads by explicit-search capability without waiting on the reverse-order Notepad lock', async () => {
+  it('reads through a visible association without waiting on the reverse-order Notepad lock', async () => {
     await seed();
     await store.createExplicitNotepad({
       record: explicit({ content: 'shared', sizeBytes: 6, revision: 1 }),
       actor: { kind: 'system' },
       activityId: '00000000-0000-4000-8000-000000000811',
     });
-    await store.putSessionNotepadCapability({
-      sessionId,
-      kind: 'explicit_search',
-      grantedByUserId: userId,
-      createdAt: t(1),
+    await store.putNotepadAssociation({
+      record: { notepadId, sessionId, createdAt: t(1) },
+      actor: { kind: 'system' },
+      activityId: '00000000-0000-4000-8000-000000000812',
     });
     const blocker = await pool.connect();
     try {
       await blocker.query('BEGIN');
       await blocker.query('SELECT 1 FROM explicit_notepads WHERE id=$1 FOR UPDATE', [notepadId]);
       const result = await Promise.race([
-        store.readExplicitNotepadWithCapability({
+        store.readExplicitNotepadForAgent({
           actorSessionId: sessionId,
-          expectedGrantorUserId: userId,
           notepadId,
         }),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('capability read waited on Notepad lock')), 1_000),
+          setTimeout(() => reject(new Error('associated read waited on Notepad lock')), 1_000),
         ),
       ]);
       expect(result).toMatchObject({ id: notepadId, content: 'shared' });
@@ -453,6 +463,132 @@ describe.skipIf(!testDatabaseUrl)('Postgres Notepad persistence', () => {
       await blocker.query('ROLLBACK').catch(() => undefined);
       blocker.release();
     }
+  });
+
+  it('serializes Explicit Notepad writes with association revocation', async () => {
+    await seed();
+    const service = new NotepadService(store);
+    const pad = await service.createForSessionAgent(sessionId, { title: 'revocation race', content: 'before' }, actor);
+    const revoker = await pool.connect();
+    try {
+      await revoker.query('BEGIN');
+      await revoker.query('SELECT 1 FROM explicit_notepads WHERE id=$1 FOR UPDATE', [pad.id]);
+      await revoker.query('DELETE FROM notepad_associations WHERE notepad_id=$1 AND session_id=$2', [
+        pad.id,
+        sessionId,
+      ]);
+      const blockedWrite = store.mutateExplicitNotepad({
+        id: pad.id,
+        append: ' blocked',
+        actor,
+        mutationKind: 'append',
+        now: t(2),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await revoker.query('COMMIT');
+      await expect(blockedWrite).rejects.toMatchObject({ code: 'not_found' });
+      await expect(store.getExplicitNotepad(pad.id)).resolves.toMatchObject({ content: 'before', revision: 1 });
+      expect((await store.listNotepadRevisions('explicit', pad.id, 50, 0)).items).toHaveLength(1);
+    } finally {
+      await revoker.query('ROLLBACK').catch(() => undefined);
+      revoker.release();
+    }
+
+    await store.putNotepadAssociation({
+      record: { notepadId: pad.id, sessionId, createdAt: t(3) },
+      actor: { kind: 'system' },
+      activityId: '00000000-0000-4000-8000-000000000881',
+    });
+    await expect(
+      store.mutateExplicitNotepad({
+        id: pad.id,
+        append: ' committed',
+        actor,
+        mutationKind: 'append',
+        now: t(4),
+      }),
+    ).resolves.toMatchObject({ content: 'before committed', revision: 2 });
+    await store.removeNotepadAssociation({
+      notepadId: pad.id,
+      sessionId,
+      actor,
+      activityId: '00000000-0000-4000-8000-000000000882',
+      now: t(5),
+    });
+    await expect(
+      store.mutateExplicitNotepad({
+        id: pad.id,
+        append: ' blocked later',
+        actor,
+        mutationKind: 'append',
+        now: t(6),
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('filters Explicit Notepad search and reads through private Session ownership', async () => {
+    const base = await seed();
+    const privateActorId = '00000000-0000-4000-8000-000000000870';
+    const sameOwnerTargetId = '00000000-0000-4000-8000-000000000871';
+    const otherOwnerId = '00000000-0000-4000-8000-000000000872';
+    const otherOwnerTargetId = '00000000-0000-4000-8000-000000000873';
+    const sameOwnerPadId = '00000000-0000-4000-8000-000000000874';
+    const otherOwnerPadId = '00000000-0000-4000-8000-000000000875';
+    await store.upsertAuthUserForAccount({
+      userId: otherOwnerId,
+      accountId: '00000000-0000-4000-8000-000000000876',
+      provider: 'notepad-test',
+      providerAccountId: 'other-private-owner',
+      username: 'other-private-owner',
+      role: 'member',
+      profile: {},
+      now: t(0),
+    });
+    await store.createSession({ ...base, id: privateActorId, visibility: 'private', ownerUserId: userId });
+    await store.createSession({ ...base, id: sameOwnerTargetId, visibility: 'private', ownerUserId: userId });
+    await store.createSession({
+      ...base,
+      id: otherOwnerTargetId,
+      visibility: 'private',
+      ownerUserId: otherOwnerId,
+      createdByUserId: otherOwnerId,
+    });
+    await store.createExplicitNotepad({
+      record: explicit({ id: sameOwnerPadId, title: 'same-private-needle' }),
+      actor: { kind: 'system' },
+      activityId: '00000000-0000-4000-8000-000000000877',
+    });
+    await store.createExplicitNotepad({
+      record: explicit({ id: otherOwnerPadId, title: 'other-private-needle' }),
+      actor: { kind: 'system' },
+      activityId: '00000000-0000-4000-8000-000000000878',
+    });
+    await store.putNotepadAssociation({
+      record: { notepadId: sameOwnerPadId, sessionId: sameOwnerTargetId, createdAt: t(1) },
+      actor: { kind: 'system' },
+      activityId: '00000000-0000-4000-8000-000000000879',
+    });
+    await store.putNotepadAssociation({
+      record: { notepadId: otherOwnerPadId, sessionId: otherOwnerTargetId, createdAt: t(1) },
+      actor: { kind: 'system' },
+      activityId: '00000000-0000-4000-8000-000000000880',
+    });
+
+    await expect(
+      store.searchExplicitNotepadsForAgent({ actorSessionId: sessionId, query: 'private-needle', limit: 20 }),
+    ).resolves.toEqual([]);
+    await expect(
+      store.readExplicitNotepadForAgent({ actorSessionId: sessionId, notepadId: sameOwnerPadId }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(
+      store.searchExplicitNotepadsForAgent({ actorSessionId: privateActorId, query: 'private-needle', limit: 20 }),
+    ).resolves.toMatchObject([{ id: sameOwnerPadId }]);
+    await expect(
+      store.readExplicitNotepadForAgent({ actorSessionId: privateActorId, notepadId: sameOwnerPadId }),
+    ).resolves.toMatchObject({ id: sameOwnerPadId });
+    await expect(
+      store.readExplicitNotepadForAgent({ actorSessionId: privateActorId, notepadId: otherOwnerPadId }),
+    ).rejects.toMatchObject({ code: 'not_found' });
   });
 
   it('enforces foreign keys for explicit notepad associations', async () => {
@@ -507,133 +643,44 @@ describe.skipIf(!testDatabaseUrl)('Postgres Notepad persistence', () => {
     ).rejects.toMatchObject({ code: '23514' });
   });
 
-  it.each([
-    ['grantor role demotion', {}, "UPDATE auth_users SET role='viewer' WHERE id=$1", [userId]],
-    ['acting Session archive', {}, "UPDATE sessions SET status='archived' WHERE id=$1", [sessionId]],
-    ['target Session archive', {}, "UPDATE sessions SET status='archived' WHERE id=$1", [targetSessionId]],
-    [
-      'capability revoke',
-      {},
-      "DELETE FROM session_notepad_capabilities WHERE session_id=$1 AND kind='session_notepad_coordination'",
-      [sessionId],
-    ],
-    [
-      'capability replacement',
-      {},
-      "UPDATE session_notepad_capabilities SET granted_by_user_id=$1 WHERE session_id=$2 AND kind='session_notepad_coordination'",
-      [replacementUserId, sessionId],
-    ],
-  ] as const)(
-    'proves revocation-first blocks and rejects coordination: %s',
-    async (_name, options, sql, parameters) => {
-      await seedCoordination(options);
-      const revoker = await pool.connect();
-      try {
-        await revoker.query('BEGIN');
-        await revoker.query("SET LOCAL statement_timeout='5s'");
-        await revoker.query(sql, [...parameters]);
-        const revokerPid = Number((await revoker.query('SELECT pg_backend_pid() pid')).rows[0].pid);
-        const command = coordinatedAppend();
-        const commandPid = await waitForBlockedBackend(pool, revokerPid);
-        expect(commandPid).not.toBe(revokerPid);
-        await revoker.query('COMMIT');
-        await expect(command).rejects.toMatchObject({
-          code: expect.stringMatching(/not_found|session_archived/),
-        });
-        expect(await store.getSessionNotepad(targetSessionId)).toMatchObject({ revision: 1, content: 'baseline' });
-        expect((await store.listNotepadRevisions('session', targetSessionId, 50, 0)).items).toHaveLength(1);
-      } finally {
-        await revoker.query('ROLLBACK').catch(() => undefined);
-        revoker.release();
-      }
-    },
-    10_000,
-  );
+  it('allows a Session agent to read and update another tenant Session Notepad without a capability', async () => {
+    await seedCrossSessionNotepad();
+    await expect(store.readSessionNotepadForAgent(sessionId, targetSessionId)).resolves.toMatchObject({
+      revision: 1,
+      content: 'baseline',
+    });
+    await expect(
+      store.mutateSessionNotepad({
+        sessionId: targetSessionId,
+        append: ' shared',
+        actor,
+        mutationKind: 'append',
+        now: t(2),
+      }),
+    ).resolves.toMatchObject({ revision: 2, content: 'baseline shared' });
+  });
 
-  it('deterministically serializes a coordination mutation before a later revocation', async () => {
-    await seedCoordination();
-    const blocker = await pool.connect();
-    const revoker = await pool.connect();
-    try {
-      await blocker.query('BEGIN');
-      await blocker.query("SET LOCAL statement_timeout='3s'");
-      await blocker.query('SELECT 1 FROM session_notepads WHERE session_id=$1 FOR UPDATE', [targetSessionId]);
-      const command = coordinatedAppend();
-      const commandPid = await waitForNotepadLock(pool);
-      await revoker.query('BEGIN');
-      await revoker.query("SET LOCAL statement_timeout='3s'");
-      const revokerPid = Number((await revoker.query('SELECT pg_backend_pid() pid')).rows[0].pid);
-      const revoke = revoker.query(
-        "DELETE FROM session_notepad_capabilities WHERE session_id=$1 AND kind='session_notepad_coordination'",
-        [sessionId],
-      );
-      expect(await waitForBlockedBackend(pool, commandPid)).toBe(revokerPid);
-      await blocker.query('COMMIT');
-      await expect(command).resolves.toMatchObject({ revision: 2, content: 'baseline forbidden' });
-      await revoke;
-      await revoker.query('COMMIT');
-      expect(await store.getSessionNotepad(targetSessionId)).toMatchObject({
-        revision: 2,
-        content: 'baseline forbidden',
-      });
-    } finally {
-      await blocker.query('ROLLBACK').catch(() => undefined);
-      await revoker.query('ROLLBACK').catch(() => undefined);
-      blocker.release();
-      revoker.release();
-    }
-  }, 10_000);
+  it('reads archived Session Notepads while keeping cross-session writes blocked', async () => {
+    await seedCrossSessionNotepad();
+    await store.archiveSession({ sessionId: targetSessionId, archivedAt: t(2) });
+    await expect(store.readSessionNotepadForAgent(sessionId, targetSessionId)).resolves.toMatchObject({
+      revision: 1,
+      content: 'baseline',
+    });
+    await expect(
+      store.mutateSessionNotepad({
+        sessionId: targetSessionId,
+        append: ' blocked',
+        actor,
+        mutationKind: 'append',
+        now: t(3),
+      }),
+    ).rejects.toMatchObject({ code: 'session_archived' });
 
-  it('blocks a coordinated read behind revocation and rejects after commit', async () => {
-    await seedCoordination();
-    const revoker = await pool.connect();
-    try {
-      await revoker.query('BEGIN');
-      await revoker.query("SET LOCAL statement_timeout='5s'");
-      await revoker.query(
-        "DELETE FROM session_notepad_capabilities WHERE session_id=$1 AND kind='session_notepad_coordination'",
-        [sessionId],
-      );
-      const revokerPid = Number((await revoker.query('SELECT pg_backend_pid() pid')).rows[0].pid);
-      const command = store.readCoordinatedSessionNotepad(sessionId, targetSessionId, userId);
-      expect(await waitForBlockedBackend(pool, revokerPid)).not.toBe(revokerPid);
-      await revoker.query('COMMIT');
-      await expect(command).rejects.toMatchObject({ code: 'not_found' });
-    } finally {
-      await revoker.query('ROLLBACK').catch(() => undefined);
-      revoker.release();
-    }
-  }, 10_000);
+    await store.unarchiveSession({ sessionId: targetSessionId, unarchivedAt: t(3) });
+    await store.archiveSession({ sessionId, archivedAt: t(4) });
+    await expect(store.readSessionNotepadForAgent(sessionId, targetSessionId)).resolves.toMatchObject({
+      content: 'baseline',
+    });
+  });
 });
-
-const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
-
-async function waitForBlockedBackend(pool: Pool, revokerPid: number): Promise<number> {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const result = await pool.query(
-      `SELECT pid
-         FROM pg_stat_activity
-        WHERE pid <> pg_backend_pid()
-          AND $1 = ANY(pg_blocking_pids(pid))
-          AND query_start > now() - interval '5 seconds'`,
-      [revokerPid],
-    );
-    if (result.rows[0]) return Number(result.rows[0].pid);
-    await delay(10);
-  }
-  throw new Error(`store coordination command was not blocked by revoker backend ${revokerPid}`);
-}
-
-async function waitForNotepadLock(pool: Pool): Promise<number> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const result = await pool.query(
-      `SELECT waiting.pid
-         FROM pg_locks waiting
-         JOIN pg_stat_activity activity ON activity.pid=waiting.pid
-        WHERE NOT waiting.granted AND activity.query LIKE '%session_notepads%'`,
-    );
-    if (result.rows[0]) return Number(result.rows[0].pid);
-    await delay(10);
-  }
-  throw new Error('coordination command did not reach the notepad row barrier');
-}

@@ -7,13 +7,7 @@ import {
   canWriteSession,
   type RequestAuthorization,
 } from '../auth/authorization.js';
-import type {
-  AppStore,
-  ExplicitNotepadRecord,
-  NotepadActor,
-  NotepadMutationKind,
-  SessionNotepadCapabilityRecord,
-} from '../store/types.js';
+import type { AppStore, ExplicitNotepadRecord, NotepadActor, NotepadMutationKind } from '../store/types.js';
 import type { EventService } from '../events/service.js';
 
 export const notepadMaxBytes = 256 * 1024;
@@ -59,26 +53,25 @@ export class NotepadService {
     );
   }
 
-  async readCoordinatedSession(actorSessionId: string, targetSessionId: string, expectedGrantorUserId: string) {
-    return this.store.readCoordinatedSessionNotepad(actorSessionId, targetSessionId, expectedGrantorUserId);
+  async readSessionForAgent(actorSessionId: string, targetSessionId: string) {
+    return this.store.readSessionNotepadForAgent(actorSessionId, targetSessionId);
   }
 
-  /** Coordinated patches must derive their replacement from a read performed
-   * under the same live grantor authority that the mutation will recheck. */
-  async patchCoordinatedSession(
+  /** Cross-session patches derive their replacement from a read performed
+   * under the same live Session-agent authority that the mutation will recheck. */
+  async patchSessionForAgent(
     auth: RequestAuthorization,
     actorSessionId: string,
     targetSessionId: string,
     input: { oldText?: unknown; newText?: unknown; expectedRevision?: unknown },
     actor: NotepadActor,
-    expectedGrantorUserId: string,
   ) {
     const session = await this.requireSession(targetSessionId);
     this.allow(canWriteSession(auth, session));
     if (session.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
     let source;
     try {
-      source = await this.store.readCoordinatedSessionNotepad(actorSessionId, targetSessionId, expectedGrantorUserId);
+      source = await this.store.readSessionNotepadForAgent(actorSessionId, targetSessionId);
     } catch {
       this.forbidden();
     }
@@ -88,7 +81,6 @@ export class NotepadService {
       content,
       expectedRevision: integerValue(input.expectedRevision, 'expectedRevision'),
       actor,
-      expectedCoordinationGrantorUserId: expectedGrantorUserId,
       mutationKind: 'patch',
       now: new Date(),
     });
@@ -101,12 +93,11 @@ export class NotepadService {
     sessionId: string,
     input: { content?: unknown; append?: unknown; oldText?: unknown; newText?: unknown; expectedRevision?: unknown },
     actor: NotepadActor,
-    expectedCoordinationGrantorUserId?: string,
   ) {
     const session = await this.requireSession(sessionId);
     this.allow(canWriteSession(auth, session));
     if (session.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
-    const result = await this.mutate('session', sessionId, input, actor, undefined, expectedCoordinationGrantorUserId);
+    const result = await this.mutate('session', sessionId, input, actor);
     await this.publishChange('session', sessionId, result.revision);
     return result;
   }
@@ -245,7 +236,7 @@ export class NotepadService {
     this.allow(writable);
     const associatedAuthority =
       associatedSessionId && !auth.bypass ? { associatedSessionId, expectedUserId: auth.user.id } : undefined;
-    const result = await this.mutate('explicit', id, input, actor, undefined, undefined, associatedAuthority);
+    const result = await this.mutate('explicit', id, input, actor, undefined, associatedAuthority);
     await this.publishChange('explicit', id, result.revision);
     return result;
   }
@@ -335,36 +326,6 @@ export class NotepadService {
         canWrite: s.status !== 'archived' && canWriteSession(auth, s),
       })),
     };
-  }
-  async capabilities(auth: RequestAuthorization, sessionId: string) {
-    const s = await this.requireSession(sessionId);
-    if (s.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
-    this.allow(canManageNotepad(auth));
-    return this.store.listSessionNotepadCapabilities(sessionId);
-  }
-  async putCapability(auth: RequestAuthorization, sessionId: string, kind: unknown) {
-    const s = await this.requireSession(sessionId);
-    if (s.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
-    if (kind !== 'explicit_search' && kind !== 'session_notepad_coordination')
-      throw new NotepadServiceError('invalid', 'Invalid capability');
-    this.allow(kind === 'explicit_search' ? canManageNotepad(auth) : canWriteSession(auth, s));
-    if (auth.bypass) throw new NotepadServiceError('invalid', 'Capabilities require a human grantor');
-    return this.store.putSessionNotepadCapability({
-      sessionId,
-      kind,
-      grantedByUserId: auth.user.id,
-      createdAt: new Date(),
-    });
-  }
-  async removeCapability(auth: RequestAuthorization, sessionId: string, kind: SessionNotepadCapabilityRecord['kind']) {
-    const s = await this.requireSession(sessionId);
-    if (kind !== 'explicit_search' && kind !== 'session_notepad_coordination')
-      throw new NotepadServiceError('invalid', 'Invalid capability');
-    if (s.status === 'archived') throw new NotepadServiceError('archived', 'Archived sessions are read-only');
-    const existing = (await this.store.listSessionNotepadCapabilities(sessionId)).find((c) => c.kind === kind);
-    this.allow(canManageNotepad(auth) || (!auth.bypass && existing?.grantedByUserId === auth.user.id));
-    const manager = canManageNotepad(auth);
-    return this.store.removeSessionNotepadCapability(sessionId, kind, manager ? undefined : auth.user!.id);
   }
   async activityList(auth: RequestAuthorization, id: string, limit: unknown = 50, cursor: unknown = 0) {
     const notepad = await this.requireExplicitMetadata(id);
@@ -551,7 +512,6 @@ export class NotepadService {
     input: Record<string, unknown>,
     actor: NotepadActor,
     forcedKind?: 'restore',
-    expectedCoordinationGrantorUserId?: string,
     associatedAuthority?: { associatedSessionId: string; expectedUserId: string },
   ) {
     const current =
@@ -572,7 +532,6 @@ export class NotepadService {
     if (kind === 'session')
       return this.store.mutateSessionNotepad({
         sessionId: id,
-        ...(expectedCoordinationGrantorUserId ? { expectedCoordinationGrantorUserId } : {}),
         ...(mutationKind === 'append' ? { append: stringValue(input.append, 'append') } : { content: content! }),
         ...common,
       });

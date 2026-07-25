@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { NotepadService } from '../../src/notepads/service.js';
 import { executeNotepadTool, notepadToolDescription } from '../../src/notepads/tool.js';
 import { MemoryStore } from '../../src/store/memory.js';
@@ -101,20 +101,13 @@ describe('Pi Notepad tool', () => {
     });
   });
 
-  it('denies unassociated access, rechecks association, and grants another Session', async () => {
+  it('denies dormant Explicit Notepad access and grants another Session', async () => {
     const pad = await service.create(system, { title: 'pad' });
     await expect(run({ action: 'read', notepadId: pad.id })).resolves.toMatchObject({
       ok: false,
-      error: expect.stringContaining('not associated'),
+      error: expect.stringContaining('denied'),
     });
     await service.putAssociation(system, pad.id, own.id, { kind: 'system' });
-    const association = await store.getNotepadAssociation(pad.id, own.id);
-    vi.spyOn(store, 'getNotepadAssociation').mockResolvedValueOnce(association).mockResolvedValueOnce(null);
-    await expect(run({ action: 'read', notepadId: pad.id })).resolves.toMatchObject({
-      ok: false,
-      error: expect.stringContaining('authorization'),
-    });
-    vi.restoreAllMocks();
     const peer = await store.createSession({ ...session('peer', 'owner'), parentSessionId: own.id, spawnDepth: 1 });
     await expect(run({ action: 'grant', notepadId: pad.id, sessionId: peer.id })).resolves.toMatchObject({
       ok: true,
@@ -122,56 +115,113 @@ describe('Pi Notepad tool', () => {
     });
   });
 
-  it('uses explicit_search for broad reads only and reauthorizes member/admin grantors after viewer demotion', async () => {
+  it('searches and reads Explicit Notepads through readable Session associations but keeps writes associated', async () => {
     const pad = await service.create(system, { title: 'searchable needle' });
     const peer = await store.createSession(session('search-peer', 'owner'));
     await service.putAssociation(system, pad.id, peer.id, { kind: 'system' });
-    await store.putSessionNotepadCapability({
-      sessionId: own.id,
-      kind: 'explicit_search',
-      grantedByUserId: 'owner',
-      createdAt: now,
-    });
     await expect(run({ action: 'search', query: 'needle' })).resolves.toMatchObject({
       ok: true,
       result: { results: [{ id: pad.id }] },
     });
     await expect(run({ action: 'read', notepadId: pad.id })).resolves.toMatchObject({ ok: true });
     await expect(run({ action: 'append', notepadId: pad.id, append: 'no' })).resolves.toMatchObject({ ok: false });
-    await store.updateAuthUserRole({ userId: 'owner', role: 'viewer', updatedAt: now });
-    await expect(run({ action: 'search', query: 'needle' })).resolves.toMatchObject({
-      ok: false,
-      error: expect.stringContaining('authorization'),
+  });
+
+  it('directly reads archived Explicit Notepads and archived-only associations without searching them', async () => {
+    const pad = await service.createForSessionAgent(
+      own.id,
+      { title: 'archived-search-needle', content: 'durable' },
+      { kind: 'agent', sessionId: own.id, runId: 'archive-run' },
+    );
+    await store.archiveExplicitNotepad({ id: pad.id, archivedAt: now });
+    await expect(run({ action: 'search', query: 'archived-search-needle' })).resolves.toMatchObject({
+      result: { results: [] },
+    });
+    await expect(run({ action: 'read', notepadId: pad.id })).resolves.toMatchObject({
+      ok: true,
+      result: { content: 'durable' },
+    });
+
+    await store.restoreExplicitNotepad({ id: pad.id, updatedAt: now });
+    await store.archiveSession({ sessionId: own.id, archivedAt: now });
+    await expect(run({ action: 'search', query: 'archived-search-needle' })).resolves.toMatchObject({
+      result: { results: [] },
+    });
+    await expect(run({ action: 'read', notepadId: pad.id })).resolves.toMatchObject({
+      ok: true,
+      result: { content: 'durable' },
     });
   });
 
-  it('coordinates Session Notepads while capability and live grantor mutation authority remain valid', async () => {
+  it('keeps Explicit Notepads associated only with private Sessions owner-isolated', async () => {
+    await store.upsertAuthUserForAccount({
+      userId: 'other-owner',
+      accountId: 'other-owner-account',
+      provider: 'test',
+      providerAccountId: 'other-owner',
+      username: 'other-owner',
+      role: 'member',
+      profile: {},
+      now,
+    });
+    const privateActor = await store.createSession({
+      ...session('private-search-actor', 'owner'),
+      visibility: 'private',
+      ownerUserId: 'owner',
+    });
+    const sameOwnerTarget = await store.createSession({
+      ...session('private-search-target', 'owner'),
+      visibility: 'private',
+      ownerUserId: 'owner',
+    });
+    const otherOwnerTarget = await store.createSession({
+      ...session('other-private-search-target', 'other-owner'),
+      visibility: 'private',
+      ownerUserId: 'other-owner',
+    });
+    const sameOwnerPad = await service.create(system, { title: 'same-owner-secret' });
+    const otherOwnerPad = await service.create(system, { title: 'other-owner-secret' });
+    await store.putNotepadAssociation({
+      record: { notepadId: sameOwnerPad.id, sessionId: sameOwnerTarget.id, createdAt: now },
+      actor: { kind: 'system' },
+      activityId: 'same-owner-association',
+    });
+    await store.putNotepadAssociation({
+      record: { notepadId: otherOwnerPad.id, sessionId: otherOwnerTarget.id, createdAt: now },
+      actor: { kind: 'system' },
+      activityId: 'other-owner-association',
+    });
+
+    await expect(run({ action: 'search', query: 'owner-secret' })).resolves.toMatchObject({
+      result: { results: [] },
+    });
+    await expect(run({ action: 'read', notepadId: sameOwnerPad.id })).resolves.toMatchObject({ ok: false });
+
+    own = privateActor;
+    await expect(run({ action: 'search', query: 'owner-secret' })).resolves.toMatchObject({
+      result: { results: [{ id: sameOwnerPad.id }] },
+    });
+    await expect(run({ action: 'read', notepadId: sameOwnerPad.id })).resolves.toMatchObject({ ok: true });
+    await expect(run({ action: 'read', notepadId: otherOwnerPad.id })).resolves.toMatchObject({ ok: false });
+  });
+
+  it('coordinates available Session Notepads without a separate capability grant', async () => {
     const peer = await store.createSession(session('peer', 'someone'));
-    await expect(run({ action: 'append_session', sessionId: peer.id, append: 'no' })).resolves.toMatchObject({
-      ok: false,
-      error: expect.stringContaining('capability'),
-    });
-    await store.putSessionNotepadCapability({
-      sessionId: own.id,
-      kind: 'session_notepad_coordination',
-      grantedByUserId: 'owner',
-      createdAt: now,
-    });
     await expect(run({ action: 'append_session', sessionId: peer.id, append: 'handoff' })).resolves.toMatchObject({
       ok: true,
     });
     await store.updateAuthUserRole({ userId: 'owner', role: 'viewer', updatedAt: now });
     await expect(run({ action: 'read_session', sessionId: peer.id })).resolves.toMatchObject({
-      ok: false,
-      error: expect.stringContaining('authorization'),
+      ok: true,
     });
-    await expect(run({ action: 'append_session', sessionId: peer.id, append: 'no' })).resolves.toMatchObject({
-      ok: false,
-      error: expect.stringContaining('authorization'),
+    await expect(
+      run({ action: 'append_session', sessionId: peer.id, append: ' still available' }),
+    ).resolves.toMatchObject({
+      ok: true,
     });
   });
 
-  it('does not let tenant or promoted agents coordinate another private Session Notepad', async () => {
+  it('allows same-owner private Session Notepads but blocks tenant or promoted agents', async () => {
     const target = await store.createSession({
       ...session('private-target', 'owner'),
       visibility: 'private',
@@ -182,38 +232,37 @@ describe('Pi Notepad tool', () => {
       visibility: 'private',
       ownerUserId: 'owner',
     });
-    for (const sessionId of [own.id, privateActor.id]) {
-      await store.putSessionNotepadCapability({
-        sessionId,
-        kind: 'session_notepad_coordination',
-        grantedByUserId: 'owner',
-        createdAt: now,
-      });
-    }
-
     await expect(run({ action: 'read_session', sessionId: target.id })).resolves.toMatchObject({ ok: false });
+    own = privateActor;
     await expect(
-      store.mutateSessionNotepad({
-        sessionId: target.id,
-        append: 'allowed while private',
-        actor: { kind: 'agent', sessionId: privateActor.id, runId: 'private-run' },
-        expectedCoordinationGrantorUserId: 'owner',
-        mutationKind: 'append',
-        now,
-      }),
-    ).resolves.toMatchObject({ revision: 1 });
+      run({ action: 'append_session', sessionId: target.id, append: 'allowed while private' }),
+    ).resolves.toMatchObject({ ok: true });
 
     await store.updateSessionMetadataWithEvent({ id: privateActor.id, promoteToTenant: true, updatedAt: now });
     await expect(
-      store.mutateSessionNotepad({
-        sessionId: target.id,
-        append: 'blocked after promotion',
-        actor: { kind: 'agent', sessionId: privateActor.id, runId: 'promoted-run' },
-        expectedCoordinationGrantorUserId: 'owner',
-        mutationKind: 'append',
-        now,
-      }),
-    ).rejects.toMatchObject({ code: 'not_found' });
+      run({ action: 'append_session', sessionId: target.id, append: 'blocked after promotion' }),
+    ).resolves.toMatchObject({ ok: false });
+  });
+
+  it('reads archived Session Notepads but does not update them', async () => {
+    const peer = await store.createSession(session('archived-peer', 'owner'));
+    await service.mutateSession(system, peer.id, { content: 'finished', expectedRevision: 0 }, { kind: 'system' });
+    await store.archiveSession({ sessionId: peer.id, archivedAt: now });
+
+    await expect(run({ action: 'read_session', sessionId: peer.id })).resolves.toMatchObject({
+      ok: true,
+      result: { content: 'finished' },
+    });
+    await expect(run({ action: 'append_session', sessionId: peer.id, append: 'no' })).resolves.toMatchObject({
+      ok: false,
+    });
+
+    await store.unarchiveSession({ sessionId: peer.id, unarchivedAt: now });
+    await store.archiveSession({ sessionId: own.id, archivedAt: now });
+    await expect(run({ action: 'read_session', sessionId: peer.id })).resolves.toMatchObject({
+      ok: true,
+      result: { content: 'finished' },
+    });
   });
 
   it('grants Explicit Notepad associations only to sessions readable by the acting private agent', async () => {
@@ -263,65 +312,6 @@ describe('Pi Notepad tool', () => {
     await expect(run({ action: 'grant', notepadId: pad.id, sessionId: sameOwnerTarget.id })).resolves.toMatchObject({
       ok: false,
     });
-  });
-
-  it('uses the current replacement capability and rejects stale grantor authority', async () => {
-    const peer = await store.createSession(session('peer', 'owner'));
-    await store.upsertAuthUserForAccount({
-      userId: 'admin',
-      accountId: 'admin-account',
-      provider: 'test',
-      providerAccountId: 'admin',
-      username: 'admin',
-      role: 'admin',
-      profile: {},
-      now,
-    });
-    await store.putSessionNotepadCapability({
-      sessionId: own.id,
-      kind: 'session_notepad_coordination',
-      grantedByUserId: 'owner',
-      createdAt: now,
-    });
-    await store.putSessionNotepadCapability({
-      sessionId: own.id,
-      kind: 'session_notepad_coordination',
-      grantedByUserId: 'admin',
-      createdAt: now,
-    });
-    await expect(run({ action: 'append_session', sessionId: peer.id, append: 'admin' })).resolves.toMatchObject({
-      ok: true,
-    });
-    await expect(
-      store.mutateSessionNotepad({
-        sessionId: peer.id,
-        append: 'stale',
-        actor: { kind: 'agent', sessionId: own.id, runId: 'run-7' },
-        expectedCoordinationGrantorUserId: 'owner',
-        mutationKind: 'append',
-        now,
-      }),
-    ).rejects.toMatchObject({ code: 'not_found' });
-  });
-
-  it('cannot commit a coordinated patch after capability revocation', async () => {
-    const peer = await store.createSession(session('peer-race', 'owner'));
-    await store.putSessionNotepadCapability({
-      sessionId: own.id,
-      kind: 'session_notepad_coordination',
-      grantedByUserId: 'owner',
-      createdAt: now,
-    });
-    await service.mutateSession(system, peer.id, { content: 'before', expectedRevision: 0 }, { kind: 'system' });
-    const mutate = store.mutateSessionNotepad.bind(store);
-    store.mutateSessionNotepad = async (input) => {
-      await store.removeSessionNotepadCapability(own.id, 'session_notepad_coordination');
-      return mutate(input);
-    };
-    await expect(
-      run({ action: 'patch_session', sessionId: peer.id, oldText: 'before', newText: 'after', expectedRevision: 1 }),
-    ).resolves.toMatchObject({ ok: false });
-    await expect(store.getSessionNotepad(peer.id)).resolves.toMatchObject({ revision: 1, content: 'before' });
   });
 
   it('rejects archived actors/targets, invalid actions, and bounds multibyte reads/history', async () => {

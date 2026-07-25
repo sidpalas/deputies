@@ -49,7 +49,6 @@ import type {
   SessionNotepadRecord,
   NotepadRevisionRecord,
   NotepadAssociationRecord,
-  SessionNotepadCapabilityRecord,
   NotepadActivityRecord,
   NotepadActor,
   NotepadMutationKind,
@@ -187,15 +186,11 @@ export class PostgresStore implements AppStore {
     const r = await this.pool.query('SELECT * FROM session_notepads WHERE session_id=$1', [sessionId]);
     return r.rows[0] ? toSessionNotepad(r.rows[0]) : null;
   }
-  async readCoordinatedSessionNotepad(
-    actorSessionId: string,
-    targetSessionId: string,
-    expectedGrantorUserId: string,
-  ): Promise<SessionNotepadRecord> {
+  async readSessionNotepadForAgent(actorSessionId: string, targetSessionId: string): Promise<SessionNotepadRecord> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await this.requirePgCoordinationAuthority(client, actorSessionId, targetSessionId, expectedGrantorUserId);
+      await this.requirePgSessionNotepadAccess(client, actorSessionId, targetSessionId, true);
       const session = (await client.query('SELECT created_at FROM sessions WHERE id=$1', [targetSessionId])).rows[0];
       const row = (
         await client.query('SELECT * FROM session_notepads WHERE session_id=$1 FOR SHARE', [targetSessionId])
@@ -225,7 +220,6 @@ export class PostgresStore implements AppStore {
     append?: string;
     expectedRevision?: number;
     actor: NotepadActor;
-    expectedCoordinationGrantorUserId?: string;
     mutationKind: NotepadMutationKind;
     now: Date;
   }): Promise<SessionNotepadRecord> {
@@ -236,19 +230,13 @@ export class PostgresStore implements AppStore {
     revision: number;
     expectedRevision: number;
     actor: NotepadActor;
-    expectedCoordinationGrantorUserId?: string;
     now: Date;
   }): Promise<SessionNotepadRecord> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       if (input.actor.kind === 'agent' && input.actor.sessionId !== input.sessionId)
-        await this.requirePgCoordinationAuthority(
-          client,
-          input.actor.sessionId,
-          input.sessionId,
-          input.expectedCoordinationGrantorUserId,
-        );
+        await this.requirePgSessionNotepadAccess(client, input.actor.sessionId, input.sessionId);
       else await this.lockLiveSessions(client, [input.sessionId]);
       const old = (
         await client.query('SELECT * FROM session_notepads WHERE session_id=$1 FOR UPDATE', [input.sessionId])
@@ -408,58 +396,56 @@ export class PostgresStore implements AppStore {
     );
     return r.rows.map((row) => ({ ...toExplicitMetadata(row), snippet: row.snippet }));
   }
-  async searchExplicitNotepadsWithCapability(input: {
-    actorSessionId: string;
-    expectedGrantorUserId: string;
-    query: string;
-    limit: number;
-  }) {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      await this.requirePgExplicitSearchAuthority(client, input.actorSessionId, input.expectedGrantorUserId);
-      const literal = input.query.replace(/[\\%_]/g, '\\$&');
-      const r = await client.query(
-        `SELECT n.id,n.title,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at,n.archived_at,
-          substring(n.content FROM greatest(1, strpos(lower(n.content),lower($2))-80) FOR 240) AS snippet
-         FROM explicit_notepads n WHERE n.archived_at IS NULL
-           AND EXISTS (SELECT 1 FROM notepad_associations a JOIN sessions s ON s.id=a.session_id WHERE a.notepad_id=n.id AND s.status<>'archived')
-           AND (n.title ILIKE $1 ESCAPE '\\' OR n.content ILIKE $1 ESCAPE '\\') ORDER BY n.updated_at DESC,n.id ASC LIMIT $3`,
-        [`%${literal}%`, input.query, input.limit],
-      );
-      await client.query('COMMIT');
-      return r.rows.map((row) => ({ ...toExplicitMetadata(row), snippet: row.snippet }));
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+  async searchExplicitNotepadsForAgent(input: { actorSessionId: string; query: string; limit: number }) {
+    const literal = input.query.replace(/[\\%_]/g, '\\$&');
+    const result = await this.pool.query(
+      `WITH actor AS (
+         SELECT visibility, owner_user_id FROM sessions WHERE id=$1
+       )
+       SELECT n.id,n.title,n.revision,n.size_bytes,n.created_by_user_id,n.created_at,n.updated_at,n.archived_at,
+         substring(n.content FROM greatest(1, strpos(lower(n.content),lower($3))-80) FOR 240) AS snippet
+       FROM explicit_notepads n
+       WHERE n.archived_at IS NULL
+         AND EXISTS (
+           SELECT 1
+           FROM notepad_associations a
+           JOIN sessions target ON target.id=a.session_id
+           CROSS JOIN actor
+           WHERE a.notepad_id=n.id
+             AND target.status<>'archived'
+             AND (target.visibility<>'private'
+               OR (actor.visibility='private' AND actor.owner_user_id=target.owner_user_id))
+         )
+         AND (n.title ILIKE $2 ESCAPE '\\' OR n.content ILIKE $2 ESCAPE '\\')
+       ORDER BY n.updated_at DESC,n.id ASC
+       LIMIT $4`,
+      [input.actorSessionId, `%${literal}%`, input.query, input.limit],
+    );
+    return result.rows.map((row) => ({ ...toExplicitMetadata(row), snippet: row.snippet }));
   }
-  async readExplicitNotepadWithCapability(input: {
-    actorSessionId: string;
-    expectedGrantorUserId: string;
-    notepadId: string;
-  }) {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const discovered = (await client.query('SELECT 1 FROM explicit_notepads WHERE id=$1', [input.notepadId])).rows[0];
-      if (!discovered) throw new StoreConflictError('not_found', 'Notepad access denied');
-      await this.requirePgExplicitSearchAuthority(client, input.actorSessionId, input.expectedGrantorUserId);
-      // Do not lock the Notepad after locking the acting Session: association
-      // mutations lock those rows in the opposite order. MVCC gives this read
-      // a coherent snapshot while the authority locks prevent revocation.
-      const row = (await client.query('SELECT * FROM explicit_notepads WHERE id=$1', [input.notepadId])).rows[0];
-      if (!row) throw new StoreConflictError('not_found', 'Notepad access denied');
-      await client.query('COMMIT');
-      return toExplicitNotepad(row);
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+  async readExplicitNotepadForAgent(input: { actorSessionId: string; notepadId: string }) {
+    const row = (
+      await this.pool.query(
+        `WITH actor AS (
+           SELECT visibility, owner_user_id FROM sessions WHERE id=$1
+         )
+         SELECT n.*
+         FROM explicit_notepads n
+         WHERE n.id=$2
+           AND EXISTS (
+             SELECT 1
+             FROM notepad_associations a
+             JOIN sessions target ON target.id=a.session_id
+             CROSS JOIN actor
+             WHERE a.notepad_id=n.id
+               AND (target.visibility<>'private'
+                 OR (actor.visibility='private' AND actor.owner_user_id=target.owner_user_id))
+           )`,
+        [input.actorSessionId, input.notepadId],
+      )
+    ).rows[0];
+    if (!row) throw new StoreConflictError('not_found', 'Notepad access denied');
+    return toExplicitNotepad(row);
   }
   async updateExplicitNotepadMetadata(input: {
     id: string;
@@ -706,39 +692,6 @@ export class PostgresStore implements AppStore {
     }));
     return sqlPage(rows, limit, offset);
   }
-  async putSessionNotepadCapability(c: SessionNotepadCapabilityRecord): Promise<SessionNotepadCapabilityRecord> {
-    return this.withLiveSessionLock(c.sessionId, async (client) => {
-      const r = await client.query(
-        `INSERT INTO session_notepad_capabilities(session_id,kind,granted_by_user_id,created_at) VALUES($1,$2,$3,$4) ON CONFLICT(session_id,kind) DO UPDATE SET granted_by_user_id=excluded.granted_by_user_id,created_at=excluded.created_at RETURNING *`,
-        [c.sessionId, c.kind, c.grantedByUserId, c.createdAt],
-      );
-      return toCapability(r.rows[0]);
-    });
-  }
-  async removeSessionNotepadCapability(
-    s: string,
-    k: SessionNotepadCapabilityRecord['kind'],
-    expected?: string,
-  ): Promise<boolean> {
-    return this.withLiveSessionLock(
-      s,
-      async (client) =>
-        (
-          await client.query(
-            `DELETE FROM session_notepad_capabilities WHERE session_id=$1 AND kind=$2${expected ? ' AND granted_by_user_id=$3' : ''}`,
-            expected ? [s, k, expected] : [s, k],
-          )
-        ).rowCount === 1,
-    );
-  }
-  async listSessionNotepadCapabilities(s: string): Promise<SessionNotepadCapabilityRecord[]> {
-    return (
-      await this.pool.query(
-        'SELECT * FROM session_notepad_capabilities WHERE session_id=$1 ORDER BY created_at ASC,kind ASC',
-        [s],
-      )
-    ).rows.map(toCapability);
-  }
   private async insertNotepadActivity(
     client: PoolClient,
     id: string,
@@ -792,6 +745,13 @@ export class PostgresStore implements AppStore {
     }
   }
 
+  private async lockReadableSessions(client: PoolClient, ids: string[]) {
+    for (const id of [...new Set(ids)].sort()) {
+      const row = (await client.query('SELECT 1 FROM sessions WHERE id=$1 FOR SHARE', [id])).rows[0];
+      if (!row) throw new StoreConflictError('not_found', 'Session not found');
+    }
+  }
+
   private async requirePgExplicitWriteAuthority(client: PoolClient, notepadId: string, actor: NotepadActor) {
     if (actor.kind !== 'agent') return;
     const association = await client.query('SELECT 1 FROM notepad_associations WHERE notepad_id=$1 AND session_id=$2', [
@@ -831,55 +791,28 @@ export class PostgresStore implements AppStore {
     if (association.rowCount !== 1 || (user?.role !== 'member' && user?.role !== 'admin'))
       throw new StoreConflictError('not_found', 'Associated Session authority is no longer valid');
   }
-  private async requirePgExplicitSearchAuthority(client: PoolClient, actorSessionId: string, userId: string) {
-    const user = (await client.query('SELECT role FROM auth_users WHERE id=$1 FOR SHARE', [userId])).rows[0];
-    await this.lockLiveSessions(client, [actorSessionId]);
-    const grant = (
-      await client.query(
-        "SELECT granted_by_user_id FROM session_notepad_capabilities WHERE session_id=$1 AND kind='explicit_search' FOR SHARE",
-        [actorSessionId],
-      )
-    ).rows[0];
-    if (!user || grant?.granted_by_user_id !== userId || (user.role !== 'admin' && user.role !== 'member'))
-      throw new StoreConflictError('not_found', 'Notepad access denied');
-  }
 
-  private async requirePgCoordinationAuthority(
+  private async requirePgSessionNotepadAccess(
     client: PoolClient,
     actorSessionId: string,
     targetSessionId: string,
-    expectedGrantorUserId?: string,
+    readOnly = false,
   ) {
-    if (!expectedGrantorUserId)
-      throw new StoreConflictError('not_found', 'Session Notepad coordination capability is required');
-    const user = (await client.query('SELECT role FROM auth_users WHERE id=$1 FOR SHARE', [expectedGrantorUserId]))
-      .rows[0];
-    await this.lockLiveSessions(client, [actorSessionId, targetSessionId]);
+    if (readOnly) await this.lockReadableSessions(client, [actorSessionId, targetSessionId]);
+    else await this.lockLiveSessions(client, [actorSessionId, targetSessionId]);
     const accessRows = await client.query<{ id: string; visibility: string; owner_user_id: string | null }>(
       'SELECT id, visibility, owner_user_id FROM sessions WHERE id = ANY($1::uuid[])',
       [[actorSessionId, targetSessionId]],
     );
     const actor = accessRows.rows.find((row) => row.id === actorSessionId);
     const target = accessRows.rows.find((row) => row.id === targetSessionId);
-    const capability = (
-      await client.query(
-        "SELECT granted_by_user_id FROM session_notepad_capabilities WHERE session_id=$1 AND kind='session_notepad_coordination' FOR SHARE",
-        [actorSessionId],
-      )
-    ).rows[0];
-    const privateTargetAuthorized = Boolean(
+    const authorized = Boolean(
+      actor &&
       target &&
       (target.visibility !== 'private' ||
-        (actor?.visibility === 'private' &&
-          actor.owner_user_id === target.owner_user_id &&
-          target.owner_user_id === expectedGrantorUserId)),
+        (actor.visibility === 'private' && actor.owner_user_id && actor.owner_user_id === target.owner_user_id)),
     );
-    if (
-      capability?.granted_by_user_id !== expectedGrantorUserId ||
-      (user?.role !== 'member' && user?.role !== 'admin') ||
-      !privateTargetAuthorized
-    )
-      throw new StoreConflictError('not_found', 'Coordination grantor is no longer authorized');
+    if (!authorized) throw new StoreConflictError('not_found', 'Session Notepad access denied');
   }
 
   private async withLiveSessionLock<T>(id: string, operation: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -906,7 +839,6 @@ export class PostgresStore implements AppStore {
       append?: string;
       expectedRevision?: number;
       actor: NotepadActor;
-      expectedCoordinationGrantorUserId?: string;
       associatedAuthority?: import('./types.js').AssociatedNotepadAuthority;
       mutationKind: NotepadMutationKind;
       now: Date;
@@ -917,12 +849,7 @@ export class PostgresStore implements AppStore {
       await client.query('BEGIN');
       if (kind === 'session') {
         if (input.actor.kind === 'agent' && input.actor.sessionId !== id) {
-          await this.requirePgCoordinationAuthority(
-            client,
-            input.actor.sessionId,
-            id,
-            input.expectedCoordinationGrantorUserId,
-          );
+          await this.requirePgSessionNotepadAccess(client, input.actor.sessionId, id);
         } else await this.lockLiveSessions(client, [id]);
         const session = await client.query('SELECT status FROM sessions WHERE id=$1', [id]);
         if (!session.rows[0]) throw new StoreConflictError('not_found', 'Notepad not found');
@@ -5391,13 +5318,6 @@ type NotepadAssociationRow = {
   created_by_user_id: string | null;
   created_at: Date;
 };
-type NotepadCapabilityRow = {
-  session_id: string;
-  kind: SessionNotepadCapabilityRecord['kind'];
-  granted_by_user_id: string;
-  created_at: Date;
-};
-
 function toSessionNotepad(r: SessionNotepadRow): SessionNotepadRecord {
   return {
     sessionId: r.session_id,
@@ -5463,9 +5383,6 @@ function toAssociation(r: NotepadAssociationRow): NotepadAssociationRecord {
     ...(r.created_by_user_id ? { createdByUserId: r.created_by_user_id } : {}),
     createdAt: r.created_at,
   };
-}
-function toCapability(r: NotepadCapabilityRow): SessionNotepadCapabilityRecord {
-  return { sessionId: r.session_id, kind: r.kind, grantedByUserId: r.granted_by_user_id, createdAt: r.created_at };
 }
 function toNotepadActivity(r: {
   id: string;

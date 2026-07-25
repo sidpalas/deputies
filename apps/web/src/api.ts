@@ -191,13 +191,6 @@ export type SessionNotepadAssociationPage = {
   hasMore: boolean;
   nextCursor: string | null;
 };
-export type SessionNotepadCapability = {
-  sessionId: string;
-  kind: 'explicit_search' | 'session_notepad_coordination';
-  grantedByUserId: string;
-  createdAt: string;
-};
-
 export type SessionSearchResult = {
   session: Session;
   snippet: string;

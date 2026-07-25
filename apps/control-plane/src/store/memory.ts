@@ -48,7 +48,6 @@ import type {
   SessionNotepadRecord,
   NotepadRevisionRecord,
   NotepadAssociationRecord,
-  SessionNotepadCapabilityRecord,
   NotepadActivityRecord,
   NotepadActor,
   NotepadMutationKind,
@@ -125,7 +124,6 @@ export class MemoryStore implements AppStore {
   private readonly explicitNotepads = new Map<string, ExplicitNotepadRecord>();
   private readonly notepadRevisions = new Map<string, NotepadRevisionRecord[]>();
   private readonly notepadAssociations = new Map<string, NotepadAssociationRecord>();
-  private readonly notepadCapabilities = new Map<string, SessionNotepadCapabilityRecord>();
   private readonly notepadActivity = new Map<string, NotepadActivityRecord[]>();
   private searchIndexCursor = 0;
 
@@ -134,16 +132,10 @@ export class MemoryStore implements AppStore {
     return value ? structuredClone(value) : null;
   }
 
-  async readCoordinatedSessionNotepad(
-    actorSessionId: string,
-    targetSessionId: string,
-    expectedGrantorUserId: string,
-  ): Promise<SessionNotepadRecord> {
+  async readSessionNotepadForAgent(actorSessionId: string, targetSessionId: string): Promise<SessionNotepadRecord> {
     const target = this.sessions.get(targetSessionId);
     if (!target) throw new StoreConflictError('not_found', 'Session not found');
-    this.assertLiveSession(actorSessionId);
-    this.assertLiveSession(targetSessionId);
-    this.assertMemoryCoordinationAuthority(actorSessionId, target, expectedGrantorUserId);
+    this.assertMemorySessionNotepadAccess(actorSessionId, target);
     const value = this.sessionNotepads.get(targetSessionId) ?? {
       sessionId: targetSessionId,
       revision: 0,
@@ -161,7 +153,6 @@ export class MemoryStore implements AppStore {
     append?: string;
     expectedRevision?: number;
     actor: NotepadActor;
-    expectedCoordinationGrantorUserId?: string;
     mutationKind: NotepadMutationKind;
     now: Date;
   }): Promise<SessionNotepadRecord> {
@@ -171,7 +162,7 @@ export class MemoryStore implements AppStore {
     if (session.status === 'archived')
       throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
     if (input.actor.kind === 'agent' && input.actor.sessionId !== input.sessionId)
-      this.assertMemoryCoordinationAuthority(input.actor.sessionId, session, input.expectedCoordinationGrantorUserId);
+      this.assertMemorySessionNotepadAccess(input.actor.sessionId, session);
     const old = this.sessionNotepads.get(input.sessionId);
     return this.mutateMemoryNotepad('session', input.sessionId, old, input, (value) =>
       this.sessionNotepads.set(input.sessionId, value as SessionNotepadRecord),
@@ -182,7 +173,6 @@ export class MemoryStore implements AppStore {
     revision: number;
     expectedRevision: number;
     actor: NotepadActor;
-    expectedCoordinationGrantorUserId?: string;
     now: Date;
   }): Promise<SessionNotepadRecord> {
     this.assertLiveNotepadActor(input.actor);
@@ -191,7 +181,7 @@ export class MemoryStore implements AppStore {
     if (session.status === 'archived')
       throw new StoreConflictError('session_archived', 'Archived sessions are read-only');
     if (input.actor.kind === 'agent' && input.actor.sessionId !== input.sessionId)
-      this.assertMemoryCoordinationAuthority(input.actor.sessionId, session, input.expectedCoordinationGrantorUserId);
+      this.assertMemorySessionNotepadAccess(input.actor.sessionId, session);
     const old = this.sessionNotepads.get(input.sessionId);
     if ((old?.revision ?? 0) !== input.expectedRevision)
       throw new StoreConflictError('stale_revision', 'Stale notepad revision');
@@ -319,24 +309,26 @@ export class MemoryStore implements AppStore {
       .slice(0, input.limit)
       .map(({ content, ...n }) => ({ ...structuredClone(n), snippet: notepadSnippet(content, input.query) }));
   }
-  async searchExplicitNotepadsWithCapability(input: {
-    actorSessionId: string;
-    expectedGrantorUserId: string;
-    query: string;
-    limit: number;
-  }) {
-    this.assertMemoryExplicitSearchAuthority(input.actorSessionId, input.expectedGrantorUserId);
-    return this.searchExplicitNotepads({ query: input.query, limit: input.limit });
+  async searchExplicitNotepadsForAgent(input: { actorSessionId: string; query: string; limit: number }) {
+    const query = input.query.toLowerCase();
+    return [...this.explicitNotepads.values()]
+      .filter(
+        (notepad) =>
+          !notepad.archivedAt &&
+          this.memoryAgentCanReadExplicitNotepad(input.actorSessionId, notepad.id, true) &&
+          `${notepad.title}\n${notepad.content}`.toLowerCase().includes(query),
+      )
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || a.id.localeCompare(b.id))
+      .slice(0, input.limit)
+      .map(({ content, ...notepad }) => ({
+        ...structuredClone(notepad),
+        snippet: notepadSnippet(content, input.query),
+      }));
   }
-  async readExplicitNotepadWithCapability(input: {
-    actorSessionId: string;
-    expectedGrantorUserId: string;
-    notepadId: string;
-  }) {
+  async readExplicitNotepadForAgent(input: { actorSessionId: string; notepadId: string }) {
     const notepad = this.explicitNotepads.get(input.notepadId);
-    const actor = this.sessions.get(input.actorSessionId);
-    if (!notepad || !actor) throw new StoreConflictError('not_found', 'Notepad access denied');
-    this.assertMemoryExplicitSearchAuthority(input.actorSessionId, input.expectedGrantorUserId);
+    if (!notepad || !this.memoryAgentCanReadExplicitNotepad(input.actorSessionId, input.notepadId, false))
+      throw new StoreConflictError('not_found', 'Notepad access denied');
     return structuredClone(notepad);
   }
   async updateExplicitNotepadMetadata(input: {
@@ -537,27 +529,6 @@ export class MemoryStore implements AppStore {
       });
     return memoryPage(all, offset, limit);
   }
-  async putSessionNotepadCapability(record: SessionNotepadCapabilityRecord): Promise<SessionNotepadCapabilityRecord> {
-    this.assertLiveSession(record.sessionId);
-    this.notepadCapabilities.set(`${record.sessionId}:${record.kind}`, structuredClone(record));
-    return structuredClone(record);
-  }
-  async removeSessionNotepadCapability(
-    sessionId: string,
-    kind: SessionNotepadCapabilityRecord['kind'],
-    expectedGrantedByUserId?: string,
-  ): Promise<boolean> {
-    this.assertLiveSession(sessionId);
-    const existing = this.notepadCapabilities.get(`${sessionId}:${kind}`);
-    if (expectedGrantedByUserId && existing?.grantedByUserId !== expectedGrantedByUserId) return false;
-    return this.notepadCapabilities.delete(`${sessionId}:${kind}`);
-  }
-  async listSessionNotepadCapabilities(sessionId: string): Promise<SessionNotepadCapabilityRecord[]> {
-    return [...this.notepadCapabilities.values()]
-      .filter((c) => c.sessionId === sessionId)
-      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.kind.localeCompare(b.kind))
-      .map((c) => structuredClone(c));
-  }
   private addMemoryActivity(
     notepadId: string,
     id: string,
@@ -603,36 +574,37 @@ export class MemoryStore implements AppStore {
     this.explicitNotepads.set(input.id, structuredClone(updated));
     return structuredClone(updated);
   }
-  private assertMemoryExplicitSearchAuthority(actorSessionId: string, userId: string) {
+  private memoryAgentCanReadExplicitNotepad(
+    actorSessionId: string,
+    notepadId: string,
+    requireLiveAssociation: boolean,
+  ) {
     const actor = this.sessions.get(actorSessionId);
-    const grant = this.notepadCapabilities.get(`${actorSessionId}:explicit_search`);
-    const user = this.authUsers.get(userId);
-    if (!actor || actor.status === 'archived' || grant?.grantedByUserId !== userId || !user || user.role === 'viewer')
-      throw new StoreConflictError('not_found', 'Notepad access denied');
+    if (!actor) return false;
+    for (const association of this.notepadAssociations.values()) {
+      if (association.notepadId !== notepadId) continue;
+      const target = this.sessions.get(association.sessionId);
+      if (!target || (requireLiveAssociation && target.status === 'archived')) continue;
+      if (
+        target.visibility !== 'private' ||
+        (actor.visibility === 'private' && actor.ownerUserId && actor.ownerUserId === target.ownerUserId)
+      )
+        return true;
+    }
+    return false;
   }
   private memoryUserCanWriteSession(userId: string, _session: SessionRecord) {
     const user = this.authUsers.get(userId);
     return Boolean(user && (user.role === 'member' || user.role === 'admin'));
   }
-  private assertMemoryCoordinationAuthority(
-    actorSessionId: string,
-    target: SessionRecord,
-    expectedGrantorUserId?: string,
-  ) {
+  private assertMemorySessionNotepadAccess(actorSessionId: string, target: SessionRecord) {
     const actor = this.sessions.get(actorSessionId);
-    const capability = this.notepadCapabilities.get(`${actorSessionId}:session_notepad_coordination`);
-    if (!actor || !expectedGrantorUserId || capability?.grantedByUserId !== expectedGrantorUserId)
-      throw new StoreConflictError('not_found', 'Session Notepad coordination capability is required');
-    const user = this.authUsers.get(expectedGrantorUserId);
-    const authorized = user?.role === 'member' || user?.role === 'admin';
-    const privateTargetAuthorized =
-      target.visibility !== 'private' ||
-      (actor.visibility === 'private' &&
-        actor.ownerUserId === target.ownerUserId &&
-        target.ownerUserId === expectedGrantorUserId);
-    if (!user || !authorized || !privateTargetAuthorized) {
-      throw new StoreConflictError('not_found', 'Coordination grantor is no longer authorized');
-    }
+    const authorized = Boolean(
+      actor &&
+      (target.visibility !== 'private' ||
+        (actor.visibility === 'private' && actor.ownerUserId && actor.ownerUserId === target.ownerUserId)),
+    );
+    if (!authorized) throw new StoreConflictError('not_found', 'Session Notepad access denied');
   }
   private assertLiveSession(sessionId: string) {
     const session = this.sessions.get(sessionId);

@@ -111,22 +111,6 @@ describe('Notepad API policy', () => {
     await expect(api.restore(admin, pad.id)).resolves.toMatchObject({ id: pad.id, content: 'durable', revision: 1 });
   });
 
-  it('validates capability kinds, records/replaces/revokes the human grantor, and rejects archived sessions', async () => {
-    await expect(api.putCapability(member, session.id, 'explicit_search')).resolves.toMatchObject({
-      grantedByUserId: 'member',
-    });
-    await expect(api.putCapability(admin, session.id, 'explicit_search')).resolves.toMatchObject({
-      grantedByUserId: 'admin',
-    });
-    await expect(api.removeCapability(viewer, session.id, 'explicit_search')).rejects.toMatchObject({
-      code: 'forbidden',
-    });
-    await expect(api.removeCapability(member, session.id, 'explicit_search')).resolves.toBe(true);
-    await expect(api.putCapability(member, session.id, 'bad')).rejects.toMatchObject({ code: 'invalid' });
-    await store.archiveSession({ sessionId: session.id, archivedAt: now });
-    await expect(api.putCapability(admin, session.id, 'explicit_search')).rejects.toMatchObject({ code: 'archived' });
-  });
-
   it('rejects malformed and NaN revisions', async () => {
     await expect(
       api.mutateSession(member, session.id, { content: 'x', expectedRevision: Number.NaN }, actor),

@@ -1,4 +1,5 @@
-import { canWriteSession, type RequestAuthorization } from '../auth/authorization.js';
+import { type RequestAuthorization } from '../auth/authorization.js';
+import { agentCanReadSession, agentCanWriteSession, type AgentPrincipal } from '../auth/agent-authorization.js';
 import type { AppStore, NotepadActor } from '../store/types.js';
 import { NotepadService, NotepadServiceError } from './service.js';
 
@@ -26,7 +27,7 @@ const maxReadBytes = 32 * 1024;
 const defaultLineCount = 200;
 
 export const notepadToolDescription =
-  'Durable external memory for objectives, findings, blockers, and next actions. Read and update the current Session Notepad and associated Explicit Notepads; capability grants may additionally permit search or coordination. Updates do not send Messages or wake Sessions.';
+  'Durable external memory for objectives, findings, blockers, and next actions. Read and search Notepads available to the acting session; Explicit Notepad writes require an association. Updates do not send Messages or wake Sessions.';
 
 export const notepadToolParameters = {
   type: 'object',
@@ -90,8 +91,6 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
       throw new NotepadServiceError('archived', 'Archived sessions are read-only');
     const actor: NotepadActor = { kind: 'agent', sessionId: s.sessionId, runId: s.runId };
     const agentAuth: RequestAuthorization = { bypass: true, user: null, agentSessionId: s.sessionId };
-    const capability = async (kind: 'explicit_search' | 'session_notepad_coordination') =>
-      (await s.store.listSessionNotepadCapabilities(s.sessionId)).find((c) => c.kind === kind);
     const ownSession = async () => bounded(await s.notepads.readSession(agentAuth, s.sessionId), p);
     if (action === 'read' && !p.notepadId) return ok(action, await ownSession());
     if (action === 'replace' && !p.notepadId)
@@ -142,44 +141,36 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
           );
         return ok(action, await s.notepads.mutateSession(agentAuth, s.sessionId, { append: p.append }, actor));
       }
-      const coordinationCapability = await capability('session_notepad_coordination');
-      if (!coordinationCapability) {
-        if (action === 'patch_session') denied();
-        throw new Error('Session Notepad coordination capability is required');
-      }
-      const target = await tenantSession(s.store, targetId);
-      const targetAuth = await grantorAuth(s.store, coordinationCapability.grantedByUserId);
+      const target = await requiredSession(s.store, targetId);
+      const principal: AgentPrincipal = {
+        kind: 'session_agent',
+        sessionId: current.id,
+        spawnDepth: current.spawnDepth,
+        ...(current.visibility === 'private' && current.ownerUserId ? { ownerUserId: current.ownerUserId } : {}),
+      };
+      const authorized =
+        action === 'read_session' ? agentCanReadSession(principal, target) : agentCanWriteSession(principal, target);
+      if (!authorized) denied();
+      const targetAuth: RequestAuthorization = { bypass: true, user: null, agentSessionId: target.id };
       if (action === 'read_session') {
-        if (!canWriteSession(targetAuth, target)) denied();
-        return ok(
-          action,
-          bounded(
-            await s.notepads.readCoordinatedSession(s.sessionId, targetId, coordinationCapability.grantedByUserId),
-            p,
-          ),
-        );
+        return ok(action, bounded(await s.notepads.readSessionForAgent(s.sessionId, targetId), p));
       }
-      if (!canWriteSession(targetAuth, target)) denied();
       if (action === 'patch_session')
         return ok(
           action,
-          await s.notepads.patchCoordinatedSession(
+          await s.notepads.patchSessionForAgent(
             targetAuth,
             s.sessionId,
             targetId,
             { oldText: p.oldText, newText: p.newText, expectedRevision: p.expectedRevision },
             actor,
-            coordinationCapability.grantedByUserId,
           ),
         );
       const input =
         action === 'replace_session'
           ? { content: p.content, expectedRevision: p.expectedRevision }
           : { append: p.append };
-      return ok(
-        action,
-        await s.notepads.mutateSession(targetAuth, targetId, input, actor, coordinationCapability.grantedByUserId),
-      );
+      return ok(action, await s.notepads.mutateSession(targetAuth, targetId, input, actor));
     }
     if (action === 'create') {
       const created = await s.notepads.createForSessionAgent(
@@ -218,38 +209,23 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
         ),
       );
     if (action === 'search') {
-      const grant = await capability('explicit_search');
-      if (!grant) denied();
       const query = string(p.query, 'query').trim();
       if (!query || query.length > 200) throw new Error('query must be 1 to 200 characters');
       return ok(action, {
-        results: await s.store
-          .searchExplicitNotepadsWithCapability({
-            actorSessionId: s.sessionId,
-            expectedGrantorUserId: grant.grantedByUserId,
-            query,
-            limit: Math.min(number(p.limit ?? 20, 'limit'), 50),
-          })
-          .catch(() => denied()),
+        results: await s.store.searchExplicitNotepadsForAgent({
+          actorSessionId: s.sessionId,
+          query,
+          limit: Math.min(number(p.limit ?? 20, 'limit'), 50),
+        }),
       });
     }
     const id = string(p.notepadId, 'notepadId');
     const association = await s.store.getNotepadAssociation(id, s.sessionId);
-    const searchGrant = await capability('explicit_search');
-    const broad = Boolean(searchGrant);
-    if (!association && !(broad && action === 'read'))
-      throw new Error('Notepad is not associated with the current Session');
     if (action === 'read') {
-      let readAuth: RequestAuthorization = agentAuth;
       if (!association) {
-        // Resolve metadata and owner boundary before loading content or applying
-        // the grantor's canonical readability. Every failure is intentionally
-        // indistinguishable to avoid disclosing whether the notepad exists.
-        if (!searchGrant) denied();
         const record = await s.store
-          .readExplicitNotepadWithCapability({
+          .readExplicitNotepadForAgent({
             actorSessionId: s.sessionId,
-            expectedGrantorUserId: searchGrant.grantedByUserId,
             notepadId: id,
           })
           .catch(() => denied());
@@ -258,11 +234,12 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
       return ok(
         action,
         bounded(
-          await s.notepads.requireReadable(readAuth, id, association ? s.sessionId : undefined).catch(() => denied()),
+          await s.notepads.requireReadable(agentAuth, id, association ? s.sessionId : undefined).catch(() => denied()),
           p,
         ),
       );
     }
+    if (!association) throw new Error('Notepad is not associated with the current Session');
     if (action === 'replace')
       return ok(
         action,
@@ -312,7 +289,7 @@ export async function executeNotepadTool(s: NotepadToolServices, params: unknown
         ),
       );
     if (action === 'grant') {
-      const target = await tenantSession(s.store, string(p.sessionId, 'sessionId'));
+      const target = await targetSession(s.store, string(p.sessionId, 'sessionId'));
       return ok(action, associationAck(await s.notepads.putAssociation(agentAuth, id, target.id, actor)));
     }
     if (action === 'revoke')
@@ -385,11 +362,6 @@ function utf8Prefix(value: string, maxBytes: number): string {
   // surrogate keeps both the returned string and its UTF-8 encoding valid.
   return /[\uD800-\uDBFF]$/.test(value.slice(0, low)) ? value.slice(0, low - 1) : value.slice(0, low);
 }
-async function grantorAuth(store: AppStore, userId: string): Promise<RequestAuthorization> {
-  const user = await store.getAuthUser(userId);
-  if (!user) throw new Error('Capability grantor is no longer active');
-  return { bypass: false, user };
-}
 async function requiredSession(store: AppStore, id: string) {
   const s = await store.getSession(id);
   if (!s) throw new Error('Session not found');
@@ -413,7 +385,7 @@ function number(v: unknown, n: string) {
   return v as number;
 }
 function denied(): never {
-  throw new Error('Notepad access denied by current grantor authorization');
+  throw new Error('Notepad access denied');
 }
 function ok(action: Action, value: unknown) {
   if (
@@ -445,7 +417,7 @@ function acknowledgement(record: {
 function associationAck(record: { notepadId: string; sessionId: string }) {
   return { notepadId: record.notepadId, sessionId: record.sessionId };
 }
-async function tenantSession(store: AppStore, id: string) {
+async function targetSession(store: AppStore, id: string) {
   const target = await store.getSession(id);
   if (!target) throw new Error('Target unavailable');
   return target;
