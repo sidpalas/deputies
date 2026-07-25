@@ -91,25 +91,20 @@ docker buildx build --platform "$platforms" -f apps/web/Dockerfile -t "$WEB_IMAG
 """
 
 [tasks.check]
-description = "Run formatting, linting, typechecks, and unit tests"
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-mise run //:format:check
-mise run //:lint
-mise run //:typecheck
-mise run //:test
-mise run //:infra:validate
-"""
+description = "Run formatting, linting, typechecks, unit tests, and infrastructure validation in parallel"
+depends = ["format:check", "lint", "typecheck", "test", "infra:validate"]
+
+[tasks."check:low-memory"]
+description = "Run the canonical checks sequentially for memory-constrained environments"
+run = "mise run --jobs 1 //:check"
 
 [tasks."check:ship"]
-description = "Run the canonical checks and Postgres-backed integration tests"
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-mise run //:check
-mise run //:test:integration
-"""
+description = "Run the canonical checks and Postgres-backed integration tests in parallel"
+depends = ["check", "test:integration"]
+
+[tasks."check:ship:low-memory"]
+description = "Run the canonical ship checks sequentially for memory-constrained environments"
+run = "mise run --jobs 1 //:check:ship"
 
 [tasks."ci:smoke:local"]
 description = "Run smoke GitHub Actions workflow locally with Agent CI"

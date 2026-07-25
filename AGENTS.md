@@ -33,15 +33,21 @@ For standard repository verification, run:
 mise run //:check
 ```
 
-This runs formatting checks, linting, package typechecks and unit tests, and infrastructure validation.
+This runs formatting checks, linting, package typechecks and unit tests, and infrastructure validation in parallel by default. In memory-constrained environments, use `mise run //:check:low-memory` to run the same checks sequentially.
 
-For the standard ship workflow, run:
+For the canonical parallel ship workflow in normal developer and CI environments, run:
 
 ```sh
 mise run //:check:ship
 ```
 
-This is the canonical ship check. It includes `//:check`, reuses an available Postgres test database or starts one with Docker/directly as supported, sets `TEST_DATABASE_URL`, and runs the control-plane integration tests. Run additional targeted e2e or build checks when the changed area requires them.
+Because Amp runs in memory-constrained orbs, Amp's standard ship workflow is:
+
+```sh
+mise run //:check:ship:low-memory
+```
+
+Both ship tasks run the same checks: they include `//:check`, reuse an available Postgres test database or start one with Docker/directly as supported, set `TEST_DATABASE_URL`, and run the control-plane integration tests. The default task runs independent work in parallel; the low-memory variant runs it sequentially. Run additional targeted e2e or build checks when the changed area requires them.
 
 Do not substitute `deploy/sandboxes/daytona/full-check.sh` for either canonical check. That script is only for explicitly validating the Daytona sandbox image and its no-nested-virtualization environment.
 
@@ -99,7 +105,9 @@ When asked to run or preview the Deputies app from this checkout inside the sand
 
 ```sh
 mise run //:check
+mise run //:check:low-memory
 mise run //:check:ship
+mise run //:check:ship:low-memory
 mise run //apps/control-plane:typecheck
 mise run //apps/control-plane:test
 mise run //:test:integration
