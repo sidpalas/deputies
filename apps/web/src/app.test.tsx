@@ -4064,6 +4064,147 @@ it('renders tool diagnostics as readable activity with raw details collapsed', a
   await waitForHighlightedCodeCount(failedToolCard, 3);
 });
 
+it('nests live subagent tool activity under its parent invocation', async () => {
+  mockApi({
+    messages: [
+      messageFixture({
+        id: '00000000-0000-4000-8000-000000000129',
+        sequence: 1,
+        status: 'processing',
+        prompt: 'inspect auth',
+      }),
+    ],
+    events: [
+      eventFixture({
+        sequence: 1,
+        type: 'message_started',
+        runId: '00000000-0000-4000-8000-000000000229',
+        messageId: '00000000-0000-4000-8000-000000000129',
+        payload: { sequences: [1], batchSize: 1 },
+      }),
+      eventFixture({
+        sequence: 2,
+        type: 'tool_started',
+        runId: '00000000-0000-4000-8000-000000000229',
+        messageId: '00000000-0000-4000-8000-000000000129',
+        payload: {
+          toolName: 'subagent',
+          toolCallId: 'subagent-1',
+          args: { agent: 'explore', task: 'Trace the authentication flow' },
+        },
+      }),
+      eventFixture({
+        sequence: 3,
+        type: 'tool_started',
+        runId: '00000000-0000-4000-8000-000000000229',
+        messageId: '00000000-0000-4000-8000-000000000129',
+        payload: {
+          toolName: 'shell',
+          toolCallId: 'subagent-1',
+          activityId: 'child-session:subagent-1',
+          parentActivityId: 'subagent-1',
+          subagentDepth: 1,
+          subagentAgent: 'explore',
+          args: { command: 'rg -n "authenticate" apps/control-plane/src' },
+        },
+      }),
+      eventFixture({
+        sequence: 4,
+        type: 'tool_finished',
+        runId: '00000000-0000-4000-8000-000000000229',
+        messageId: '00000000-0000-4000-8000-000000000129',
+        payload: {
+          toolName: 'shell',
+          toolCallId: 'subagent-1',
+          activityId: 'child-session:subagent-1',
+          parentActivityId: 'subagent-1',
+          subagentDepth: 1,
+          subagentAgent: 'explore',
+          result: '3 matches',
+        },
+      }),
+      eventFixture({
+        sequence: 5,
+        type: 'tool_started',
+        runId: '00000000-0000-4000-8000-000000000229',
+        messageId: '00000000-0000-4000-8000-000000000129',
+        payload: {
+          toolName: 'subagent',
+          toolCallId: 'subagent-1',
+          activityId: 'nested-session:subagent-1',
+          parentActivityId: 'subagent-1',
+          subagentDepth: 1,
+          subagentAgent: 'explore',
+          args: { agent: 'explore', task: 'Inspect the nested service' },
+        },
+      }),
+      eventFixture({
+        sequence: 6,
+        type: 'tool_started',
+        runId: '00000000-0000-4000-8000-000000000229',
+        messageId: '00000000-0000-4000-8000-000000000129',
+        payload: {
+          toolName: 'read',
+          toolCallId: 'subagent-1',
+          activityId: 'grandchild-session:subagent-1',
+          parentActivityId: 'nested-session:subagent-1',
+          subagentDepth: 2,
+          subagentAgent: 'explore',
+          args: { path: '/workspace/apps/control-plane/src/service.ts' },
+        },
+      }),
+      eventFixture({
+        sequence: 7,
+        type: 'tool_finished',
+        runId: '00000000-0000-4000-8000-000000000229',
+        messageId: '00000000-0000-4000-8000-000000000129',
+        payload: {
+          toolName: 'read',
+          toolCallId: 'subagent-1',
+          activityId: 'grandchild-session:subagent-1',
+          parentActivityId: 'nested-session:subagent-1',
+          subagentDepth: 2,
+          subagentAgent: 'explore',
+          result: 'service file contents',
+        },
+      }),
+      eventFixture({
+        sequence: 8,
+        type: 'tool_finished',
+        runId: '00000000-0000-4000-8000-000000000229',
+        messageId: '00000000-0000-4000-8000-000000000129',
+        payload: {
+          toolName: 'subagent',
+          toolCallId: 'subagent-1',
+          activityId: 'nested-session:subagent-1',
+          parentActivityId: 'subagent-1',
+          subagentDepth: 1,
+          subagentAgent: 'explore',
+          result: 'nested inspection complete',
+        },
+      }),
+    ],
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByText(/Activity · 8 events/));
+
+  expect(screen.getByText('Subagent started: Trace the authentication flow')).toBeInTheDocument();
+  expect(screen.queryByText(/Command completed: rg -n/)).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByText('Subagent activity · 2 steps'));
+
+  expect(await screen.findByText(/Command completed: rg -n/)).toBeInTheDocument();
+  expect(screen.getByText('3 matches')).toBeInTheDocument();
+  expect(screen.getByText('Subagent completed: Inspect the nested service')).toBeInTheDocument();
+  expect(screen.queryByText('Read completed')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByText('Subagent activity · 1 step'));
+
+  expect(await screen.findByText('Read completed')).toBeInTheDocument();
+  expect(screen.getByText('service file contents')).toBeInTheDocument();
+});
+
 it('labels unmatched tool start diagnostics as started instead of running', async () => {
   mockApi({
     messages: [

@@ -168,6 +168,10 @@ type SandboxLifecyclePayload = {
 type ToolStartedPayload = {
   toolName: string;
   toolCallId?: string | undefined;
+  activityId?: string | undefined;
+  parentActivityId?: string | undefined;
+  subagentDepth?: number | undefined;
+  subagentAgent?: string | undefined;
   command?: string;
   args?: unknown;
   taskId?: string | undefined;
@@ -181,6 +185,10 @@ type ToolStartedPayload = {
 type ToolFinishedPayload = {
   toolName: string;
   toolCallId?: string | undefined;
+  activityId?: string | undefined;
+  parentActivityId?: string | undefined;
+  subagentDepth?: number | undefined;
+  subagentAgent?: string | undefined;
   isError?: boolean | undefined;
   result?: unknown;
   command?: string | undefined;

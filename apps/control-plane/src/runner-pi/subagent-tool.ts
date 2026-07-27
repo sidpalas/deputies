@@ -14,6 +14,8 @@ export type PiSubagentRunInput = {
   task: string;
   cwd?: string;
   signal?: AbortSignal;
+  parentToolCallId?: string;
+  parentActivityId?: string;
 };
 
 export type PiSubagentRunResult = {
@@ -95,8 +97,9 @@ export function createPiSubagentToolDefinition(services: PiSubagentToolServices)
     ],
     parameters: piSubagentToolParametersForPi,
     executionMode: 'sequential',
-    async execute(_toolCallId, params, signal) {
+    async execute(toolCallId, params, signal) {
       const input = readSubagentInput(params as Record<string, unknown>, signal);
+      input.parentToolCallId = toolCallId;
       const result = await services.run(input);
       const output = truncateOutput(result.text);
       return {

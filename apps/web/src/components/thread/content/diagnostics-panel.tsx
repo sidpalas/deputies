@@ -10,6 +10,9 @@ type DiagnosticActivity = {
   subtitle: string;
   status: 'started' | 'completed' | 'failed' | 'info';
   createdAt: string;
+  activityId?: string;
+  parentActivityId?: string;
+  children?: DiagnosticActivity[];
   command?: string;
   detail?: string;
   error?: string;
@@ -108,6 +111,24 @@ function DiagnosticActivityCard(props: { activity: DiagnosticActivity }) {
       {activity.command ? <DebugCode code={activity.command} language="bash" label="Diagnostic command" /> : null}
       {activity.detail ? <DebugText text={activity.detail} /> : null}
       {activity.error ? <DebugText text={activity.error} tone="error" /> : null}
+      {activity.children?.length ? (
+        <LazyDetails
+          className="mt-2 rounded border border-border/70 bg-muted/20 p-2"
+          summaryClassName="cursor-pointer text-xs font-medium text-muted-foreground"
+          summary={`Subagent activity · ${activity.children.length} ${activity.children.length === 1 ? 'step' : 'steps'}`}
+        >
+          {({ close }) => (
+            <div className="mt-2 grid min-w-0 gap-2 border-l-2 border-border pl-2">
+              {activity.children!.map((child) => (
+                <DiagnosticActivityCard activity={child} key={child.key} />
+              ))}
+              <Button className="justify-self-start px-2" type="button" variant="secondary" size="sm" onClick={close}>
+                Collapse subagent activity
+              </Button>
+            </div>
+          )}
+        </LazyDetails>
+      ) : null}
       <LazyDetails summary="Debug details" summaryClassName="cursor-pointer text-xs text-muted-foreground">
         {() => (
           <div className="mt-2 grid min-w-0 gap-2 text-xs [&_figure]:my-0 [&_figure]:shadow-none [&_.highlighted-code]:text-xs">
@@ -152,7 +173,25 @@ function buildDiagnosticActivities(events: AgentEvent[]): DiagnosticActivity[] {
     activities.push(formatToolActivity(event, null));
   }
 
-  return activities.sort((a, b) => firstActivitySequence(a) - firstActivitySequence(b));
+  return nestDiagnosticActivities(activities.sort((a, b) => firstActivitySequence(a) - firstActivitySequence(b)));
+}
+
+function nestDiagnosticActivities(activities: DiagnosticActivity[]): DiagnosticActivity[] {
+  const byActivityId = new Map(
+    activities.flatMap((activity) => (activity.activityId ? [[activity.activityId, activity] as const] : [])),
+  );
+  const roots: DiagnosticActivity[] = [];
+
+  for (const activity of activities) {
+    const parent = activity.parentActivityId ? byActivityId.get(activity.parentActivityId) : undefined;
+    if (!parent || parent === activity) {
+      roots.push(activity);
+      continue;
+    }
+    (parent.children ??= []).push(activity);
+  }
+
+  return roots;
 }
 
 function formatToolActivity(start: AgentEvent | undefined, finish: AgentEvent | null): DiagnosticActivity {
@@ -160,10 +199,12 @@ function formatToolActivity(start: AgentEvent | undefined, finish: AgentEvent | 
   const toolName = stringValue(payload.toolName) ?? 'tool';
   const isError = finish ? payload.isError === true : false;
   const command = toolCommand(start, finish);
-  const taskPrompt = toolName === 'task' ? stringValue(payload.prompt) : undefined;
+  const taskPrompt = toolTaskPrompt(toolName, start, payload);
   const resultPreview = previewToolResult(toolName, payload.result);
   const errorPreview = previewValue(payload.error) ?? (isError ? resultPreview : undefined);
   const customTool = customToolName(payload.result);
+  const activityId = stringValue(payload.activityId) ?? stringValue(payload.toolCallId);
+  const parentActivityId = stringValue(payload.parentActivityId);
 
   const activity: DiagnosticActivity = {
     key: `tool-${start?.sequence ?? 'missing'}-${finish?.sequence ?? 'running'}`,
@@ -171,6 +212,8 @@ function formatToolActivity(start: AgentEvent | undefined, finish: AgentEvent | 
     subtitle: toolActivitySubtitle(start, finish),
     status: finish ? (isError ? 'failed' : 'completed') : 'started',
     createdAt: (start ?? finish)!.createdAt,
+    ...(activityId ? { activityId } : {}),
+    ...(parentActivityId ? { parentActivityId } : {}),
     rawEvents: [start, finish].filter((item): item is AgentEvent => Boolean(item)),
   };
   if (command) activity.command = command;
@@ -199,7 +242,11 @@ function formatStandaloneActivity(event: AgentEvent): DiagnosticActivity {
 
 function toolActivityKey(event: AgentEvent): string | null {
   const payload = event.payload;
-  const key = stringValue(payload.toolCallId) ?? stringValue(payload.taskId) ?? stringValue(payload.operationId);
+  const key =
+    stringValue(payload.activityId) ??
+    stringValue(payload.toolCallId) ??
+    stringValue(payload.taskId) ??
+    stringValue(payload.operationId);
   if (key) return key;
   const args = payload.args;
   if (args && typeof args === 'object') return stringValue((args as Record<string, unknown>).operationId) ?? null;
@@ -212,15 +259,25 @@ function toolActivitySubtitle(start: AgentEvent | undefined, finish: AgentEvent 
 }
 
 function toolCommand(start: AgentEvent | undefined, finish: AgentEvent | null): string | undefined {
-  const startArgs = start?.payload.args;
-  if (startArgs && typeof startArgs === 'object') {
-    const command = stringValue((startArgs as Record<string, unknown>).command);
+  const startArgs = recordValue(start?.payload.args);
+  if (startArgs) {
+    const command = stringValue(startArgs.command);
     if (command) return command;
   }
 
   const result = finish?.payload.result;
   if (result && typeof result === 'object') return stringValue((result as Record<string, unknown>).command);
   return undefined;
+}
+
+function toolTaskPrompt(
+  toolName: string,
+  start: AgentEvent | undefined,
+  payload: Record<string, unknown>,
+): string | undefined {
+  if (toolName === 'task') return stringValue(payload.prompt);
+  if (toolName !== 'subagent') return undefined;
+  return stringValue(recordValue(start?.payload.args)?.task);
 }
 
 function toolActivityTitle(
@@ -233,6 +290,7 @@ function toolActivityTitle(
 ): string {
   const status = finished ? (isError ? 'failed' : 'completed') : 'started';
   if (command) return `Command ${status}: ${singleLine(command, 80)}`;
+  if (toolName === 'subagent' && taskPrompt) return `Subagent ${status}: ${singleLine(taskPrompt, 80)}`;
   if (taskPrompt) return `Task ${status}: ${singleLine(taskPrompt, 80)}`;
   return `${humanizeEventName(toolName)}${customTool ? ' custom tool' : ''} ${status}`;
 }
@@ -433,6 +491,19 @@ function customToolName(value: unknown): string | undefined {
   const details = (value as Record<string, unknown>).details;
   if (!details || typeof details !== 'object') return undefined;
   return stringValue((details as Record<string, unknown>).customTool);
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== 'string' || !value.startsWith('{')) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function singleLine(value: string, maxLength: number): string {

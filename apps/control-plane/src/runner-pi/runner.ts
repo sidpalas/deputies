@@ -290,7 +290,11 @@ export class PiRunner implements Runner {
         mcpTools: mcpSetup?.tools ?? [],
         skills: preparedSkills.skills,
         skillInvocationRuntime,
-        subagentInput,
+        emitEvent: enqueueEvent,
+        subagentInput: {
+          ...subagentInput,
+          ...(subagentInput.parentToolCallId ? { parentActivityId: subagentInput.parentToolCallId } : {}),
+        },
       });
     const { customTools } = createPiToolSet(input, this.options, repositoryState, cwd, {
       subagentDepth: 0,
@@ -668,6 +672,7 @@ type RunPiSubagentInput = {
   mcpTools: ToolDefinition[];
   skills: Skill[];
   skillInvocationRuntime: SkillInvocationRuntime;
+  emitEvent: (event: NormalizedEvent) => void;
   subagentInput: PiSubagentRunInput;
 };
 
@@ -689,13 +694,18 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
   );
   await resourceLoader.reload();
 
-  const sessionManager = createNewSessionManager(`subagent-${randomUUID()}`, cwd);
+  const activityNamespace = `subagent-${randomUUID()}`;
+  const activityId = (toolCallId: string) => `${activityNamespace}:${toolCallId}`;
+  const sessionManager = createNewSessionManager(activityNamespace, cwd);
   const runSubagent = (subagentInput: PiSubagentRunInput) =>
     runPiSubagent({
       ...params,
       parentCwd: cwd,
       subagentDepth: childDepth,
-      subagentInput,
+      subagentInput: {
+        ...subagentInput,
+        ...(subagentInput.parentToolCallId ? { parentActivityId: activityId(subagentInput.parentToolCallId) } : {}),
+      },
     });
   const { customTools } = createPiToolSet(params.input, params.options, params.repositoryState, cwd, {
     subagentDepth: childDepth,
@@ -725,6 +735,34 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
     const normalized = normalizePiEvent(event, params.input);
     if (!normalized) return;
     skillInvocationObserver.observe(normalized);
+    if (
+      params.subagentInput.parentActivityId &&
+      (normalized.type === 'tool_started' || normalized.type === 'tool_finished')
+    ) {
+      if (normalized.type === 'tool_started') {
+        params.emitEvent({
+          ...normalized,
+          payload: {
+            ...normalized.payload,
+            ...(normalized.payload.toolCallId ? { activityId: activityId(normalized.payload.toolCallId) } : {}),
+            parentActivityId: params.subagentInput.parentActivityId,
+            subagentDepth: childDepth,
+            subagentAgent: profile.name,
+          },
+        });
+      } else {
+        params.emitEvent({
+          ...normalized,
+          payload: {
+            ...normalized.payload,
+            ...(normalized.payload.toolCallId ? { activityId: activityId(normalized.payload.toolCallId) } : {}),
+            parentActivityId: params.subagentInput.parentActivityId,
+            subagentDepth: childDepth,
+            subagentAgent: profile.name,
+          },
+        });
+      }
+    }
   });
   const abortSession = () => {
     void session.abort();

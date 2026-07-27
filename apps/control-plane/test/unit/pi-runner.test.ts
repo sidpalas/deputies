@@ -894,30 +894,51 @@ describe('PiRunner', () => {
           async prompt(prompt: string) {
             prompts.push(`${index}:${prompt}`);
             if (index < 4) {
+              listener?.({
+                type: 'tool_execution_start',
+                toolName: 'subagent',
+                toolCallId: 'tool-shared',
+                args: { agent: 'explore', task: `child-${index}` },
+              });
               const toolResult = await subagentTool!.execute(
-                `tool-${index}`,
+                'tool-shared',
                 { agent: 'explore', task: `child-${index}` },
                 undefined,
                 undefined,
                 undefined,
               );
+              listener?.({
+                type: 'tool_execution_end',
+                toolName: 'subagent',
+                toolCallId: 'tool-shared',
+                isError: false,
+                result: toolResult,
+              });
               const content = toolResult.content[0];
               messages[0]!.content[0]!.text = content?.type === 'text' ? content.text : '';
               return;
             }
 
             listener?.({
+              type: 'message_update',
+              message: messages[0] as never,
+              assistantMessageEvent: { type: 'text_delta', delta: 'private child draft' } as never,
+            });
+            listener?.({
               type: 'tool_execution_start',
               toolName: 'read',
-              toolCallId: 'subagent-skill-read',
-              args: { path: '/workspace/.deputies-skills/managed/skill-review/revision-review-1/review/SKILL.md' },
+              toolCallId: 'tool-shared',
+              args: {
+                path: '/workspace/.deputies-skills/managed/skill-review/revision-review-1/review/SKILL.md',
+                apiKey: 'child-secret-value',
+              },
             });
             listener?.({
               type: 'tool_execution_end',
               toolName: 'read',
-              toolCallId: 'subagent-skill-read',
+              toolCallId: 'tool-shared',
               isError: false,
-              result: { content: [{ type: 'text', text: '# Review' }] },
+              result: { content: [{ type: 'text', text: 'child-secret-value' }] },
             });
             messages[0]!.content[0]!.text = 'leaf result';
           },
@@ -974,6 +995,141 @@ describe('PiRunner', () => {
         .filter((event) => event.type === 'skill_invoked')
         .map((event) => [event.payload.trigger, event.payload.ref]),
     ).toEqual([['user', 'skill-review']]);
+    const toolEvents = events.filter((event) => event.type === 'tool_started' || event.type === 'tool_finished');
+    expect(toolEvents).toHaveLength(10);
+    expect(toolEvents.every((event) => event.payload.toolCallId === 'tool-shared')).toBe(true);
+    expect(JSON.stringify(toolEvents.filter((event) => 'activityId' in event.payload))).toContain('child-secret-value');
+    const starts = toolEvents.filter((event) => event.type === 'tool_started');
+    let parentActivityId = 'tool-shared';
+    for (const start of starts.slice(1)) {
+      expect(start.payload.parentActivityId).toBe(parentActivityId);
+      expect(start.payload.activityId).toMatch(/^subagent-[^:]+:tool-shared$/);
+      parentActivityId = start.payload.activityId!;
+    }
+    expect(new Set(starts.slice(1).map((event) => event.payload.activityId)).size).toBe(4);
+    expect(starts.at(-1)?.payload).toEqual(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          path: '/workspace/.deputies-skills/managed/skill-review/revision-review-1/review/SKILL.md',
+          apiKey: 'child-secret-value',
+        }),
+        subagentDepth: 4,
+        subagentAgent: 'explore',
+      }),
+    );
+    expect(
+      events.some((event) => event.type === 'agent_text_delta' && event.payload.text === 'private child draft'),
+    ).toBe(false);
+  });
+
+  it('namespaces colliding tool call ids from sibling subagent sessions', async () => {
+    let createCount = 0;
+
+    piMock.createAgentSession.mockImplementation(async (options) => {
+      const index = createCount++;
+      let listener: ((event: AgentSessionEvent) => void) | undefined;
+      const messages = [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: '' }],
+          model: 'gpt-5.5',
+          stopReason: 'stop',
+        },
+      ];
+
+      return {
+        session: {
+          sessionId: `pi-sibling-session-${index}`,
+          messages,
+          async prompt() {
+            if (index === 0) {
+              const subagentTool = options.customTools.find(
+                (candidate: { name: string }) => candidate.name === 'subagent',
+              );
+              for (const parentToolCallId of ['parent-a', 'parent-b']) {
+                listener?.({
+                  type: 'tool_execution_start',
+                  toolName: 'subagent',
+                  toolCallId: parentToolCallId,
+                  args: { agent: 'explore', task: parentToolCallId },
+                });
+                const result = await subagentTool!.execute(
+                  parentToolCallId,
+                  { agent: 'explore', task: parentToolCallId },
+                  undefined,
+                  undefined,
+                  undefined,
+                );
+                listener?.({
+                  type: 'tool_execution_end',
+                  toolName: 'subagent',
+                  toolCallId: parentToolCallId,
+                  isError: false,
+                  result,
+                });
+              }
+              messages[0]!.content[0]!.text = 'siblings complete';
+              return;
+            }
+
+            listener?.({
+              type: 'tool_execution_start',
+              toolName: 'read',
+              toolCallId: 'child-call-shared',
+              args: { path: `/workspace/child-${index}.ts` },
+            });
+            listener?.({
+              type: 'tool_execution_end',
+              toolName: 'read',
+              toolCallId: 'child-call-shared',
+              isError: false,
+              result: 'not forwarded',
+            });
+            messages[0]!.content[0]!.text = `child ${index}`;
+          },
+          abort: vi.fn(),
+          dispose: vi.fn(),
+          subscribe: vi.fn((callback: (event: AgentSessionEvent) => void) => {
+            listener = callback;
+            return () => {
+              listener = undefined;
+            };
+          }),
+        },
+        extensionsResult: {},
+      };
+    });
+
+    const events: NormalizedEvent[] = [];
+    await new PiRunner({
+      model: 'openai-codex/gpt-5.5',
+      authBase64: Buffer.from('{}').toString('base64'),
+      skills: { repoScanEnabled: false, listForRun: async () => [] },
+    }).run({
+      sessionId: 'session-siblings',
+      runId: 'run-siblings',
+      messageId: 'message-siblings',
+      prompt: 'run siblings',
+      context: {},
+      sandbox: createMemorySandbox(),
+      emit: async (event) => {
+        events.push(event);
+      },
+    });
+
+    const childStarts = events.filter(
+      (event): event is NormalizedEvent<'tool_started'> =>
+        event.type === 'tool_started' && event.payload.toolCallId === 'child-call-shared',
+    );
+    const childFinishes = events.filter(
+      (event): event is NormalizedEvent<'tool_finished'> =>
+        event.type === 'tool_finished' && event.payload.toolCallId === 'child-call-shared',
+    );
+    expect(childStarts.map((event) => event.payload.parentActivityId)).toEqual(['parent-a', 'parent-b']);
+    expect(new Set(childStarts.map((event) => event.payload.activityId)).size).toBe(2);
+    expect(childFinishes.map((event) => event.payload.activityId)).toEqual(
+      childStarts.map((event) => event.payload.activityId),
+    );
   });
 
   it('registers MCP tools, shares them with subagents, and closes connections', async () => {
