@@ -1291,7 +1291,7 @@ it('keeps Enter available for newlines in mobile composer text', async () => {
   expect(submittedPrompts).toEqual([]);
 
   const sendButton = screen.getByRole('button', { name: 'Send message' });
-  expect(sendButton).toHaveClass('ml-auto');
+  expect(sendButton.parentElement).toHaveClass('ml-auto');
   expect(sendButton).not.toHaveClass('h-11', 'w-full');
   await act(async () => {
     fireEvent.touchStart(sendButton, { changedTouches: [{ clientX: 20, clientY: 20 }] });

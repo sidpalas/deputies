@@ -645,6 +645,17 @@ it('restores composer text and chips after a failed send', async () => {
   );
 });
 
+it('opens secondary composer controls from the compact message options button', () => {
+  render(<MessageComposer {...messageComposerProps(vi.fn(async () => true))} />);
+
+  expect(screen.queryByRole('dialog', { name: 'Message options' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Message options' }));
+
+  expect(screen.getByRole('dialog', { name: 'Message options' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Model' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Reasoning' })).toBeInTheDocument();
+});
+
 it('resets schedule mode and structured fields only after a successful scheduled send', async () => {
   const onSchedule = vi.fn(async (_input: unknown) => true);
   render(
@@ -655,12 +666,11 @@ it('resets schedule mode and structured fields only after a successful scheduled
     />,
   );
 
-  fireEvent.change(screen.getByLabelText('Send choice'), { target: { value: 'schedule' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Schedule send' }));
   const composer = screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
   fireEvent.change(composer, { target: { value: '/rev' } });
   fireEvent.click(screen.getByRole('option', { name: /review-change/i }));
   fireEvent.change(composer, { target: { value: 'inspect this' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Show send times' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Schedule message' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: 'Schedule message' }));
 
@@ -670,12 +680,14 @@ it('resets schedule mode and structured fields only after a successful scheduled
     skills: ['review-change'],
     skillRefs: [{ id: 'skill-1', name: 'review-change', revisionId: 'revision-2' }],
   });
-  await waitFor(() => expect(screen.getByLabelText('Send choice')).toHaveValue('now'));
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Schedule send' })).toHaveAttribute('aria-pressed', 'false'),
+  );
   expect(screen.queryByRole('group', { name: 'Schedule settings' })).not.toBeInTheDocument();
   expect(screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...')).toHaveValue('');
 });
 
-it('preserves schedule mode, valid preview, prompt, and skills after a failed scheduled send', async () => {
+it('preserves schedule mode, prompt, and skills after a failed scheduled send', async () => {
   const onSchedule = vi.fn(async (_input: unknown) => false);
   render(
     <MessageComposer
@@ -685,17 +697,16 @@ it('preserves schedule mode, valid preview, prompt, and skills after a failed sc
     />,
   );
 
-  fireEvent.change(screen.getByLabelText('Send choice'), { target: { value: 'schedule' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Schedule send' }));
   const composer = screen.getByPlaceholderText('Ask your deputy to investigate, change code, or follow up...');
   fireEvent.change(composer, { target: { value: '/rev' } });
   fireEvent.click(screen.getByRole('option', { name: /review-change/i }));
   fireEvent.change(composer, { target: { value: 'inspect this' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Show send times' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Schedule message' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: 'Schedule message' }));
 
   await waitFor(() => expect(onSchedule).toHaveBeenCalled());
-  expect(screen.getByLabelText('Send choice')).toHaveValue('schedule');
+  expect(screen.getByRole('button', { name: 'Close scheduler' })).toHaveAttribute('aria-pressed', 'true');
   expect(screen.getByRole('button', { name: 'Schedule message' })).toBeEnabled();
   expect(composer).toHaveValue('inspect this');
   expect(screen.getByRole('button', { name: 'Remove review-change skill' })).toBeInTheDocument();

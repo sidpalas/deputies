@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FocusEvent, FormEvent, TouchEvent } from 'react';
-import { SendHorizontal } from 'lucide-react';
+import { CalendarClock, SendHorizontal, SlidersHorizontal } from 'lucide-react';
 import type {
   BranchOption,
   Environment,
@@ -90,9 +90,9 @@ export function MessageComposer(props: {
   const [prompt, setPrompt] = useState('');
   const [promptResetKey, setPromptResetKey] = useState(0);
   const [branchControlsOpen, setBranchControlsOpen] = useState(false);
+  const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
   const [sendMode, setSendMode] = useState<'now' | 'schedule'>('now');
   const [schedule, setSchedule] = useState<ScheduledFollowUpSchedule | null>(null);
-  const [schedulePreviewValid, setSchedulePreviewValid] = useState(false);
   const [scheduleResetKey, setScheduleResetKey] = useState(0);
   const submitTouchRef = useRef<{ moved: boolean; x: number; y: number } | null>(null);
   const explicitEnvironment =
@@ -139,6 +139,9 @@ export function MessageComposer(props: {
 
   async function submitPrompt() {
     if (!canSubmit) return;
+    const scheduledSubmission =
+      sendMode === 'schedule' && schedule && props.onSchedule ? { schedule, submit: props.onSchedule } : null;
+    if (sendMode === 'schedule' && !scheduledSubmission) return;
     const submittedPrompt = prompt;
     const submittedSkills = skillDraft.selectedSkills;
     const prepared = skillDraft.prepareSubmission();
@@ -146,10 +149,9 @@ export function MessageComposer(props: {
     setPromptResetKey((key) => key + 1);
     setPrompt('');
     skillDraft.clearSelectedSkills();
-    const sent =
-      sendMode === 'schedule' && schedule && props.onSchedule
-        ? await props.onSchedule({ ...prepared, schedule })
-        : await props.onSubmit({ ...prepared });
+    const sent = scheduledSubmission
+      ? await scheduledSubmission.submit({ ...prepared, schedule: scheduledSubmission.schedule })
+      : await props.onSubmit({ ...prepared });
     if (!sent) {
       setPrompt(submittedPrompt);
       skillDraft.restoreSelectedSkills(submittedSkills);
@@ -157,7 +159,6 @@ export function MessageComposer(props: {
     }
     setSendMode('now');
     setSchedule(null);
-    setSchedulePreviewValid(false);
     setScheduleResetKey((key) => key + 1);
   }
 
@@ -240,33 +241,8 @@ export function MessageComposer(props: {
           disabled={props.archived || props.readOnly}
         />
         <div className="relative flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
-          {props.onSchedule && props.onSchedulePreview ? (
-            <>
-              <label className="sr-only" htmlFor="composer-send-mode">
-                Send choice
-              </label>
-              <select
-                id="composer-send-mode"
-                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                value={sendMode}
-                onChange={(event) => setSendMode(event.target.value as typeof sendMode)}
-                disabled={props.archived || props.readOnly}
-              >
-                <option value="now">Send now</option>
-                <option value="schedule">Schedule send</option>
-              </select>
-              {sendMode === 'schedule' ? (
-                <FollowUpScheduleFields
-                  key={scheduleResetKey}
-                  onChange={setSchedule}
-                  onPreview={props.onSchedulePreview}
-                  onPreviewValid={setSchedulePreviewValid}
-                />
-              ) : null}
-            </>
-          ) : null}
           <CodebasePicker
-            className="min-w-0 flex-[2_1_16rem]"
+            className="min-w-0 flex-1 md:flex-[2_1_16rem]"
             triggerClassName="h-8 text-xs"
             direction="up"
             value={codebaseValue}
@@ -282,105 +258,154 @@ export function MessageComposer(props: {
             emptyOptionLabel="Use session codebase"
             disabled={props.archived || props.readOnly}
           />
-          {branchRepository ? (
-            <BranchPicker
-              className="min-w-0 max-w-40 flex-[0.8_2_8rem]"
+          <div
+            className={cn(
+              composerOptionsOpen
+                ? 'absolute bottom-full right-2 z-30 mb-1 flex w-72 max-w-[calc(100%-1rem)] flex-col gap-2 rounded-md border border-border bg-card p-2 text-card-foreground shadow-xl'
+                : 'hidden',
+              'md:contents',
+            )}
+            role={composerOptionsOpen ? 'dialog' : undefined}
+            aria-label={composerOptionsOpen ? 'Message options' : undefined}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) setComposerOptionsOpen(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setComposerOptionsOpen(false);
+            }}
+          >
+            {branchRepository ? (
+              <BranchPicker
+                className="min-w-0 w-full md:max-w-40 md:flex-[0.8_2_8rem]"
+                triggerClassName="h-8 text-xs"
+                direction="up"
+                value={props.branch}
+                branches={props.branchOptions}
+                loading={props.branchOptionsLoading}
+                error={props.branchOptionsError}
+                onChange={props.onBranchChange}
+                disabled={props.archived || props.readOnly}
+                placeholder={props.inheritedBranch || 'Branch'}
+              />
+            ) : selectedEnvironment ? (
+              <div
+                className="w-full shrink-0 md:w-auto"
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) setBranchControlsOpen(false);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setBranchControlsOpen(false);
+                }}
+              >
+                <Button
+                  className="h-8 w-full px-2 text-xs md:w-auto"
+                  type="button"
+                  variant={branchControlsOpen ? 'default' : 'secondary'}
+                  size="sm"
+                  onClick={() => setBranchControlsOpen((open) => !open)}
+                  disabled={props.archived || props.readOnly}
+                  aria-expanded={branchControlsOpen}
+                  aria-haspopup="dialog"
+                >
+                  {branchControlLabel}
+                </Button>
+                {branchControlsOpen ? (
+                  <div
+                    className="absolute bottom-full right-2 z-30 mb-1 w-[28rem] max-w-[calc(100%-1rem)] rounded-md border border-border bg-card p-2 text-card-foreground shadow-xl"
+                    role="dialog"
+                    aria-label={`${branchControlLabel} for ${selectedEnvironment.name}`}
+                  >
+                    <EnvironmentBranchOverridesEditor
+                      compact
+                      environment={selectedEnvironment}
+                      value={props.environmentBranchOverrides}
+                      direction="down"
+                      disabled={props.archived || props.readOnly}
+                      onLoadBranches={props.onEnvironmentRepositoryBranchesLoad}
+                      onChange={props.onEnvironmentBranchOverridesChange}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <OptionPicker
+              className="min-w-0 w-full md:flex-[1_2_9rem]"
               triggerClassName="h-8 text-xs"
               direction="up"
-              value={props.branch}
-              branches={props.branchOptions}
-              loading={props.branchOptionsLoading}
-              error={props.branchOptionsError}
-              onChange={props.onBranchChange}
-              disabled={props.archived || props.readOnly}
-              placeholder={props.inheritedBranch || 'Branch'}
+              label="Model"
+              value={props.model}
+              options={props.modelChoices}
+              emptyLabel={props.inheritedModel ? formatModelLabel(props.inheritedModel) : 'Default model'}
+              onChange={props.onModelChange}
+              disabled={props.archived || props.readOnly || props.modelChoices.length <= 1}
             />
-          ) : selectedEnvironment ? (
-            <div
-              className="shrink-0"
-              onBlur={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget)) setBranchControlsOpen(false);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') setBranchControlsOpen(false);
-              }}
-            >
-              <Button
-                className="h-8 px-2 text-xs"
-                type="button"
-                variant={branchControlsOpen ? 'default' : 'secondary'}
-                size="sm"
-                onClick={() => setBranchControlsOpen((open) => !open)}
-                disabled={props.archived || props.readOnly}
-                aria-expanded={branchControlsOpen}
-                aria-haspopup="dialog"
-              >
-                {branchControlLabel}
-              </Button>
-              {branchControlsOpen ? (
-                <div
-                  className="absolute bottom-full right-2 z-30 mb-1 w-[28rem] max-w-[calc(100%-1rem)] rounded-md border border-border bg-card p-2 text-card-foreground shadow-xl"
-                  role="dialog"
-                  aria-label={`${branchControlLabel} for ${selectedEnvironment.name}`}
-                >
-                  <EnvironmentBranchOverridesEditor
-                    compact
-                    environment={selectedEnvironment}
-                    value={props.environmentBranchOverrides}
-                    direction="down"
-                    disabled={props.archived || props.readOnly}
-                    onLoadBranches={props.onEnvironmentRepositoryBranchesLoad}
-                    onChange={props.onEnvironmentBranchOverridesChange}
-                  />
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          <OptionPicker
-            className="min-w-0 flex-[1_2_9rem]"
-            triggerClassName="h-8 text-xs"
-            direction="up"
-            label="Model"
-            value={props.model}
-            options={props.modelChoices}
-            emptyLabel={props.inheritedModel ? formatModelLabel(props.inheritedModel) : 'Default model'}
-            onChange={props.onModelChange}
-            disabled={props.archived || props.readOnly || props.modelChoices.length <= 1}
-          />
-          <OptionPicker
-            className="min-w-0 flex-[0.8_2_8rem]"
-            triggerClassName="h-8 text-xs"
-            direction="up"
-            label="Reasoning"
-            value={props.reasoningLevel}
-            options={REASONING_LEVEL_OPTIONS}
-            emptyLabel={
-              props.inheritedReasoningLevel
-                ? reasoningLevelLabel(props.inheritedReasoningLevel)
-                : defaultReasoningLevelLabel(props.defaultReasoningLevel)
-            }
-            allowEmpty={Boolean(props.reasoningLevel)}
-            onChange={(value) => props.onReasoningLevelChange(value as ReasoningLevel | '')}
-            disabled={props.archived || props.readOnly}
-          />
+            <OptionPicker
+              className="min-w-0 w-full md:flex-[0.8_2_8rem]"
+              triggerClassName="h-8 text-xs"
+              direction="up"
+              label="Reasoning"
+              value={props.reasoningLevel}
+              options={REASONING_LEVEL_OPTIONS}
+              emptyLabel={
+                props.inheritedReasoningLevel
+                  ? reasoningLevelLabel(props.inheritedReasoningLevel)
+                  : defaultReasoningLevelLabel(props.defaultReasoningLevel)
+              }
+              allowEmpty={Boolean(props.reasoningLevel)}
+              onChange={(value) => props.onReasoningLevelChange(value as ReasoningLevel | '')}
+              disabled={props.archived || props.readOnly}
+            />
+          </div>
           {props.modelUnavailableReason ? (
             <p className="basis-full rounded-md border border-warning/50 bg-warning/10 px-2 py-1.5 text-warning-foreground dark:text-warning">
               {props.modelUnavailableReason}
             </p>
           ) : null}
-          <Button
-            className="ml-auto h-8 w-8 shrink-0 p-0"
-            type="submit"
-            disabled={!canSubmit || (sendMode === 'schedule' && (!schedule || !schedulePreviewValid))}
-            aria-label={sendMode === 'schedule' ? 'Schedule message' : 'Send message'}
-            title={sendMode === 'schedule' ? 'Schedule message' : 'Send message'}
-            onTouchStart={handleSubmitTouchStart}
-            onTouchMove={handleSubmitTouchMove}
-            onTouchEnd={handleSubmitTouchEnd}
-            onTouchCancel={handleSubmitTouchCancel}
-          >
-            <SendHorizontal className="h-4 w-4" aria-hidden="true" />
-          </Button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <Button
+              className="h-8 w-8 shrink-0 p-0 md:hidden"
+              type="button"
+              variant={composerOptionsOpen ? 'secondary' : 'ghost'}
+              disabled={props.archived || props.readOnly}
+              aria-label={composerOptionsOpen ? 'Close message options' : 'Message options'}
+              aria-expanded={composerOptionsOpen}
+              aria-haspopup="dialog"
+              title={composerOptionsOpen ? 'Close message options' : 'Message options'}
+              onClick={() => setComposerOptionsOpen((open) => !open)}
+            >
+              <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            {props.onSchedule && props.onSchedulePreview ? (
+              <Button
+                className="h-8 w-8 shrink-0 p-0"
+                type="button"
+                variant={sendMode === 'schedule' ? 'secondary' : 'ghost'}
+                disabled={props.archived || props.readOnly}
+                aria-label={sendMode === 'schedule' ? 'Close scheduler' : 'Schedule send'}
+                aria-pressed={sendMode === 'schedule'}
+                title={sendMode === 'schedule' ? 'Close scheduler' : 'Schedule send'}
+                onClick={() => setSendMode((mode) => (mode === 'schedule' ? 'now' : 'schedule'))}
+              >
+                <CalendarClock className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            ) : null}
+            <Button
+              className="h-8 w-8 shrink-0 p-0"
+              type="submit"
+              disabled={!canSubmit || (sendMode === 'schedule' && !schedule)}
+              aria-label={sendMode === 'schedule' ? 'Schedule message' : 'Send message'}
+              title={sendMode === 'schedule' ? 'Schedule message' : 'Send message'}
+              onTouchStart={handleSubmitTouchStart}
+              onTouchMove={handleSubmitTouchMove}
+              onTouchEnd={handleSubmitTouchEnd}
+              onTouchCancel={handleSubmitTouchCancel}
+            >
+              <SendHorizontal className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </div>
+          {sendMode === 'schedule' && props.onSchedulePreview ? (
+            <FollowUpScheduleFields key={scheduleResetKey} onChange={setSchedule} onPreview={props.onSchedulePreview} />
+          ) : null}
         </div>
       </Card>
     </form>
