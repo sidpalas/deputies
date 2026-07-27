@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.24.0](https://github.com/sidpalas/deputies/compare/v0.23.0...v0.24.0) (2026-07-27)
+
+
+### Build System
+
+* add canonical ship verification ([d5b56df](https://github.com/sidpalas/deputies/commit/d5b56df351794424c3a25303740dbc743471ee5b))
+* add low-memory verification tasks ([4ccc200](https://github.com/sidpalas/deputies/commit/4ccc2000689ddc1044d3096a5944b64ad8ea2171))
+
+
+### Features
+
+* add private sessions ([370c6af](https://github.com/sidpalas/deputies/commit/370c6af55aa77f9dea166c65583931a27ccab8b2))
+* add scheduled follow-ups ([020400c](https://github.com/sidpalas/deputies/commit/020400caad1210d2079d0220cd8f1f1dcb5d4360))
+* compact scheduled send controls ([589dcb7](https://github.com/sidpalas/deputies/commit/589dcb7e51a415556fa672bc0fc7e9c783ccd853))
+* show nested subagent activity ([69698f3](https://github.com/sidpalas/deputies/commit/69698f397550c0bc22315e4d05b4d3344cb858c4))
+* simplify agent notepad access ([6e4a4eb](https://github.com/sidpalas/deputies/commit/6e4a4ebf5157c1a258311494b69708427b3e8ac5))
+
+
+### Bug Fixes
+
+* contain mobile session messages ([7d8ccdb](https://github.com/sidpalas/deputies/commit/7d8ccdbe299965a4b6d40e9425b70ec15454a8ef))
+* harden deputy coordination and setup validation ([56c410b](https://github.com/sidpalas/deputies/commit/56c410b6423d130ffbc8ba66ce87044c0b52f73c))
+* normalize encoded follow-up schedules ([dc2c36e](https://github.com/sidpalas/deputies/commit/dc2c36eecdcbfff6a7209c7d051fbb11aa859e1c))
+* release parent lease before waking deputies ([10ddb59](https://github.com/sidpalas/deputies/commit/10ddb59bf3848362c3cccd763c1bdef8da93674a))
+* repair static demo navigation ([68117df](https://github.com/sidpalas/deputies/commit/68117dfb8cded988715bc3e3f5defe5f2cdbe7d0))
+
+
+### Chores
+
+* increase eslint heap limit ([6cfd74e](https://github.com/sidpalas/deputies/commit/6cfd74e2fafbbe4d98c8016681a72e8eb495f5f8))
+* restore production provider lock ([82c9308](https://github.com/sidpalas/deputies/commit/82c9308f00aa74e58aa3e4287cb7468cd1481720))
+
 ## [0.23.0](https://github.com/sidpalas/deputies/compare/v0.22.0...v0.23.0) (2026-07-24)
 
 
