@@ -19,7 +19,7 @@ Implemented so far:
 - DB-backed generic webhook sources with bearer auth, prompt prefixes, thread reuse, and delivery dedupe.
 - Architecture fitness tests for core import boundaries.
 - Postgres-backed Pi `SessionStore` and `runner-pi` adapter seam.
-- Daytona SDK dependency and sandbox provider adapter.
+- Sandbox provider adapters for Daytona, Superserve, Docker, Tensorlake, Kubernetes Agent Sandbox, and AWS Lambda MicroVM.
 - Real Pi runner wiring behind `RUNNER=pi`.
 - Sandbox lifecycle persistence with active sandbox reconnect/reuse.
 - Opt-in real Daytona/Pi built-artifact UAT scaffold.
@@ -30,7 +30,7 @@ Implemented so far:
 - Postgres integration test path.
 - App-level Postgres worker integration test.
 - Daytona sandbox idle cleanup with stop-before-destroy retention policy and advisory-lock reaper coordination.
-- Vite React operator UI with provider-aware session-cookie login, session list/search, queued message editing/cancelling, active-run cancellation, archive/restore, SSE streaming, artifact panels, callback status, and per-run diagnostics derived from replayed/streamed events.
+- Vite React operator UI with provider-aware session-cookie login, session search and filtering, nested deputy activity, queued-message controls and steering, active-run cancellation, archive/restore, SSE streaming, artifacts, callback status, environments, skills, snippets, notepads, private sessions, scheduled follow-ups, agent profiles, and per-run diagnostics derived from replayed/streamed events.
 - GitHub App runtime access for allowlisted repositories, including real GitHub token minting, Pi-runner repository refresh, and opt-in real GitHub + Daytona clone UAT coverage.
 - GitHub webhook ingress for issue, PR, PR review comment, and PR review events with signature verification, delivery dedupe, repository/user/repository-owner allowlists, required trigger-phrase gating when webhooks are enabled, session mapping, bounded context fetching, received reactions, and completion comments through the callback dispatcher.
 - Agent runtime GitHub repository tooling for repository selection/preparation, authenticated `gh`, and authenticated guarded `git` operations inside prepared sandbox repositories.
@@ -40,7 +40,7 @@ Still open from the early phases:
 
 - Public API response schemas are implemented in `src/app/response-schemas.ts`; event payload schemas remain open.
 
-The next implementation phase should focus on operational polish and the remaining GitHub/artifact integration gaps: collaborator permission checks, label-based triggers, provider-owned branch/PR helpers, artifact retention cleanup, richer UI observability for sandbox cleanup, sandbox cancellation conformance coverage, release/migration commands, Railway/ECS/Kubernetes guidance, and event payload schemas.
+Near-term work should focus on operational polish and remaining integration/runtime gaps: collaborator permission checks, label-based triggers, broader PR-resource recording, artifact retention cleanup, richer sandbox cleanup observability, provider conformance coverage, event payload schemas, and release/migration runbooks.
 
 ## Phase 0: Repository And Agent Context
 
@@ -255,7 +255,7 @@ Deliverables:
 
 - API route to list callback deliveries for a session or message.
 - API route to manually replay failed callback deliveries.
-- Operator UI context-panel section for callback status, attempts, last error, and next retry time.
+- Operator UI Session Details section for callback status, attempts, last error, and next retry time.
 - Tests for callback visibility, retry state, and manual replay behavior.
 
 Acceptance criteria:
@@ -264,7 +264,7 @@ Acceptance criteria:
 - Operators can replay a failed callback without re-running the agent task.
 - Callback observability works for all callback target types through the generic callback core.
 
-Status: implemented for the current callback core. Session-scoped API routes list callback deliveries and requeue failed deliveries for replay. Manual replay preserves delivery history while extending the attempt budget for one more dispatch. The operator UI context panel shows callback status, attempts, retry timing, last error, and a replay action for failed deliveries.
+Status: implemented for the current callback core. Session-scoped API routes list callback deliveries and requeue failed deliveries for replay. Manual replay preserves delivery history while extending the attempt budget for one more dispatch. The operator UI Session Details panel shows callback status, attempts, retry timing, last error, and a replay action for failed deliveries.
 
 ## Phase 8.6: GitHub App Runtime Access
 

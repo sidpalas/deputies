@@ -63,7 +63,7 @@ It is simple enough to get up and running in an hour, but provides the right pri
 
 ### See What a Deputies Session Looks Like
 
-Browse a read-only snapshot of real agent work: the original request, progress updates, diagnostics, artifacts, callbacks, and session context that Deputies keeps together while a background agent runs.
+Browse a read-only, curated example of agent work: the original request, progress updates, diagnostics, artifacts, callbacks, and session context that Deputies keeps together while a background agent runs.
 
 <div class="static-demo-breakout">
   <div class="static-demo-frame">
@@ -110,12 +110,12 @@ Because of that, Deputies can become infrastructure that teams adapt to their en
 
 ### Deployment Options
 
-| Control plane deployment                                                | Agent sandbox provider                                         | Best for                                                                               |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [Railway deploy template](https://railway.com/deploy/deputies-monolith) | Daytona (more options coming soon!)                            | Easy cloud deployment without managing all the infrastructure yourself.                |
-| Docker Compose                                                          | Docker                                                         | A single big server or VPS where you want Deputies to just work.                       |
-| Kubernetes Helm chart                                                   | [Kubernetes Agent Sandbox](https://agent-sandbox.sigs.k8s.io/) | Existing Kubernetes infrastructure where you want scalability and operational control. |
-| Custom                                                                  | Custom                                                         | Anywhere that can run containers (Caddy + Node.js server) and Postgres.                |
+| Control plane deployment                                                | Agent sandbox provider                                                              | Best for                                                                               |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [Railway deploy template](https://railway.com/deploy/deputies-monolith) | Configurable (Daytona/Tensorlake/Superserve/etc.)                                   | Easy cloud deployment without managing all the infrastructure yourself.                |
+| Docker Compose                                                          | Docker or a hosted sandbox provider                                                 | A single big server or VPS where you want Deputies to just work.                       |
+| Kubernetes Helm chart                                                   | [Kubernetes Agent Sandbox](https://agent-sandbox.sigs.k8s.io/) or a hosted provider | Existing Kubernetes infrastructure where you want scalability and operational control. |
+| Custom                                                                  | Custom                                                                              | Anywhere that can run containers (Caddy + Node.js server) and Postgres.                |
 
 ## Who Is Deputies For?
 

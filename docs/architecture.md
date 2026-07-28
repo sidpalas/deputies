@@ -317,7 +317,7 @@ docs/
 | `app`          | Process bootstrap, run mode, graceful shutdown                                       | Business logic                               |
 | `sessions`     | Durable task workspace lifecycle and status                                          | SQL details, runner calls                    |
 | `messages`     | Prompt/follow-up queue semantics                                                     | Running prompts                              |
-| `skills`       | Managed skill validation, authorization, lifecycle, sharing, and run-time resolution | Runner-specific loading and materialization  |
+| `skills`       | Managed skill validation, authorization, lifecycle, scope, and run-time resolution   | Runner-specific loading and materialization  |
 | `worker`       | Claiming runnable work and coordinating execution                                    | HTTP concerns                                |
 | `runner-pi`    | Pi initialization, tool wiring, and event normalization                              | Session persistence policy                   |
 | `sandbox`      | Provider interface, lifecycle, health, cleanup                                       | Prompt construction                          |
@@ -361,7 +361,7 @@ The HTTP transport uses Hono on Node via `@hono/node-server`. This keeps the API
 
 Product session routes support `API_AUTH_MODE=none|bearer|session`; the mode is required so deployments fail to start instead of silently running open. `/health` remains public and reports the active mode and session provider. Bearer mode uses `API_BEARER_TOKEN` for machine/developer access. Session mode uses an opaque HTTP-only `dev_deputies_session` cookie backed by the configured app data store (`auth_sessions` in Postgres for durable deployments); the browser never receives user tokens or signed user payloads. `AUTH_PROVIDER=static` enables `POST /auth/login` with local static credentials, while `AUTH_PROVIDER=github` uses GitHub App user authorization through `GET /auth/oauth/github/start` and `GET /auth/oauth/github/callback`. GitHub App login uses `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, and `GITHUB_OAUTH_CALLBACK_URL`; runtime repository access still uses `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` to mint installation tokens. Generic webhooks keep their own per-source bearer auth so external systems can be authorized independently from product API clients.
 
-Current session-cookie auth is an API access gate only. Product sessions remain multiplayer/shared by default: authenticated users can list and open the same global session set, and sessions are not currently owned by or filtered to the authenticated user.
+Session-cookie auth enforces tenant roles and resource visibility. Authenticated users can list and open tenant-wide sessions; owner-only private sessions are visible only to their owner.
 
 Session-scoped product state is exposed through the product API. Artifact reads use `GET /sessions/:sessionId/artifacts` and are protected by the same product session auth as session, message, and event routes.
 
@@ -517,7 +517,7 @@ interface SandboxProvider {
 Provider choices should be config-driven:
 
 ```txt
-SANDBOX_PROVIDER=fake|unsafe-local|docker|daytona|tensorlake|k8s-agent-sandbox|lambda-microvm
+SANDBOX_PROVIDER=fake|unsafe-local|docker|daytona|tensorlake|superserve|k8s-agent-sandbox|lambda-microvm
 ```
 
 MVP should include `fake` for tests and one real provider.

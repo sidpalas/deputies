@@ -55,7 +55,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
         <article>
           <span>2</span>
           <h2>Agent runs</h2>
-          <p>Deputies manages the sandbox, work queue, logs, services, and artifacts.</p>
+          <p>Deputies manages the sandbox, work queue, diagnostics, services, and artifacts.</p>
         </article>
         <article>
           <span>3</span>
@@ -98,8 +98,8 @@ import BaseLayout from '../layouts/BaseLayout.astro';
       <p class="eyebrow">Read-only snapshot</p>
       <h3>Preview example sessions without logging in.</h3>
       <p>
-        This embedded static demo is a read-only snapshot of prior agent work. It is separate from the live public demo
-        above.
+        This embedded static demo is a read-only, curated example of Deputies sessions and product features. It is
+        separate from the live public demo above.
       </p>
     </div>
     <div class="static-demo-breakout">
@@ -125,12 +125,17 @@ import BaseLayout from '../layouts/BaseLayout.astro';
           <li>Start a background engineering session from the web UI, Slack, GitHub, or custom webhooks</li>
           <li>Assign follow-ups and queue additional work</li>
           <li>Manage tenant-wide viewer, member, and admin roles</li>
+          <li>Reuse versioned environments, agent profiles, skills, personal prompt snippets, and durable notepads</li>
+          <li>Steer active work, inspect nested subagents, and schedule one-time or recurring follow-ups</li>
+          <li>Star sessions and create owner-only private sessions when enabled</li>
           <li>Watch the agent's work trail as it runs</li>
-          <li>Persist and review diagnostics, generated files, reports, logs, and callbacks</li>
+          <li>Persist and review session diagnostics, published artifacts and reports, and callback history</li>
           <li>Open app previews from sandbox services</li>
-          <li>Inspect or edit output in a browser-based IDE and diff viewer</li>
+          <li>Open configured sandbox workspace tools for browser-based editing and review</li>
           <li>Create PRs from completed work</li>
-          <li>Run sandboxes on Daytona, Docker, or Kubernetes Agent Sandbox</li>
+          <li>
+            Run sandboxes on Daytona, Superserve, Docker, Tensorlake, Kubernetes Agent Sandbox, or AWS Lambda MicroVM
+          </li>
           <li>Use multiple model providers, including OpenAI Codex with a ChatGPT Pro subscription</li>
           <li>Deploy with Railway, Docker Compose, or Kubernetes Helm chart docs</li>
         </ul>
@@ -138,8 +143,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
       <article>
         <p class="eyebrow">Coming soon</p>
         <ul>
-          <li>Recurring and proactive tasks</li>
-          <li>Reusable agent prompts for common workflows</li>
+          <li>More proactive triggers and automation workflows</li>
           <li>Snapshot and restore workflows for moving work between remote and local sandboxes</li>
           <li>Fine-grained repository and agent access controls</li>
           <li>Traces for deeper run inspection</li>
@@ -165,14 +169,15 @@ import BaseLayout from '../layouts/BaseLayout.astro';
       <figure class="architecture-card">
         <figcaption>
           <strong>Simple Mode</strong>
-          <span>Get started with one service, the core web workflow, Postgres, and a sandbox provider.</span>
+          <span>Use a web/proxy entrypoint with one combined API/worker process, Postgres, and a sandbox provider.</span
+          >
         </figcaption>
         <img src="/images/simple-mode.svg" alt="Simple Mode Deputies architecture" />
       </figure>
       <figure class="architecture-card">
         <figcaption>
           <strong>Integrated Mode</strong>
-          <span>Keep the monolith shape while enabling auxiliary services like storage, auth, and callbacks.</span>
+          <span>Separate API and worker processes while keeping the core services in one application boundary.</span>
         </figcaption>
         <img src="/images/integrated-mode.svg" alt="Integrated Mode Deputies architecture" />
       </figure>
@@ -196,7 +201,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
       <p>
         A <a href="https://background-agents.com/" target="_blank" rel="noopener noreferrer">background agent</a> is an AI
         coding agent that runs asynchronously instead of sitting inside your terminal. You hand it a task, it works in its
-        own environment, and you come back to review progress, artifacts, logs, callbacks, and the final result.
+        own environment, and you come back to review progress, artifacts, diagnostics, callbacks, and the final result.
       </p>
       <p>
         Deputies is built for teams that want to hand off real engineering work to agents while keeping visibility,

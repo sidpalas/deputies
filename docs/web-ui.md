@@ -16,7 +16,7 @@ mise run //apps/web:dev
 
 For quick UI experiments that do not need durable state, you can instead run the API with `APP_DATA_STORE=memory`.
 
-The web app uses same-origin API requests by default. In Vite dev mode, `apps/web/vite.config.ts` proxies `/health`, `/auth`, `/sessions`, `/skills`, `/events`, `/repositories`, `/models`, and `/webhooks` to the API at `VITE_API_PROXY_TARGET` or `http://localhost:3583`.
+The web app uses same-origin API requests by default. In Vite dev mode, `apps/web/vite.config.ts` proxies all browser-facing API routes—including auth, agent profiles, automations, environments, sessions and events, repositories, models, notepads, setup, skills, snippets, telemetry, users, and webhooks—to `VITE_API_PROXY_TARGET` or `http://localhost:3583`.
 
 ```sh
 VITE_API_PROXY_TARGET=http://localhost:3583 mise run //apps/web:dev
@@ -109,7 +109,7 @@ The UI supports all product API auth modes exposed by `/health`:
 
 `API_AUTH_MODE` is required. Browser-facing deployments use `session`. Reserve `bearer` for development tooling or programmatic/internal API access, and use `none` only for intentional local or test no-auth runs.
 
-Session-cookie auth enables tenant-wide role checks for browser-facing product routes. Viewers can read all resources, members manage ordinary resources, and admins additionally manage users and setup configuration. See [Tenant Access](./tenant-access.md).
+Session-cookie auth enables tenant-wide role checks for browser-facing product routes. Viewers can read tenant-wide resources and manage their own personal resources; members can also manage ordinary tenant resources and their own private sessions; admins additionally manage users and setup configuration. See [Tenant Access](./tenant-access.md).
 
 Local static session-auth example:
 
@@ -165,20 +165,30 @@ The SSE client uses `fetch()` streaming instead of native `EventSource` because 
 - Archive and restore sessions. Archived sessions are read-only until restored.
 - Manage tenant users and roles as an admin; the final admin cannot be demoted or removed.
 - Manage environments and inspect immutable repository-configuration revisions.
+- Choose built-in agent profiles or manage organization profiles, including immutable instruction revisions, model/reasoning defaults, invocation compatibility, and the tenant default profile.
 - Manage tenant-wide skills as a member or admin, or private personal skills as their owner, including immutable definition revisions and archive/restore actions.
 - Attach available skills to a message as structured invocation chips and inspect the skills loaded for each run.
+- Create and manage personal prompt snippets and expand them from the composer with `//`.
+- Use durable Session Notepads and associated Explicit Notepads from Session Details.
+- Create, edit, cancel, and inspect one-time or recurring timezone-aware scheduled follow-ups for an existing session.
+- Mark a pending follow-up as steering so it is prioritized for the active run when steering is enabled.
+- Inspect nested deputy sessions and nested subagent activity, and group starred sessions in the sidebar.
 - Replay and stream session events internally, rendering assistant text in the transcript and non-text run/message events as collapsible diagnostics.
-- List session artifacts in the context panel.
+- List session artifacts in Session Details.
 - Render run-created image and text artifacts inline with the relevant transcript group when they are safe to preview.
 - Open stored image artifacts through authenticated download URLs, skip automatic loading for large images, and lazy-load text previews from the artifact preview API.
 - Download stored artifacts and open external-link artifacts.
-- Show HTTP, Slack, and GitHub completion callback delivery status in the context panel and manually replay failed callbacks.
+- Show HTTP, Slack, and GitHub completion callback delivery status in Session Details and manually replay failed callbacks.
 
 ## Environments
 
 Open `Environments` to manage reusable multi-repository codebases. Existing environments show a compact revision selector at the top of the editor. The selector is newest-first, marks the current and historical entries, and uses the bounded searchable picker for long histories. Selecting a historical revision changes only the displayed repository configuration: name, owner, sharing, and lifecycle remain visibly current. The whole editor becomes read-only and a warning describes that boundary until the current revision is selected again.
 
 Environment deep links use `?environment=<environment-id>&revision=<revision-id>`. The revision is part of application navigation state, so initial loads and browser Back/Forward restore it. Changing revisions or environments uses the same unsaved-change guard as other editor navigation, and selecting another environment clears the prior revision selection. An unavailable revision falls back visibly to the current repository configuration.
+
+## Agent profiles
+
+Open `Agents` to choose built-in profiles or manage organization profiles. Managed profiles contain a name, description, instructions, default model and reasoning level, and supported `agent` and `subagent` invocation modes. Instruction changes publish immutable revisions. Admins can select the tenant default; if that profile becomes unavailable, Deputies falls back to an available built-in profile. Built-in identity and instructions are code-defined, while admins can configure whether each built-in is enabled and its model/reasoning defaults.
 
 ## Skills
 

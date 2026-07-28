@@ -21,7 +21,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Surface sandbox cleanup events and failures more clearly.
 - Expand callback delivery UI with filtering and clearer retry/failure history.
 - Bulk cleanup and retention workflows for archived sessions.
-- Broader Playwright smoke tests for desktop/mobile flows beyond the existing responsive context-panel coverage.
+- Broader Playwright smoke tests for desktop/mobile flows beyond the existing responsive Session Details coverage.
 
 ## Agent Runtime
 
@@ -29,7 +29,7 @@ This is a living backlog for product, integration, runtime, and operations work.
 - Agent authentication to external services: instance-level remote MCP/Executor support is implemented through `MCP_SERVERS`; remaining work is per-user configuration, CLI credential policy, API-token lifecycle, and short-lived provider tokens.
 - Credential scoping and injection policy for tools, commands, per-user MCP servers, and sandbox environments.
 - Sandbox credential broker for GitHub repository operations: keep GitHub App installation tokens outside the sandbox trust domain, route `git` smart-HTTP and `gh` operations through a control-plane or sandbox-bridge proxy, and enforce push/PR policy server-side with opaque per-session sandbox credentials. Treat this as the gate for safely preparing untrusted PR branches or forks; until then repository setup assumes trusted, allowlisted repositories.
-- Named agent presets that bundle versioned agent instructions with model/reasoning defaults, managed skills, environment/runtime defaults, and scoped tool or MCP policy. Keep the preset separate from stored prompt templates: a preset defines how the agent works and may reference a default prompt, while the rendered prompt remains user-visible session input.
+- Extend shipped agent profiles with managed-skill bundles, environment/runtime defaults, scoped tool or MCP policy, and optional default prompt references. Keep profiles separate from stored prompt templates: a profile defines how the agent works, while rendered prompt text remains user-visible session input.
 - Prompt templates and snapshot tests for Slack/GitHub/Linear inputs.
 - Better repo resolution from Slack/GitHub/Linear context.
 - Setup/install hook observability beyond `repository_ready`.
@@ -46,9 +46,8 @@ This is a living backlog for product, integration, runtime, and operations work.
 ## Automations
 
 - Automatic stale session archival when associated GitHub PRs are closed; direct-to-main workflows can already archive their current or child sessions through the `deputies` control tool.
-- Scheduled follow-up prompts for an existing session and integration-source-aware scheduled callbacks, beyond the current automation-per-invocation session creation.
+- Integration-source-aware callbacks and additional notification surfaces for the shipped one-time and recurring scheduled follow-ups feature.
 - Timezone-aware schedules and failure backoff for the existing UTC cron automations.
-- One-off delayed tasks and reminders.
 - Automation definition and invocation changes in the product-wide audit trail; ownership, invocation history, and next-run visibility already exist.
 - Integration-triggered automations such as daily Slack summaries, weekly repository health checks, and scheduled GitHub issue/PR sweeps.
 - Guardrails beyond the existing no-overlap default: max frequency, configurable concurrency, allowed repositories/sources, and external callback behavior.

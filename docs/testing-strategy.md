@@ -78,7 +78,7 @@ Current local policy:
 - `mise run //apps/control-plane:test:load` runs a configurable Postgres-backed control-plane load profile and requires `TEST_DATABASE_URL`.
 - `mise run //apps/control-plane:test:uat` runs built-artifact UAT tests from `apps/control-plane/test/uat` and requires `TEST_DATABASE_URL` plus a prior `mise run //apps/control-plane:build`.
 - `mise run //apps/web:test` runs the Vite/jsdom operator UI regression tests.
-- `mise run //apps/web:e2e` runs Playwright browser tests such as responsive context-panel coverage.
+- `mise run //apps/web:e2e` runs Playwright browser tests such as responsive Session Details coverage.
 - `mise run //deploy/docker-compose:smoke:full-stack` is an opt-in Docker smoke that builds the local Postgres, SeaweedFS, built control-plane, and built web/Caddy stack, then drives Playwright through Caddy. It verifies deployed-style API proxying for browser routes such as `/repositories` and `/models` plus basic session creation against Postgres.
 - `pnpm check` and `mise run //:check` run formatting, package typechecks, and package unit tests; they do not run Playwright E2E tests.
 - Real local Pi UAT is opt-in: set `RUN_REAL_LOCAL_PI_UAT=true`, `API_AUTH_MODE=none`, `RUNNER_MODEL_DEFAULT`, and the model provider credentials required by that model before running `pnpm --dir apps/control-plane exec vitest run --config vitest.uat.config.ts test/uat/real-local-pi.test.ts`.

@@ -4,17 +4,18 @@
 
 The system must support multiple sandbox providers without changing session, message, worker, integration, or runner code. Provider-specific behavior belongs behind a stable sandbox provider interface plus capability flags.
 
-Initial providers may include:
+Current implemented providers are:
 
 - `fake`: deterministic tests.
 - `unsafe-local`: local development with host subprocess execution in a temp workspace. This is convenient for getting started but is not a security sandbox. Commands inherit a minimal environment and discover executables through an allowlisted `.deputies-bin` path; configure `LOCAL_SANDBOX_ALLOWED_COMMANDS` to replace the built-in development allowlist.
-- `docker`: planned Docker Engine backed sandboxes. This can use a local or remote Docker daemon depending on deployment configuration.
+- `docker`: Docker Engine-backed sandboxes using a local or remote Docker daemon, depending on deployment configuration.
 - `daytona`: hosted persistent development sandboxes.
 - `tensorlake`: hosted MicroVM sandboxes with direct exec, file operations, suspend/resume, snapshots, and exposed service ports.
 - `superserve`: hosted Firecracker MicroVM sandboxes with direct exec/files, pause/resume, snapshots, and public port URLs routed through the authenticated Deputies bridge.
 - `lambda-microvm`: AWS Lambda MicroVM sandboxes launched from a prebuilt MicroVM image through the AWS Lambda MicroVM APIs.
-- `kubernetes`: pods/jobs inside a cluster.
-- `modal` or others later, if desired.
+- `k8s-agent-sandbox`: Kubernetes Agent Sandbox resources inside a cluster.
+
+Additional providers such as Modal may be added later.
 
 Some sandbox providers create sandboxes from OCI/container images without supporting nested Docker or Docker Compose inside the sandbox. For those providers, Postgres-backed tests should start Postgres directly in the sandbox. The repo-owned Daytona image and scripts in `deploy/sandboxes/daytona/` install Postgres directly and expose `./deploy/sandboxes/daytona/start-postgres.sh` for this path.
 
@@ -564,7 +565,7 @@ Current implementation:
 - Follow-up messages reconnect to the latest active sandbox for the session/provider when health is ready. Stopped sandboxes are restarted before reconnect so filesystem state can be reused. Unhealthy or missing sandboxes are marked unhealthy and replaced.
 - `apps/control-plane/test/uat/real-daytona-pi.test.ts` provides an opt-in built-artifact UAT path for `RUNNER=pi` plus `SANDBOX_PROVIDER=daytona`; it is skipped unless `RUN_REAL_DAYTONA_PI_UAT=true` and required credentials are present.
 
-### Kubernetes Provider
+### Kubernetes Agent Sandbox Provider
 
 Purpose:
 
@@ -572,11 +573,11 @@ Purpose:
 
 Behavior:
 
-- Creates Pod or Job per session.
-- Uses PVC for persistent workspace if needed.
-- Executes commands via Kubernetes exec API.
-- Health checks pod phase and optional exec probe.
-- Destroy deletes pod/job and optional PVC depending on retention policy.
+- Creates an `agents.x-k8s.io/v1alpha1` `Sandbox` resource per product sandbox.
+- Uses a PVC template for the persistent workspace.
+- Stops and starts a sandbox by changing the Sandbox replica count.
+- Uses the authenticated Deputies bridge for exec, filesystem operations, health checks, and service previews.
+- Destroy deletes the Sandbox resource and its managed workspace resources.
 
 ## Bridge Pattern
 
@@ -598,7 +599,7 @@ Docker should use the bridge pattern from the first implementation rather than u
 
 ## Planned Conformance Tests
 
-Every provider should eventually pass the same conformance suite. The current code has focused unit coverage for fake, local, and Daytona behavior, but a reusable provider conformance suite is still planned.
+Every provider should eventually pass the same conformance suite. Focused unit coverage exists for every current provider, but a reusable cross-provider conformance suite is still planned.
 
 Required tests:
 
@@ -674,7 +675,7 @@ Rules:
 
 ## MVP Recommendation
 
-Current implemented providers are `fake`, `unsafe-local`, `docker`, `daytona`, `tensorlake`, `k8s-agent-sandbox`, and `lambda-microvm`. Docker is named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
+Current implemented providers are listed at the start of this document. Docker is named for the Docker Engine API rather than local-only operation, because the same provider can target a local or remote Docker daemon.
 
 Docker MVP order:
 

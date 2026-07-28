@@ -11,7 +11,7 @@ A production-like deployment usually includes:
 - One or more worker processes, either combined with the API or split out.
 - Postgres for durable product state and runner state.
 - Optional S3-compatible object storage for artifact blobs.
-- A sandbox provider for real agent work: Daytona, Docker, Tensorlake, Kubernetes Agent Sandbox, or AWS Lambda MicroVM.
+- A sandbox provider for real agent work: Daytona, Superserve, Docker, Tensorlake, Kubernetes Agent Sandbox, or AWS Lambda MicroVM.
 
 The diagrams below show the three intended deployment modes, from the smallest useful setup to a horizontally scalable split topology.
 
@@ -267,11 +267,13 @@ The web entrypoint should proxy these paths to the control-plane API:
 ```txt
 /health
 /auth*
+/agent-profiles*
 /automations*
 /environments*
 /sessions*
 /events*
 /repositories*
+/notepads*
 /skills*
 /snippets*
 /models*
@@ -580,6 +582,21 @@ The Daytona image is built for Linux/amd64 and uses glibc, satisfying Superserve
 
 Superserve public preview URLs expose only the authenticated Deputies bridge on port `3584`. Deputies app service links target `/preview/<application-port>` on that bridge, so application ports are not published directly. The bridge token protects that public endpoint from arbitrary external callers, but it is a sandbox-visible capability and not a secrecy boundary from sandbox code.
 
+### Tensorlake
+
+```sh
+SANDBOX_PROVIDER=tensorlake
+TENSORLAKE_API_KEY=<secret>
+TENSORLAKE_REGISTERED_IMAGE=deputies
+SANDBOX_WORKSPACE_PATH=/workspace
+```
+
+`TENSORLAKE_REGISTERED_IMAGE` must be a registered Tensorlake image name or ID, not an OCI registry reference. Optional deployment-level sizing and network controls are `TENSORLAKE_SANDBOX_CPU`, `TENSORLAKE_SANDBOX_MEMORY_MB`, `TENSORLAKE_SANDBOX_DISK_MB`, and `TENSORLAKE_ALLOW_INTERNET_ACCESS`. See [Sandbox Providers](./sandbox-providers.md) for image registration and bridge-preview details.
+
+### Kubernetes Agent Sandbox
+
+Use `SANDBOX_PROVIDER=k8s-agent-sandbox` with the Agent Sandbox orchestrator. The Helm chart configures the Sandbox CRD, orchestrator mode, image, workspace storage, namespace, and optional storage class; follow [`deploy/kubernetes/charts/deputies/README.md`](../deploy/kubernetes/charts/deputies/README.md) rather than assembling those resources manually.
+
 ### AWS Lambda MicroVM
 
 ```sh
@@ -812,7 +829,7 @@ Use a secrets manager where possible. Avoid `UNSAFE_*` flags in production.
 
 ## Deployment Checklist
 
-- Choose topology: `all` or split `api`/`worker`.
+- Choose topology: `combined` or split `api`/`worker` (`all` is retained only as a compatibility alias).
 - Use `API_AUTH_MODE=session` for browser deployments. Reserve `bearer` or `none` for development tooling, tests, or programmatic/internal API access.
 - Provision Postgres and run migrations before starting API or worker processes.
 - For Scheduled Follow-up migration 023, drain/stop all old API/workers before migration and cut over the new API/workers together; do not use a mixed-version rolling deployment.

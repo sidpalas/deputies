@@ -1,6 +1,6 @@
 # Deputies Documentation
 
-This directory defines the implementation plan for a portable background-agent system built on Pi for real agent work.
+This directory describes a portable background-agent system built on Pi for real agent work.
 
 The goal is a deployable background coding-agent service that can start as a single modular Node service, then split into separate API and worker services without changing the core architecture. The design must not depend on one cloud provider's primitives. Railway, ECS Fargate + RDS, and Kubernetes should all be viable deployment targets.
 
@@ -69,7 +69,7 @@ Pi handles real agent work. `RUNNER=fake` remains the safe boot and smoke-test r
 
 ## Current Implementation Status
 
-The current scaffold has implemented the portable control-plane foundation:
+The current implementation includes:
 
 - TypeScript Node service with `RUN_MODE=combined|api|worker`.
 - Core session/message/event HTTP loop.
@@ -80,23 +80,29 @@ The current scaffold has implemented the portable control-plane foundation:
 - Generic inbound webhook integration with DB-backed source config and prompt prefixes.
 - SSE event streaming with cursor replay.
 - Unit, Postgres integration, architecture fitness, and built-artifact UAT tests.
-- Daytona SDK dependency and provider lifecycle adapter.
+- Provider lifecycle adapters for Daytona, Superserve, Docker, Tensorlake, Kubernetes Agent Sandbox, and AWS Lambda MicroVM.
 - Pi runner wiring behind `RUNNER=pi` using provider-backed sandbox handles.
 - Sandbox lifecycle persistence with reconnect/reuse semantics for follow-up messages.
 - Daytona sandbox auto-stop configuration and stopped-sandbox restart/reuse.
 - Artifact persistence, optional filesystem/S3-compatible blob storage, session artifact list/download/preview APIs, and generic HTTP completion callbacks.
-- Separate Vite React operator UI scaffold.
+- Separate Vite React operator UI with session search and filtering, nested deputy activity, queued-message controls, artifacts, callbacks, environments, skills, snippets, notepads, private sessions, scheduled follow-ups, and agent profiles.
 - Scheduled automations with UTC cron schedules, durable invocation records, manual invocation, and minimal operator UI.
 - Opt-in real local Pi and real Daytona/Pi UAT paths with credentials.
 - Slack and GitHub webhook integrations with external thread reuse, callback delivery, and archived-session recovery.
 - GitHub App repository access with guarded `repository`, `gh`, and authenticated `git` tools.
 - Repo-owned `.agents/setup` scripts for preparing sandbox workspaces before agent prompts.
 - Pi artifact tools for publishing sandbox files as downloadable/previewable product artifacts.
+- Reusable multi-repository environments with immutable repository-configuration revisions.
+- Managed and repository agent skills, including managed revisions and explicit invocation.
+- Personal prompt snippets, durable notepads, and opt-in pending-message steering.
+- Tenant-wide access with optional owner-only private sessions.
+- One-time and recurring scheduled follow-ups for existing sessions.
+- Built-in and organization-managed agent profiles with revisions and model/reasoning defaults.
 
 The following MVP pieces are still planned:
 
-- contract schemas for public API responses and normalized events.
-- release/migration runbooks.
+- Contract schemas for normalized event payloads.
+- Release/migration runbooks.
 
 ## MVP Target
 

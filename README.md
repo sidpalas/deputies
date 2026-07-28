@@ -13,11 +13,13 @@ Deputies is a control plane for delegating engineering work to [background agent
 - Streams progress, tool diagnostics, artifacts, and final responses into the web UI.
 - Lets users star, tag, filter, search, archive, and resume sessions.
 - Built on [Pi](https://pi.dev/) for real agent work, with a fake runner for deterministic smoke tests.
-- Supports Slack, GitHub, generic webhook, and scheduled automation workflows with callback delivery tracking.
+- Supports Slack, GitHub, generic webhook, scheduled automation, and per-session scheduled follow-up workflows with callback delivery tracking where applicable.
 - Supports GitHub OAuth login, static login, and tenant-wide viewer/member/admin access control.
-- Works with [Daytona](https://www.daytona.io/), Docker, Tensorlake, Kubernetes Agent Sandbox, and AWS Lambda MicroVM sandbox providers, plus fake and unsafe local providers for tests and trusted development.
+- Works with [Daytona](https://www.daytona.io/), Superserve, Docker, Tensorlake, Kubernetes Agent Sandbox, and AWS Lambda MicroVM sandbox providers, plus fake and unsafe local providers for tests and trusted development.
 - Runs repo-owned `.agents/setup` scripts to prepare sandbox workspaces before agents start.
 - Supports standard LLM API-key configuration and OpenAI Codex/ChatGPT subscriptions.
+- Provides reusable environments, versioned agent skills and profiles, personal prompt snippets, and durable session notepads.
+- Supports nested deputy sessions, private sessions, pending-message steering, and one-time or recurring scheduled follow-ups.
 - Tracks artifacts, callback deliveries, repositories, sandbox status, automations, and queued messages.
 - Deploys as portable Node, Caddy, Postgres, and optional S3-compatible object storage services.
 
