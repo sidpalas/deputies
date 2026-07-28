@@ -38,9 +38,30 @@ run = "pnpm format:check"
 description = "Lint the workspace"
 run = "pnpm lint"
 
+[tasks."lint:low-memory"]
+description = "Lint each workspace scope in a fresh, memory-bounded process"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+eslint=(node --max-old-space-size=2048 ./node_modules/eslint/bin/eslint.js)
+"${eslint[@]}" apps/control-plane
+"${eslint[@]}" apps/web
+"${eslint[@]}" apps/www
+"${eslint[@]}" packages
+"${eslint[@]}" deploy
+"""
+
 [tasks.test]
 description = "Run package unit tests"
 run = "pnpm -r --if-present test"
+
+[tasks."test:low-memory"]
+description = "Run package unit tests sequentially with one Vitest worker"
+run = """
+pnpm --dir apps/control-plane exec vitest run --maxWorkers=1
+pnpm --dir apps/web exec vitest run --maxWorkers=1
+pnpm --dir packages/sandbox-bridge exec vitest run --maxWorkers=1
+"""
 
 [tasks."test:integration"]
 description = "Ensure Postgres is running and run control-plane integration tests"
@@ -58,12 +79,24 @@ else
   ./deploy/sandboxes/daytona/start-postgres.sh
 fi
 
-mise run //apps/control-plane:test:integration
+vitest_args=()
+if [[ -n "${DEPUTIES_TEST_MAX_WORKERS:-}" ]]; then
+  vitest_args+=(--maxWorkers "$DEPUTIES_TEST_MAX_WORKERS")
+fi
+pnpm --dir apps/control-plane exec vitest run --config vitest.integration.config.ts "${vitest_args[@]}"
 """
+
+[tasks."test:integration:low-memory"]
+description = "Ensure Postgres is running and run integration tests with one Vitest worker"
+run = "DEPUTIES_TEST_MAX_WORKERS=1 mise run //:test:integration"
 
 [tasks.typecheck]
 description = "Run package TypeScript checks"
 run = "pnpm -r --if-present typecheck"
+
+[tasks."typecheck:low-memory"]
+description = "Run package TypeScript checks sequentially"
+run = "pnpm --workspace-concurrency=1 -r --if-present typecheck"
 
 [tasks."infra:validate"]
 description = "Validate infrastructure definitions"
@@ -96,7 +129,13 @@ depends = ["format:check", "lint", "typecheck", "test", "infra:validate"]
 
 [tasks."check:low-memory"]
 description = "Run the canonical checks sequentially for memory-constrained environments"
-run = "mise run --jobs 1 //:check"
+run = """
+mise run //:format:check
+mise run //:lint:low-memory
+mise run //:typecheck:low-memory
+mise run //:test:low-memory
+mise run //:infra:validate
+"""
 
 [tasks."check:ship"]
 description = "Run the canonical checks and Postgres-backed integration tests in parallel"
@@ -104,7 +143,7 @@ depends = ["check", "test:integration"]
 
 [tasks."check:ship:low-memory"]
 description = "Run the canonical ship checks sequentially for memory-constrained environments"
-run = "mise run --jobs 1 //:check:ship"
+run = "mise run //:check:low-memory && mise run //:test:integration:low-memory"
 
 [tasks."ci:smoke:local"]
 description = "Run smoke GitHub Actions workflow locally with Agent CI"
