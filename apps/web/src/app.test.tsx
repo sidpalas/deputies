@@ -3909,6 +3909,35 @@ it('uses a reconnecting wake state instead of generic slow request guidance afte
   expect(banner).not.toHaveTextContent('several windows');
 });
 
+it('does not restore a wake warning when a pre-reconnect request times out', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const reopenedStream = deferred<Response>();
+  let streamRequestCount = 0;
+  mockApi({
+    hangSessionsAfterFirst: true,
+    onGlobalStreamRequest: (_url, count) => {
+      streamRequestCount = count;
+      return count === 2 ? reopenedStream.promise : undefined;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  await waitFor(() => expect(streamRequestCount).toBe(1));
+
+  fireEvent(window, new Event('online'));
+  await waitFor(() => expect(streamRequestCount).toBe(2));
+
+  await act(async () => {
+    reopenedStream.resolve(new Response(new ReadableStream(), { status: 200 }));
+    await reopenedStream.promise;
+  });
+  await waitFor(() => expect(screen.queryByText('Reconnecting after sleep.')).not.toBeInTheDocument());
+
+  await act(() => vi.advanceTimersByTimeAsync(31_000));
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+});
+
 it('labels active streamed text as progress and separates obvious sentence boundaries', async () => {
   mockApi({
     messages: [

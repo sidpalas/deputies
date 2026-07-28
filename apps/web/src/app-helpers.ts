@@ -30,10 +30,13 @@ export type ConnectionStatus = {
 
 type ApiConnectionOkDetail = {
   source?: unknown;
+  sequence?: unknown;
 };
 
 type ApiConnectionDelayedDetail = {
   message?: unknown;
+  source?: unknown;
+  operationStartedSequence?: unknown;
 };
 
 export function loadStoredToken(): string {
@@ -160,6 +163,20 @@ export function wakeRecoveryConnectionStatus(): ConnectionStatus {
 export function isStreamConnectionOk(event: Event): boolean {
   const detail = event instanceof CustomEvent ? (event.detail as ApiConnectionOkDetail) : undefined;
   return detail?.source === 'stream';
+}
+
+export function connectionOkSequence(event: Event): number | undefined {
+  const detail = event instanceof CustomEvent ? (event.detail as ApiConnectionOkDetail) : undefined;
+  return typeof detail?.sequence === 'number' ? detail.sequence : undefined;
+}
+
+export function isStaleRequestConnectionDelay(event: Event, latestOkSequence: number): boolean {
+  const detail = event instanceof CustomEvent ? (event.detail as ApiConnectionDelayedDetail) : undefined;
+  return (
+    detail?.source === 'request' &&
+    typeof detail.operationStartedSequence === 'number' &&
+    detail.operationStartedSequence < latestOkSequence
+  );
 }
 
 export function connectionDelayedMessage(event: Event): string {

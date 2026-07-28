@@ -2,6 +2,7 @@ export const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$
 const requestTimeoutMs = 15_000;
 const requestRetryDelayMs = 250;
 const streamIdleTimeoutMs = 45_000;
+let connectionEventSequence = 0;
 
 export const apiConnectionOkEvent = 'deputies:api-connection-ok';
 export const apiConnectionDelayedEvent = 'deputies:api-connection-delayed';
@@ -36,10 +37,11 @@ export async function request<T>(
 ): Promise<T> {
   const method = options.method ?? 'GET';
   const attempts = method === 'GET' ? 2 : 1;
+  const operationStartedSequence = nextConnectionEventSequence();
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await requestOnce<T>(path, { ...options, method });
+      return await requestOnce<T>(path, { ...options, method }, operationStartedSequence);
     } catch (error) {
       const retryableTimeout = error instanceof ApiError && error.status === 0 && attempt < attempts;
       if (!retryableTimeout) throw error;
@@ -59,6 +61,7 @@ export async function streamEventResponse<TEvent>(
     onEvent: (event: TEvent) => void;
   },
 ): Promise<void> {
+  const operationStartedSequence = nextConnectionEventSequence();
   const abort = new AbortController();
   let idleTimedOut = false;
   let idleTimeout: number | undefined;
@@ -84,12 +87,18 @@ export async function streamEventResponse<TEvent>(
     if (!input.signal.aborted)
       dispatchApiConnectionDelayed(
         idleTimedOut ? 'Realtime connection went idle.' : 'Realtime connection interrupted.',
+        'stream',
+        operationStartedSequence,
       );
     throw error;
   }
 
   if (!response.ok) {
-    dispatchApiConnectionDelayed(`Realtime connection failed with ${response.status}.`);
+    dispatchApiConnectionDelayed(
+      `Realtime connection failed with ${response.status}.`,
+      'stream',
+      operationStartedSequence,
+    );
     throw new ApiError(response.status, `Event stream failed with ${response.status}`);
   }
   if (!response.body) throw new ApiError(response.status, 'Event stream response has no body');
@@ -120,7 +129,7 @@ export async function streamEventResponse<TEvent>(
       if (!idleTimedOut) throw error;
     }
     if (idleTimedOut) {
-      dispatchApiConnectionDelayed('Realtime connection went idle.');
+      dispatchApiConnectionDelayed('Realtime connection went idle.', 'stream', operationStartedSequence);
       throw new ApiError(0, 'Realtime connection went idle');
     }
   } finally {
@@ -142,6 +151,7 @@ async function requestOnce<T>(
     expectJson?: boolean;
     keepalive?: boolean;
   },
+  operationStartedSequence: number,
 ): Promise<T> {
   const abort = new AbortController();
   let timedOut = false;
@@ -181,7 +191,7 @@ async function requestOnce<T>(
     return (await response.json()) as T;
   } catch (error) {
     if (timedOut) {
-      dispatchApiConnectionDelayed(`Request timed out: ${path}`);
+      dispatchApiConnectionDelayed(`Request timed out: ${path}`, 'request', operationStartedSequence);
       throw new ApiError(0, `Request timed out: ${path}`);
     }
     throw error;
@@ -192,11 +202,22 @@ async function requestOnce<T>(
 }
 
 function dispatchApiConnectionOk(source: 'request' | 'stream') {
-  window.dispatchEvent(new CustomEvent(apiConnectionOkEvent, { detail: { source } }));
+  window.dispatchEvent(
+    new CustomEvent(apiConnectionOkEvent, {
+      detail: { source, sequence: nextConnectionEventSequence() },
+    }),
+  );
 }
 
-function dispatchApiConnectionDelayed(message: string) {
-  window.dispatchEvent(new CustomEvent(apiConnectionDelayedEvent, { detail: { message } }));
+function dispatchApiConnectionDelayed(message: string, source: 'request' | 'stream', operationStartedSequence: number) {
+  window.dispatchEvent(
+    new CustomEvent(apiConnectionDelayedEvent, { detail: { message, source, operationStartedSequence } }),
+  );
+}
+
+function nextConnectionEventSequence(): number {
+  connectionEventSequence += 1;
+  return connectionEventSequence;
 }
 
 function delay(ms: number): Promise<void> {

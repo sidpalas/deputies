@@ -135,9 +135,11 @@ import {
   archivedAutomationsOpenStorageKey,
   applyThemePreference,
   connectionDelayedMessage,
+  connectionOkSequence,
   initialConnectionStatus,
   isPageVisible,
   isStreamConnectionOk,
+  isStaleRequestConnectionDelay,
   isThreadComposerFocused,
   isThreadNearBottom,
   isWakeRecoveryStatus,
@@ -503,6 +505,7 @@ export function App() {
   const globalEventCursor = useRef(0);
   const wasPageHiddenRef = useRef(!isPageVisible());
   const wakeRecoveryActive = useRef(false);
+  const latestConnectionOkSequenceRef = useRef(0);
   const recoveryGenerationRef = useRef(0);
   const recoveryPendingRef = useRef(false);
   const recoveryRunningRef = useRef(false);
@@ -1495,6 +1498,10 @@ export function App() {
 
   useEffect(() => {
     const handleConnectionOk = (event: Event) => {
+      const sequence = connectionOkSequence(event);
+      if (sequence !== undefined) {
+        latestConnectionOkSequenceRef.current = Math.max(latestConnectionOkSequenceRef.current, sequence);
+      }
       setConnectionStatus((current) => {
         if (isWakeRecoveryStatus(current)) {
           wakeRecoveryActive.current = false;
@@ -1506,6 +1513,7 @@ export function App() {
       });
     };
     const handleConnectionDelayed = (event: Event) => {
+      if (isStaleRequestConnectionDelay(event, latestConnectionOkSequenceRef.current)) return;
       setConnectionStatus((current) => {
         if (wakeRecoveryActive.current && isWakeRecoveryStatus(current)) return current;
         return {
