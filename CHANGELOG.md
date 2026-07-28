@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.25.0](https://github.com/sidpalas/deputies/compare/v0.24.0...v0.25.0) (2026-07-28)
+
+
+### Features
+
+* add agent profiles ([29f425c](https://github.com/sidpalas/deputies/commit/29f425cbf9485b0028c7e42155f6efae24f63b72))
+
+
+### Bug Fixes
+
+* ignore stale connection warnings after reconnect ([65fea86](https://github.com/sidpalas/deputies/commit/65fea86c622a26146fdb65a7e570972c4e95b960))
+* preserve original request during steering ([43095e9](https://github.com/sidpalas/deputies/commit/43095e99f31151bf099b17e8d9c5f599dc1ca168))
+* tighten custom agent card actions ([4970ace](https://github.com/sidpalas/deputies/commit/4970aceb1f84de36d18f113b21b82c20173007dc))
+
 ## [0.24.0](https://github.com/sidpalas/deputies/compare/v0.23.0...v0.24.0) (2026-07-27)
 
 
