@@ -267,7 +267,8 @@ describe('PiRunner', () => {
     expect(register).toHaveBeenCalledTimes(1);
     await activeHandler!({ messageId: 'message-2', prompt: 'steer now', sequence: 2 });
     expect(calls[1]).toEqual({
-      prompt: 'steer now',
+      prompt:
+        'The user sent this while you were working. Address both the original request and this message unless this message explicitly redirects or cancels the original request.\n\nsteer now',
       options: { streamingBehavior: 'steer', expandPromptTemplates: false },
     });
     releasePrimary();

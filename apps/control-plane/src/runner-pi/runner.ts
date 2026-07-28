@@ -95,6 +95,8 @@ function deputiesSystemPrompt(sessionId: string, context?: Record<string, unknow
 const PI_NO_TOOLS: NonNullable<CreateAgentSessionOptions['noTools']> = 'builtin';
 const PI_SUBAGENT_MAX_DEPTH = 4;
 const BEDROCK_AUTHENTICATED_SENTINEL = '<authenticated>';
+const ACTIVE_MESSAGE_GUIDANCE =
+  'The user sent this while you were working. Address both the original request and this message unless this message explicitly redirects or cancels the original request.';
 
 export type PiRunnerOptions = {
   model: string;
@@ -378,7 +380,7 @@ export class PiRunner implements Runner {
           if (input.shouldPersist && !(await input.shouldPersist())) {
             throw new Error('Run ownership lost before steering prompt');
           }
-          await session!.prompt(steeringSkills.prompt, {
+          await session!.prompt(`${ACTIVE_MESSAGE_GUIDANCE}\n\n${steeringSkills.prompt}`, {
             streamingBehavior: 'steer',
             expandPromptTemplates: false,
           });
