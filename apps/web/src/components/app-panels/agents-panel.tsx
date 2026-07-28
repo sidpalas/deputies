@@ -51,6 +51,7 @@ export function AgentsPanel(props: {
   selectedRevisionId: string;
   loaded: boolean;
   loading: boolean;
+  readOnly?: boolean;
   canManage: boolean;
   canConfigureDefault: boolean;
   defaultConfiguration: AgentProfileDefaultConfiguration | null;
@@ -326,7 +327,8 @@ export function AgentsPanel(props: {
                     {builtin ? 'Save defaults' : props.profile ? 'Save agent' : 'Create agent'}
                   </Button>
                 ) : null}
-                {props.profile?.enabled &&
+                {!props.readOnly &&
+                props.profile?.enabled &&
                 props.profile.supportedInvocations.includes('agent') &&
                 !props.profile.archivedAt ? (
                   <Button type="button" variant="secondary" onClick={() => props.onStartSession(props.profile!.id)}>

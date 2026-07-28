@@ -5318,6 +5318,19 @@ it('shows saved automation agents as available in the static demo', async () => 
   expect(screen.queryByText(/This agent is unavailable/)).not.toBeInTheDocument();
 });
 
+it('opens the read-only agents page in the static demo', async () => {
+  window.history.replaceState({}, '', '/?page=agents&agent=builtin%3Areviewer');
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    jsonResponse({ generatedAt: '2026-07-18T00:00:00.000Z', sessions: [] }),
+  );
+  render(<StaticDemoApp />);
+
+  expect(await screen.findByRole('heading', { name: 'Agent profiles' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Reviewer' })).toBeInTheDocument();
+  expect(screen.getByLabelText('New agent')).toBeDisabled();
+  expect(screen.queryByRole('button', { name: 'Start session' })).not.toBeInTheDocument();
+});
+
 function mockApi(options: MockApiOptions = {}) {
   let currentSession = { ...session, ...options.sessionOverride };
   let currentUser = options.currentUser;

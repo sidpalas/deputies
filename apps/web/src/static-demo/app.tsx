@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { PanelLeftOpen } from 'lucide-react';
 import type { ArtifactPreview, ModelChoice, Session, SessionSearchResult, SessionTagSummary } from '../api.js';
 import {
+  AgentsPanel,
+  AgentsSidebar,
   AutomationsPanel,
   AutomationsSidebar,
   EnvironmentsPanel,
@@ -74,6 +76,7 @@ export function StaticDemoApp() {
   const [selectedEnvironmentRevisionId, setSelectedEnvironmentRevisionId] = useState(() =>
     getInitialRevisionId('environments'),
   );
+  const [selectedAgentId, setSelectedAgentId] = useState(() => getInitialResourceId('agent', demoAgentProfiles));
   const [selectedSkillId, setSelectedSkillId] = useState(() => getInitialResourceId('skill', demoSkills));
   const [selectedSkillRevisionId, setSelectedSkillRevisionId] = useState(() => getInitialRevisionId('skills'));
   const [selectedSnippetId, setSelectedSnippetId] = useState(() => getInitialResourceId('snippet', demoSnippets));
@@ -163,6 +166,7 @@ export function StaticDemoApp() {
       setSelectedAutomationId(getInitialResourceId('automation', demoAutomations));
       setSelectedEnvironmentId(getInitialResourceId('environment', demoEnvironments));
       setSelectedEnvironmentRevisionId(nextPage === 'environments' ? (params.get('revision') ?? '') : '');
+      setSelectedAgentId(getInitialResourceId('agent', demoAgentProfiles));
       setSelectedSkillId(getInitialResourceId('skill', demoSkills));
       setSelectedSkillRevisionId(nextPage === 'skills' ? (params.get('revision') ?? '') : '');
       setSelectedSnippetId(getInitialResourceId('snippet', demoSnippets));
@@ -186,6 +190,7 @@ export function StaticDemoApp() {
       }
     : null;
   const selectedAutomation = demoAutomations.find((automation) => automation.id === selectedAutomationId) ?? null;
+  const selectedAgent = demoAgentProfiles.find((profile) => profile.id === selectedAgentId) ?? null;
   const selectedSkill = demoSkills.find((skill) => skill.id === selectedSkillId) ?? null;
   const selectedSnippet = demoSnippets.find((snippet) => snippet.id === selectedSnippetId) ?? null;
 
@@ -213,6 +218,7 @@ export function StaticDemoApp() {
     canViewGroups: true,
     canViewAutomations: true,
     canViewEnvironments: true,
+    canViewAgents: true,
     canViewSkills: true,
     canViewSnippets: true,
     canViewSetup: false,
@@ -223,6 +229,7 @@ export function StaticDemoApp() {
     onOpenGroups: () => navigate('groups'),
     onOpenAutomations: () => navigate('automations'),
     onOpenEnvironments: () => navigate('environments'),
+    onOpenAgents: () => navigate('agents'),
     onOpenSkills: () => navigate('skills'),
     onOpenSnippets: () => navigate('snippets'),
     onOpenSessions: () => navigate('sessions'),
@@ -235,6 +242,7 @@ export function StaticDemoApp() {
     if (nextPage === 'groups') return '';
     if (nextPage === 'automations') return selectedAutomationId;
     if (nextPage === 'environments') return selectedEnvironmentId;
+    if (nextPage === 'agents') return selectedAgentId;
     if (nextPage === 'skills') return selectedSkillId;
     if (nextPage === 'snippets') return selectedSnippetId;
     return selected?.session.id ?? '';
@@ -326,6 +334,21 @@ export function StaticDemoApp() {
                 onCreateEnvironment={() => undefined}
                 onRestoreEnvironment={() => undefined}
                 onSelectEnvironment={(id) => selectResource('environments', id, setSelectedEnvironmentId)}
+              />
+            ) : page === 'agents' ? (
+              <AgentsSidebar
+                profiles={demoAgentProfiles}
+                defaultProfileId="builtin:general"
+                selectedId={selectedAgentId}
+                loading={false}
+                canManage={false}
+                footerProps={footerProps}
+                onSelect={(id) => selectResource('agents', id, setSelectedAgentId)}
+                onCreate={() => undefined}
+                onArchive={() => undefined}
+                onRestore={() => undefined}
+                onBack={() => navigate('sessions')}
+                onCollapse={collapseSidebar}
               />
             ) : page === 'skills' ? (
               <SkillsSidebar
@@ -480,6 +503,30 @@ export function StaticDemoApp() {
               setSelectedEnvironmentRevisionId(revisionId);
               updateDemoUrl('environments', selectedEnvironmentId, revisionId);
             }}
+            onError={() => undefined}
+          />
+        ) : page === 'agents' ? (
+          <AgentsPanel
+            profile={selectedAgent}
+            selectedId={selectedAgentId}
+            selectedRevisionId=""
+            loaded
+            loading={false}
+            readOnly
+            canManage={false}
+            canConfigureDefault={false}
+            defaultConfiguration={{ configuredProfileId: null, effectiveProfileId: 'builtin:general' }}
+            token=""
+            models={[]}
+            showOpenSidebar={!sidebarOpen}
+            onOpenSidebar={() => setSidebarOpen(true)}
+            onChanged={() => undefined}
+            onDefaultConfigurationChanged={() => undefined}
+            onSelectRevision={() => undefined}
+            onArchive={() => undefined}
+            onRestore={() => undefined}
+            onStartSession={() => undefined}
+            onDirtyChange={() => undefined}
             onError={() => undefined}
           />
         ) : page === 'skills' ? (
@@ -737,6 +784,7 @@ function getInitialPage(): StaticDemoPage {
   if (isStaticDemoPage(requestedPage)) return requestedPage;
   if (params.has('automation')) return 'automations';
   if (params.has('environment')) return 'environments';
+  if (params.has('agent')) return 'agents';
   if (params.has('skill')) return 'skills';
   if (params.has('snippet')) return 'snippets';
   if (params.has('group')) return 'groups';
@@ -748,6 +796,7 @@ function isStaticDemoPage(value: string | null): value is StaticDemoPage {
     value === 'sessions' ||
     value === 'automations' ||
     value === 'environments' ||
+    value === 'agents' ||
     value === 'skills' ||
     value === 'snippets' ||
     value === 'groups'
@@ -765,7 +814,17 @@ function getInitialRevisionId(page: 'environments' | 'skills'): string {
 
 function updateDemoUrl(page: StaticDemoPage, resourceId: string, revisionId = '') {
   const url = new URL(window.location.href);
-  for (const key of ['page', 'session', 'automation', 'environment', 'skill', 'snippet', 'group', 'revision']) {
+  for (const key of [
+    'page',
+    'session',
+    'automation',
+    'environment',
+    'agent',
+    'skill',
+    'snippet',
+    'group',
+    'revision',
+  ]) {
     url.searchParams.delete(key);
   }
   if (page !== 'sessions') url.searchParams.set('page', page);
@@ -781,6 +840,7 @@ function updateDemoUrl(page: StaticDemoPage, resourceId: string, revisionId = ''
 function resourceQueryKey(page: StaticDemoPage): string {
   if (page === 'automations') return 'automation';
   if (page === 'environments') return 'environment';
+  if (page === 'agents') return 'agent';
   if (page === 'skills') return 'skill';
   if (page === 'snippets') return 'snippet';
   if (page === 'groups') return 'group';
