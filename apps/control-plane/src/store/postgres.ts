@@ -8,9 +8,16 @@ import {
   type NormalizedSchedule,
 } from '../scheduled-follow-ups/recurrence.js';
 import { PostgresSkillStore } from './postgres/skills.js';
+import { PostgresAgentProfileStore } from './postgres/agent-profiles.js';
 import { StoreConflictError } from './types.js';
 import type {
   AppStore,
+  AgentProfileRecord,
+  AgentProfileRevisionRecord,
+  BuiltinAgentProfileSettingWrite,
+  CreateAgentProfileRecord,
+  TenantAgentProfileConfigurationWrite,
+  UpdateAgentProfileRecord,
   AgentSessionListOptions,
   ArtifactRecord,
   AutomationInvocationRecord,
@@ -165,6 +172,7 @@ export class PostgresStore implements AppStore {
   private readonly coordinationPool: Pool;
   private readonly heldCoordinationLocks = new AsyncLocalStorage<ReadonlySet<string>>();
   private readonly skillStore: PostgresSkillStore;
+  private readonly agentProfileStore: PostgresAgentProfileStore;
   private readonly secretCipher?: SecretCipher;
 
   constructor(databaseUrl: string | Pool, options: { sandboxSecretEncryptionKey?: string } = {}) {
@@ -174,6 +182,7 @@ export class PostgresStore implements AppStore {
         ? new Pool({ connectionString: databaseUrl })
         : new Pool(Object.defineProperties({}, Object.getOwnPropertyDescriptors(databaseUrl.options)));
     this.skillStore = new PostgresSkillStore(this.pool);
+    this.agentProfileStore = new PostgresAgentProfileStore(this.pool);
     if (options.sandboxSecretEncryptionKey)
       this.secretCipher = new SecretCipher(options.sandboxSecretEncryptionKey, 'sandbox-secrets');
   }
@@ -2195,6 +2204,40 @@ export class PostgresStore implements AppStore {
     return this.skillStore.createSkill(record);
   }
 
+  getTenantAgentProfileConfiguration() {
+    return this.agentProfileStore.getTenantAgentProfileConfiguration();
+  }
+  setTenantAgentProfileConfiguration(record: TenantAgentProfileConfigurationWrite) {
+    return this.agentProfileStore.setTenantAgentProfileConfiguration(record);
+  }
+
+  listBuiltinAgentProfileSettings() {
+    return this.agentProfileStore.listBuiltinAgentProfileSettings();
+  }
+  setBuiltinAgentProfileSettings(record: BuiltinAgentProfileSettingWrite) {
+    return this.agentProfileStore.setBuiltinAgentProfileSettings(record);
+  }
+  createAgentProfile(record: CreateAgentProfileRecord) {
+    return this.agentProfileStore.createAgentProfile(record);
+  }
+  getAgentProfile(id: string) {
+    return this.agentProfileStore.getAgentProfile(id);
+  }
+  listAgentProfiles(): Promise<AgentProfileRecord[]> {
+    return this.agentProfileStore.listAgentProfiles();
+  }
+  listAgentProfileRevisions(id: string): Promise<AgentProfileRevisionRecord[]> {
+    return this.agentProfileStore.listAgentProfileRevisions(id);
+  }
+  updateAgentProfile(record: UpdateAgentProfileRecord) {
+    return this.agentProfileStore.updateAgentProfile(record);
+  }
+  archiveAgentProfile(input: { id: string; archivedAt: Date }) {
+    return this.agentProfileStore.archiveAgentProfile(input);
+  }
+  restoreAgentProfile(input: { id: string; updatedAt: Date }) {
+    return this.agentProfileStore.restoreAgentProfile(input);
+  }
   async getSkill(id: string): Promise<SkillRecord | null> {
     return this.skillStore.getSkill(id);
   }
@@ -2512,6 +2555,7 @@ export class PostgresStore implements AppStore {
          name,
          prompt,
          schedule_cron,
+         profile_id,
          enabled,
          context,
          created_by_user_id,
@@ -2522,7 +2566,7 @@ export class PostgresStore implements AppStore {
          created_at,
          updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING ${automationSelectColumns}`,
         [
           record.id,
@@ -2530,6 +2574,7 @@ export class PostgresStore implements AppStore {
           record.name,
           record.prompt,
           record.scheduleCron,
+          record.profileId,
           record.enabled,
           record.context ?? null,
           record.createdByUserId ?? null,
@@ -2590,6 +2635,7 @@ export class PostgresStore implements AppStore {
       if (input.name !== undefined) addUpdate('name', input.name);
       if (input.prompt !== undefined) addUpdate('prompt', input.prompt);
       if (input.scheduleCron !== undefined) addUpdate('schedule_cron', input.scheduleCron);
+      if (input.profileId !== undefined) addUpdate('profile_id', input.profileId);
       if (input.enabled !== undefined) addUpdate('enabled', input.enabled);
       if (input.context !== undefined) addUpdate('context', input.context);
       if (input.environmentId !== undefined) addUpdate('environment_id', input.environmentId);
@@ -2773,13 +2819,14 @@ export class PostgresStore implements AppStore {
          requested_by_user_id,
          environment_id,
          environment_revision_id,
+         session_context,
          reason,
          error,
          metadata,
          created_at,
          completed_at
        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         RETURNING ${automationInvocationSelectColumns}`,
         [
           record.id,
@@ -2794,6 +2841,7 @@ export class PostgresStore implements AppStore {
           record.requestedByUserId ?? null,
           record.environmentId ?? null,
           record.environmentRevisionId ?? null,
+          record.sessionContext ?? null,
           record.reason ?? null,
           record.error ?? null,
           record.metadata,
@@ -2817,11 +2865,12 @@ export class PostgresStore implements AppStore {
             requested_by_user_id = $8,
             environment_id = $9,
             environment_revision_id = $10,
-            reason = $11,
-            error = $12,
-            metadata = $13,
-            created_at = $14,
-            completed_at = $15
+            session_context = $11,
+            reason = $12,
+            error = $13,
+            metadata = $14,
+            created_at = $15,
+            completed_at = $16
         WHERE id = $1
         RETURNING ${automationInvocationSelectColumns}`,
       [
@@ -2835,6 +2884,7 @@ export class PostgresStore implements AppStore {
         record.requestedByUserId ?? null,
         record.environmentId ?? null,
         record.environmentRevisionId ?? null,
+        record.sessionContext ?? null,
         record.reason ?? null,
         record.error ?? null,
         record.metadata,

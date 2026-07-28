@@ -115,6 +115,12 @@ type MockApiOptions = {
   currentUser?: typeof user | null;
   notices?: unknown[];
   environments?: unknown[];
+  agentProfiles?: unknown[];
+  agentProfileDefaultConfiguration?: {
+    configuredProfileId: string | null;
+    effectiveProfileId: string | null;
+  };
+  agentProfileDefaultUpdates?: Array<string | null>;
   environmentRevisions?: Record<string, unknown[]>;
   skills?: unknown[];
   snippets?: unknown[];
@@ -811,6 +817,225 @@ it('shows the configured default and submits a reasoning override when starting 
   expect(submittedMessageBodies[0]).toMatchObject({ prompt: 'think hard', reasoningLevel: 'max' });
 });
 
+it('selects the effective tenant agent profile for a new session', async () => {
+  const createdSessionBodies: unknown[] = [];
+  mockApi({
+    createdSessionBodies,
+    repositories: [],
+    agentProfiles: [
+      agentProfileFixture(),
+      agentProfileFixture({
+        id: 'profile-a',
+        source: 'managed',
+        revision: 'profile-a-r1',
+        name: 'Profile A',
+        defaultModel: 'openai/gpt-4.1',
+        defaultReasoningLevel: 'max',
+      }),
+    ],
+    agentProfileDefaultConfiguration: {
+      configuredProfileId: 'profile-a',
+      effectiveProfileId: 'profile-a',
+    },
+  });
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('gpt 4.1');
+  expect(screen.getByRole('button', { name: 'Reasoning' })).toHaveTextContent('Max');
+  fireEvent.change(screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...'), {
+    target: { value: 'use the tenant default' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+  await waitFor(() =>
+    expect(createdSessionBodies).toEqual([
+      { title: 'use the tenant default', visibility: 'tenant', profileId: 'profile-a' },
+    ]),
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('gpt 4.1');
+  expect(screen.getByRole('button', { name: 'Reasoning' })).toHaveTextContent('Max');
+});
+
+it('lets an admin set a profile as the tenant default', async () => {
+  window.history.replaceState({}, '', '/?agent=profile-a');
+  sessionStorage.setItem('deputies-sidebar-panel', 'agents');
+  const updates: Array<string | null> = [];
+  mockApi({
+    authMode: 'session',
+    currentUser: { ...user, role: 'admin' },
+    agentProfileDefaultUpdates: updates,
+    agentProfiles: [
+      agentProfileFixture(),
+      agentProfileFixture({ id: 'profile-a', source: 'managed', revision: 'profile-a-r1', name: 'Profile A' }),
+    ],
+  });
+  render(<App />);
+
+  await screen.findByDisplayValue('Profile A');
+  const setDefault = await screen.findByRole('button', { name: 'Set as tenant default' });
+  await waitFor(() => expect(setDefault).toBeEnabled());
+  fireEvent.click(setDefault);
+  await waitFor(() => expect(updates).toEqual(['profile-a']));
+  expect(await screen.findByText('Tenant default')).toBeVisible();
+});
+
+it('replaces inherited profile defaults and falls back to application defaults', async () => {
+  mockApi({
+    defaultReasoningLevel: 'high',
+    environments: [environmentFixture()],
+    agentProfiles: [
+      agentProfileFixture(),
+      agentProfileFixture({
+        id: 'profile-a',
+        source: 'managed',
+        revision: 'profile-a-r1',
+        name: 'Profile A',
+        defaultModel: 'openai/gpt-4.1',
+        defaultReasoningLevel: 'max',
+      }),
+      agentProfileFixture({
+        id: 'profile-b',
+        source: 'managed',
+        revision: 'profile-b-r1',
+        name: 'Profile B',
+      }),
+    ],
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Agent' }));
+  fireEvent.click(screen.getByRole('option', { name: /^Profile A/ }));
+  expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('gpt 4.1');
+  expect(screen.getByRole('button', { name: 'Reasoning' })).toHaveTextContent('Max');
+  expect(screen.getByRole('button', { name: 'Codebase' })).toHaveTextContent('Select environment or repository');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Agent' }));
+  fireEvent.click(screen.getByRole('option', { name: /^Profile B/ }));
+  expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent(/claude sonnet/i);
+  expect(screen.getByRole('button', { name: 'Reasoning' })).toHaveTextContent('Default (High)');
+  expect(screen.getByRole('button', { name: 'Codebase' })).toHaveTextContent('Select environment or repository');
+});
+
+it('preserves explicit composer choices and clears across profile changes', async () => {
+  const createdSessionBodies: unknown[] = [];
+  const submittedMessageBodies: unknown[] = [];
+  mockApi({
+    createdSessionBodies,
+    submittedMessageBodies,
+    defaultReasoningLevel: 'high',
+    environments: [environmentFixture()],
+    agentProfiles: [
+      agentProfileFixture(),
+      agentProfileFixture({
+        id: 'profile-a',
+        source: 'managed',
+        name: 'Profile A',
+        defaultModel: 'openai/gpt-4.1',
+        defaultReasoningLevel: 'max',
+      }),
+      agentProfileFixture({ id: 'profile-b', source: 'managed', name: 'Profile B' }),
+    ],
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: 'New session' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Agent' }));
+  fireEvent.click(screen.getByRole('option', { name: /^Profile A/ }));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+  fireEvent.click(screen.getByRole('option', { name: /claude sonnet/i }));
+  fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
+  fireEvent.click(screen.getByRole('option', { name: /Clear selection/ }));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Agent' }));
+  fireEvent.click(screen.getByRole('option', { name: /^Profile B/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Agent' }));
+  fireEvent.click(screen.getByRole('option', { name: /^Profile A/ }));
+  expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent(/claude sonnet/i);
+  expect(screen.getByRole('button', { name: 'Reasoning' })).toHaveTextContent('Default (High)');
+  expect(screen.getByRole('button', { name: 'Codebase' })).toHaveTextContent('Select environment or repository');
+
+  fireEvent.change(screen.getByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...'), {
+    target: { value: 'run explicitly' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+  await waitFor(() =>
+    expect(createdSessionBodies).toEqual([
+      {
+        title: 'run explicitly',
+        visibility: 'tenant',
+        profileId: 'profile-a',
+        model: 'anthropic/claude-sonnet',
+        reasoningLevel: null,
+      },
+    ]),
+  );
+  expect(submittedMessageBodies[0]).toMatchObject({ model: 'anthropic/claude-sonnet' });
+  expect(submittedMessageBodies[0]).not.toHaveProperty('reasoningLevel');
+  expect(submittedMessageBodies[0]).not.toHaveProperty('environmentId');
+});
+
+it('guards dirty agent Start session before navigation and resets stale composer overrides when accepted', async () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+  window.history.replaceState({}, '', '/?agent=profile-a');
+  mockApi({
+    skills: [],
+    agentProfiles: [
+      agentProfileFixture(),
+      agentProfileFixture({
+        id: 'profile-a',
+        source: 'managed',
+        revision: 'profile-a-r1',
+        revisionNumber: 1,
+        name: 'Profile A',
+        defaultModel: 'openai/gpt-4.1',
+      }),
+    ],
+  });
+  render(<App />);
+  const name = await screen.findByDisplayValue('Profile A');
+  fireEvent.change(name, { target: { value: 'Unsaved name' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+  expect(confirm).toHaveBeenCalledWith('Discard unsaved agent changes?');
+  expect(screen.getByDisplayValue('Unsaved name')).toBeVisible();
+  expect(window.location.search).toBe('?agent=profile-a');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+  expect(
+    await screen.findByPlaceholderText('Ask Deputies to investigate, change code, or answer a question...'),
+  ).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('gpt 4.1');
+  expect(window.location.search).not.toContain('agent=');
+});
+
+it('does not persist Skills navigation when a dirty agent editor rejects it', async () => {
+  window.history.replaceState({}, '', '/?agent=profile-a');
+  sessionStorage.setItem('deputies-sidebar-panel', 'agents');
+  sessionStorage.setItem('deputies-setup-guide-open', 'true');
+  sessionStorage.setItem('deputies-selected-skill-id', 'existing-skill');
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  mockApi({
+    skills: [],
+    agentProfiles: [
+      agentProfileFixture(),
+      agentProfileFixture({ id: 'profile-a', source: 'managed', revision: 'profile-a-r1', name: 'Profile A' }),
+    ],
+  });
+  render(<App />);
+  fireEvent.change(await screen.findByDisplayValue('Profile A'), { target: { value: 'Unsaved profile' } });
+  fireEvent.click(screen.getByRole('button', { name: /Switch page, current page Agents/ }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Skills/ }));
+
+  expect(confirm).toHaveBeenCalledWith('Discard unsaved agent changes?');
+  expect(window.location.search).toBe('?agent=profile-a');
+  expect(sessionStorage.getItem('deputies-sidebar-panel')).toBe('agents');
+  expect(sessionStorage.getItem('deputies-setup-guide-open')).toBe('true');
+  expect(sessionStorage.getItem('deputies-selected-skill-id')).toBe('existing-skill');
+  expect(screen.getByDisplayValue('Unsaved profile')).toBeVisible();
+});
+
 it('allows starting a session without repository options', async () => {
   const submittedMessageBodies: unknown[] = [];
   mockApi({ submittedMessageBodies, repositories: [] });
@@ -839,7 +1064,11 @@ it('creates a private session from the new-session composer', async () => {
   });
   fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
 
-  await waitFor(() => expect(createdSessionBodies).toEqual([{ title: 'secret work', visibility: 'private' }]));
+  await waitFor(() =>
+    expect(createdSessionBodies).toEqual([
+      { title: 'secret work', visibility: 'private', profileId: 'builtin:general' },
+    ]),
+  );
   expect(await screen.findByTitle('Visible only to you')).toBeInTheDocument();
 });
 
@@ -5090,6 +5319,10 @@ function mockApi(options: MockApiOptions = {}) {
   let globalStreamRequestCount = 0;
   let messageSubmitCount = 0;
   let skills = options.skills;
+  let agentProfileDefaultConfiguration = options.agentProfileDefaultConfiguration ?? {
+    configuredProfileId: null,
+    effectiveProfileId: 'builtin:general',
+  };
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
     const method = init?.method ?? 'GET';
@@ -5215,6 +5448,37 @@ function mockApi(options: MockApiOptions = {}) {
 
     if (url.pathname === '/environments' && method === 'GET') {
       return jsonResponse({ environments: options.environments ?? [] });
+    }
+
+    if (url.pathname === '/agent-profiles' && method === 'GET') {
+      return jsonResponse({ agentProfiles: options.agentProfiles ?? [agentProfileFixture()] });
+    }
+
+    if (url.pathname === '/agent-profiles/configuration/default' && method === 'GET') {
+      return jsonResponse({ configuration: agentProfileDefaultConfiguration });
+    }
+
+    if (url.pathname === '/agent-profiles/configuration/default' && method === 'PATCH') {
+      const body = JSON.parse(String(init?.body)) as { defaultProfileId: string | null };
+      options.agentProfileDefaultUpdates?.push(body.defaultProfileId);
+      agentProfileDefaultConfiguration = {
+        configuredProfileId: body.defaultProfileId,
+        effectiveProfileId: body.defaultProfileId ?? 'builtin:general',
+      };
+      return jsonResponse({ configuration: agentProfileDefaultConfiguration });
+    }
+
+    if (/^\/agent-profiles\/[^/]+\/revisions$/.test(url.pathname) && method === 'GET') {
+      const id = url.pathname.split('/')[2];
+      return jsonResponse({
+        revisions: options.agentProfiles?.filter(
+          (profile): profile is Record<string, unknown> =>
+            typeof profile === 'object' &&
+            profile !== null &&
+            'id' in profile &&
+            (profile as { id?: unknown }).id === id,
+        ),
+      });
     }
 
     if (url.pathname === '/snippets' && method === 'GET') {
@@ -5803,6 +6067,24 @@ function environmentFixture() {
     canManage: true,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
+  };
+}
+
+function agentProfileFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'builtin:general',
+    source: 'builtin',
+    revision: 'builtin:general:v1',
+    revisionNumber: 1,
+    name: 'General',
+    description: 'General-purpose coding agent',
+    instructions: 'Help the user.',
+    supportedInvocations: ['agent', 'subagent'],
+    enabled: true,
+    archivedAt: null,
+    createdAt: '2026-05-05T12:00:00.000Z',
+    updatedAt: '2026-05-05T12:00:00.000Z',
+    ...overrides,
   };
 }
 

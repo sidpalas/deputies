@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Skill } from './api.js';
 import { selectedSkillStorageKey, setupGuideOpenStorageKey, sidebarPanelStorageKey } from './app-helpers.js';
-import { useAppNavigation, type SidebarPanel } from './app-navigation.js';
+import type { RevisionResource, SidebarPanel } from './app-navigation.js';
 import { useSessionSkillCatalog } from './session-skill-catalog.js';
 import { useSkillInvocationCandidates } from './skill-invocation-candidates.js';
 import { useSkillsAdmin } from './skills-admin.js';
@@ -15,6 +15,8 @@ export type SkillWorkspaceNavigation = {
   isCreatingThread: boolean;
   selectedEnvironmentId: string;
   selectedEnvironmentRevisionId: string;
+  selectedAgentId: string;
+  selectedAgentRevisionId: string;
   selectedSkillId: string;
   selectedSkillRevisionId: string;
   selectedSnippetId: string;
@@ -31,7 +33,7 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
   setSidebarOpen: (open: boolean) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   onError: (error: unknown) => void;
-  canNavigate: (navigation: T) => boolean;
+  navigate: (navigation: T, resource: RevisionResource, replace?: boolean) => boolean;
 }) {
   const editorDirtyRef = useRef(false);
   const [newThreadError, setNewThreadError] = useState('');
@@ -81,20 +83,6 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
     editorDirtyRef.current = dirty;
   }
 
-  const navigation = useAppNavigation({
-    navigation: input.navigation,
-    onNavigationChange: (next) => input.setNavigation(() => next),
-    canNavigate: (next) => {
-      const leavingDirtySkill =
-        input.navigation.sidebarPanel === 'skills' &&
-        (next.sidebarPanel !== 'skills' ||
-          next.selectedSkillId !== input.navigation.selectedSkillId ||
-          next.selectedSkillRevisionId !== input.navigation.selectedSkillRevisionId);
-      if (leavingDirtySkill && !confirmDiscard()) return false;
-      return input.canNavigate(next);
-    },
-  });
-
   useEffect(() => {
     if (!input.canCallApi) return;
     void admin.refresh();
@@ -123,60 +111,20 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
       selectedSkillId: skillId,
       selectedSkillRevisionId: revisionId,
     };
-    return navigation.navigate(nextNavigation, { type: 'skill', id: skillId, revisionId }, replace);
-  }
-
-  function navigateToEnvironment(environmentId: string, revisionId = '', replace = false): boolean {
-    const nextNavigation = {
-      ...input.navigation,
-      setupGuideOpen: false,
-      instanceAccessOpen: false,
-      sidebarPanel: 'environments' as const,
-      isCreatingThread: false,
-      selectedEnvironmentId: environmentId,
-      selectedEnvironmentRevisionId: environmentId === input.navigation.selectedEnvironmentId ? revisionId : '',
-    };
-    return navigation.navigate(
-      nextNavigation,
-      {
-        type: 'environment',
-        id: environmentId,
-        revisionId: nextNavigation.selectedEnvironmentRevisionId,
-      },
-      replace,
-    );
-  }
-
-  function navigateToSnippet(snippetId: string, replace = false): boolean {
-    const nextNavigation = {
-      ...input.navigation,
-      setupGuideOpen: false,
-      instanceAccessOpen: false,
-      sidebarPanel: 'snippets' as const,
-      isCreatingThread: false,
-      selectedSnippetId: snippetId,
-    };
-    return navigation.navigate(nextNavigation, { type: 'snippet', id: snippetId }, replace);
+    return input.navigate(nextNavigation, { type: 'skill', id: skillId, revisionId }, replace);
   }
 
   function open() {
     if (!canView) return;
     if (input.navigation.sidebarPanel !== 'skills' && !confirmDiscard()) return;
     const desktop = isDesktopViewport();
-    sessionStorage.removeItem(setupGuideOpenStorageKey);
-    sessionStorage.setItem(sidebarPanelStorageKey, 'skills');
     if (selectedSkillId) {
       if (!navigateToSkill(selectedSkillId)) return;
     } else {
-      clearResourceSearchParams();
-      input.setNavigation((current) => ({
-        ...current,
-        setupGuideOpen: false,
-        instanceAccessOpen: false,
-        sidebarPanel: 'skills',
-        isCreatingThread: false,
-      }));
+      if (!navigateToSkill('')) return;
     }
+    sessionStorage.removeItem(setupGuideOpenStorageKey);
+    sessionStorage.setItem(sidebarPanelStorageKey, 'skills');
     input.setSidebarCollapsed(false);
     input.setSidebarOpen(!desktop);
   }
@@ -200,10 +148,10 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
 
   function select(skillId: string, revisionId = '') {
     if (!canView) return;
+    if (!navigateToSkill(skillId, revisionId)) return;
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'skills');
     sessionStorage.setItem(selectedSkillStorageKey, skillId);
-    if (!navigateToSkill(skillId, revisionId)) return;
     input.setSidebarCollapsed(false);
     if (!isDesktopViewport()) input.setSidebarOpen(false);
   }
@@ -272,8 +220,6 @@ export function useSkillsWorkspace<T extends SkillWorkspaceNavigation>(input: {
       create,
       select,
       selectRevision: (revisionId: string) => navigateToSkill(selectedSkillId, revisionId),
-      navigateToEnvironment,
-      navigateToSnippet,
       saved,
       changed,
       archive: admin.archive,

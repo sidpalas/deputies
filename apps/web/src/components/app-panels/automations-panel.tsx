@@ -8,6 +8,7 @@ import {
   listBranches,
   updateAutomation,
   type Automation,
+  type AgentProfile,
   type AutomationInvocation,
   type AutomationInvocationPage,
   type BranchOption,
@@ -43,6 +44,7 @@ type AutomationForm = {
   id: string;
   name: string;
   scheduleCron: string;
+  profileId: string;
   environmentId: string;
   environmentRevisionPolicy: 'follow_latest' | 'pinned';
   environmentRevisionId: string;
@@ -79,6 +81,8 @@ export function AutomationsPanel(props: {
   repositoryOptionsLoading: boolean;
   repositoryOptionsError: string;
   modelChoices: ModelChoice[];
+  agentProfiles?: AgentProfile[];
+  defaultProfileId?: string | null;
   defaultReasoningLevel: ReasoningLevel | '';
   selectedAutomationId: string;
   showOpenSidebar: boolean;
@@ -133,12 +137,30 @@ export function AutomationsPanel(props: {
     form.model && !modelOptions.some((option) => option.value === form.model)
       ? [{ value: form.model, label: `${form.model} (saved)`, available: true }, ...modelOptions]
       : modelOptions;
+  const selectableAgentProfiles = (props.agentProfiles ?? []).filter(
+    (profile) => profile.enabled && !profile.archivedAt && profile.supportedInvocations.includes('agent'),
+  );
+  const savedAgentProfile = (props.agentProfiles ?? []).find((profile) => profile.id === form.profileId);
+  const savedAgentProfileUnavailable = Boolean(
+    selected &&
+    form.profileId &&
+    (!savedAgentProfile ||
+      !savedAgentProfile.enabled ||
+      savedAgentProfile.archivedAt ||
+      !savedAgentProfile.supportedInvocations.includes('agent')),
+  );
+  const agentProfileOptions = [
+    ...(savedAgentProfileUnavailable
+      ? [{ value: form.profileId, label: `${savedAgentProfile?.name ?? form.profileId} (unavailable)` }]
+      : []),
+    ...selectableAgentProfiles.map((profile) => ({ value: profile.id, label: profile.name })),
+  ];
   const canEdit =
     props.canCallApi &&
     props.canManageTenantResources &&
     (selected ? Boolean(selected.canManage) && !selectedArchived : props.canCreateAutomations);
   const canEditDefinition = canEdit;
-  const formComplete = Boolean(form.name.trim() && form.scheduleCron.trim() && form.prompt.trim());
+  const formComplete = Boolean(form.name.trim() && form.scheduleCron.trim() && form.profileId && form.prompt.trim());
   const saveDisabled = !canEdit || saving || !formComplete;
   const revisionPolicyHasUnsavedChanges =
     !selected ||
@@ -165,7 +187,7 @@ export function AutomationsPanel(props: {
       setInvocationsNextCursor('');
       setInvocationsLoading(false);
       setOlderInvocationsLoading(false);
-      if (!props.selectedAutomationId) setForm(emptyForm());
+      if (!props.selectedAutomationId) setForm(emptyForm(props.defaultProfileId ?? ''));
       return;
     }
     let cancelled = false;
@@ -190,6 +212,14 @@ export function AutomationsPanel(props: {
       cancelled = true;
     };
   }, [selected?.id, props.selectedAutomationId, props.token, props.loadInvocationPage]);
+
+  useEffect(() => {
+    if (!selected && !props.selectedAutomationId && props.defaultProfileId) {
+      setForm((current) =>
+        !current.id && !current.profileId ? { ...current, profileId: props.defaultProfileId ?? '' } : current,
+      );
+    }
+  }, [selected, props.selectedAutomationId, props.defaultProfileId]);
 
   useEffect(() => {
     const repository = form.repository.trim();
@@ -443,7 +473,25 @@ export function AutomationsPanel(props: {
                   </label>
                 </div>
 
-                <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(12rem,20rem)_minmax(8rem,12rem)]">
+                <div className="grid items-start gap-3 xl:grid-cols-4">
+                  <div className="order-1 xl:order-none">
+                    <Field label="Agent" htmlFor="automation-agent">
+                      <OptionPicker
+                        id="automation-agent"
+                        label="Agent"
+                        value={form.profileId}
+                        options={agentProfileOptions}
+                        emptyLabel="Select agent"
+                        onChange={(value) => setForm({ ...form, profileId: value })}
+                        disabled={!canEditDefinition}
+                      />
+                      {savedAgentProfileUnavailable ? (
+                        <p className="mt-1.5 text-xs font-medium text-destructive">
+                          This agent is unavailable. Select an active agent before saving or invoking this automation.
+                        </p>
+                      ) : null}
+                    </Field>
+                  </div>
                   <div className="order-1 xl:order-none">
                     <Field label="Codebase" htmlFor="automation-codebase">
                       <CodebasePicker
@@ -790,11 +838,12 @@ function InvocationRow(props: { invocation: AutomationInvocation; onSelectSessio
   );
 }
 
-function emptyForm(): AutomationForm {
+function emptyForm(profileId = ''): AutomationForm {
   return {
     id: '',
     name: '',
     scheduleCron: '0 9 * * 1-5',
+    profileId,
     environmentId: '',
     environmentRevisionPolicy: 'follow_latest',
     environmentRevisionId: '',
@@ -814,6 +863,7 @@ function formFromAutomation(automation: Automation): AutomationForm {
     id: automation.id,
     name: automation.name,
     scheduleCron: automation.scheduleCron,
+    profileId: automation.profileId,
     environmentId: automation.environmentId ?? '',
     environmentRevisionPolicy: automation.environmentRevisionPolicy ?? 'follow_latest',
     environmentRevisionId: automation.environmentRevisionId ?? '',
@@ -834,6 +884,7 @@ function automationFormInput(form: AutomationForm, token: string, environment: E
     name: form.name.trim(),
     prompt: form.prompt.trim(),
     scheduleCron: form.scheduleCron.trim(),
+    profileId: form.profileId,
     enabled: form.enabled,
     environmentId: form.environmentId,
     ...(form.environmentId

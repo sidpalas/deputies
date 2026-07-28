@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readAppliedAgentProfileSnapshot } from '../agent-profiles/types.js';
 import type { EventService } from '../events/service.js';
 import { StoreConflictError } from '../store/types.js';
 import type { SessionRecord, SessionStore } from '../store/types.js';
@@ -12,6 +13,7 @@ export type CreateSessionInput = {
   createdByUserId?: string;
   visibility?: 'tenant' | 'private';
   ownerUserId?: string;
+  context?: Record<string, unknown>;
 };
 
 export type UpdateSessionInput = {
@@ -53,10 +55,20 @@ export class SessionService {
   constructor(
     private readonly store: SessionStore,
     private readonly events: EventService,
+    private readonly defaultContext?: () => Promise<Record<string, unknown>>,
   ) {}
 
   async create(input: CreateSessionInput = {}): Promise<SessionRecord> {
     const now = new Date();
+    let context = input.context;
+    if (this.defaultContext && !readAppliedAgentProfileSnapshot(context?.agentProfileSnapshot)) {
+      const defaults = await this.defaultContext();
+      context = {
+        ...defaults,
+        ...(context ?? {}),
+        agentProfileSnapshot: defaults.agentProfileSnapshot,
+      };
+    }
     // Session list cursors round-trip JS Date millisecond precision. Do not write
     // session timestamps with database now(), or keyset pagination can skip rows.
     const record: SessionRecord = {
@@ -74,6 +86,7 @@ export class SessionService {
     if (input.parentSessionId) record.parentSessionId = input.parentSessionId;
     if (input.createdByUserId) record.createdByUserId = input.createdByUserId;
     if (input.ownerUserId) record.ownerUserId = input.ownerUserId;
+    if (context) record.context = context;
 
     const session = await this.store.createSession(record);
     await this.events.append({

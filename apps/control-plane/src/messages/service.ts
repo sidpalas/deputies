@@ -243,8 +243,12 @@ function mergeMessageContext(
   sessionContext: Record<string, unknown> | undefined,
   messageContext: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
+  const safeMessageContext = messageContext ? { ...messageContext } : undefined;
+  if (safeMessageContext) delete safeMessageContext.agentProfileSnapshot;
   const context =
-    sessionContext && messageContext ? { ...sessionContext, ...messageContext } : (messageContext ?? sessionContext);
+    sessionContext && safeMessageContext
+      ? { ...sessionContext, ...safeMessageContext }
+      : (safeMessageContext ?? sessionContext);
   if (!context || !messageContext) return context;
   return clearOppositeCodebaseContext(context, messageContext);
 }

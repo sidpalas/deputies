@@ -78,6 +78,217 @@ describe('core API', () => {
     await expect(response.json()).resolves.toMatchObject({ status: 'ok', runMode: 'combined' });
   });
 
+  it('rejects malformed agent profile compatibility and unknown invocations as client errors', async () => {
+    const base = { name: 'Managed', description: 'Description', instructions: 'Instructions' };
+    for (const body of [
+      { ...base, supportedInvocations: 'agent' },
+      { ...base, supportedInvocations: ['automation'] },
+      { ...base, supportedInvocations: ['deputy'] },
+      { ...base, supportedInvocations: ['session'] },
+      { ...base, supportedInvocations: ['agent'], skillRevisions: [] },
+    ]) {
+      const response = await postJson(`${baseUrl}/agent-profiles`, body);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error: expect.anything() });
+    }
+  });
+
+  it('defaults new agent profiles to agent and subagent invocation', async () => {
+    const response = await postJson(`${baseUrl}/agent-profiles`, {
+      name: 'Default compatibility',
+      description: 'Description',
+      instructions: 'Instructions',
+    });
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      agentProfile: { supportedInvocations: ['agent', 'subagent'] },
+    });
+  });
+
+  it('reads, validates, clears, and applies the tenant default profile to new sessions', async () => {
+    const initial = await fetch(`${baseUrl}/agent-profiles/configuration/default`);
+    await expect(initial.json()).resolves.toMatchObject({
+      configuration: { configuredProfileId: null, effectiveProfileId: 'builtin:general' },
+    });
+    for (const body of [{}, { defaultProfileId: '' }, { defaultProfileId: 3 }, { defaultProfileId: null, extra: true }])
+      expect((await patchJson(`${baseUrl}/agent-profiles/configuration/default`, body)).status).toBe(400);
+
+    const configured = await patchJson(`${baseUrl}/agent-profiles/configuration/default`, {
+      defaultProfileId: 'builtin:reviewer',
+    });
+    expect(configured.status).toBe(200);
+    await expect(configured.json()).resolves.toMatchObject({
+      configuration: { configuredProfileId: 'builtin:reviewer', effectiveProfileId: 'builtin:reviewer' },
+    });
+    const created = await postJson(`${baseUrl}/sessions`, {});
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toHaveProperty(
+      'session.context.agentProfileSnapshot.profileId',
+      'builtin:reviewer',
+    );
+
+    const cleared = await patchJson(`${baseUrl}/agent-profiles/configuration/default`, { defaultProfileId: null });
+    await expect(cleared.json()).resolves.toMatchObject({
+      configuration: { configuredProfileId: null, effectiveProfileId: 'builtin:general' },
+    });
+  });
+
+  it('configures built-in agent availability, model, and reasoning defaults', async () => {
+    const response = await patchJson(`${baseUrl}/agent-profiles/builtin:reviewer/settings`, {
+      enabled: false,
+      defaultModel: 'openai/reviewer',
+      defaultReasoningLevel: 'high',
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      agentProfile: {
+        id: 'builtin:reviewer',
+        enabled: false,
+        defaultModel: 'openai/reviewer',
+        defaultReasoningLevel: 'high',
+      },
+    });
+    const listed = await fetch(`${baseUrl}/agent-profiles`);
+    await expect(listed.json()).resolves.toMatchObject({
+      agentProfiles: expect.arrayContaining([
+        expect.objectContaining({ id: 'builtin:reviewer', enabled: false, defaultModel: 'openai/reviewer' }),
+      ]),
+    });
+  });
+
+  it('reports a conflict when disabling a profile used by an active automation', async () => {
+    const automation = await services.automations.createScheduled({
+      name: 'Reviewer automation',
+      prompt: 'Review changes',
+      scheduleCron: '0 9 * * *',
+      profileId: 'builtin:reviewer',
+    });
+
+    const blocked = await patchJson(`${baseUrl}/agent-profiles/builtin:reviewer/settings`, { enabled: false });
+    expect(blocked.status).toBe(409);
+    await expect(blocked.json()).resolves.toMatchObject({
+      error: 'in_use',
+      message: expect.stringContaining(`Reviewer automation (${automation.id})`),
+    });
+
+    await services.automations.updateScheduled({ id: automation.id, enabled: false });
+    expect((await patchJson(`${baseUrl}/agent-profiles/builtin:reviewer/settings`, { enabled: false })).status).toBe(
+      200,
+    );
+  });
+
+  it('rejects malformed optional agent profile defaults', async () => {
+    const base = {
+      name: 'Managed',
+      description: 'Description',
+      instructions: 'Instructions',
+      supportedInvocations: ['agent'],
+    };
+    for (const body of [
+      { ...base, defaultModel: null },
+      { ...base, defaultModel: '  ' },
+      { ...base, defaultReasoningLevel: 1 },
+      { ...base, defaultReasoningLevel: '' },
+    ]) {
+      const response = await postJson(`${baseUrl}/agent-profiles`, body);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error: 'invalid' });
+    }
+  });
+
+  it('maps agent profile name collisions to conflict and missing revisions to not found', async () => {
+    const write = (name: string) => ({
+      name,
+      description: 'Description',
+      instructions: 'Instructions',
+      supportedInvocations: ['agent'],
+    });
+    const firstResponse = await postJson(`${baseUrl}/agent-profiles`, write(' Collision '));
+    const firstBody = (await firstResponse.json()) as { agentProfile: { id: string; name: string; revision: string } };
+    expect(firstBody.agentProfile.name).toBe('Collision');
+    const first = firstBody.agentProfile;
+    const removedSkillConfiguration = await patchJson(`${baseUrl}/agent-profiles/${first.id}`, {
+      ...write('Collision'),
+      expectedCurrentRevisionId: first.revision,
+      skillRevisions: [],
+    });
+    expect(removedSkillConfiguration.status).toBe(400);
+    await expect(removedSkillConfiguration.json()).resolves.toMatchObject({ error: 'invalid' });
+    const duplicate = await postJson(`${baseUrl}/agent-profiles`, write('collision'));
+    expect(duplicate.status).toBe(409);
+    await expect(duplicate.json()).resolves.toMatchObject({ error: 'name_collision' });
+
+    expect((await postJson(`${baseUrl}/agent-profiles/${first.id}/archive`, {})).status).toBe(200);
+    expect((await postJson(`${baseUrl}/agent-profiles`, write('Collision'))).status).toBe(201);
+    const restore = await postJson(`${baseUrl}/agent-profiles/${first.id}/restore`, {});
+    expect(restore.status).toBe(409);
+    await expect(restore.json()).resolves.toMatchObject({ error: 'name_collision' });
+
+    const missing = await fetch(`${baseUrl}/agent-profiles/missing/revisions`);
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toMatchObject({ error: 'not_found' });
+    const builtin = await fetch(`${baseUrl}/agent-profiles/builtin:general/revisions`);
+    expect(builtin.status).toBe(409);
+    await expect(builtin.json()).resolves.toMatchObject({ error: 'immutable_builtin' });
+  });
+
+  it('maps session profile errors and resolves profile environment defaults to executable context', async () => {
+    expect((await postJson(`${baseUrl}/sessions`, { profileId: 42 })).status).toBe(400);
+    expect((await postJson(`${baseUrl}/sessions`, { reasoningLevel: 'impossible' })).status).toBe(400);
+    const unknown = await postJson(`${baseUrl}/sessions`, { profileId: 'missing' });
+    expect(unknown.status).toBe(404);
+    await expect(unknown.json()).resolves.toMatchObject({ error: 'not_found' });
+
+    const incompatible = await postJson(`${baseUrl}/agent-profiles`, {
+      name: 'Subagent only',
+      description: 'Description',
+      instructions: 'Instructions',
+      supportedInvocations: ['subagent'],
+    });
+    const incompatibleProfile = ((await incompatible.json()) as { agentProfile: { id: string } }).agentProfile;
+    const incompatibleSession = await postJson(`${baseUrl}/sessions`, { profileId: incompatibleProfile.id });
+    expect(incompatibleSession.status).toBe(400);
+    await expect(incompatibleSession.json()).resolves.toMatchObject({ error: 'incompatible' });
+
+    const environment = await services.environments.create({
+      name: 'Profile environment',
+      repositories: [{ owner: 'deputies', repo: 'app', branch: 'main', primary: true }],
+    });
+    const profileResponse = await postJson(`${baseUrl}/agent-profiles`, {
+      name: 'Environment agent',
+      description: 'Description',
+      instructions: 'Instructions',
+      supportedInvocations: ['agent'],
+    });
+    const profile = ((await profileResponse.json()) as { agentProfile: { id: string } }).agentProfile;
+    const sessionResponse = await postJson(`${baseUrl}/sessions`, {
+      profileId: profile.id,
+      environmentId: environment.id,
+    });
+    expect(sessionResponse.status).toBe(201);
+    await expect(sessionResponse.json()).resolves.toMatchObject({
+      session: {
+        context: {
+          environment: { id: environment.id, revisionId: environment.currentRevisionId },
+          agentProfileSnapshot: { profileId: profile.id },
+        },
+      },
+    });
+    const clearedResponse = await postJson(`${baseUrl}/sessions`, {
+      profileId: profile.id,
+      model: null,
+      reasoningLevel: null,
+      environmentId: null,
+    });
+    expect(clearedResponse.status).toBe(201);
+    const cleared = (await clearedResponse.json()) as { session: { context: Record<string, unknown> } };
+    expect(cleared.session.context).not.toHaveProperty('environment');
+    expect(cleared.session.context).not.toHaveProperty('model');
+    expect(cleared.session.context.agentProfileSnapshot).toEqual(
+      expect.not.objectContaining({ environmentId: expect.anything() }),
+    );
+  });
+
   it('reports Pi runner as configured without adding an app notice', async () => {
     await closeServer(server);
     store = new MemoryStore();
@@ -239,7 +450,7 @@ describe('core API', () => {
 
     expect(response.status).toBe(202);
     const body = (await response.json()) as { message: Record<string, unknown> };
-    expect(body.message).not.toHaveProperty('context');
+    expect(body.message).toHaveProperty('context.agentProfileSnapshot.profileId', 'builtin:general');
   });
 
   it('rejects environment branch overrides without an environment message context', async () => {
@@ -403,6 +614,17 @@ describe('core API', () => {
     });
     expect(crossSiteCreate.status).toBe(403);
     await expect(crossSiteCreate.json()).resolves.toMatchObject({ error: 'forbidden' });
+
+    const crossSiteAgentUpdate = await fetch(`${baseUrl}/agent-profiles/builtin:reviewer/settings`, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        cookie: cookie!,
+        origin: 'https://evil.example',
+      },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(crossSiteAgentUpdate.status).toBe(403);
 
     const crossSiteFetchMetadataCreate = await fetch(`${baseUrl}/sessions`, {
       method: 'POST',
@@ -862,7 +1084,7 @@ describe('core API', () => {
     expect(generatedMessageBody.message).toMatchObject({
       context: { titleGeneration: { fallbackTitle: 'Generated fallback' } },
     });
-    expect(explicitMessageBody.message).not.toHaveProperty('context');
+    expect(explicitMessageBody.message).toHaveProperty('context.agentProfileSnapshot.profileId', 'builtin:general');
 
     const editedMessage = await patchJson(
       `${baseUrl}/sessions/${generatedSession.id}/messages/${generatedMessageBody.message.id}`,
@@ -1006,17 +1228,21 @@ describe('core API', () => {
 
     const body = await createMessage.json();
     expectMessageResponse(body);
-    expect((body.message as { context?: unknown }).context).toEqual({
-      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
-    });
+    expect((body.message as { context?: unknown }).context).toEqual(
+      expect.objectContaining({
+        repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
+      }),
+    );
 
     const sessionResponse = await fetch(`${baseUrl}/sessions/${session.id}`);
     expect(sessionResponse.status).toBe(200);
     const sessionBody = await sessionResponse.json();
     expectSessionResponse(sessionBody);
-    expect((sessionBody.session as { context?: unknown }).context).toEqual({
-      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
-    });
+    expect((sessionBody.session as { context?: unknown }).context).toEqual(
+      expect.objectContaining({
+        repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
+      }),
+    );
   });
 
   it('inherits and overrides session repository context on follow-up messages', async () => {
@@ -1034,9 +1260,11 @@ describe('core API', () => {
     expect(inherited.status).toBe(202);
     const inheritedBody = await inherited.json();
     expectMessageResponse(inheritedBody);
-    expect((inheritedBody.message as { context?: unknown }).context).toEqual({
-      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
-    });
+    expect((inheritedBody.message as { context?: unknown }).context).toEqual(
+      expect.objectContaining({
+        repository: { provider: 'github', owner: 'manaflow-ai', repo: 'manaflow' },
+      }),
+    );
 
     const overridden = await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
       prompt: 'Switch repos',
@@ -1045,18 +1273,22 @@ describe('core API', () => {
     expect(overridden.status).toBe(202);
     const overriddenBody = await overridden.json();
     expectMessageResponse(overriddenBody);
-    expect((overriddenBody.message as { context?: unknown }).context).toEqual({
-      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'agent-runtime' },
-    });
+    expect((overriddenBody.message as { context?: unknown }).context).toEqual(
+      expect.objectContaining({
+        repository: { provider: 'github', owner: 'manaflow-ai', repo: 'agent-runtime' },
+      }),
+    );
 
     const inheritedOverride = await postJson(`${baseUrl}/sessions/${session.id}/messages`, {
       prompt: 'Use the new repo',
     });
     const inheritedOverrideBody = await inheritedOverride.json();
     expectMessageResponse(inheritedOverrideBody);
-    expect((inheritedOverrideBody.message as { context?: unknown }).context).toEqual({
-      repository: { provider: 'github', owner: 'manaflow-ai', repo: 'agent-runtime' },
-    });
+    expect((inheritedOverrideBody.message as { context?: unknown }).context).toEqual(
+      expect.objectContaining({
+        repository: { provider: 'github', owner: 'manaflow-ai', repo: 'agent-runtime' },
+      }),
+    );
   });
 
   it('rejects invalid repository context', async () => {

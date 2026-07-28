@@ -1,16 +1,23 @@
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { builtinAgentProfiles } from '../agent-profiles/builtins.js';
+import { formatAgentProfileCatalog } from '../agent-profiles/types.js';
 
 const subagentOutputMaxBytes = 50 * 1024;
 
 export type PiSubagentProfile = {
+  id: string;
   name: string;
-  aliases: string[];
+  source: 'builtin' | 'managed';
+  revision: string;
+  hash?: string;
   description: string;
   instructions: string;
+  model?: string;
+  reasoningLevel?: string;
 };
 
 export type PiSubagentRunInput = {
-  agent: string;
+  profileId: string;
   task: string;
   cwd?: string;
   signal?: AbortSignal;
@@ -19,12 +26,15 @@ export type PiSubagentRunInput = {
 };
 
 export type PiSubagentRunResult = {
-  agent: string;
+  profileId: string;
   task: string;
   cwd: string;
   depth: number;
   text: string;
   model?: string;
+  profileSource?: 'builtin' | 'managed';
+  profileRevision?: string;
+  profileHash?: string;
   usage?: unknown;
 };
 
@@ -32,56 +42,37 @@ export type PiSubagentToolServices = {
   run: (input: PiSubagentRunInput) => Promise<PiSubagentRunResult>;
 };
 
-const profiles: PiSubagentProfile[] = [
-  {
-    name: 'general',
-    aliases: ['general-purpose', 'worker'],
-    description: 'General-purpose subagent for delegated implementation or investigation work.',
-    instructions:
-      'You are a general-purpose subagent. Work autonomously on the delegated task, use the available tools as needed, verify important claims, and return a concise final result with any files changed, checks run, and residual risks.',
-  },
-  {
-    name: 'explore',
-    aliases: ['scout'],
-    description: 'Read-oriented codebase reconnaissance and context gathering.',
-    instructions:
-      'You are an exploration subagent. Focus on codebase reconnaissance, relevant files, data flow, risks, and open questions. Do not edit files or make persistent changes unless the task explicitly asks you to.',
-  },
-  {
-    name: 'planner',
-    aliases: ['plan'],
-    description: 'Grounded implementation planning without making changes.',
-    instructions:
-      'You are a planning subagent. Read enough context to produce a concrete, grounded implementation plan. Do not edit files. Include assumptions, sequencing, validation steps, and risks.',
-  },
-  {
-    name: 'reviewer',
-    aliases: ['review'],
-    description: 'Independent code review and verification.',
-    instructions:
-      'You are a review subagent. Review the delegated work for bugs, regressions, missing tests, security issues, and unnecessary complexity. Prefer findings with file or command evidence. Do not edit files unless explicitly instructed.',
-  },
-];
+const profiles: PiSubagentProfile[] = builtinAgentProfiles.map(
+  ({ id, name, source, revision, description, instructions, defaultModel, defaultReasoningLevel }) => ({
+    id,
+    name,
+    source,
+    revision,
+    description,
+    instructions,
+    ...(defaultModel ? { model: defaultModel } : {}),
+    ...(defaultReasoningLevel ? { reasoningLevel: defaultReasoningLevel } : {}),
+  }),
+);
 
 export const piSubagentToolParameters = {
   type: 'object',
   additionalProperties: false,
-  required: ['task'],
+  required: ['profileId', 'task'],
   properties: {
-    agent: {
+    profileId: {
       type: 'string',
-      description: `Subagent profile. Available profiles: ${profiles
-        .map((profile) => [profile.name, ...profile.aliases].join('/'))
-        .join(', ')}. Defaults to general.`,
+      description: `Agent profile ID. Built-ins: ${profiles.map((profile) => profile.id).join(', ')}.`,
     },
     task: { type: 'string', description: 'Focused task to delegate to the subagent.' },
     cwd: { type: 'string', description: 'Optional sandbox working directory for the subagent.' },
   },
 } as const;
 
-const piSubagentToolParametersForPi = piSubagentToolParameters as unknown as ToolDefinition['parameters'];
-
-export function createPiSubagentToolDefinition(services: PiSubagentToolServices): ToolDefinition {
+export function createPiSubagentToolDefinition(
+  services: PiSubagentToolServices,
+  availableProfiles: PiSubagentProfile[] = profiles,
+): ToolDefinition {
   return {
     name: 'subagent',
     label: 'subagent',
@@ -91,11 +82,11 @@ export function createPiSubagentToolDefinition(services: PiSubagentToolServices)
     promptGuidelines: [
       'Use subagent for independent exploration, planning, review, or larger delegated work that would clutter the main context.',
       'Do not use subagent for quick answers, tiny targeted edits, or latency-sensitive one-step work.',
-      'Prefer agent=explore for reconnaissance, agent=planner for plans, agent=reviewer for independent review, and agent=general or worker for implementation.',
-      'Subagents in this environment run inside the same Deputies sandbox and return a concise final result to you.',
+      'Select a profileId compatible with subagent invocation.',
+      'Subagents in this environment run inside the same Deputies sandbox and should generally return a concise final result to you.',
       'Nested subagent delegation is available but capped at 4 levels deep.',
     ],
-    parameters: piSubagentToolParametersForPi,
+    parameters: subagentToolParameters(availableProfiles),
     executionMode: 'sequential',
     async execute(toolCallId, params, signal) {
       const input = readSubagentInput(params as Record<string, unknown>, signal);
@@ -110,11 +101,24 @@ export function createPiSubagentToolDefinition(services: PiSubagentToolServices)
   };
 }
 
-export function resolvePiSubagentProfile(value: string | undefined): PiSubagentProfile {
-  const name = value?.trim() || 'general';
-  const profile = profiles.find((candidate) => candidate.name === name || candidate.aliases.includes(name));
+function subagentToolParameters(availableProfiles: PiSubagentProfile[]) {
+  return {
+    ...piSubagentToolParameters,
+    properties: {
+      ...piSubagentToolParameters.properties,
+      profileId: {
+        ...piSubagentToolParameters.properties.profileId,
+        description: `Agent profile ID. Available profiles: ${formatAgentProfileCatalog(availableProfiles)}.`,
+      },
+    },
+  };
+}
+
+export function resolvePiSubagentProfile(value: string): PiSubagentProfile {
+  const name = value?.trim();
+  const profile = profiles.find((candidate) => candidate.id === name);
   if (profile) return profile;
-  const available = profiles.map((candidate) => [candidate.name, ...candidate.aliases].join('/')).join(', ');
+  const available = profiles.map((candidate) => candidate.id).join(', ');
   throw new Error(`Unknown subagent profile: ${name}. Available profiles: ${available}.`);
 }
 
@@ -122,10 +126,10 @@ export function piSubagentSystemPrompt(basePrompt: string, profile: PiSubagentPr
   return [
     basePrompt,
     '',
-    `<subagent name="${profile.name}">`,
+    `<subagent profile-id="${profile.id}">`,
     profile.instructions,
     '',
-    'You are operating in an isolated child context. Return a concise final answer for the parent agent. Do not ask the user questions directly; report blockers and decisions needed back to the parent.',
+    'You are operating in an isolated child context. Generally return a concise final result to the parent agent. Do not ask the user questions directly; report blockers and decisions needed back to the parent.',
     '</subagent>',
   ].join('\n');
 }
@@ -133,8 +137,11 @@ export function piSubagentSystemPrompt(basePrompt: string, profile: PiSubagentPr
 function readSubagentInput(params: Record<string, unknown>, signal?: AbortSignal): PiSubagentRunInput {
   const task = typeof params.task === 'string' ? params.task.trim() : '';
   if (!task) throw new Error('subagent task must be a non-empty string');
-  const profile = resolvePiSubagentProfile(typeof params.agent === 'string' ? params.agent : undefined);
-  const input: PiSubagentRunInput = { agent: profile.name, task };
+  const profileId = typeof params.profileId === 'string' ? params.profileId.trim() : '';
+  if (!profileId) throw new Error('subagent profileId must be a non-empty string');
+  // Resolution is deliberately deferred to the runner: managed profiles are
+  // tenant data and can only be resolved asynchronously there.
+  const input: PiSubagentRunInput = { profileId, task };
   const cwd = typeof params.cwd === 'string' ? params.cwd.trim() : '';
   if (cwd) input.cwd = cwd;
   if (signal) input.signal = signal;

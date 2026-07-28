@@ -21,7 +21,15 @@ import { cn } from '../../lib/utils.js';
 import { Button } from '../ui/button.js';
 import type { ThemePreference } from './types.js';
 
-export type NavigationPage = 'sessions' | 'setup' | 'groups' | 'automations' | 'environments' | 'skills' | 'snippets';
+export type NavigationPage =
+  | 'sessions'
+  | 'setup'
+  | 'groups'
+  | 'automations'
+  | 'environments'
+  | 'agents'
+  | 'skills'
+  | 'snippets';
 
 const navigationPages: Array<{
   id: NavigationPage;
@@ -31,6 +39,7 @@ const navigationPages: Array<{
 }> = [
   { id: 'sessions', label: 'Sessions', description: 'Run and review agent work', icon: MessagesSquare },
   { id: 'automations', label: 'Automations', description: 'Schedule recurring work', icon: Bot },
+  { id: 'agents', label: 'Agents', description: 'Manage agent profiles', icon: Bot },
   { id: 'skills', label: 'Skills', description: 'Manage reusable agent instructions', icon: BookOpenCheck },
   { id: 'snippets', label: 'Snippets', description: 'Manage personal prompt snippets', icon: TextQuote },
   { id: 'groups', label: 'Instance access', description: 'Manage tenant-wide user roles', icon: UsersRound },
@@ -49,6 +58,7 @@ export type SidebarFooterProps = {
   canViewGroups: boolean;
   canViewAutomations: boolean;
   canViewEnvironments: boolean;
+  canViewAgents?: boolean;
   canViewSkills: boolean;
   canViewSnippets?: boolean;
   canViewSetup: boolean;
@@ -59,6 +69,7 @@ export type SidebarFooterProps = {
   onOpenGroups: () => void;
   onOpenAutomations: () => void;
   onOpenEnvironments: () => void;
+  onOpenAgents?: () => void;
   onOpenSkills: () => void;
   onOpenSnippets?: () => void;
   onOpenSessions: () => void;
@@ -78,6 +89,7 @@ export function SidebarFooter(props: SidebarFooterProps) {
   const visiblePages = navigationPages.filter((page) => {
     if (page.id === 'groups') return props.canViewGroups;
     if (page.id === 'automations') return props.canViewAutomations;
+    if (page.id === 'agents') return props.canViewAgents;
     if (page.id === 'skills') return props.canViewSkills;
     if (page.id === 'snippets') return props.canViewSnippets;
     if (page.id === 'environments') return props.canViewEnvironments;
@@ -110,6 +122,7 @@ export function SidebarFooter(props: SidebarFooterProps) {
   const pageActions: Record<NavigationPage, () => void> = {
     sessions: props.onOpenSessions,
     automations: props.onOpenAutomations,
+    agents: props.onOpenAgents ?? (() => {}),
     skills: props.onOpenSkills,
     snippets: props.onOpenSnippets ?? (() => {}),
     groups: props.onOpenGroups,
@@ -136,7 +149,7 @@ export function SidebarFooter(props: SidebarFooterProps) {
     >
       {navigationOpen ? (
         <div
-          className="absolute bottom-[calc(100%+0.5rem)] left-0 z-50 max-h-[min(26rem,calc(100dvh-8rem))] w-full overflow-y-auto rounded-lg border border-border bg-card p-1.5 text-card-foreground shadow-xl"
+          className="absolute bottom-[calc(100%+0.5rem)] left-0 z-50 max-h-[calc(100dvh-8rem)] w-full overflow-y-auto rounded-lg border border-border bg-card p-1.5 text-card-foreground shadow-xl"
           role="menu"
           aria-label="Pages"
         >

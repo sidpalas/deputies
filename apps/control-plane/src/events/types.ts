@@ -100,6 +100,13 @@ export type NormalizedEventPayloadMap = {
     shadowed: SkillLoadEventItem[];
     diagnostics: string[];
   };
+  profile_loaded: {
+    profileId: string;
+    source: 'builtin' | 'managed';
+    revision: string;
+    hash: string;
+    defaults: { model?: string; reasoningLevel?: string };
+  };
   skill_invoked: {
     name: string;
     source: 'managed' | 'repo';
@@ -171,7 +178,10 @@ type ToolStartedPayload = {
   activityId?: string | undefined;
   parentActivityId?: string | undefined;
   subagentDepth?: number | undefined;
-  subagentAgent?: string | undefined;
+  subagentProfileId?: string | undefined;
+  subagentProfileSource?: 'builtin' | 'managed' | undefined;
+  subagentProfileRevision?: string | undefined;
+  subagentProfileHash?: string | undefined;
   command?: string;
   args?: unknown;
   taskId?: string | undefined;
@@ -188,7 +198,10 @@ type ToolFinishedPayload = {
   activityId?: string | undefined;
   parentActivityId?: string | undefined;
   subagentDepth?: number | undefined;
-  subagentAgent?: string | undefined;
+  subagentProfileId?: string | undefined;
+  subagentProfileSource?: 'builtin' | 'managed' | undefined;
+  subagentProfileRevision?: string | undefined;
+  subagentProfileHash?: string | undefined;
   isError?: boolean | undefined;
   result?: unknown;
   command?: string | undefined;
@@ -275,6 +288,7 @@ export type NormalizedEventType =
   | 'sandbox_stop_failed'
   | 'repository_ready'
   | 'skills_loaded'
+  | 'profile_loaded'
   | 'skill_invoked'
   | 'setup_script_started'
   | 'setup_script_finished'

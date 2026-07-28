@@ -931,20 +931,22 @@ describe('WorkerService', () => {
 
     await expect(worker.processNext()).resolves.toBe(true);
 
-    expect(runner.inputs[0]?.context).toEqual({
+    expect(runner.inputs[0]?.context).toMatchObject({
+      agentProfileSnapshot: { profileId: 'builtin:general' },
       repository: { provider: 'github', owner: 'manaflow-ai', repo: 'new-repo' },
       reasoningLevel: 'max',
       skills: ['second-skill'],
     });
     expect(runner.inputs[0]?.reasoningLevel).toBe('max');
     expect(runner.inputs[0]?.createdByUserId).toBe('user-1');
-    expect(runner.inputs[0]?.messages).toEqual([
+    expect(runner.inputs[0]?.messages).toMatchObject([
       {
         messageId: firstMessage.id,
         prompt: 'first',
         authorUserId: 'user-1',
         sequence: 1,
         context: {
+          agentProfileSnapshot: { profileId: 'builtin:general' },
           repository: { provider: 'github', owner: 'manaflow-ai', repo: 'old-repo' },
           skills: ['first-skill'],
         },
@@ -956,6 +958,7 @@ describe('WorkerService', () => {
         authorUserId: 'user-1',
         sequence: 2,
         context: {
+          agentProfileSnapshot: { profileId: 'builtin:general' },
           repository: { provider: 'github', owner: 'manaflow-ai', repo: 'new-repo' },
           reasoningLevel: 'max',
           skills: ['second-skill'],
@@ -1048,7 +1051,7 @@ describe('WorkerService', () => {
     await expect(worker.processNext()).resolves.toBe(true);
 
     const updated = await services.sessions.get(session.id);
-    expect(updated?.context).toBeUndefined();
+    expect(updated?.context).toMatchObject({ agentProfileSnapshot: { profileId: 'builtin:general' } });
     expect(updated?.status).toBe('queued');
     const events = await services.events.list(session.id);
     expect(events.map((event) => event.type)).not.toContain('session_updated');

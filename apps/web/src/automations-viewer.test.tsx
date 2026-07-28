@@ -10,6 +10,7 @@ const activeAutomation: Automation = {
   name: 'Nightly review',
   prompt: 'Review changes',
   scheduleCron: '0 9 * * *',
+  profileId: 'builtin:general',
   scheduleTimezone: 'UTC',
   enabled: true,
   canManage: true,

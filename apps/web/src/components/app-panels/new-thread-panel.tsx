@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { PanelLeftOpen } from 'lucide-react';
 import type {
   BranchOption,
+  AgentProfile,
   Environment,
   ModelChoice,
   ReasoningLevel,
@@ -37,6 +38,8 @@ export function NewThreadPanel(props: {
   readOnly: boolean;
   loading: boolean;
   prompt: string;
+  profileId?: string;
+  profiles?: AgentProfile[];
   environmentId: string;
   environmentBranchOverrides: EnvironmentBranchOverrides;
   environmentOptions: Environment[];
@@ -65,6 +68,7 @@ export function NewThreadPanel(props: {
   openSidebarLabel?: string;
   onOpenSidebar: () => void;
   onPromptChange: (value: string) => void;
+  onProfileChange?: (value: string) => void;
   onCodebaseChange: (value: string) => void;
   onEnvironmentBranchOverridesChange: (value: EnvironmentBranchOverrides) => void;
   onEnvironmentRepositoryBranchesLoad: (repository: EnvironmentBranchOverrideRepository) => Promise<BranchOption[]>;
@@ -76,6 +80,7 @@ export function NewThreadPanel(props: {
     skills: string[];
     skillRefs: SkillInvocationRef[];
     visibility: 'tenant' | 'private';
+    profileId?: string;
   }) => Promise<boolean>;
 }) {
   const [branchControlsOpen, setBranchControlsOpen] = useState(false);
@@ -116,7 +121,11 @@ export function NewThreadPanel(props: {
   async function submit() {
     const prepared = skillDraft.prepareSubmission();
     if (!prepared.prompt.trim() && !prepared.skillRefs.length) return;
-    const sent = await props.onSubmit({ ...prepared, visibility: privateSession ? 'private' : 'tenant' });
+    const sent = await props.onSubmit({
+      ...prepared,
+      visibility: privateSession ? 'private' : 'tenant',
+      ...(props.profileId !== undefined ? { profileId: props.profileId } : {}),
+    });
     if (sent) {
       skillDraft.clearSelectedSkills();
       setPrivateSession(false);
@@ -168,6 +177,27 @@ export function NewThreadPanel(props: {
             }}
           >
             <div className="relative flex min-w-0 flex-wrap gap-2">
+              <div className="min-w-0 flex-[0.8_1_12rem]">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="new-thread-agent">
+                  Agent
+                </label>
+                <OptionPicker
+                  id="new-thread-agent"
+                  label="Agent"
+                  value={props.profileId ?? ''}
+                  options={(props.profiles ?? [])
+                    .filter((p) => !p.archivedAt && p.enabled && p.supportedInvocations.includes('agent'))
+                    .map((p) => ({
+                      value: p.id,
+                      label: p.name,
+                      description: p.description,
+                      section: p.source === 'builtin' ? 'Deputies agents' : 'Organization agents',
+                    }))}
+                  emptyLabel="General"
+                  onChange={props.onProfileChange ?? (() => {})}
+                  disabled={!props.canCallApi || !props.profiles?.length}
+                />
+              </div>
               <div className="min-w-0 flex-[1.4_1_18rem]">
                 <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="new-thread-codebase">
                   Codebase

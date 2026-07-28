@@ -231,6 +231,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function omitReservedSkillContext(context: Record<string, unknown>): Record<string, unknown> {
-  const { skills: _skills, skillRefs: _skillRefs, ...safe } = context;
+  const { skills: _skills, skillRefs: _skillRefs, agentProfileSnapshot: _agentProfileSnapshot, ...safe } = context;
   return safe;
 }

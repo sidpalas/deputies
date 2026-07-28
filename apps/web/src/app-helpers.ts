@@ -6,6 +6,7 @@ export const sidebarPanelStorageKey = 'deputies-sidebar-panel';
 export const selectedAutomationStorageKey = 'deputies-selected-automation-id';
 export const selectedEnvironmentStorageKey = 'deputies-selected-environment-id';
 export const selectedSkillStorageKey = 'deputies-selected-skill-id';
+export const selectedAgentStorageKey = 'deputies-selected-agent-id';
 export const archivedSessionsOpenStorageKey = 'deputies-archived-sessions-open';
 export const sessionFiltersStorageKey = 'deputies-session-filters';
 export const archivedAutomationsOpenStorageKey = 'deputies-archived-automations-open';
@@ -45,7 +46,14 @@ export function loadStoredToken(): string {
 
 export function loadInitialSelectedSessionId(): string {
   const query = new URLSearchParams(window.location.search);
-  if (query.get('automation') || query.get('environment') || query.get('skill') || query.get('snippet')) return '';
+  if (
+    query.get('automation') ||
+    query.get('environment') ||
+    query.get('agent') ||
+    query.get('skill') ||
+    query.get('snippet')
+  )
+    return '';
   return query.get('session') ?? sessionStorage.getItem(selectedSessionStorageKey) ?? '';
 }
 
@@ -54,6 +62,7 @@ export function loadInitialIsCreatingThread(): boolean {
     !new URLSearchParams(window.location.search).get('session') &&
     !new URLSearchParams(window.location.search).get('automation') &&
     !new URLSearchParams(window.location.search).get('environment') &&
+    !new URLSearchParams(window.location.search).get('agent') &&
     !new URLSearchParams(window.location.search).get('skill') &&
     !new URLSearchParams(window.location.search).get('snippet') &&
     sessionStorage.getItem(newSessionSelectedStorageKey) === 'true'
@@ -66,6 +75,7 @@ export function loadInitialSetupGuideOpen(): boolean {
     query.get('session') ||
     query.get('automation') ||
     query.get('environment') ||
+    query.get('agent') ||
     query.get('skill') ||
     query.get('snippet')
   )
@@ -73,11 +83,18 @@ export function loadInitialSetupGuideOpen(): boolean {
   return sessionStorage.getItem(setupGuideOpenStorageKey) === 'true';
 }
 
-export function loadInitialSidebarPanel(): 'sessions' | 'automations' | 'environments' | 'skills' | 'snippets' {
+export function loadInitialSidebarPanel():
+  | 'sessions'
+  | 'automations'
+  | 'environments'
+  | 'agents'
+  | 'skills'
+  | 'snippets' {
   const query = new URLSearchParams(window.location.search);
   if (query.get('session')) return 'sessions';
   if (query.get('automation')) return 'automations';
   if (query.get('environment')) return 'environments';
+  if (query.get('agent')) return 'agents';
   if (query.get('skill')) return 'skills';
   if (query.get('snippet')) return 'snippets';
   const stored = sessionStorage.getItem(sidebarPanelStorageKey);
@@ -85,12 +102,24 @@ export function loadInitialSidebarPanel(): 'sessions' | 'automations' | 'environ
     stored === 'sessions' ||
     stored === 'automations' ||
     stored === 'environments' ||
+    stored === 'agents' ||
     stored === 'snippets' ||
     stored === 'skills'
   ) {
     return stored;
   }
   return 'sessions';
+}
+
+export function loadInitialSelectedAgentId(): string {
+  return (
+    new URLSearchParams(window.location.search).get('agent') ?? sessionStorage.getItem(selectedAgentStorageKey) ?? ''
+  );
+}
+
+export function loadInitialSelectedAgentRevisionId(): string {
+  const query = new URLSearchParams(window.location.search);
+  return query.get('agent') ? (query.get('revision') ?? '') : '';
 }
 
 export function loadInitialSelectedAutomationId(): string {

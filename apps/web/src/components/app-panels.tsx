@@ -15,6 +15,8 @@ export { MessageComposer } from './app-panels/message-composer.js';
 export { NewThreadPanel } from './app-panels/new-thread-panel.js';
 export { SkillsPanel } from './app-panels/skills-panel.js';
 export { SkillsSidebar } from './app-panels/skills-sidebar.js';
+export { AgentsPanel } from './app-panels/agents-panel.js';
+export { AgentsSidebar } from './app-panels/agents-sidebar.js';
 export { SnippetsPanel } from './app-panels/snippets-panel.js';
 export { SnippetsSidebar } from './app-panels/snippets-sidebar.js';
 export type { SidebarFooterProps } from './app-panels/sidebar-footer.js';

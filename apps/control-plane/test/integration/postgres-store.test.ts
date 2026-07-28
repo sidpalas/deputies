@@ -15,6 +15,7 @@ import { setupPostgresStoreSuite, testDatabaseUrl } from '../support/postgres-st
 import { defineSessionTagsStoreContract } from '../support/session-tags-store-contract.js';
 import { defineSnippetsStoreContract } from '../support/snippets-store-contract.js';
 import { defineSkillsStoreContract } from '../support/skills-store-contract.js';
+import { defineAgentProfilesStoreContract } from '../support/agent-profiles-store-contract.js';
 
 describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   let pool: Pool;
@@ -30,6 +31,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
   defineSessionTagsStoreContract(() => store);
   defineSnippetsStoreContract(() => store);
   defineSkillsStoreContract(() => store);
+  defineAgentProfilesStoreContract(() => store);
 
   const authUser = (suffix: string, providerAccountId: string, role: 'admin' | 'member' = 'member') => ({
     userId: `00000000-0000-4000-8000-${suffix.padStart(12, '0')}`,

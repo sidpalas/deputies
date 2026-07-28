@@ -1,5 +1,6 @@
 import type { Context, Hono } from 'hono';
 import { AutomationServiceError } from '../automations/service.js';
+import { AgentProfileError } from '../agent-profiles/service.js';
 import {
   canManageAutomation,
   canReadAutomation,
@@ -63,10 +64,17 @@ export function registerAutomationRoutes(
         Boolean(environmentId),
         environmentBranchOverrides ?? [],
       );
+      const requestedProfileId = Object.hasOwn(body, 'profileId') ? optionalString(body.profileId) : undefined;
+      if (Object.hasOwn(body, 'profileId') && !requestedProfileId)
+        throw new HttpRequestError(400, 'invalid_request', 'profileId must be a non-empty string');
+      const profileId = requestedProfileId ?? (await services.agentProfiles.effectiveDefault());
+      if (!profileId)
+        throw new HttpRequestError(409, 'no_default_agent_profile', 'No usable default agent profile is configured');
       const automation = await services.automations.createScheduled({
         name,
         prompt,
         scheduleCron,
+        profileId,
         enabled: body.enabled === undefined ? true : parseBooleanBody(body.enabled, 'enabled'),
         ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
         ...(environmentId ? { environmentId } : {}),
@@ -75,6 +83,7 @@ export function registerAutomationRoutes(
       });
       return c.json({ automation: await serializeAutomation(services, automation, auth) }, 201);
     } catch (error) {
+      if (error instanceof AgentProfileError) return writeError(c, 400, error.code, error.message);
       if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
       if (error instanceof StoreConflictError) return automationStoreConflictResponse(c, error);
       throw error;
@@ -115,6 +124,9 @@ export function registerAutomationRoutes(
     rejectStaleAutomationFields(body);
 
     try {
+      const profileId = Object.hasOwn(body, 'profileId') ? optionalString(body.profileId) : undefined;
+      if (Object.hasOwn(body, 'profileId') && !profileId)
+        throw new HttpRequestError(400, 'invalid_request', 'profileId must be a non-empty string');
       const environmentId = await parseAutomationUpdateEnvironmentId(body, automation, auth, services);
       const effectiveEnvironmentId = environmentId === undefined ? automation.environmentId : environmentId;
       const revisionSelection = await parseEnvironmentRevisionSelection(
@@ -149,6 +161,7 @@ export function registerAutomationRoutes(
       );
       const updated = await services.automations.updateScheduled({
         id: automation.id,
+        ...(profileId ? { profileId } : {}),
         ...(body.name !== undefined ? { name: optionalString(body.name) ?? '' } : {}),
         ...(body.prompt !== undefined ? { prompt: optionalString(body.prompt) ?? '' } : {}),
         ...(body.scheduleCron !== undefined ? { scheduleCron: optionalString(body.scheduleCron) ?? '' } : {}),
@@ -159,6 +172,7 @@ export function registerAutomationRoutes(
       });
       return c.json({ automation: await serializeAutomation(services, updated, auth) });
     } catch (error) {
+      if (error instanceof AgentProfileError) return writeError(c, 400, error.code, error.message);
       if (error instanceof AutomationServiceError) return automationServiceErrorResponse(c, error);
       if (error instanceof StoreConflictError) return automationStoreConflictResponse(c, error);
       throw error;
@@ -276,6 +290,7 @@ async function serializeAutomation(services: AppServices, automation: Automation
     name: automation.name,
     prompt: automation.prompt,
     scheduleCron: automation.scheduleCron,
+    profileId: automation.profileId,
     scheduleTimezone: 'UTC',
     enabled: automation.enabled,
     ...(automation.createdByUserId ? { createdByUserId: automation.createdByUserId } : {}),

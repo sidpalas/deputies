@@ -6,6 +6,86 @@ import { MemoryStore } from '../../src/store/memory.js';
 import type { AutomationRecord } from '../../src/store/types.js';
 
 describe('scheduled automations', () => {
+  it('stores the effective tenant default when no agent profile is specified', async () => {
+    const services = createServices(new MemoryStore());
+    const profile = await services.agentProfiles.create({
+      name: 'Tenant default',
+      description: 'The tenant default agent',
+      instructions: 'Use tenant-specific instructions.',
+      supportedInvocations: ['agent'],
+    });
+    await services.agentProfiles.setTenantDefault(profile.id);
+
+    const automation = await services.automations.createScheduled({
+      name: 'Defaulted automation',
+      prompt: 'Run with the tenant default',
+      scheduleCron: '0 9 * * *',
+    });
+
+    expect(automation.profileId).toBe(profile.id);
+  });
+
+  it('creates sessions with the automation agent profile snapshot', async () => {
+    const services = createServices(new MemoryStore());
+    const profile = await services.agentProfiles.create({
+      name: 'Automation reviewer',
+      description: 'Reviews automation output',
+      instructions: 'Review the requested work carefully.',
+      defaultModel: 'anthropic/profile-model',
+      defaultReasoningLevel: 'high',
+      supportedInvocations: ['agent'],
+    });
+    const automation = await services.automations.createScheduled({
+      name: 'Review automation',
+      prompt: 'Review the latest changes',
+      scheduleCron: '0 9 * * *',
+      profileId: profile.id,
+    });
+
+    const result = await services.automations.invokeManual({ automationId: automation.id });
+
+    expect(result.session?.context).toMatchObject({
+      model: 'anthropic/profile-model',
+      reasoningLevel: 'high',
+      agentProfileSnapshot: {
+        profileId: profile.id,
+        revision: profile.revision,
+        instructions: 'Review the requested work carefully.',
+      },
+    });
+    expect(result.message?.context).toMatchObject({
+      model: 'anthropic/profile-model',
+      reasoningLevel: 'high',
+    });
+  });
+
+  it('fails invocation when the stored agent profile becomes unavailable', async () => {
+    const services = createServices(new MemoryStore());
+    const profile = await services.agentProfiles.create({
+      name: 'Temporary reviewer',
+      description: 'An agent that will be archived',
+      instructions: 'Review the requested work carefully.',
+      supportedInvocations: ['agent'],
+    });
+    const automation = await services.automations.createScheduled({
+      name: 'Review automation',
+      prompt: 'Review the latest changes',
+      scheduleCron: '0 9 * * *',
+      profileId: profile.id,
+    });
+    await services.store.archiveAgentProfile({ id: profile.id, archivedAt: new Date() });
+
+    const result = await services.automations.invokeManual({ automationId: automation.id });
+
+    expect(result).toMatchObject({
+      invocation: {
+        status: 'failed',
+        error: expect.stringContaining(`Agent profile not found: ${profile.id}`),
+      },
+    });
+    expect(result.session).toBeUndefined();
+  });
+
   it('computes the next UTC cron invocation', () => {
     expect(nextUtcCronInvocation('0 9 * * 1-5', new Date('2026-06-08T08:59:30Z')).toISOString()).toBe(
       '2026-06-08T09:00:00.000Z',
@@ -39,6 +119,49 @@ describe('scheduled automations', () => {
     expect(result.message).toMatchObject({ prompt: 'Check the repository', source: 'automation' });
   });
 
+  it('does not reactivate automations whose profiles became unavailable while inactive', async () => {
+    const services = createServices(new MemoryStore());
+    const disabledProfile = await services.agentProfiles.create({
+      name: 'Disabled automation profile',
+      description: 'Used by a disabled automation',
+      instructions: 'Run the disabled automation.',
+      supportedInvocations: ['agent'],
+    });
+    const disabled = await services.automations.createScheduled({
+      name: 'Disabled automation',
+      prompt: 'Run later',
+      scheduleCron: '0 9 * * *',
+      profileId: disabledProfile.id,
+      enabled: false,
+    });
+    await services.agentProfiles.archive(disabledProfile.id);
+
+    await expect(services.automations.updateScheduled({ id: disabled.id, enabled: true })).rejects.toMatchObject({
+      code: 'not_found',
+    });
+
+    const archivedProfile = await services.agentProfiles.create({
+      name: 'Archived automation profile',
+      description: 'Used by an archived automation',
+      instructions: 'Run the archived automation.',
+      supportedInvocations: ['agent'],
+    });
+    const archived = await services.automations.createScheduled({
+      name: 'Archived automation',
+      prompt: 'Run after restoring',
+      scheduleCron: '0 9 * * *',
+      profileId: archivedProfile.id,
+    });
+    await services.automations.archive(archived.id);
+    await services.agentProfiles.archive(archivedProfile.id);
+
+    const restored = await services.automations.unarchive(archived.id);
+    expect(restored.enabled).toBe(false);
+    await expect(services.automations.updateScheduled({ id: restored.id, enabled: true })).rejects.toMatchObject({
+      code: 'not_found',
+    });
+  });
+
   it('applies environment branch overrides when invoking automations', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -63,7 +186,7 @@ describe('scheduled automations', () => {
 
     const result = await services.automations.invokeManual({ automationId: automation.id });
 
-    expect(result.message?.context).toEqual({
+    expect(result.message?.context).toMatchObject({
       model: 'anthropic/claude-sonnet',
       reasoningLevel: 'high',
       environment: {
@@ -100,7 +223,7 @@ describe('scheduled automations', () => {
 
     const result = await services.automations.invokeManual({ automationId: automation.id });
 
-    expect(result.message?.context).toEqual({
+    expect(result.message?.context).toMatchObject({
       environment: {
         id: environment.id,
         revisionId: environment.currentRevisionId,
@@ -335,6 +458,97 @@ describe('scheduled automations', () => {
     await expect(store.getMessages(sessionId)).resolves.toHaveLength(1);
   });
 
+  it('reuses the reserved session profile snapshot when completing a partial retry', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const scheduledAt = new Date('2026-06-08T09:00:00Z');
+    const now = new Date('2026-06-08T09:01:30Z');
+    const sessionId = '00000000-0000-4000-8000-000000000211';
+    const messageId = '00000000-0000-4000-8000-000000000212';
+    const profile = await services.agentProfiles.create({
+      name: 'Pinned retry profile',
+      description: 'Tests retry snapshots',
+      instructions: 'Original instructions.',
+      supportedInvocations: ['agent'],
+    });
+    const snapshot = await services.agentProfiles.snapshot(profile.id, 'agent');
+    const automation = await services.automations.createScheduled({
+      name: 'Retry partial creation',
+      prompt: 'Recover the missing message',
+      scheduleCron: '* * * * *',
+      profileId: profile.id,
+    });
+    await setNextInvocationAt(store, automation, scheduledAt, now);
+    await services.sessions.create({
+      id: sessionId,
+      title: 'Retry partial creation - 2026-06-08 09:00 UTC',
+      context: { agentProfileSnapshot: snapshot },
+    });
+    await store.createAutomationInvocation({
+      id: '00000000-0000-4000-8000-000000000213',
+      automationId: automation.id,
+      trigger: 'scheduled',
+      status: 'creating',
+      scheduledAt,
+      createdAt: scheduledAt,
+      reservedSessionId: sessionId,
+      reservedMessageId: messageId,
+      metadata: {},
+    });
+    await store.archiveAgentProfile({ id: profile.id, archivedAt: new Date() });
+
+    await services.automations.processNextScheduled({ now, lockOwner: 'scheduler-1' });
+
+    const [message] = await store.getMessages(sessionId);
+    expect(message?.context?.agentProfileSnapshot).toEqual(snapshot);
+    expect((await services.automations.listInvocations(automation.id))[0]).toMatchObject({
+      status: 'created',
+      sessionId,
+      messageId,
+    });
+  });
+
+  it('reuses the reserved profile context when recovering before session creation', async () => {
+    const store = new MemoryStore();
+    const services = createServices(store);
+    const scheduledAt = new Date('2026-06-08T09:00:00Z');
+    const now = new Date('2026-06-08T09:01:30Z');
+    const profile = await services.agentProfiles.create({
+      name: 'Pre-session retry profile',
+      description: 'Tests context reservation',
+      instructions: 'Original reserved instructions.',
+      supportedInvocations: ['agent'],
+      defaultModel: 'anthropic/original',
+    });
+    const sessionContext = await services.agentProfiles.executionContext(profile.id, 'agent');
+    const automation = await services.automations.createScheduled({
+      name: 'Retry before session creation',
+      prompt: 'Recover from the reservation',
+      scheduleCron: '* * * * *',
+      profileId: profile.id,
+    });
+    await setNextInvocationAt(store, automation, scheduledAt, now);
+    await store.createAutomationInvocation({
+      id: '00000000-0000-4000-8000-000000000214',
+      automationId: automation.id,
+      trigger: 'scheduled',
+      status: 'creating',
+      scheduledAt,
+      createdAt: scheduledAt,
+      reservedSessionId: '00000000-0000-4000-8000-000000000215',
+      reservedMessageId: '00000000-0000-4000-8000-000000000216',
+      sessionContext,
+      metadata: {},
+    });
+    await store.archiveAgentProfile({ id: profile.id, archivedAt: new Date() });
+
+    await services.automations.processNextScheduled({ now, lockOwner: 'scheduler-1' });
+
+    const [session] = await services.sessions.list();
+    expect(session?.context).toEqual(sessionContext);
+    expect((await services.automations.listInvocations(automation.id))[0]).toMatchObject({ status: 'created' });
+  });
+
   it('does not manually invoke while another invocation owns the automation claim', async () => {
     const store = new MemoryStore();
     const services = createServices(store);
@@ -426,6 +640,25 @@ describe('scheduled automations', () => {
     };
     expect(invocationsBody.invocations.map((invocation) => invocation.id)).toContain(invokeBody.invocation.id);
     expect(invocationsBody.invocations[0]).toMatchObject({ sessionStatus: 'queued', messageStatus: 'pending' });
+  });
+
+  it('rejects malformed explicit agent profile IDs instead of using the default', async () => {
+    const services = createServices(new MemoryStore());
+    const app = createApp(loadConfig({ API_AUTH_MODE: 'none' }), services);
+
+    for (const profileId of [null, '', '   ', 42, []]) {
+      const response = await app.request(
+        '/automations',
+        jsonRequest({
+          name: 'Invalid profile automation',
+          prompt: 'Do not create this',
+          scheduleCron: '0 9 * * *',
+          profileId,
+        }),
+      );
+      expect(response.status).toBe(400);
+    }
+    await expect(services.automations.list()).resolves.toHaveLength(0);
   });
 
   it('validates environment branch overrides on automation API routes', async () => {

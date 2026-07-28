@@ -64,6 +64,7 @@ import {
   updateSessionTags,
   updateSnippet,
   type Automation,
+  type AgentProfile,
   type Environment,
   type EnvironmentBranchOverrideInput,
   type Health,
@@ -83,9 +84,10 @@ import {
   type SkillInvocationRef,
 } from './api.js';
 import { isSnippetMutationAuthoritative, isSnippetMutationCurrent } from './app-state.js';
+import { useAgentProfilesWorkspace } from './agent-profiles-workspace.js';
 import { useAutomationsAdmin } from './automations-admin.js';
 import { useSkillsWorkspace } from './skills-workspace.js';
-import { resolveSidebarNavigation, type SidebarPanel } from './app-navigation.js';
+import { resolveSidebarNavigation, useAppNavigation, type SidebarPanel } from './app-navigation.js';
 import { isInlineDisplayableArtifact } from './artifact-display.js';
 import {
   startSessionMilestoneInteraction,
@@ -148,6 +150,8 @@ import {
   loadInitialSelectedAutomationId,
   loadInitialSelectedEnvironmentId,
   loadInitialSelectedEnvironmentRevisionId,
+  loadInitialSelectedAgentId,
+  loadInitialSelectedAgentRevisionId,
   loadInitialSelectedSkillId,
   loadInitialSelectedSkillRevisionId,
   loadInitialSetupGuideOpen,
@@ -159,6 +163,7 @@ import {
   realtimeReconnectMaxDelayMs,
   selectedAutomationStorageKey,
   selectedEnvironmentStorageKey,
+  selectedAgentStorageKey,
   selectedSkillStorageKey,
   selectedSessionStorageKey,
   sessionFiltersStorageKey,
@@ -177,6 +182,8 @@ import {
   ArchivedSessionNotice,
   AppNoticesBanner,
   AutomationsPanel,
+  AgentsPanel,
+  AgentsSidebar,
   AutomationsSidebar,
   BearerAuthPanel,
   ConnectionStatusBanner,
@@ -231,6 +238,8 @@ type NavigationState = {
   selectedAutomationId: string;
   selectedEnvironmentId: string;
   selectedEnvironmentRevisionId: string;
+  selectedAgentId: string;
+  selectedAgentRevisionId: string;
   selectedSkillId: string;
   selectedSkillRevisionId: string;
   selectedSnippetId: string;
@@ -331,6 +340,8 @@ function loadInitialNavigationState(): NavigationState {
     selectedAutomationId: loadInitialSelectedAutomationId(),
     selectedEnvironmentId: loadInitialSelectedEnvironmentId(),
     selectedEnvironmentRevisionId: loadInitialSelectedEnvironmentRevisionId(),
+    selectedAgentId: loadInitialSelectedAgentId(),
+    selectedAgentRevisionId: loadInitialSelectedAgentRevisionId(),
     selectedSkillId: loadInitialSelectedSkillId(),
     selectedSkillRevisionId: loadInitialSelectedSkillRevisionId(),
     selectedSnippetId: new URLSearchParams(window.location.search).get('snippet') ?? '',
@@ -392,6 +403,12 @@ export function App() {
   snippetAuthorityRef.current = snippetAuthority;
   const navigationRef = useRef(navigation);
   navigationRef.current = navigation;
+  const resourceNavigationGuardRef = useRef<(next: NavigationState) => boolean>(() => true);
+  const resourceNavigation = useAppNavigation({
+    navigation,
+    onNavigationChange: (next) => setWorkspaceNavigation(() => next),
+    canNavigate: (next) => resourceNavigationGuardRef.current(next),
+  });
   const snippetEditorKey = `${navigation.sidebarPanel}\u0000${navigation.selectedSnippetId}`;
   const snippetEditorKeyRef = useRef(snippetEditorKey);
   const snippetEditorEpochRef = useRef(0);
@@ -424,14 +441,14 @@ export function App() {
     error: '',
   });
   const [modelChoices, setModelChoices] = useState<ModelChoice[]>([]);
+  const agentEditorDirtyRef = useRef(false);
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [setupStatusLoading, setSetupStatusLoading] = useState(false);
   const [setupStatusError, setSetupStatusError] = useState('');
-  const [newThreadModel, setNewThreadModel] = useState('');
-  const [newThreadReasoningLevel, setNewThreadReasoningLevel] = useState<ReasoningLevel | ''>('');
   const [newThreadEnvironmentId, setNewThreadEnvironmentId] = useState('');
   const [newThreadEnvironmentBranchOverrides, setNewThreadEnvironmentBranchOverrides] =
     useState<EnvironmentBranchOverrides>({});
+  const newThreadEnvironmentExplicitRef = useRef(false);
   const [newThreadBranch, setNewThreadBranch] = useState('');
   const [newThreadPrompt, setNewThreadPrompt] = useState('');
   const [newThreadRepository, setNewThreadRepository] = useState('');
@@ -721,9 +738,35 @@ export function App() {
   const canManageTenantResources =
     canCallApi && (!sessionAuthRequired || currentUser?.role === 'member' || currentUser?.role === 'admin');
   const canManageSkills = canCallApi && (!sessionAuthRequired || Boolean(currentUser));
+  const canManageAgents = canManageTenantResources;
+  const canConfigureAgentDefault = canCallApi && (!sessionAuthRequired || currentUser?.role === 'admin');
+  const canViewAgents = canCallApi;
+  const agentProfilesWorkspace = useAgentProfilesWorkspace({
+    token,
+    canCallApi,
+    canManage: canManageAgents,
+    applicationDefaultModel: defaultModel,
+    onError: handleApiError,
+  });
+  const {
+    profiles: agentProfiles,
+    selectableProfiles: selectableAgentProfiles,
+    defaultConfiguration: agentProfileDefaultConfiguration,
+    loading: agentProfilesLoading,
+    loaded: agentProfilesLoaded,
+    newSession: {
+      profileId: newThreadProfileId,
+      model: newThreadModel,
+      reasoningLevel: newThreadReasoningLevel,
+      modelIsExplicit: newThreadModelIsExplicit,
+      reasoningLevelIsExplicit: newThreadReasoningLevelIsExplicit,
+    },
+  } = agentProfilesWorkspace.model;
   const canManagePersonalResources = canCallApi && Boolean(currentUser);
   const canCreateThread =
-    canCallApi && (!sessionAuthRequired || currentUser?.role === 'member' || currentUser?.role === 'admin');
+    canCallApi &&
+    selectableAgentProfiles.length > 0 &&
+    (!sessionAuthRequired || currentUser?.role === 'member' || currentUser?.role === 'admin');
   const canViewAutomations = canCallApi;
   const canCreateAutomations = canManageTenantResources;
   const {
@@ -759,26 +802,42 @@ export function App() {
     setSidebarOpen,
     setSidebarCollapsed,
     onError: handleApiError,
-    canNavigate: (next) => {
-      const leavingDirtyEnvironment =
-        navigation.sidebarPanel === 'environments' &&
-        (next.sidebarPanel !== 'environments' ||
-          next.selectedEnvironmentId !== navigation.selectedEnvironmentId ||
-          next.selectedEnvironmentRevisionId !== navigation.selectedEnvironmentRevisionId);
-      if (leavingDirtyEnvironment && environmentEditorDirtyRef.current) {
-        if (!window.confirm('Discard unsaved environment changes?')) return false;
-        setEnvironmentEditorDirty(false);
-      }
-      const leavingDirtySnippet =
-        navigation.sidebarPanel === 'snippets' &&
-        (next.sidebarPanel !== 'snippets' || next.selectedSnippetId !== navigation.selectedSnippetId);
-      if (leavingDirtySnippet && snippetDirtyRef.current) {
-        if (!window.confirm('Discard unsaved snippet changes?')) return false;
-        snippetDirtyRef.current = false;
-      }
-      return true;
-    },
+    navigate: resourceNavigation.navigate,
   });
+  resourceNavigationGuardRef.current = (next) => {
+    const leavingDirtySkill =
+      navigation.sidebarPanel === 'skills' &&
+      (next.sidebarPanel !== 'skills' ||
+        next.selectedSkillId !== navigation.selectedSkillId ||
+        next.selectedSkillRevisionId !== navigation.selectedSkillRevisionId);
+    if (leavingDirtySkill && !skillsWorkspace.actions.confirmDiscard()) return false;
+    const leavingDirtyEnvironment =
+      navigation.sidebarPanel === 'environments' &&
+      (next.sidebarPanel !== 'environments' ||
+        next.selectedEnvironmentId !== navigation.selectedEnvironmentId ||
+        next.selectedEnvironmentRevisionId !== navigation.selectedEnvironmentRevisionId);
+    if (leavingDirtyEnvironment && environmentEditorDirtyRef.current) {
+      if (!window.confirm('Discard unsaved environment changes?')) return false;
+      setEnvironmentEditorDirty(false);
+    }
+    const leavingDirtySnippet =
+      navigation.sidebarPanel === 'snippets' &&
+      (next.sidebarPanel !== 'snippets' || next.selectedSnippetId !== navigation.selectedSnippetId);
+    if (leavingDirtySnippet && snippetDirtyRef.current) {
+      if (!window.confirm('Discard unsaved snippet changes?')) return false;
+      snippetDirtyRef.current = false;
+    }
+    const leavingDirtyAgent =
+      navigation.sidebarPanel === 'agents' &&
+      (next.sidebarPanel !== 'agents' ||
+        next.selectedAgentId !== navigation.selectedAgentId ||
+        next.selectedAgentRevisionId !== navigation.selectedAgentRevisionId);
+    if (leavingDirtyAgent && agentEditorDirtyRef.current) {
+      if (!window.confirm('Discard unsaved agent changes?')) return false;
+      agentEditorDirtyRef.current = false;
+    }
+    return true;
+  };
   const canViewSkills = skillsWorkspace.model.canView;
   const canViewInstanceAccess = canCallApi && currentUser?.role === 'admin';
   const canViewEnvironments =
@@ -879,6 +938,52 @@ export function App() {
     const next = update(navigationRef.current);
     if (navigationLeavesSessions(next)) exitSessionLineageReveal();
     setNavigation(update);
+  }
+
+  function navigateToEnvironment(environmentId: string, revisionId = '', replace = false): boolean {
+    const next = {
+      ...navigation,
+      setupGuideOpen: false,
+      instanceAccessOpen: false,
+      sidebarPanel: 'environments' as const,
+      isCreatingThread: false,
+      selectedEnvironmentId: environmentId,
+      selectedEnvironmentRevisionId: environmentId === navigation.selectedEnvironmentId ? revisionId : '',
+    };
+    return resourceNavigation.navigate(
+      next,
+      { type: 'environment', id: environmentId, revisionId: next.selectedEnvironmentRevisionId },
+      replace,
+    );
+  }
+
+  function navigateToAgent(agentId: string, revisionId = '', replace = false): boolean {
+    const next = {
+      ...navigation,
+      setupGuideOpen: false,
+      instanceAccessOpen: false,
+      sidebarPanel: 'agents' as const,
+      isCreatingThread: false,
+      selectedAgentId: agentId,
+      selectedAgentRevisionId: agentId === navigation.selectedAgentId ? revisionId : '',
+    };
+    return resourceNavigation.navigate(
+      next,
+      { type: 'agent', id: agentId, revisionId: next.selectedAgentRevisionId },
+      replace,
+    );
+  }
+
+  function navigateToSnippet(snippetId: string, replace = false): boolean {
+    const next = {
+      ...navigation,
+      setupGuideOpen: false,
+      instanceAccessOpen: false,
+      sidebarPanel: 'snippets' as const,
+      isCreatingThread: false,
+      selectedSnippetId: snippetId,
+    };
+    return resourceNavigation.navigate(next, { type: 'snippet', id: snippetId }, replace);
   }
 
   function navigationLeavesSessions(next: Partial<NavigationState>) {
@@ -1277,15 +1382,11 @@ export function App() {
         if (cancelled) return;
         setRepositoryOptionsState({ data: repositories, loading: false, error: '' });
         const choices = normalizeModelChoices(models);
-        const availableModels = choices.filter((model) => model.available).map((model) => model.value);
         setModelChoices(choices);
-        setDefaultModel(models.defaultModel ?? models.models[0] ?? '');
-        setDefaultReasoningLevel(models.defaultReasoningLevel ?? '');
-        setNewThreadModel((current) => {
-          if (current && availableModels.includes(current)) return current;
-          if (models.defaultModel && availableModels.includes(models.defaultModel)) return models.defaultModel;
-          return availableModels[0] ?? '';
-        });
+        const applicationModel = models.defaultModel ?? models.models[0] ?? '';
+        const applicationReasoning = models.defaultReasoningLevel ?? '';
+        setDefaultModel(applicationModel);
+        setDefaultReasoningLevel(applicationReasoning);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -3012,6 +3113,7 @@ export function App() {
     skills: string[];
     skillRefs: Array<{ id: string; name: string }>;
     visibility: 'tenant' | 'private';
+    profileId?: string;
   }): Promise<boolean> {
     const firstPrompt = input.prompt.trim();
     if (createSessionInFlightRef.current || !canCreateThread || (!firstPrompt && !input.skills.length)) return false;
@@ -3043,6 +3145,10 @@ export function App() {
       const session = await createSession({
         title: titleFromPrompt(firstPrompt || input.skills.join(', ')),
         visibility: input.visibility,
+        ...(input.profileId ? { profileId: input.profileId } : {}),
+        ...(newThreadModelIsExplicit ? { model: newThreadModel || null } : {}),
+        ...(newThreadReasoningLevelIsExplicit ? { reasoningLevel: newThreadReasoningLevel || null } : {}),
+        ...(newThreadEnvironmentExplicitRef.current ? { environmentId: firstEnvironmentId || null } : {}),
         token,
       });
       markSessionSummaryChanged(session.id);
@@ -3074,8 +3180,10 @@ export function App() {
             : firstRepository
               ? { repository: firstRepository }
               : {}),
-          ...(newThreadModel ? { model: newThreadModel } : {}),
-          ...(newThreadReasoningLevel ? { reasoningLevel: newThreadReasoningLevel } : {}),
+          ...(newThreadModelIsExplicit && newThreadModel ? { model: newThreadModel } : {}),
+          ...(newThreadReasoningLevelIsExplicit && newThreadReasoningLevel
+            ? { reasoningLevel: newThreadReasoningLevel }
+            : {}),
           ...(!firstEnvironmentId && firstBranch ? { branch: firstBranch } : {}),
           ...(input.skills.length ? { skills: input.skills, skillRefs: input.skillRefs } : {}),
         });
@@ -3298,6 +3406,7 @@ export function App() {
   }
 
   function handleNewThreadCodebaseChange(value: string) {
+    newThreadEnvironmentExplicitRef.current = true;
     const selection = parseCodebasePickerValue(value);
     setNewThreadEnvironmentBranchOverrides({});
     setNewThreadBranch('');
@@ -3814,8 +3923,9 @@ export function App() {
     setSetupStatusError('');
   }
 
-  function startNewThread() {
+  function startNewThread(profileId?: string) {
     if (!canCreateThread) return;
+    if (profileId && !confirmDiscardEditorChanges()) return;
     resetIncrementalRecovery();
     sessionSelectionVersionRef.current += 1;
     sessionDetailLoadGenerationRef.current += 1;
@@ -3836,8 +3946,11 @@ export function App() {
       setupGuideOpen: false,
       instanceAccessOpen: false,
     });
+    newThreadEnvironmentExplicitRef.current = false;
     setNewThreadEnvironmentId('');
     setNewThreadEnvironmentBranchOverrides({});
+    setNewThreadRepository('');
+    setNewThreadBranch('');
     setFollowUpRepository('');
     setFollowUpEnvironmentId('');
     setFollowUpEnvironmentBranchOverrides({});
@@ -3848,6 +3961,7 @@ export function App() {
     skillsWorkspace.actions.setSessionError('');
     clearSessionDetail();
     eventCursor.current = 0;
+    agentProfilesWorkspace.actions.resetNewSessionSelection(profileId);
   }
 
   function selectSession(sessionId: string, options: { keepSidebarOpen?: boolean } = {}) {
@@ -3939,7 +4053,7 @@ export function App() {
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'environments');
     if (selectedEnvironmentId) {
-      if (!skillsWorkspace.actions.navigateToEnvironment(selectedEnvironmentId, selectedEnvironmentRevisionId)) return;
+      if (!navigateToEnvironment(selectedEnvironmentId, selectedEnvironmentRevisionId)) return;
     } else {
       clearResourceSearchParams();
       updateNavigation({
@@ -4021,7 +4135,7 @@ export function App() {
     if (!canViewEnvironments) return;
     sessionStorage.removeItem(setupGuideOpenStorageKey);
     sessionStorage.setItem(sidebarPanelStorageKey, 'environments');
-    if (!skillsWorkspace.actions.navigateToEnvironment(environmentId)) return;
+    if (!navigateToEnvironment(environmentId)) return;
     sessionStorage.setItem(selectedEnvironmentStorageKey, environmentId);
     if (!isDesktopViewport()) setSidebarOpen(false);
   }
@@ -4030,7 +4144,7 @@ export function App() {
     setEnvironmentEditorDirty(false);
     handleEnvironmentChanged(environment);
     sessionStorage.setItem(selectedEnvironmentStorageKey, environment.id);
-    skillsWorkspace.actions.navigateToEnvironment(environment.id, '', true);
+    navigateToEnvironment(environment.id, '', true);
   }
 
   async function handleArchiveEnvironment(environmentId: string) {
@@ -4078,7 +4192,51 @@ export function App() {
     setSidebarOpen(true);
   }
 
+  function openAgentsPanel() {
+    if (!canViewAgents || !confirmDiscardEditorChanges()) return;
+    sessionStorage.setItem(sidebarPanelStorageKey, 'agents');
+    selectAgentProfile(
+      navigation.selectedAgentId ||
+        agentProfiles.find((profile) => profile.id === 'builtin:general')?.id ||
+        agentProfiles[0]?.id ||
+        '',
+    );
+    setSidebarCollapsed(false);
+    setSidebarOpen(!isDesktopViewport());
+  }
+
+  function selectAgentProfile(id: string, revisionId = '') {
+    if (!navigateToAgent(id, revisionId)) return;
+    sessionStorage.setItem(sidebarPanelStorageKey, 'agents');
+    if (id) sessionStorage.setItem(selectedAgentStorageKey, id);
+    else sessionStorage.removeItem(selectedAgentStorageKey);
+    if (!isDesktopViewport()) setSidebarOpen(false);
+  }
+
+  function mergeAgentProfile(profile: AgentProfile) {
+    agentProfilesWorkspace.actions.merge(profile);
+  }
+
+  function agentChanged(profile: AgentProfile) {
+    mergeAgentProfile(profile);
+    const selectedAgentId = navigationRef.current.selectedAgentId;
+    if (!selectedAgentId || selectedAgentId === profile.id) {
+      agentEditorDirtyRef.current = false;
+      selectAgentProfile(profile.id);
+    }
+  }
+
+  async function mutateAgent(id: string, restore: boolean) {
+    if (!canManageAgents) return;
+    if (id === navigation.selectedAgentId && !confirmDiscardEditorChanges()) return;
+    await agentProfilesWorkspace.actions.setArchived(id, !restore);
+  }
+
   function confirmDiscardEditorChanges(): boolean {
+    if (sidebarPanel === 'agents' && agentEditorDirtyRef.current) {
+      if (!window.confirm('Discard unsaved agent changes?')) return false;
+      agentEditorDirtyRef.current = false;
+    }
     if (sidebarPanel === 'skills' && !skillsWorkspace.actions.confirmDiscard()) return false;
     if (sidebarPanel === 'snippets' && snippetDirtyRef.current) {
       if (!window.confirm('Discard unsaved snippet changes?')) return false;
@@ -4512,7 +4670,7 @@ export function App() {
   const { selectedSnippetId } = navigation;
   const selectedSnippet = snippets.find((item) => item.id === selectedSnippetId) ?? null;
   function selectSnippet(id: string) {
-    if (!skillsWorkspace.actions.navigateToSnippet(id)) return;
+    if (!navigateToSnippet(id)) return;
     sessionStorage.setItem(sidebarPanelStorageKey, 'snippets');
     if (!isDesktopViewport()) setSidebarOpen(false);
   }
@@ -4528,7 +4686,7 @@ export function App() {
     snippetDirtyRef.current = false;
     if (selectedSnippetId !== snippet.id) {
       sessionStorage.setItem(sidebarPanelStorageKey, 'snippets');
-      skillsWorkspace.actions.navigateToSnippet(snippet.id, true);
+      navigateToSnippet(snippet.id, true);
     }
   }
   function mergeSnippetIntoCache(snippet: Snippet) {
@@ -4625,6 +4783,7 @@ export function App() {
       groups: canViewInstanceAccess,
       automations: canViewAutomations,
       environments: canViewEnvironments,
+      agents: canViewAgents,
       skills: canViewSkills,
       snippets: canViewSnippets,
     },
@@ -4634,6 +4793,7 @@ export function App() {
     canViewGroups: canViewInstanceAccess,
     canViewAutomations,
     canViewEnvironments,
+    canViewAgents,
     canViewSkills,
     canViewSnippets,
     canViewSetup,
@@ -4644,6 +4804,7 @@ export function App() {
     onOpenGroups: openInstanceAccessPanel,
     onOpenAutomations: openAutomationsPanel,
     onOpenEnvironments: openEnvironmentsPanel,
+    onOpenAgents: openAgentsPanel,
     onOpenSkills: skillsWorkspace.actions.open,
     onOpenSnippets: openSnippets,
     onOpenSessions: showSessionsSidebar,
@@ -4736,6 +4897,21 @@ export function App() {
                     onCreateEnvironment={startNewEnvironment}
                     onRestoreEnvironment={fireAndForget(handleRestoreEnvironment)}
                     onSelectEnvironment={selectEnvironmentPanel}
+                  />
+                ) : sidebarPanel === 'agents' && canViewAgents ? (
+                  <AgentsSidebar
+                    profiles={agentProfiles}
+                    defaultProfileId={agentProfileDefaultConfiguration?.effectiveProfileId ?? null}
+                    selectedId={navigation.selectedAgentId}
+                    loading={agentProfilesLoading}
+                    canManage={canManageAgents}
+                    footerProps={footerProps}
+                    onSelect={selectAgentProfile}
+                    onCreate={() => selectAgentProfile('')}
+                    onArchive={(id) => void mutateAgent(id, false)}
+                    onRestore={(id) => void mutateAgent(id, true)}
+                    onBack={backToSessionsSidebar}
+                    onCollapse={collapseSidebar}
                   />
                 ) : sidebarPanel === 'skills' && canViewSkills ? (
                   <SkillsSidebar
@@ -4859,6 +5035,8 @@ export function App() {
                     repositoryOptionsLoading={repositoryOptionsLoading}
                     repositoryOptionsError={repositoryOptionsError}
                     modelChoices={modelChoices}
+                    agentProfiles={agentProfiles}
+                    defaultProfileId={agentProfileDefaultConfiguration?.effectiveProfileId ?? null}
                     defaultReasoningLevel={defaultReasoningLevel}
                     selectedAutomationId={selectedAutomationId}
                     showOpenSidebar={!sidebarOpen}
@@ -4891,9 +5069,34 @@ export function App() {
                     onDirtyChange={setEnvironmentEditorDirty}
                     onEnvironmentChanged={handleEnvironmentSaved}
                     onOpenSidebar={expandSidebar}
-                    onSelectRevision={(revisionId) =>
-                      skillsWorkspace.actions.navigateToEnvironment(selectedEnvironmentId, revisionId)
-                    }
+                    onSelectRevision={(revisionId) => navigateToEnvironment(selectedEnvironmentId, revisionId)}
+                    onError={handleApiError}
+                  />
+                ) : sidebarPanel === 'agents' && canViewAgents ? (
+                  <AgentsPanel
+                    profile={agentProfiles.find((profile) => profile.id === navigation.selectedAgentId) ?? null}
+                    selectedId={navigation.selectedAgentId}
+                    selectedRevisionId={navigation.selectedAgentRevisionId}
+                    loaded={agentProfilesLoaded}
+                    loading={agentProfilesLoading}
+                    canManage={canManageAgents}
+                    canConfigureDefault={canConfigureAgentDefault}
+                    defaultConfiguration={agentProfileDefaultConfiguration}
+                    token={token}
+                    models={modelChoices}
+                    showOpenSidebar={!sidebarOpen}
+                    onOpenSidebar={expandSidebar}
+                    onChanged={agentChanged}
+                    onDefaultConfigurationChanged={agentProfilesWorkspace.actions.applyDefaultConfiguration}
+                    onSelectRevision={(revisionId) => selectAgentProfile(navigation.selectedAgentId, revisionId)}
+                    onArchive={(id) => void mutateAgent(id, false)}
+                    onRestore={(id) => void mutateAgent(id, true)}
+                    onStartSession={(id) => {
+                      startNewThread(id);
+                    }}
+                    onDirtyChange={(dirty) => {
+                      agentEditorDirtyRef.current = dirty;
+                    }}
                     onError={handleApiError}
                   />
                 ) : sidebarPanel === 'skills' && canViewSkills ? (
@@ -4945,6 +5148,8 @@ export function App() {
                     readOnly={!canCreateThread}
                     loading={loading}
                     prompt={newThreadPrompt}
+                    profileId={newThreadProfileId}
+                    profiles={agentProfiles}
                     environmentId={newThreadEnvironmentId}
                     environmentBranchOverrides={newThreadEnvironmentBranchOverrides}
                     environmentOptions={newThreadEnvironmentOptions}
@@ -4973,12 +5178,19 @@ export function App() {
                     openSidebarLabel={sidebarNavigation.openLabel}
                     onOpenSidebar={expandSidebar}
                     onPromptChange={setNewThreadPrompt}
+                    onProfileChange={(profileId) => {
+                      agentProfilesWorkspace.actions.selectForNewSession(profileId);
+                    }}
                     onCodebaseChange={handleNewThreadCodebaseChange}
                     onEnvironmentBranchOverridesChange={setNewThreadEnvironmentBranchOverrides}
                     onEnvironmentRepositoryBranchesLoad={loadEnvironmentRepositoryBranches}
                     onBranchChange={setNewThreadBranch}
-                    onModelChange={setNewThreadModel}
-                    onReasoningLevelChange={setNewThreadReasoningLevel}
+                    onModelChange={(value) => {
+                      agentProfilesWorkspace.actions.setNewSessionModel(value);
+                    }}
+                    onReasoningLevelChange={(value) => {
+                      agentProfilesWorkspace.actions.setNewSessionReasoningLevel(value);
+                    }}
                     onSubmit={handleCreateThread}
                   />
                 ) : (
@@ -5501,12 +5713,16 @@ function setAutomationSearchParam(automationId: string) {
   setResourceSearchParam('automation', automationId);
 }
 
-function setResourceSearchParam(param: 'session' | 'group' | 'automation' | 'environment' | 'skill', value: string) {
+function setResourceSearchParam(
+  param: 'session' | 'group' | 'automation' | 'environment' | 'agent' | 'skill',
+  value: string,
+) {
   const url = new URL(window.location.href);
   url.searchParams.delete('session');
   url.searchParams.delete('group');
   url.searchParams.delete('automation');
   url.searchParams.delete('environment');
+  url.searchParams.delete('agent');
   url.searchParams.delete('skill');
   url.searchParams.delete('snippet');
   url.searchParams.delete('revision');
@@ -5524,6 +5740,7 @@ function clearResourceSearchParams() {
   url.searchParams.delete('group');
   url.searchParams.delete('automation');
   url.searchParams.delete('environment');
+  url.searchParams.delete('agent');
   url.searchParams.delete('skill');
   url.searchParams.delete('snippet');
   url.searchParams.delete('revision');
@@ -5607,6 +5824,7 @@ function hasResourceSearchParam(): boolean {
     searchParams.has('group') ||
     searchParams.has('automation') ||
     searchParams.has('environment') ||
+    searchParams.has('agent') ||
     searchParams.has('snippet') ||
     searchParams.has('skill')
   );

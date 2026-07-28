@@ -13,6 +13,7 @@ import type { GitHubRepositoryAccess } from '../../src/repositories/setup.js';
 import type { RunnerMessageInput } from '../../src/runner/types.js';
 import { PiRunner } from '../../src/runner-pi/runner.js';
 import { createSandboxPiToolDefinitions } from '../../src/runner-pi/sandbox-tools.js';
+import { createPiSubagentToolDefinition, piSubagentSystemPrompt } from '../../src/runner-pi/subagent-tool.js';
 import {
   PI_SESSION_DATA_VERSION,
   PostgresPiSessionStore,
@@ -177,6 +178,38 @@ describe('PiRunner', () => {
     piMock.openSessionCalls.length = 0;
     piMock.openSessionError = undefined;
     piMock.resourceLoaderOptions.length = 0;
+  });
+
+  it('describes available subagent profiles and asks subagents for concise results', () => {
+    const profile = {
+      id: 'managed:researcher',
+      name: 'Tenant researcher',
+      source: 'managed' as const,
+      revision: 'revision-1',
+      hash: 'hash-1',
+      description: 'Explores code using tenant-specific conventions.',
+      instructions: 'Investigate before reporting.',
+    };
+    const tool = createPiSubagentToolDefinition(
+      {
+        run: async () => ({
+          profileId: profile.id,
+          task: 'research',
+          cwd: '/workspace',
+          depth: 1,
+          text: 'done',
+        }),
+      },
+      [profile],
+    );
+
+    expect(
+      (tool.parameters as { properties: { profileId: { description: string } } }).properties.profileId.description,
+    ).toContain('managed:researcher — Tenant researcher: Explores code using tenant-specific conventions.');
+    expect(tool.promptGuidelines).toEqual(
+      expect.arrayContaining([expect.stringContaining('generally return a concise final result')]),
+    );
+    expect(piSubagentSystemPrompt('base', profile)).toContain('Generally return a concise final result');
   });
 
   it('registers steering only after the initial prompt starts and uses Pi steer options', async () => {
@@ -857,7 +890,21 @@ describe('PiRunner', () => {
 
   it('runs subagents in-process and caps nested registration at depth 4', async () => {
     let createCount = 0;
+    let profileResolutionCount = 0;
     const prompts: string[] = [];
+    const resolveAgentProfile = vi.fn(async (id: string) => {
+      const first = profileResolutionCount++ === 0;
+      return {
+        id,
+        name: 'Managed reviewer',
+        source: 'managed' as const,
+        revision: 'profile-revision-7',
+        hash: 'profile-hash-7',
+        description: 'Managed profile',
+        instructions: 'Follow the managed profile instructions.',
+        ...(first ? { model: 'openai-codex/child-model', reasoningLevel: 'high' } : {}),
+      };
+    });
     const listForRun = vi.fn(async () => [
       {
         id: 'skill-review',
@@ -869,6 +916,39 @@ describe('PiRunner', () => {
         autoLoad: false,
         source: 'managed' as const,
         createdAt: new Date('2026-01-01T00:00:00Z'),
+      },
+      {
+        id: 'skill-autoload-one',
+        revisionId: 'revision-autoload-one',
+        revisionNumber: 1,
+        name: 'autoload-one',
+        description: 'First parent auto-loaded skill',
+        body: 'Follow the first auto-loaded skill.',
+        autoLoad: true,
+        source: 'managed' as const,
+        createdAt: new Date('2026-01-02T00:00:00Z'),
+      },
+      {
+        id: 'different-skill',
+        revisionId: 'different-revision',
+        revisionNumber: 1,
+        name: 'autoload-two',
+        description: 'Second parent auto-loaded skill',
+        body: 'Follow the second auto-loaded skill.',
+        autoLoad: true,
+        source: 'managed' as const,
+        createdAt: new Date('2026-01-03T00:00:00Z'),
+      },
+      {
+        id: 'parent-skill',
+        revisionId: 'parent-revision',
+        revisionNumber: 1,
+        name: 'parent-skill',
+        description: 'Inherited parent skill',
+        body: 'This skill should be inherited by subagents.',
+        autoLoad: true,
+        source: 'managed' as const,
+        createdAt: new Date('2026-01-04T00:00:00Z'),
       },
     ]);
 
@@ -898,11 +978,11 @@ describe('PiRunner', () => {
                 type: 'tool_execution_start',
                 toolName: 'subagent',
                 toolCallId: 'tool-shared',
-                args: { agent: 'explore', task: `child-${index}` },
+                args: { profileId: 'managed-profile-id', task: `child-${index}` },
               });
               const toolResult = await subagentTool!.execute(
                 'tool-shared',
-                { agent: 'explore', task: `child-${index}` },
+                { profileId: 'managed-profile-id', task: `child-${index}` },
                 undefined,
                 undefined,
                 undefined,
@@ -960,6 +1040,7 @@ describe('PiRunner', () => {
       model: 'openai-codex/gpt-5.5',
       authBase64: Buffer.from('{}').toString('base64'),
       skills: { repoScanEnabled: false, listForRun },
+      resolveAgentProfile,
     }).run({
       sessionId: 'session-1',
       runId: 'run-1',
@@ -975,6 +1056,18 @@ describe('PiRunner', () => {
 
     expect(result.text).toBe('leaf result');
     expect(createCount).toBe(5);
+    expect(piMock.createAgentSession.mock.calls.slice(1).map(([options]) => options.model.id)).toEqual([
+      'child-model',
+      'child-model',
+      'child-model',
+      'child-model',
+    ]);
+    expect(piMock.createAgentSession.mock.calls.slice(1).map(([options]) => options.thinkingLevel)).toEqual([
+      'high',
+      'high',
+      'high',
+      'high',
+    ]);
     expect(prompts[0]).toContain(
       '0:<skill name="review" location="/workspace/.deputies-skills/managed/skill-review/revision-review-1/review/SKILL.md">',
     );
@@ -985,10 +1078,24 @@ describe('PiRunner', () => {
     expect(prompts.slice(1)).toEqual(['1:child-0', '2:child-1', '3:child-2', '4:child-3']);
     expect(listForRun).toHaveBeenCalledTimes(2);
     expect(piMock.resourceLoaderOptions).toHaveLength(5);
-    for (const loaderOptions of piMock.resourceLoaderOptions) {
+    expect(resolveAgentProfile).toHaveBeenCalledWith('managed-profile-id');
+    expect(piMock.resourceLoaderOptions[1]?.systemPrompt).toContain('Follow the managed profile instructions.');
+    const topLevelSkills =
+      piMock.resourceLoaderOptions[0]?.skillsOverride?.({ skills: [], diagnostics: [] }).skills ?? [];
+    expect(topLevelSkills.map((skill) => (skill as { name: string }).name)).toEqual([
+      'autoload-one',
+      'autoload-two',
+      'parent-skill',
+    ]);
+    for (const loaderOptions of piMock.resourceLoaderOptions.slice(1)) {
       expect(loaderOptions.noSkills).toBe(true);
       expect(loaderOptions.systemPrompt).toContain('The current durable Deputies session ID is "session-1".');
-      expect(loaderOptions.skillsOverride?.({ skills: [], diagnostics: [] }).skills).toEqual([]);
+      const loadedSkills = loaderOptions.skillsOverride?.({ skills: [], diagnostics: [] }).skills ?? [];
+      expect(loadedSkills.map((skill) => (skill as { name: string }).name)).toEqual([
+        'autoload-one',
+        'autoload-two',
+        'parent-skill',
+      ]);
     }
     expect(
       events
@@ -1014,7 +1121,10 @@ describe('PiRunner', () => {
           apiKey: 'child-secret-value',
         }),
         subagentDepth: 4,
-        subagentAgent: 'explore',
+        subagentProfileId: 'managed-profile-id',
+        subagentProfileSource: 'managed',
+        subagentProfileRevision: 'profile-revision-7',
+        subagentProfileHash: 'profile-hash-7',
       }),
     );
     expect(
@@ -1051,11 +1161,11 @@ describe('PiRunner', () => {
                   type: 'tool_execution_start',
                   toolName: 'subagent',
                   toolCallId: parentToolCallId,
-                  args: { agent: 'explore', task: parentToolCallId },
+                  args: { profileId: 'builtin:codebase-researcher', task: parentToolCallId },
                 });
                 const result = await subagentTool!.execute(
                   parentToolCallId,
-                  { agent: 'explore', task: parentToolCallId },
+                  { profileId: 'builtin:codebase-researcher', task: parentToolCallId },
                   undefined,
                   undefined,
                   undefined,
@@ -1183,7 +1293,7 @@ describe('PiRunner', () => {
               );
               const childResult = await subagentTool!.execute(
                 'tool-2',
-                { agent: 'explore', task: 'child task' },
+                { profileId: 'builtin:codebase-researcher', task: 'child task' },
                 undefined,
                 undefined,
                 undefined,

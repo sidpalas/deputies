@@ -6,9 +6,16 @@ import {
   type NormalizedSchedule,
 } from '../scheduled-follow-ups/recurrence.js';
 import { MemorySkillStore } from './memory-skills.js';
+import { MemoryAgentProfileStore } from './memory-agent-profiles.js';
 import { notepadRevisionRetentionLimit, StoreConflictError } from './types.js';
 import type {
   AppStore,
+  AgentProfileRecord,
+  AgentProfileRevisionRecord,
+  BuiltinAgentProfileSettingWrite,
+  CreateAgentProfileRecord,
+  TenantAgentProfileConfigurationWrite,
+  UpdateAgentProfileRecord,
   AgentSessionListOptions,
   ArtifactRecord,
   AutomationInvocationRecord,
@@ -97,6 +104,7 @@ export class MemoryStore implements AppStore {
   private readonly authSessions = new Map<string, AuthSessionRecord>();
   private readonly operationLocks = new Map<string, Promise<void>>();
   private readonly skillStore = new MemorySkillStore();
+  private readonly agentProfileStore = new MemoryAgentProfileStore();
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly messages = new Map<string, MessageRecord[]>();
   private readonly runs = new Map<string, RunRecord>();
@@ -127,6 +135,40 @@ export class MemoryStore implements AppStore {
   private readonly notepadActivity = new Map<string, NotepadActivityRecord[]>();
   private searchIndexCursor = 0;
 
+  getTenantAgentProfileConfiguration() {
+    return this.agentProfileStore.getTenantAgentProfileConfiguration();
+  }
+  setTenantAgentProfileConfiguration(record: TenantAgentProfileConfigurationWrite) {
+    return this.agentProfileStore.setTenantAgentProfileConfiguration(record);
+  }
+
+  listBuiltinAgentProfileSettings() {
+    return this.agentProfileStore.listBuiltinAgentProfileSettings();
+  }
+  setBuiltinAgentProfileSettings(record: BuiltinAgentProfileSettingWrite) {
+    return this.agentProfileStore.setBuiltinAgentProfileSettings(record);
+  }
+  createAgentProfile(record: CreateAgentProfileRecord) {
+    return this.agentProfileStore.createAgentProfile(record);
+  }
+  getAgentProfile(id: string) {
+    return this.agentProfileStore.getAgentProfile(id);
+  }
+  listAgentProfiles(): Promise<AgentProfileRecord[]> {
+    return this.agentProfileStore.listAgentProfiles();
+  }
+  listAgentProfileRevisions(id: string): Promise<AgentProfileRevisionRecord[]> {
+    return this.agentProfileStore.listAgentProfileRevisions(id);
+  }
+  updateAgentProfile(record: UpdateAgentProfileRecord) {
+    return this.agentProfileStore.updateAgentProfile(record);
+  }
+  archiveAgentProfile(input: { id: string; archivedAt: Date }) {
+    return this.agentProfileStore.archiveAgentProfile(input);
+  }
+  restoreAgentProfile(input: { id: string; updatedAt: Date }) {
+    return this.agentProfileStore.restoreAgentProfile(input);
+  }
   async getSessionNotepad(sessionId: string): Promise<SessionNotepadRecord | null> {
     const value = this.sessionNotepads.get(sessionId);
     return value ? structuredClone(value) : null;
@@ -1426,6 +1468,7 @@ export class MemoryStore implements AppStore {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
       ...(input.scheduleCron !== undefined ? { scheduleCron: input.scheduleCron } : {}),
+      ...(input.profileId !== undefined ? { profileId: input.profileId } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
     };
     if (input.context !== undefined) {

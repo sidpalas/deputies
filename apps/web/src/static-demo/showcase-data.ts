@@ -134,6 +134,7 @@ export const demoAutomations: Automation[] = [
     prompt:
       'Review changes merged since the previous release. Summarize user-facing changes, migration risks, failing checks, and anything that should block the next release.',
     scheduleCron: '0 14 * * 1-5',
+    profileId: 'builtin:general',
     scheduleTimezone: 'UTC',
     enabled: true,
     environmentId: 'demo-environment-product',
@@ -151,6 +152,7 @@ export const demoAutomations: Automation[] = [
     prompt:
       'Audit dependencies for security advisories, breaking releases, and stale packages. Propose a prioritized update plan with verification steps.',
     scheduleCron: '0 9 * * 1',
+    profileId: 'builtin:general',
     scheduleTimezone: 'UTC',
     enabled: true,
     environmentId: 'demo-environment-product',
@@ -170,6 +172,7 @@ export const demoAutomations: Automation[] = [
     prompt:
       'Compare recently changed product behavior with the developer documentation. Open a session with concrete documentation updates for any drift you find.',
     scheduleCron: '30 16 * * 5',
+    profileId: 'builtin:general',
     scheduleTimezone: 'UTC',
     enabled: false,
     environmentId: 'demo-environment-product',

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { MessageService } from '../messages/service.js';
 import type { SessionService } from '../sessions/service.js';
 import type { EnvironmentBranchOverride, EnvironmentService } from '../environments/service.js';
+import type { AgentProfileService } from '../agent-profiles/service.js';
 import type {
   AppStore,
   AutomationInvocationCursor,
@@ -18,6 +19,7 @@ export type CreateScheduledAutomationInput = {
   name: string;
   prompt: string;
   scheduleCron: string;
+  profileId?: string;
   enabled?: boolean;
   createdByUserId?: string;
   context?: Record<string, unknown>;
@@ -31,6 +33,7 @@ export type UpdateScheduledAutomationInput = {
   name?: string;
   prompt?: string;
   scheduleCron?: string;
+  profileId?: string;
   enabled?: boolean;
   context?: Record<string, unknown> | null;
   environmentId?: string | null;
@@ -77,6 +80,7 @@ export class AutomationService {
     private readonly sessions: SessionService,
     private readonly messages: MessageService,
     private readonly environments: EnvironmentService,
+    private readonly agentProfiles: AgentProfileService,
   ) {}
 
   async createScheduled(input: CreateScheduledAutomationInput): Promise<AutomationRecord> {
@@ -85,6 +89,11 @@ export class AutomationService {
     const prompt = requiredTrimmed(input.prompt, 'prompt');
     const scheduleCron = parseScheduleCron(input.scheduleCron);
     const nextInvocationAt = nextScheduledInvocation(scheduleCron, now);
+    const profileId = input.profileId ?? (await this.agentProfiles.effectiveDefault());
+    if (!profileId) {
+      throw new AutomationServiceError('invalid_request', 'No usable default agent profile is configured');
+    }
+    await this.agentProfiles.resolve(profileId, 'agent');
     const revisionSelection = await this.validateEnvironmentRevisionSelection({
       environmentId: input.environmentId,
       policy: input.environmentRevisionPolicy,
@@ -96,6 +105,7 @@ export class AutomationService {
       name,
       prompt,
       scheduleCron,
+      profileId,
       enabled: input.enabled ?? true,
       createdAt: now,
       updatedAt: now,
@@ -121,6 +131,9 @@ export class AutomationService {
     if (existing.archivedAt) throw new AutomationServiceError('archived', 'Restore this automation before editing it');
 
     const now = new Date();
+    const profileId = input.profileId ?? existing.profileId;
+    if (input.profileId !== undefined || (input.enabled === true && !existing.enabled))
+      await this.agentProfiles.resolve(profileId, 'agent');
     const scheduleCron =
       input.scheduleCron === undefined ? existing.scheduleCron : parseScheduleCron(input.scheduleCron);
     const enabled = input.enabled ?? existing.enabled;
@@ -153,6 +166,7 @@ export class AutomationService {
       ...(input.name !== undefined ? { name: requiredTrimmed(input.name, 'name') } : {}),
       ...(input.prompt !== undefined ? { prompt: requiredTrimmed(input.prompt, 'prompt') } : {}),
       ...(input.scheduleCron !== undefined ? { scheduleCron } : {}),
+      ...(input.profileId !== undefined ? { profileId: input.profileId } : {}),
       ...(input.enabled !== undefined ? { enabled } : {}),
       ...(input.environmentId !== undefined ? { environmentId: input.environmentId } : {}),
       ...(input.environmentId !== undefined ||
@@ -354,41 +368,69 @@ export class AutomationService {
             environmentRevisionId: input.invocation.environmentRevisionId,
           }
         : await this.resolveAutomationEnvironmentReference(input.automation);
-    const initialInvocation =
-      input.invocation ??
-      (await this.store.createAutomationInvocation({
-        id: randomUUID(),
-        automationId: input.automation.id,
-        trigger: input.trigger,
-        status: 'creating',
-        createdAt: now,
-        metadata: input.metadata ?? {},
-        ...environmentReference,
-        reservedSessionId: randomUUID(),
-        reservedMessageId: randomUUID(),
-        ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
-        ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
-      }));
-    const { invocation, reservation } = await this.ensureInvocationReservation(initialInvocation);
+    let reservedSessionContext: Record<string, unknown> | undefined;
+    if (!input.invocation) {
+      try {
+        reservedSessionContext = await this.resolveAutomationSessionContext(input.automation, environmentReference);
+      } catch (error) {
+        const failed = await this.store.createAutomationInvocation({
+          id: randomUUID(),
+          automationId: input.automation.id,
+          trigger: input.trigger,
+          status: 'failed',
+          createdAt: now,
+          completedAt: now,
+          metadata: input.metadata ?? {},
+          ...environmentReference,
+          error: error instanceof Error ? error.message : 'Unknown automation invocation error',
+          ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
+          ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
+        });
+        return { invocation: failed };
+      }
+    }
+    const initialInvocation = input.invocation
+      ? input.invocation
+      : await this.store.createAutomationInvocation({
+          id: randomUUID(),
+          automationId: input.automation.id,
+          trigger: input.trigger,
+          status: 'creating',
+          createdAt: now,
+          metadata: input.metadata ?? {},
+          ...environmentReference,
+          sessionContext: reservedSessionContext!,
+          reservedSessionId: randomUUID(),
+          reservedMessageId: randomUUID(),
+          ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
+          ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
+        });
+    const reserved = await this.ensureInvocationReservation(initialInvocation);
+    let invocation = reserved.invocation;
+    const { reservation } = reserved;
     const { sessionId, messageId } = reservation;
 
     try {
       await this.assertAutomationCanCreateSession(input.automation, { allowDisabled: input.allowDisabled === true });
       const existingSession = await this.store.getSession(sessionId);
+      const sessionContext =
+        existingSession?.context ??
+        invocation.sessionContext ??
+        (await this.resolveAutomationSessionContext(input.automation, invocation));
+      if (!invocation.sessionContext) {
+        invocation = await this.store.updateAutomationInvocation({ ...invocation, sessionContext });
+      }
       const createdSession =
         existingSession ??
         (await this.sessions.create({
           id: sessionId,
           title: automationSessionTitle(input.automation, input.scheduledAt ?? now),
           tags: ['automation'],
+          context: sessionContext,
           ...effectiveSessionCreator(input.automation, input.requestedByUserId),
         }));
       const existingMessage = (await this.store.getMessages(createdSession.id)).find(
         (message) => message.id === messageId,
-      );
-      const messageContext = await this.resolveAutomationMessageContext(
-        input.automation,
-        invocation.environmentRevisionId,
       );
       const message =
         existingMessage ??
@@ -398,7 +440,7 @@ export class AutomationService {
           prompt: input.automation.prompt,
           source: 'automation',
           authorName: `Automation: ${input.automation.name}`,
-          ...(messageContext ? { context: messageContext } : {}),
+          context: sessionContext,
         }));
       const session = (await this.store.getSession(createdSession.id)) ?? createdSession;
       const completed = await this.store.updateAutomationInvocation({
@@ -541,6 +583,23 @@ export class AutomationService {
       ...(typeof context.reasoningLevel === 'string' && context.reasoningLevel
         ? { reasoningLevel: context.reasoningLevel }
         : {}),
+    };
+  }
+
+  private async resolveAutomationSessionContext(
+    automation: AutomationRecord,
+    invocation: Pick<AutomationInvocationRecord, 'environmentRevisionId'>,
+  ): Promise<Record<string, unknown>> {
+    const messageContext = await this.resolveAutomationMessageContext(automation, invocation.environmentRevisionId);
+    const profileContext = await this.agentProfiles.executionContext(automation.profileId, 'agent', {
+      ...(typeof automation.context?.model === 'string' ? { model: automation.context.model || null } : {}),
+      ...(typeof automation.context?.reasoningLevel === 'string'
+        ? { reasoningLevel: automation.context.reasoningLevel || null }
+        : {}),
+    });
+    return {
+      ...(messageContext ?? {}),
+      ...profileContext,
     };
   }
 

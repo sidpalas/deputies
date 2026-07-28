@@ -1,12 +1,13 @@
 import { useEffect, useRef } from 'react';
 
-export type SidebarPanel = 'sessions' | 'groups' | 'automations' | 'environments' | 'skills' | 'snippets';
+export type SidebarPanel = 'sessions' | 'groups' | 'automations' | 'environments' | 'agents' | 'skills' | 'snippets';
 
 const sidebarPanelLabels: Record<SidebarPanel, string> = {
   sessions: 'sessions',
   groups: 'access',
   automations: 'automations',
   environments: 'environments',
+  agents: 'agents',
   skills: 'skills',
   snippets: 'snippets',
 };
@@ -21,7 +22,7 @@ type HistoryEntry<T> = {
 };
 
 export type RevisionResource = {
-  type: 'environment' | 'skill' | 'snippet';
+  type: 'environment' | 'agent' | 'skill' | 'snippet';
   id: string;
   revisionId?: string;
 };
@@ -155,7 +156,7 @@ function historyIndex(state: unknown): number {
 
 function resourceUrl(resource: RevisionResource): URL {
   const url = new URL(window.location.href);
-  for (const param of ['session', 'group', 'automation', 'environment', 'skill', 'snippet', 'revision']) {
+  for (const param of ['session', 'group', 'automation', 'environment', 'agent', 'skill', 'snippet', 'revision']) {
     url.searchParams.delete(param);
   }
   if (resource.id) url.searchParams.set(resource.type, resource.id);

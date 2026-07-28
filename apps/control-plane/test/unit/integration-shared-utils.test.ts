@@ -61,6 +61,7 @@ describe('integration shared utils', () => {
 
     expect(followUp.session.id).toBe(first.session.id);
     expect(first.session.tags).toEqual(['github']);
+    expect(first.session.context).toMatchObject({ agentProfileSnapshot: { profileId: 'builtin:general' } });
     expect(first.message.context).toMatchObject({
       source: 'github',
       integration: {

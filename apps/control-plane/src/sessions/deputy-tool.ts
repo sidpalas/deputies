@@ -9,6 +9,12 @@ import {
 import { normalizeAppendInput, type EventService } from '../events/service.js';
 import type { MessageService } from '../messages/service.js';
 import type { RepositoryAccessProvider } from '../repositories/setup.js';
+import {
+  executionContextFromSnapshot,
+  overrideAgentProfileSnapshot,
+  type AgentProfileService,
+} from '../agent-profiles/service.js';
+import { readAppliedAgentProfileSnapshot } from '../agent-profiles/types.js';
 import type { SandboxCleanupResult } from '../sandbox/service.js';
 import { sessionTitleFromPrompt, type SessionService } from './service.js';
 import type {
@@ -45,6 +51,8 @@ export type DeputyToolBaseServices = {
   maxChildrenPerSession: number;
   maxSpawnsPerRun: number;
   privateSessionsEnabled: boolean;
+  agentProfiles?: Pick<AgentProfileService, 'executionContext'> &
+    Partial<Pick<AgentProfileService, 'effectiveDefault'>>;
 };
 
 export type DeputyToolServices = DeputyToolBaseServices & {
@@ -144,6 +152,7 @@ export const deputyToolParameters = {
       type: 'string',
       description: 'Optional model context for a spawned child.',
     },
+    profileId: { type: 'string', description: 'Optional agent profile ID. Inherits the parent profile when omitted.' },
     idempotencyKey: {
       type: 'string',
       maxLength: maxIdempotencyKeyLength,
@@ -237,8 +246,8 @@ async function spawnSession(services: DeputyToolServices, params: Record<string,
     throw new Error(`Cannot spawn more than ${services.maxSpawnsPerRun} child sessions in one run`);
   }
 
-  const context = await childContext(services, params, parent);
-  if (!explicitTitle) context.titleGeneration = { fallbackTitle: title };
+  const context = existing ? structuredClone(existing.context ?? {}) : await childContext(services, params, parent);
+  if (!existing && !explicitTitle) context.titleGeneration = { fallbackTitle: title };
   const parentMessage = await services.store.getMessage({ sessionId: parent.id, messageId: services.messageId });
   const now = new Date();
   const child: SessionRecord = {
@@ -313,6 +322,39 @@ async function childContext(
   parent: SessionRecord,
 ): Promise<Record<string, unknown>> {
   const context: Record<string, unknown> = {};
+  const requestedProfileId = readOptionalString(params.profileId, 'profileId', 255);
+  const model = readOptionalString(params.model, 'model', 255);
+  if (model) {
+    const slash = model.indexOf('/');
+    if (slash <= 0 || slash === model.length - 1) {
+      throw new Error(`model must use provider/model format, received: ${model}`);
+    }
+  }
+  const parentSnapshot = readAppliedAgentProfileSnapshot(parent.context?.agentProfileSnapshot);
+  if (!requestedProfileId && parentSnapshot && !parentSnapshot.supportedInvocations.includes('agent')) {
+    throw new Error('Inherited agent profile does not support agent invocation');
+  }
+  const fallbackProfileId =
+    !requestedProfileId && !parentSnapshot
+      ? services.agentProfiles?.effectiveDefault
+        ? await services.agentProfiles.effectiveDefault()
+        : 'builtin:general'
+      : undefined;
+  const profileContext = requestedProfileId
+    ? await services.agentProfiles?.executionContext(requestedProfileId, 'agent', model ? { model } : {})
+    : parentSnapshot
+      ? model
+        ? executionContextFromSnapshot(overrideAgentProfileSnapshot(parentSnapshot, { model }))
+        : executionContextFromSnapshot(parentSnapshot)
+      : fallbackProfileId
+        ? await services.agentProfiles?.executionContext(fallbackProfileId, 'agent', model ? { model } : {})
+        : undefined;
+  if (!requestedProfileId && !parentSnapshot && services.agentProfiles?.effectiveDefault && !fallbackProfileId)
+    throw new Error('No usable default agent profile is configured');
+  if (requestedProfileId && !profileContext) throw new Error('Agent profile selection is unavailable');
+  if (profileContext) {
+    Object.assign(context, structuredClone(profileContext));
+  }
   const repository = readRepository(params.repository);
   if (repository) {
     if (!services.github)
@@ -320,14 +362,7 @@ async function childContext(
     await services.github.getRepositoryAccess(repository);
     context.repository = { provider: 'github', owner: repository.owner, repo: repository.repo };
   }
-  const model = readOptionalString(params.model, 'model', 255);
-  if (model) {
-    const slash = model.indexOf('/');
-    if (slash <= 0 || slash === model.length - 1) {
-      throw new Error(`model must use provider/model format, received: ${model}`);
-    }
-    context.model = model;
-  }
+  if (model) context.model = model;
   if (params.notifyOnComplete === true) {
     context.deputy = {
       notifyParentOnComplete: true,

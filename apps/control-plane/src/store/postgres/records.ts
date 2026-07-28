@@ -200,6 +200,7 @@ export type AutomationRow = QueryResultRow & {
   name: string;
   prompt: string;
   schedule_cron: string;
+  profile_id: string;
   enabled: boolean;
   context: Record<string, unknown> | null;
   created_by_user_id: string | null;
@@ -215,7 +216,7 @@ export type AutomationRow = QueryResultRow & {
 };
 
 export const automationSelectColumns =
-  'id, kind, name, prompt, schedule_cron, enabled, context, created_by_user_id, archived_at, environment_id, environment_revision_policy, environment_revision_id, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
+  'id, kind, name, prompt, schedule_cron, profile_id, enabled, context, created_by_user_id, archived_at, environment_id, environment_revision_policy, environment_revision_id, next_invocation_at, scheduler_lock_owner, scheduler_locked_until, created_at, updated_at';
 
 export type EnvironmentRow = QueryResultRow & {
   id: string;
@@ -285,6 +286,7 @@ export type AutomationInvocationRow = QueryResultRow & {
   requested_by_user_id: string | null;
   environment_id: string | null;
   environment_revision_id: string | null;
+  session_context: Record<string, unknown> | null;
   reason: string | null;
   error: string | null;
   metadata: Record<string, unknown>;
@@ -293,7 +295,7 @@ export type AutomationInvocationRow = QueryResultRow & {
 };
 
 export const automationInvocationSelectColumns =
-  'id, automation_id, trigger, status, scheduled_at, session_id, message_id, reserved_session_id, reserved_message_id, requested_by_user_id, environment_id, environment_revision_id, reason, error, metadata, created_at, completed_at';
+  'id, automation_id, trigger, status, scheduled_at, session_id, message_id, reserved_session_id, reserved_message_id, requested_by_user_id, environment_id, environment_revision_id, session_context, reason, error, metadata, created_at, completed_at';
 
 export type WebhookSourceRow = QueryResultRow & {
   id: string;
@@ -533,6 +535,7 @@ export function toAutomation(row: AutomationRow): AutomationRecord {
     name: row.name,
     prompt: row.prompt,
     scheduleCron: row.schedule_cron,
+    profileId: row.profile_id,
     enabled: row.enabled,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -620,6 +623,7 @@ export function toAutomationInvocation(row: AutomationInvocationRow): Automation
     ...(row.requested_by_user_id ? { requestedByUserId: row.requested_by_user_id } : {}),
     ...(row.environment_id ? { environmentId: row.environment_id } : {}),
     ...(row.environment_revision_id ? { environmentRevisionId: row.environment_revision_id } : {}),
+    ...(row.session_context ? { sessionContext: row.session_context } : {}),
     ...(row.reason ? { reason: row.reason } : {}),
     ...(row.error ? { error: row.error } : {}),
   };

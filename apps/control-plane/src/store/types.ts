@@ -84,6 +84,9 @@ export class StoreConflictError extends Error {
       | 'skill_name_exists'
       | 'skill_update_conflict'
       | 'skill_archived'
+      | 'agent_profile_name_exists'
+      | 'agent_profile_update_conflict'
+      | 'agent_profile_archived'
       | 'snippet_name_exists'
       | 'session_archived'
       | 'not_found'
@@ -469,6 +472,7 @@ export type AutomationRecord = {
   name: string;
   prompt: string;
   scheduleCron: string;
+  profileId: string;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -585,6 +589,73 @@ export type SkillRevisionSelection = {
   revisionId: string;
 };
 
+export type AgentProfileInvocation = 'agent' | 'subagent';
+export type AgentProfileRecord = {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  currentRevisionId: string;
+  currentRevisionNumber: number;
+  enabled: boolean;
+  defaultModel?: string;
+  defaultReasoningLevel?: string;
+  supportedInvocations: AgentProfileInvocation[];
+  createdByUserId?: string;
+  archivedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+export type AgentProfileRevisionRecord = Omit<
+  AgentProfileRecord,
+  'currentRevisionId' | 'currentRevisionNumber' | 'enabled' | 'createdByUserId' | 'archivedAt' | 'updatedAt'
+> & { profileId: string; revisionNumber: number; actorType: AuditActorType; actorUserId?: string };
+export type CreateAgentProfileRecord = Omit<
+  AgentProfileRecord,
+  | 'description'
+  | 'instructions'
+  | 'currentRevisionId'
+  | 'currentRevisionNumber'
+  | 'defaultModel'
+  | 'defaultReasoningLevel'
+  | 'supportedInvocations'
+> & {
+  revision: Omit<AgentProfileRevisionRecord, 'profileId' | 'revisionNumber'>;
+};
+export type UpdateAgentProfileRecord = {
+  id: string;
+  expectedCurrentRevisionId: string;
+  revision: Omit<AgentProfileRevisionRecord, 'profileId' | 'revisionNumber'>;
+  enabled?: boolean;
+  updatedAt: Date;
+};
+export type BuiltinAgentProfileSettingRecord = {
+  profileId: string;
+  enabled: boolean;
+  defaultModel?: string;
+  defaultReasoningLevel?: string;
+  updatedAt: Date;
+  updatedByUserId?: string;
+};
+export type BuiltinAgentProfileSettingWrite = {
+  profileId: string;
+  enabled?: boolean;
+  defaultModel?: string | null;
+  defaultReasoningLevel?: string | null;
+  updatedAt: Date;
+  updatedByUserId?: string;
+};
+export type TenantAgentProfileConfigurationRecord = {
+  defaultProfileId?: string;
+  updatedByUserId?: string;
+  updatedAt: Date;
+};
+export type TenantAgentProfileConfigurationWrite = {
+  defaultProfileId: string | null;
+  updatedByUserId?: string;
+  updatedAt: Date;
+};
+
 export type AutomationInvocationRecord = {
   id: string;
   automationId: string;
@@ -600,6 +671,7 @@ export type AutomationInvocationRecord = {
   requestedByUserId?: string;
   environmentId?: string;
   environmentRevisionId?: string;
+  sessionContext?: Record<string, unknown>;
   reason?: string;
   error?: string;
   metadata: Record<string, unknown>;
@@ -736,6 +808,7 @@ export type CreateAutomationRecord = {
   name: string;
   prompt: string;
   scheduleCron: string;
+  profileId: string;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -792,6 +865,7 @@ export type CreateAutomationInvocationRecord = {
   requestedByUserId?: string;
   environmentId?: string;
   environmentRevisionId?: string;
+  sessionContext?: Record<string, unknown>;
   reason?: string;
   error?: string;
 };
@@ -802,6 +876,7 @@ export type UpdateAutomationRecord = {
   name?: string;
   prompt?: string;
   scheduleCron?: string;
+  profileId?: string;
   enabled?: boolean;
   context?: Record<string, unknown> | null;
   environmentId?: string | null;
@@ -1330,6 +1405,22 @@ export interface SkillStore {
   }): Promise<SkillRunCandidate[]>;
 }
 
+export interface AgentProfileStore {
+  getTenantAgentProfileConfiguration(): Promise<TenantAgentProfileConfigurationRecord | null>;
+  setTenantAgentProfileConfiguration(
+    record: TenantAgentProfileConfigurationWrite,
+  ): Promise<TenantAgentProfileConfigurationRecord>;
+  listBuiltinAgentProfileSettings(): Promise<BuiltinAgentProfileSettingRecord[]>;
+  setBuiltinAgentProfileSettings(record: BuiltinAgentProfileSettingWrite): Promise<BuiltinAgentProfileSettingRecord>;
+  createAgentProfile(record: CreateAgentProfileRecord): Promise<AgentProfileRecord>;
+  getAgentProfile(id: string): Promise<AgentProfileRecord | null>;
+  listAgentProfiles(): Promise<AgentProfileRecord[]>;
+  listAgentProfileRevisions(id: string): Promise<AgentProfileRevisionRecord[]>;
+  updateAgentProfile(record: UpdateAgentProfileRecord): Promise<AgentProfileRecord>;
+  archiveAgentProfile(input: { id: string; archivedAt: Date }): Promise<AgentProfileRecord | null>;
+  restoreAgentProfile(input: { id: string; updatedAt: Date }): Promise<AgentProfileRecord | null>;
+}
+
 export interface SnippetStore {
   createSnippet(record: CreateSnippetRecord): Promise<SnippetRecord>;
   getSnippetForUser(id: string, ownerUserId: string): Promise<SnippetRecord | null>;
@@ -1461,6 +1552,7 @@ export interface AppStore
     AutomationStore,
     EnvironmentStore,
     SkillStore,
+    AgentProfileStore,
     SnippetStore,
     NotepadStore,
     EventStore,

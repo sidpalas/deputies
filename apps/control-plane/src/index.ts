@@ -427,6 +427,9 @@ async function createRunner(): Promise<Runner> {
     modelUnavailableReason: (inputModel: string | undefined) =>
       services.modelAvailability.unavailableFor(inputModel || model)?.reason,
     setupScript: repositorySetupScript,
+    resolveAgentProfile: (id) => services.agentProfiles.resolveRuntimeProfile(id, 'subagent'),
+    listAgentProfiles: () => services.agentProfiles.listRuntimeProfiles('subagent'),
+    listDeputyProfiles: () => services.agentProfiles.listRuntimeProfiles('agent'),
   };
   if (artifactObjectStorage) {
     piOptions.artifacts = services.artifacts;
@@ -491,6 +494,7 @@ function createDeputyToolServices(): DeputyToolBaseServices | undefined {
     maxChildrenPerSession: config.deputyMaxChildrenPerSession,
     maxSpawnsPerRun: config.deputyMaxSpawnsPerRun,
     privateSessionsEnabled: config.privateSessionsEnabled,
+    agentProfiles: services.agentProfiles,
   };
 }
 

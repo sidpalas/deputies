@@ -19,6 +19,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import type { ArtifactService } from '../artifacts/service.js';
+import { readAppliedAgentProfileSnapshot } from '../agent-profiles/types.js';
 import type { EnvironmentService } from '../environments/service.js';
 import { validateEnvironmentContext } from '../environments/tool.js';
 import type { NormalizedEvent } from '../events/types.js';
@@ -59,7 +60,7 @@ import { createPiEnvironmentToolDefinition } from './environment-tool.js';
 import { createSandboxPiToolDefinitions } from './sandbox-tools.js';
 import { createPiServiceToolDefinition } from './service-tool.js';
 import { createPiWebSearchToolDefinition } from './web-search-tool.js';
-import { preparePiSkills, unavailablePiSkills, type PiSkillsProvider } from './skills.js';
+import { preparePiSkills, unavailablePiSkills, type PiSkillsProvider, type PreparedSkillTrace } from './skills.js';
 import { SkillInvocationRuntime } from './skill-invocation-runtime.js';
 import { SerialEmitter } from './serial-emitter.js';
 import { connectMcpServer, type ConnectMcpServerOptions } from '../mcp/client.js';
@@ -74,16 +75,18 @@ import {
   createPiSubagentToolDefinition,
   piSubagentSystemPrompt,
   resolvePiSubagentProfile,
+  type PiSubagentProfile,
   type PiSubagentRunInput,
   type PiSubagentRunResult,
 } from './subagent-tool.js';
 
-function deputiesSystemPrompt(sessionId: string): string {
+function deputiesSystemPrompt(sessionId: string, context?: Record<string, unknown>): string {
+  const snapshot = readAppliedAgentProfileSnapshot(context?.agentProfileSnapshot);
   return [
-    'You are a software engineering agent running in a sandbox for the Deputies product.',
+    'You are an agent running in a sandbox for the Deputies product.',
     `The current durable Deputies session ID is "${sessionId}".`,
     'When generating files for users, prefer broadly compatible formats that can be opened in modern browsers and common desktop tools.',
-    'Before telling the user work is complete, verify important files exist and commands have succeeded.',
+    ...(snapshot ? ['', '<agent_profile>', snapshot.instructions, '</agent_profile>'] : []),
   ].join('\n');
 }
 
@@ -116,6 +119,9 @@ export type PiRunnerOptions = {
   notepad?: NotepadToolBaseServices;
   skills?: PiSkillsProvider;
   modelUnavailableReason?: (model: string | undefined) => string | undefined;
+  resolveAgentProfile?: (id: string) => Promise<PiSubagentProfile>;
+  listAgentProfiles?: () => Promise<PiSubagentProfile[]>;
+  listDeputyProfiles?: () => Promise<PiSubagentProfile[]>;
 };
 
 type PiSessionLease = {
@@ -131,6 +137,8 @@ type PiToolSetContext = {
   subagentDepth: number;
   deputyRunState: { spawns: number };
   runSubagent?: (input: PiSubagentRunInput) => Promise<PiSubagentRunResult>;
+  agentProfiles?: PiSubagentProfile[];
+  deputyProfiles?: PiSubagentProfile[];
   mcpTools?: ToolDefinition[];
 };
 
@@ -222,15 +230,19 @@ export class PiRunner implements Runner {
     }
     const activeRepositorySetup = repositorySetup?.[0] ?? null;
     const cwd = activeRepositorySetup?.plan.workspacePath ?? input.sandbox.workspacePath;
-    const preparedSkills = await preparePiSkills({
-      runnerInput: input,
-      ...(this.options.skills ? { provider: this.options.skills } : {}),
-      repositories: repositorySetup?.map((setup) => setup.plan) ?? [],
-    }).catch((error: unknown) => {
-      if (input.signal?.aborted) throw error;
-      console.warn('Skill loading degraded during run preparation; affected skills were skipped.');
-      return unavailablePiSkills(input, 'Skills could not be prepared for this run.');
-    });
+    const [preparedSkills, availableAgentProfiles, availableDeputyProfiles] = await Promise.all([
+      preparePiSkills({
+        runnerInput: input,
+        ...(this.options.skills ? { provider: this.options.skills } : {}),
+        repositories: repositorySetup?.map((setup) => setup.plan) ?? [],
+      }).catch((error: unknown) => {
+        if (input.signal?.aborted) throw error;
+        console.warn('Skill loading degraded during run preparation; affected skills were skipped.');
+        return unavailablePiSkills(input, 'Skills could not be prepared for this run.');
+      }),
+      this.options.listAgentProfiles?.(),
+      this.options.listDeputyProfiles?.(),
+    ]);
     const { lease, modelRegistry, modelSelection, model, resourceLoader } = await (async () => {
       try {
         const lease = await this.getSessionLease(input.sessionId, cwd);
@@ -243,7 +255,7 @@ export class PiRunner implements Runner {
         const resourceLoader = createPiResourceLoader(
           cwd,
           this.agentDir,
-          deputiesSystemPrompt(input.sessionId),
+          deputiesSystemPrompt(input.sessionId, input.context),
           preparedSkills.skills,
         );
         await resourceLoader.reload();
@@ -282,6 +294,7 @@ export class PiRunner implements Runner {
         agentDir: this.agentDir,
         modelRegistry,
         modelName,
+        ...(input.reasoningLevel ? { parentReasoningLevel: input.reasoningLevel } : {}),
         modelSelection,
         repositoryState,
         deputyRunState,
@@ -289,6 +302,9 @@ export class PiRunner implements Runner {
         subagentDepth: 0,
         mcpTools: mcpSetup?.tools ?? [],
         skills: preparedSkills.skills,
+        skillTraces: preparedSkills.modelInvocable,
+        ...(availableAgentProfiles ? { availableAgentProfiles } : {}),
+        ...(availableDeputyProfiles ? { availableDeputyProfiles } : {}),
         skillInvocationRuntime,
         emitEvent: enqueueEvent,
         subagentInput: {
@@ -300,6 +316,8 @@ export class PiRunner implements Runner {
       subagentDepth: 0,
       deputyRunState,
       runSubagent,
+      ...(availableAgentProfiles ? { agentProfiles: availableAgentProfiles } : {}),
+      ...(availableDeputyProfiles ? { deputyProfiles: availableDeputyProfiles } : {}),
       mcpTools: mcpSetup?.tools ?? [],
     });
 
@@ -415,6 +433,26 @@ export class PiRunner implements Runner {
         payload: { runner: 'pi' },
         createdAt: new Date(),
       });
+      const profileSnapshot = readAppliedAgentProfileSnapshot(input.context?.agentProfileSnapshot);
+      if (profileSnapshot) {
+        await input.emit({
+          sessionId: input.sessionId,
+          runId: input.runId,
+          messageId: input.messageId,
+          type: 'profile_loaded',
+          payload: {
+            profileId: profileSnapshot.profileId,
+            source: profileSnapshot.source,
+            revision: profileSnapshot.revision,
+            hash: profileSnapshot.hash,
+            defaults: {
+              ...(profileSnapshot.model ? { model: profileSnapshot.model } : {}),
+              ...(profileSnapshot.reasoningLevel ? { reasoningLevel: profileSnapshot.reasoningLevel } : {}),
+            },
+          },
+          createdAt: new Date(),
+        });
+      }
       await input.emit({
         sessionId: input.sessionId,
         runId: input.runId,
@@ -613,14 +651,17 @@ function createPiToolSet(
 
   if (options.deputy) {
     customTools.push(
-      createPiDeputyToolDefinition({
-        ...options.deputy,
-        sessionId: input.sessionId,
-        runId: input.runId,
-        messageId: input.messageId,
-        runState: context.deputyRunState,
-        ...(input.shouldPersist ? { shouldPersist: input.shouldPersist } : {}),
-      }),
+      createPiDeputyToolDefinition(
+        {
+          ...options.deputy,
+          sessionId: input.sessionId,
+          runId: input.runId,
+          messageId: input.messageId,
+          runState: context.deputyRunState,
+          ...(input.shouldPersist ? { shouldPersist: input.shouldPersist } : {}),
+        },
+        context.deputyProfiles,
+      ),
     );
   }
 
@@ -651,7 +692,7 @@ function createPiToolSet(
 
   if (context.subagentDepth < PI_SUBAGENT_MAX_DEPTH) {
     if (!context.runSubagent) throw new Error('Pi subagent runner is not configured');
-    customTools.push(createPiSubagentToolDefinition({ run: context.runSubagent }));
+    customTools.push(createPiSubagentToolDefinition({ run: context.runSubagent }, context.agentProfiles));
   }
 
   return { customTools };
@@ -664,6 +705,7 @@ type RunPiSubagentInput = {
   agentDir: string;
   modelRegistry: ModelRegistry;
   modelName: string;
+  parentReasoningLevel?: ReasoningLevel;
   modelSelection: PiModelSelection;
   repositoryState: RepositoryToolState;
   deputyRunState: { spawns: number };
@@ -671,6 +713,9 @@ type RunPiSubagentInput = {
   subagentDepth: number;
   mcpTools: ToolDefinition[];
   skills: Skill[];
+  skillTraces: PreparedSkillTrace[];
+  availableAgentProfiles?: PiSubagentProfile[];
+  availableDeputyProfiles?: PiSubagentProfile[];
   skillInvocationRuntime: SkillInvocationRuntime;
   emitEvent: (event: NormalizedEvent) => void;
   subagentInput: PiSubagentRunInput;
@@ -681,16 +726,25 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
     throw new Error(`Maximum Pi subagent depth (${PI_SUBAGENT_MAX_DEPTH}) exceeded.`);
   }
   const childDepth = params.subagentDepth + 1;
-  const profile = resolvePiSubagentProfile(params.subagentInput.agent);
+  const profile = params.options.resolveAgentProfile
+    ? await params.options.resolveAgentProfile(params.subagentInput.profileId)
+    : resolvePiSubagentProfile(params.subagentInput.profileId);
   const cwd = resolveSubagentCwd(params.parentCwd, params.subagentInput.cwd);
-  const model = params.modelRegistry.find(params.modelSelection.provider, params.modelSelection.modelId);
-  if (!model) throw new Error(`Pi model is not available: ${params.modelName}`);
+  const modelName = profile.model ?? params.modelName;
+  const unavailableReason = params.options.modelUnavailableReason?.(modelName);
+  if (unavailableReason) throw new Error(unavailableReason);
+  registerAmazonBedrockInferenceProfiles(params.modelRegistry, modelName);
+  const modelSelection = parseModelSelection(modelName);
+  const model = params.modelRegistry.find(modelSelection.provider, modelSelection.modelId);
+  if (!model) throw new Error(`Pi model is not available: ${modelName}`);
+  const inheritedSkills = params.skills;
+  const inheritedTraces = params.skillTraces;
 
   const resourceLoader = createPiResourceLoader(
     cwd,
     params.agentDir,
     piSubagentSystemPrompt(deputiesSystemPrompt(params.input.sessionId), profile),
-    params.skills,
+    inheritedSkills,
   );
   await resourceLoader.reload();
 
@@ -700,8 +754,14 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
   const runSubagent = (subagentInput: PiSubagentRunInput) =>
     runPiSubagent({
       ...params,
+      modelName,
+      ...(effectiveReasoningLevel ? { parentReasoningLevel: effectiveReasoningLevel } : {}),
       parentCwd: cwd,
       subagentDepth: childDepth,
+      skills: inheritedSkills,
+      skillTraces: inheritedTraces,
+      ...(params.availableAgentProfiles ? { availableAgentProfiles: params.availableAgentProfiles } : {}),
+      ...(params.availableDeputyProfiles ? { availableDeputyProfiles: params.availableDeputyProfiles } : {}),
       subagentInput: {
         ...subagentInput,
         ...(subagentInput.parentToolCallId ? { parentActivityId: activityId(subagentInput.parentToolCallId) } : {}),
@@ -711,12 +771,18 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
     subagentDepth: childDepth,
     deputyRunState: params.deputyRunState,
     runSubagent,
+    ...(params.availableAgentProfiles ? { agentProfiles: params.availableAgentProfiles } : {}),
+    ...(params.availableDeputyProfiles ? { deputyProfiles: params.availableDeputyProfiles } : {}),
     mcpTools: params.mcpTools,
   });
-  const thinkingLevel = resolveReasoningLevel(
-    model,
-    params.input.reasoningLevel ?? params.options.reasoningLevelDefault,
-  );
+  const profileReasoning = profile.reasoningLevel;
+  if (profileReasoning && !REASONING_LEVELS.includes(profileReasoning as ReasoningLevel))
+    throw new Error(`Invalid profile reasoning level: ${profileReasoning}`);
+  const effectiveReasoningLevel =
+    (profileReasoning as ReasoningLevel | undefined) ??
+    params.parentReasoningLevel ??
+    params.options.reasoningLevelDefault;
+  const thinkingLevel = resolveReasoningLevel(model, effectiveReasoningLevel);
   const created = await createAgentSession({
     cwd,
     agentDir: params.agentDir,
@@ -747,7 +813,10 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
             ...(normalized.payload.toolCallId ? { activityId: activityId(normalized.payload.toolCallId) } : {}),
             parentActivityId: params.subagentInput.parentActivityId,
             subagentDepth: childDepth,
-            subagentAgent: profile.name,
+            subagentProfileId: profile.id,
+            subagentProfileSource: profile.source,
+            subagentProfileRevision: profile.revision,
+            ...(profile.hash ? { subagentProfileHash: profile.hash } : {}),
           },
         });
       } else {
@@ -758,7 +827,10 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
             ...(normalized.payload.toolCallId ? { activityId: activityId(normalized.payload.toolCallId) } : {}),
             parentActivityId: params.subagentInput.parentActivityId,
             subagentDepth: childDepth,
-            subagentAgent: profile.name,
+            subagentProfileId: profile.id,
+            subagentProfileSource: profile.source,
+            subagentProfileRevision: profile.revision,
+            ...(profile.hash ? { subagentProfileHash: profile.hash } : {}),
           },
         });
       }
@@ -778,11 +850,15 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
       throw new Error(assistantMessage.errorMessage ?? 'Pi subagent failed');
     }
     return {
-      agent: profile.name,
+      profileId: profile.id,
       task: params.subagentInput.task,
       cwd,
       depth: childDepth,
       text: assistantMessageText(assistantMessage),
+      model: modelName,
+      profileSource: profile.source,
+      profileRevision: profile.revision,
+      ...(profile.hash ? { profileHash: profile.hash } : {}),
       ...assistantMessageMetadata(assistantMessage),
     };
   } finally {

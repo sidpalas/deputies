@@ -221,6 +221,7 @@ export type Automation = {
   name: string;
   prompt: string;
   scheduleCron: string;
+  profileId: string;
   scheduleTimezone: 'UTC';
   enabled: boolean;
   createdByUserId?: string;
@@ -343,6 +344,39 @@ export type SkillRevision = {
   actorType: 'system' | 'user';
   actorUserId?: string;
   createdAt: string;
+};
+
+export type AgentProfileInvocation = 'agent' | 'subagent';
+export type AgentProfile = {
+  id: string;
+  source: 'builtin' | 'managed';
+  name: string;
+  description: string;
+  instructions: string;
+  revision: string;
+  revisionNumber?: number;
+  defaultModel?: string;
+  defaultReasoningLevel?: ReasoningLevel;
+  supportedInvocations: AgentProfileInvocation[];
+  enabled: boolean;
+  archivedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AgentProfileRevision = AgentProfile & { revisionNumber: number; updatedAt: string };
+export type AgentProfileDefaultConfiguration = {
+  configuredProfileId: string | null;
+  effectiveProfileId: string | null;
+  updatedByUserId?: string;
+  updatedAt?: string;
+};
+export type AgentProfileWrite = Pick<AgentProfile, 'name' | 'description' | 'instructions' | 'supportedInvocations'> & {
+  defaultModel?: string;
+  defaultReasoningLevel?: ReasoningLevel;
+};
+export type AgentProfileCreate = Omit<AgentProfileWrite, 'supportedInvocations'> & {
+  supportedInvocations?: AgentProfileInvocation[];
 };
 
 export type EnvironmentRepository = {
@@ -604,6 +638,7 @@ export async function createAutomation(input: {
   name: string;
   prompt: string;
   scheduleCron: string;
+  profileId?: string;
   token: string;
   enabled?: boolean;
   environmentId?: string;
@@ -629,6 +664,7 @@ export async function updateAutomation(input: {
   name?: string;
   prompt?: string;
   scheduleCron?: string;
+  profileId?: string;
   enabled?: boolean;
   environmentId?: string;
   environmentRevisionPolicy?: 'follow_latest' | 'pinned';
@@ -907,10 +943,99 @@ export async function restoreSkill(input: { skillId: string; token: string }): P
   return body.skill;
 }
 
+export async function listAgentProfiles(input: { token: string }): Promise<AgentProfile[]> {
+  return (await request<{ agentProfiles: AgentProfile[] }>('/agent-profiles', { token: input.token })).agentProfiles;
+}
+export async function getAgentProfile(input: { profileId: string; token: string }): Promise<AgentProfile> {
+  return (await request<{ agentProfile: AgentProfile }>(`/agent-profiles/${input.profileId}`, { token: input.token }))
+    .agentProfile;
+}
+export async function listAgentProfileRevisions(input: {
+  profileId: string;
+  token: string;
+}): Promise<AgentProfileRevision[]> {
+  return (
+    (
+      await request<{ revisions: AgentProfileRevision[] }>(`/agent-profiles/${input.profileId}/revisions`, {
+        token: input.token,
+      })
+    ).revisions ?? []
+  );
+}
+export async function getAgentProfileDefaultConfiguration(input: {
+  token: string;
+}): Promise<AgentProfileDefaultConfiguration> {
+  return (
+    await request<{ configuration: AgentProfileDefaultConfiguration }>('/agent-profiles/configuration/default', {
+      token: input.token,
+    })
+  ).configuration;
+}
+export async function setAgentProfileDefaultConfiguration(input: {
+  token: string;
+  defaultProfileId: string | null;
+}): Promise<AgentProfileDefaultConfiguration> {
+  return (
+    await request<{ configuration: AgentProfileDefaultConfiguration }>('/agent-profiles/configuration/default', {
+      method: 'PATCH',
+      token: input.token,
+      body: { defaultProfileId: input.defaultProfileId },
+    })
+  ).configuration;
+}
+export async function createAgentProfile(input: AgentProfileCreate & { token: string }): Promise<AgentProfile> {
+  const { token, ...body } = input;
+  return (await request<{ agentProfile: AgentProfile }>('/agent-profiles', { method: 'POST', token, body }))
+    .agentProfile;
+}
+export async function updateAgentProfile(
+  input: AgentProfileWrite & { profileId: string; expectedCurrentRevisionId: string; token: string },
+): Promise<AgentProfile> {
+  const { profileId, token, ...body } = input;
+  return (
+    await request<{ agentProfile: AgentProfile }>(`/agent-profiles/${profileId}`, { method: 'PATCH', token, body })
+  ).agentProfile;
+}
+export async function updateBuiltinAgentProfileSettings(input: {
+  profileId: string;
+  token: string;
+  enabled?: boolean;
+  defaultModel?: string | null;
+  defaultReasoningLevel?: ReasoningLevel | null;
+}): Promise<AgentProfile> {
+  const { profileId, token, ...body } = input;
+  return (
+    await request<{ agentProfile: AgentProfile }>(`/agent-profiles/${profileId}/settings`, {
+      method: 'PATCH',
+      token,
+      body,
+    })
+  ).agentProfile;
+}
+export async function archiveAgentProfile(input: { profileId: string; token: string }): Promise<AgentProfile> {
+  return (
+    await request<{ agentProfile: AgentProfile }>(`/agent-profiles/${input.profileId}/archive`, {
+      method: 'POST',
+      token: input.token,
+      body: {},
+    })
+  ).agentProfile;
+}
+export async function restoreAgentProfile(input: { profileId: string; token: string }): Promise<AgentProfile> {
+  return (
+    await request<{ agentProfile: AgentProfile }>(`/agent-profiles/${input.profileId}/restore`, {
+      method: 'POST',
+      token: input.token,
+      body: {},
+    })
+  ).agentProfile;
+}
+
 function automationRequestBody(input: {
   name?: string;
   prompt?: string;
   scheduleCron?: string;
+  profileId?: string;
   enabled?: boolean;
   environmentId?: string;
   environmentRevisionPolicy?: 'follow_latest' | 'pinned';
@@ -926,6 +1051,7 @@ function automationRequestBody(input: {
     ...(input.name !== undefined ? { name: input.name } : {}),
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
     ...(input.scheduleCron !== undefined ? { scheduleCron: input.scheduleCron } : {}),
+    ...(input.profileId !== undefined ? { profileId: input.profileId } : {}),
     ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
     ...(input.environmentId !== undefined ? { environmentId: input.environmentId } : {}),
     ...(input.environmentRevisionPolicy !== undefined
@@ -992,6 +1118,10 @@ export async function updateUserRole(input: {
 export async function createSession(input: {
   title?: string;
   visibility?: 'tenant' | 'private';
+  profileId?: string;
+  model?: string | null;
+  reasoningLevel?: ReasoningLevel | null;
+  environmentId?: string | null;
   token: string;
 }): Promise<Session> {
   const body = await request<{ session: Session }>('/sessions', {
@@ -1000,6 +1130,10 @@ export async function createSession(input: {
     body: {
       ...(input.title ? { title: input.title } : {}),
       ...(input.visibility ? { visibility: input.visibility } : {}),
+      ...(input.profileId ? { profileId: input.profileId } : {}),
+      ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(input.reasoningLevel !== undefined ? { reasoningLevel: input.reasoningLevel } : {}),
+      ...(input.environmentId !== undefined ? { environmentId: input.environmentId } : {}),
     },
   });
   return body.session;

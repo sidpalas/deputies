@@ -64,6 +64,8 @@ import { registerModelRoutes } from './model-routes.js';
 import { registerRepositoryRoutes } from './repository-routes.js';
 import { registerSetupRoutes } from './setup-routes.js';
 import { registerSkillRoutes } from './skill-routes.js';
+import { registerAgentProfileRoutes } from './agent-profile-routes.js';
+import { AgentProfileError, AgentProfileService } from '../agent-profiles/service.js';
 import { routeTelemetryMiddleware } from './telemetry-middleware.js';
 import { registerTelemetryRoutes } from './telemetry-routes.js';
 import { registerUserRoutes } from './user-routes.js';
@@ -117,6 +119,7 @@ export type AppServices = {
   automations: AutomationService;
   scheduledFollowUps: ScheduledFollowUpService;
   skills: SkillService;
+  agentProfiles: AgentProfileService;
   snippets: SnippetService;
   notepads: NotepadService;
   artifacts: ArtifactService;
@@ -152,11 +155,16 @@ export function createServices(
   } = {},
 ): AppServices {
   const events = new EventService(store);
-  const sessions = new SessionService(store, events);
+  const agentProfiles = new AgentProfileService(store);
+  const sessions = new SessionService(store, events, async () => {
+    const profileId = await agentProfiles.effectiveDefault();
+    if (!profileId) throw new AgentProfileError('not_found', 'No usable default agent profile is configured');
+    return agentProfiles.executionContext(profileId, 'agent');
+  });
   const messages = new MessageService(store, events);
   const environments = new EnvironmentService(store);
-  const automations = new AutomationService(store, sessions, messages, environments);
   const skills = new SkillService(store);
+  const automations = new AutomationService(store, sessions, messages, environments, agentProfiles);
   const modelAvailability = new ModelAvailabilityService();
   const snippets = new SnippetService(store);
   const notepads = new NotepadService(store, events);
@@ -183,6 +191,7 @@ export function createServices(
           },
     ),
     skills,
+    agentProfiles,
     snippets,
     notepads,
     artifacts: new ArtifactService(store, events, options.artifactObjectStorage),
@@ -261,6 +270,8 @@ export function createApp(config: AppConfig, services = createServices()) {
   app.use('/notepads', apiAuthMiddleware(config, services.store));
   app.use('/environments/*', apiAuthMiddleware(config, services.store));
   app.use('/environments', apiAuthMiddleware(config, services.store));
+  app.use('/agent-profiles/*', apiAuthMiddleware(config, services.store));
+  app.use('/agent-profiles', apiAuthMiddleware(config, services.store));
   app.use('/repositories/*', apiAuthMiddleware(config, services.store));
   app.use('/repositories', apiAuthMiddleware(config, services.store));
   app.use('/models', apiAuthMiddleware(config, services.store));
@@ -305,13 +316,55 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (visibility === 'private' && auth.bypass) {
       return writeError(c, 400, 'invalid_request', 'Private sessions require a user session');
     }
-    const create = () =>
-      services.sessions.create({
+    if (body.profileId !== undefined && (typeof body.profileId !== 'string' || !body.profileId.trim())) {
+      return writeError(c, 400, 'invalid_request', 'profileId must be a non-empty string');
+    }
+    const nullableOverride = (key: 'model' | 'reasoningLevel' | 'environmentId'): string | null | undefined => {
+      const value = body[key];
+      if (value === undefined || value === null) return value;
+      if (typeof value !== 'string' || !value.trim())
+        throw new AgentProfileError('invalid', `${key} must be a non-empty string or null`);
+      return value.trim();
+    };
+    const create = async () => {
+      const requestedProfileId = optionalString(body.profileId) ?? (await services.agentProfiles.effectiveDefault());
+      if (!requestedProfileId)
+        throw new HttpRequestError(409, 'no_default_agent_profile', 'No usable default agent profile is configured');
+      const profileContext = await services.agentProfiles.executionContext(requestedProfileId, 'agent', {
+        ...(body.model !== undefined
+          ? { model: body.model === null ? null : parseModelBody(nullableOverride('model'), config)! }
+          : {}),
+        ...(body.reasoningLevel !== undefined
+          ? {
+              reasoningLevel:
+                body.reasoningLevel === null ? null : parseReasoningLevelBody(nullableOverride('reasoningLevel'))!,
+            }
+          : {}),
+      });
+      const effectiveModel = parseModelBody(profileContext.model, config) || config.runnerModelDefault;
+      const unavailable = services.modelAvailability.unavailableFor(effectiveModel);
+      if (unavailable) throw new HttpRequestError(409, 'model_unavailable', unavailable.reason);
+      let environment: Awaited<ReturnType<EnvironmentService['resolve']>> | undefined;
+      const environmentId = nullableOverride('environmentId');
+      if (environmentId) {
+        const selected = await services.environments.get(environmentId);
+        if (!selected || selected.archivedAt)
+          throw new HttpRequestError(400, 'invalid_environment', 'Environment not found or archived');
+        if (!canUseEnvironment(auth, selected))
+          throw new HttpRequestError(403, 'forbidden', 'Environment use access is required');
+        environment = await services.environments.resolve({ environmentId });
+      }
+      return services.sessions.create({
         ...(title ? { title } : {}),
         ...(auth.bypass ? {} : { createdByUserId: auth.user.id }),
         visibility,
         ...(visibility === 'private' && !auth.bypass ? { ownerUserId: auth.user.id } : {}),
+        context: {
+          ...profileContext,
+          ...(environment ? { environment } : {}),
+        },
       });
+    };
     let session: SessionRecord;
     try {
       session =
@@ -319,6 +372,17 @@ export function createApp(config: AppConfig, services = createServices()) {
           ? await services.store.withUserWriteLease(auth.user.id, create)
           : await create();
     } catch (error) {
+      if (error instanceof AgentProfileError) {
+        const status =
+          error.code === 'not_found'
+            ? 404
+            : error.code === 'incompatible'
+              ? 400
+              : error.code === 'conflict'
+                ? 409
+                : 400;
+        return writeError(c, status, error.code, error.message);
+      }
       if (error instanceof StoreConflictError && error.code === 'not_found') {
         return writeError(c, 403, 'forbidden', 'Member access is required');
       }
@@ -404,6 +468,7 @@ export function createApp(config: AppConfig, services = createServices()) {
   registerScheduledFollowUpRoutes(app, config, services);
   registerEnvironmentRoutes(app, config, services);
   registerSkillRoutes(app, config, services);
+  registerAgentProfileRoutes(app, config, services);
   registerSnippetRoutes(app, config, services);
   registerNotepadRoutes(app, config, services);
   registerTelemetryRoutes(app, config);

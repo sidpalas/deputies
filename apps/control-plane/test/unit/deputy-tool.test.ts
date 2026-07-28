@@ -14,6 +14,114 @@ const creatorUserId = '00000000-0000-4000-8000-000000000105';
 const now = new Date('2026-05-01T00:00:00.000Z');
 
 describe('deputies tool', () => {
+  it('rejects incompatible inherited profiles without resolving latest and retains exact compatible snapshots', async () => {
+    const incompatible = await createDeputyServices({
+      parent: {
+        context: {
+          agentProfileSnapshot: {
+            profileId: 'profile',
+            source: 'managed',
+            revision: 'old',
+            hash: 'old-hash',
+            instructions: 'Old instructions',
+            supportedInvocations: ['subagent'],
+          },
+        },
+      },
+    });
+    incompatible.services.agentProfiles = {
+      executionContext: async () => {
+        throw new Error('must not resolve an inherited snapshot');
+      },
+    };
+    await expect(executeDeputyTool(incompatible.services, { action: 'spawn', prompt: 'child' })).resolves.toMatchObject(
+      {
+        ok: false,
+        error: 'Inherited agent profile does not support agent invocation',
+      },
+    );
+
+    const pinned = {
+      profileId: 'profile',
+      source: 'managed' as const,
+      revision: 'exact-revision',
+      instructions: 'Pinned instructions',
+      supportedInvocations: ['agent' as const],
+      hash: 'pinned-hash',
+    };
+    const compatible = await createDeputyServices({ parent: { context: { agentProfileSnapshot: pinned } } });
+    compatible.services.agentProfiles = {
+      executionContext: async () => {
+        throw new Error('must not resolve an inherited snapshot');
+      },
+    };
+    const result = await executeDeputyTool(compatible.services, { action: 'spawn', prompt: 'child' });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error(result.error);
+    const child = await compatible.store.getSession((result.session as { id: string }).id);
+    expect(child?.context?.agentProfileSnapshot).toEqual(pinned);
+  });
+
+  it('recomputes an inherited profile snapshot when overriding the child model', async () => {
+    const pinned = {
+      profileId: 'profile',
+      source: 'managed' as const,
+      revision: 'exact-revision',
+      instructions: 'Pinned instructions',
+      model: 'provider/parent-model',
+      supportedInvocations: ['agent' as const],
+      hash: 'pinned-hash',
+    };
+    const { services, store } = await createDeputyServices({
+      parent: { context: { agentProfileSnapshot: pinned } },
+    });
+
+    const result = await executeDeputyTool(services, {
+      action: 'spawn',
+      prompt: 'child',
+      model: 'provider/child-model',
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error(result.error);
+    const child = await store.getSession((result.session as { id: string }).id);
+    expect(child?.context).toMatchObject({
+      model: 'provider/child-model',
+      agentProfileSnapshot: { model: 'provider/child-model' },
+    });
+    expect((child?.context?.agentProfileSnapshot as { hash?: string }).hash).not.toBe(pinned.hash);
+  });
+
+  it('replays an idempotent spawn without re-resolving its selected profile', async () => {
+    const { services } = await createDeputyServices();
+    const snapshot = {
+      profileId: 'selected-profile',
+      source: 'managed' as const,
+      revision: 'selected-revision',
+      instructions: 'Selected instructions',
+      supportedInvocations: ['agent' as const],
+      hash: 'selected-hash',
+    };
+    const resolveContext = vi.fn(async () => ({ agentProfileSnapshot: snapshot }));
+    services.agentProfiles = { executionContext: resolveContext };
+    const params = {
+      action: 'spawn' as const,
+      prompt: 'stable child',
+      profileId: snapshot.profileId,
+      idempotencyKey: 'stable-profile-child',
+    };
+
+    const first = await executeDeputyTool(services, params);
+    resolveContext.mockRejectedValueOnce(new Error('Agent profile not found'));
+    const replay = await executeDeputyTool(services, params);
+
+    expect(first).toMatchObject({ ok: true, idempotentReplay: false });
+    expect(replay).toMatchObject({ ok: true, idempotentReplay: true });
+    expect(resolveContext).toHaveBeenCalledTimes(1);
+    if (!first.ok || !replay.ok) throw new Error('Expected successful spawn and replay');
+    expect(replay.session).toMatchObject({ id: (first.session as { id: string }).id });
+  });
+
   it('spawns child sessions with the first message, lineage events, and stable retry ids', async () => {
     const { services, store } = await createDeputyServices();
 
@@ -307,14 +415,24 @@ describe('deputies tool', () => {
 
   it('exposes the acting session ID and self-archive behavior in model-visible guidance', async () => {
     const { services } = await createDeputyServices();
-    const tool = createPiDeputyToolDefinition(services);
+    const tool = createPiDeputyToolDefinition(services, [
+      {
+        id: 'managed:reviewer',
+        name: 'Tenant reviewer',
+        description: 'Reviews changes using the tenant conventions.',
+      },
+    ]);
 
     expect(tool.promptGuidelines).toEqual(
       expect.arrayContaining([
         expect.stringContaining(`current acting Deputies session ID is "${parentId}"`),
+        expect.stringContaining('available agent-compatible profiles'),
         expect.stringContaining('Treat self-archive as the final sandbox-dependent action'),
       ]),
     );
+    expect(
+      (tool.parameters as { properties: { profileId: { description: string } } }).properties.profileId.description,
+    ).toContain('managed:reviewer — Tenant reviewer: Reviews changes using the tenant conventions.');
   });
 
   it('initializes a missing child title from its normalized initial prompt', async () => {

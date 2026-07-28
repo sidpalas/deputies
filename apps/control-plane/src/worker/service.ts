@@ -856,6 +856,11 @@ function mergeRunContext(
 ): Record<string, unknown> {
   const batchContext = buildBatchContext(messages);
   const merged = { ...sessionContext, ...batchContext };
+  if (Object.hasOwn(sessionContext, 'agentProfileSnapshot')) {
+    merged.agentProfileSnapshot = sessionContext.agentProfileSnapshot;
+  } else {
+    delete merged.agentProfileSnapshot;
+  }
   for (const key of executionContextKeys) {
     if (batchContext[key] === undefined) delete merged[key];
   }

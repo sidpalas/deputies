@@ -53,6 +53,7 @@ export default defineConfig({
     proxy: {
       '/health': apiProxy,
       '/auth': apiProxy,
+      '/agent-profiles': apiProxy,
       '/automations': apiProxy,
       '/environments': apiProxy,
       '/sessions': apiProxy,
