@@ -92,10 +92,15 @@ function ProfileSection(props: {
               profile.id === props.selectedId && 'border-primary bg-primary/15',
               (profile.archivedAt || !profile.enabled) &&
                 'border-dashed border-muted-foreground/40 bg-muted/40 text-muted-foreground',
-              profile.source === 'managed' && profile.archivedAt && props.canManage && 'pb-10',
             )}
           >
-            <button className="block w-full min-w-0 text-left" onClick={() => props.onSelect(profile.id)}>
+            <button
+              className={cn(
+                'block w-full min-w-0 text-left',
+                profile.source === 'managed' && props.canManage && 'pr-8',
+              )}
+              onClick={() => props.onSelect(profile.id)}
+            >
               <span className="flex min-w-0 items-center gap-2">
                 <strong className="min-w-0 flex-1 truncate text-sm">{profile.name}</strong>
                 {profile.archivedAt || !profile.enabled ? (
