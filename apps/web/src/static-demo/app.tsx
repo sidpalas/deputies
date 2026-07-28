@@ -20,6 +20,7 @@ import type { NavigationPage } from '../components/app-panels/sidebar-footer.js'
 import { ChatPanel, DesktopContextPanel, MobileContextPanel } from '../components/thread/thread-content.js';
 import { Button } from '../components/ui/button.js';
 import {
+  demoAgentProfiles,
   demoAutomations,
   demoCurrentUser,
   demoEnvironments,
@@ -436,6 +437,8 @@ export function StaticDemoApp() {
             repositoryOptionsLoading={false}
             repositoryOptionsError=""
             modelChoices={[]}
+            agentProfiles={demoAgentProfiles}
+            defaultProfileId="builtin:general"
             defaultReasoningLevel=""
             selectedAutomationId={selectedAutomationId}
             showOpenSidebar={!sidebarOpen}

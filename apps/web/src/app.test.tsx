@@ -5307,6 +5307,17 @@ it('opens read-only instance access in the static demo', async () => {
   expect(window.location.search).toBe('?page=groups');
 });
 
+it('shows saved automation agents as available in the static demo', async () => {
+  window.history.replaceState({}, '', '/?page=automations');
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    jsonResponse({ generatedAt: '2026-07-18T00:00:00.000Z', sessions: [] }),
+  );
+  render(<StaticDemoApp />);
+
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Agent' })).toHaveTextContent('General'));
+  expect(screen.queryByText(/This agent is unavailable/)).not.toBeInTheDocument();
+});
+
 function mockApi(options: MockApiOptions = {}) {
   let currentSession = { ...session, ...options.sessionOverride };
   let currentUser = options.currentUser;
