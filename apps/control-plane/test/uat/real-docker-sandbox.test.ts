@@ -77,6 +77,10 @@ describe.skipIf(!enabled)('real Docker sandbox UAT', () => {
 });
 
 class MemorySandboxStore implements SandboxStore {
+  async withSandboxLifecycleLock<T>(_sessionId: string, _provider: string, fn: () => Promise<T>): Promise<T> {
+    return fn();
+  }
+
   private record: SandboxRecord | undefined;
   private readonly secrets = new Map<string, Record<string, string>>();
 

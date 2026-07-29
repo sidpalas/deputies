@@ -146,7 +146,7 @@ describe('service tool', () => {
     let context: Record<string, unknown> = {
       services: [
         { port: 8080, label: 'VS Code', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
-        { port: 7681, label: 'Hunk Diff', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
+        { port: 7681, label: 'Terminal', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
       ],
     };
     const tool = createServiceTool({
@@ -167,7 +167,7 @@ describe('service tool', () => {
     await expect(tool.execute({ action: 'publish', port: 5173, label: 'Web app' }).then(JSON.parse)).resolves.toEqual({
       services: [
         { port: 5173, label: 'Web app', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
-        { port: 7681, label: 'Hunk Diff', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
+        { port: 7681, label: 'Terminal', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
         { port: 8080, label: 'VS Code', providerSandboxId: 'sandbox-1', runtimeId: 'runtime-1' },
       ],
       keepalive: { keepaliveUntil: '2026-05-15T00:00:00.000Z', providerSync: 'not_supported' },

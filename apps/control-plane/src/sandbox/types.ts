@@ -33,6 +33,8 @@ export type SandboxHealth = {
   checkedAt: Date;
 };
 
+export class SandboxProviderUnavailableError extends Error {}
+
 export type SandboxProviderCheck = {
   status: 'ready' | 'unhealthy';
   message?: string;
@@ -121,6 +123,7 @@ export interface SandboxProvider {
   readonly capabilities: SandboxCapabilities;
   check?(): Promise<SandboxProviderCheck>;
   create(input: CreateSandboxInput): Promise<SandboxHandle>;
+  /** Attach to this exact existing sandbox. May resume it, but must never create or substitute another sandbox. */
   connect(input: ConnectSandboxInput): Promise<SandboxHandle>;
   start?(input: SandboxRef): Promise<void>;
   stop?(input: SandboxRef): Promise<void>;

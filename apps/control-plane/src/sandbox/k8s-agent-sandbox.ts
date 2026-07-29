@@ -20,6 +20,7 @@ import type {
   SandboxProviderCheck,
   SandboxRef,
 } from './types.js';
+import { SandboxProviderUnavailableError } from './types.js';
 
 const bridgePort = 3584;
 const defaultNamespacePath = '/var/run/secrets/kubernetes.io/serviceaccount/namespace';
@@ -222,27 +223,32 @@ export class InProcessAgentSandboxOrchestrator implements AgentSandboxOrchestrat
   }
 
   async health(input: AgentSandboxRef): Promise<SandboxHealth> {
+    let sandbox;
     try {
-      const sandbox = await this.getSandbox(input.providerSandboxId);
-      const ready = findCondition(sandbox, 'Ready');
-      const suspended = findCondition(sandbox, 'Suspended');
-      const finished = findCondition(sandbox, 'Finished');
-      const checkedAt = new Date();
-      if (readReplicas(sandbox.spec.replicas) === 0) return { status: 'stopped', checkedAt };
-      if (finished?.status === 'True') return sandboxHealth('stopped', checkedAt, finished.reason);
-      if (suspended?.status === 'True') return sandboxHealth('stopped', checkedAt, suspended.reason);
-      if (ready?.status === 'True') return { status: 'ready', checkedAt };
-      if (ready?.status === 'False') return sandboxHealth('starting', checkedAt, ready.reason);
-      return { status: 'starting', checkedAt };
+      sandbox = await this.getSandbox(input.providerSandboxId);
     } catch (error) {
       if (error instanceof KubernetesApiError && error.statusCode === 404)
         return { status: 'missing', checkedAt: new Date() };
-      throw error;
+      throw new SandboxProviderUnavailableError('Agent Sandbox health check failed', { cause: error });
     }
+    const ready = findCondition(sandbox, 'Ready');
+    const suspended = findCondition(sandbox, 'Suspended');
+    const finished = findCondition(sandbox, 'Finished');
+    const checkedAt = new Date();
+    if (readReplicas(sandbox.spec.replicas) === 0) return { status: 'stopped', checkedAt };
+    if (finished?.status === 'True') return sandboxHealth('stopped', checkedAt, finished.reason);
+    if (suspended?.status === 'True') return sandboxHealth('stopped', checkedAt, suspended.reason);
+    if (ready?.status === 'True') return { status: 'ready', checkedAt };
+    if (ready?.status === 'False') return sandboxHealth('starting', checkedAt, ready.reason);
+    return { status: 'starting', checkedAt };
   }
 
   async start(input: AgentSandboxRef): Promise<void> {
-    await this.patchSandbox(input.providerSandboxId, { spec: { replicas: 1 } });
+    try {
+      await this.patchSandbox(input.providerSandboxId, { spec: { replicas: 1 } });
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Agent Sandbox resume failed', { cause });
+    }
   }
 
   async stop(input: AgentSandboxRef): Promise<void> {
@@ -478,14 +484,22 @@ export class HttpAgentSandboxOrchestratorClient implements AgentSandboxOrchestra
     ) as Promise<AgentSandboxDescriptor>;
   }
 
-  health(input: AgentSandboxRef): Promise<SandboxHealth> {
-    return this.request('POST', `/sandboxes/${encodeURIComponent(input.providerSandboxId)}/health`, input).then(
-      parseSandboxHealth,
-    );
+  async health(input: AgentSandboxRef): Promise<SandboxHealth> {
+    let result;
+    try {
+      result = await this.request('POST', `/sandboxes/${encodeURIComponent(input.providerSandboxId)}/health`, input);
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Agent Sandbox health request failed', { cause });
+    }
+    return parseSandboxHealth(result);
   }
 
   async start(input: AgentSandboxRef): Promise<void> {
-    await this.request('POST', `/sandboxes/${encodeURIComponent(input.providerSandboxId)}/start`, input);
+    try {
+      await this.request('POST', `/sandboxes/${encodeURIComponent(input.providerSandboxId)}/start`, input);
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Agent Sandbox resume request failed', { cause });
+    }
   }
 
   async stop(input: AgentSandboxRef): Promise<void> {

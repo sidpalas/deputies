@@ -24,6 +24,7 @@ import type {
   SandboxServiceEndpoint,
   SandboxServiceEndpointInput,
 } from './types.js';
+import { SandboxProviderUnavailableError } from './types.js';
 
 const superserveActivationRetryAttempts = 4;
 const superserveActivationRetryDelayMs = 100;
@@ -143,9 +144,13 @@ export class SuperserveSandboxProvider implements SandboxProvider {
   }
 
   async connect(input: ConnectSandboxInput): Promise<SandboxHandle> {
-    const sandbox = await this.connectSandbox(input.providerSandboxId);
-    await ensureSuperserveWorkspace(sandbox, this.workspacePath);
-    return this.toHandle(sandbox, input.sessionId, input.metadata ?? {}, input.secrets);
+    try {
+      const sandbox = await this.connectSandbox(input.providerSandboxId);
+      await ensureSuperserveWorkspace(sandbox, this.workspacePath);
+      return this.toHandle(sandbox, input.sessionId, input.metadata ?? {}, input.secrets);
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Superserve sandbox connection failed', { cause });
+    }
   }
 
   async destroy(input: SandboxRef): Promise<void> {
@@ -158,7 +163,11 @@ export class SuperserveSandboxProvider implements SandboxProvider {
   }
 
   async start(input: SandboxRef): Promise<void> {
-    await this.connectSandbox(input.providerSandboxId);
+    try {
+      await this.connectSandbox(input.providerSandboxId);
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Superserve sandbox resume failed', { cause });
+    }
   }
 
   async stop(input: SandboxRef): Promise<void> {
@@ -167,9 +176,13 @@ export class SuperserveSandboxProvider implements SandboxProvider {
   }
 
   async health(input: SandboxRef): Promise<SandboxHealth> {
-    const info = (await this.client.list({ metadata: { 'deputies-session-id': input.sessionId } })).find(
-      (sandbox) => sandbox.id === input.providerSandboxId,
-    );
+    let sandboxes;
+    try {
+      sandboxes = await this.client.list({ metadata: { 'deputies-session-id': input.sessionId } });
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Superserve sandbox health check failed', { cause });
+    }
+    const info = sandboxes.find((sandbox) => sandbox.id === input.providerSandboxId);
     if (!info) return { status: 'missing', checkedAt: new Date() };
     return superserveHealth(info);
   }

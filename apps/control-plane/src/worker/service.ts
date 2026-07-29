@@ -376,7 +376,6 @@ export class WorkerService {
       { 'deputies.sandbox_provider': this.options.sandboxProvider.name },
       () => lifecycle.ensure(primary.sessionId),
     );
-    await this.options.store.updateSandbox({ ...record, updatedAt: new Date() });
     await this.appendOwnedRunEvent({
       sessionId: primary.sessionId,
       runId: claimed.run.id,
@@ -473,8 +472,10 @@ export class WorkerService {
       if (!(await this.isRunOwnedByThisWorker(claimed.run.id))) return null;
       return result;
     } finally {
-      const current = await this.options.store.getActiveSandbox(primary.sessionId, record.provider);
-      if (current?.id === record.id) await this.options.store.updateSandbox({ ...current, updatedAt: new Date() });
+      await this.options.store.withSandboxLifecycleLock(primary.sessionId, record.provider, async () => {
+        const current = await this.options.store.getActiveSandbox(primary.sessionId, record.provider);
+        if (current?.id === record.id) await this.options.store.updateSandbox({ ...current, updatedAt: new Date() });
+      });
     }
   }
 

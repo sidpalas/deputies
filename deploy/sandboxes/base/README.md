@@ -7,7 +7,7 @@ It includes:
 - Ubuntu 24.04
 - Node.js 24 and Corepack/pnpm
 - Git, Git LFS, SSH, jq, rsync, zsh, vim, and sudo
-- `code-server`, `ttyd`, and `hunkdiff` for browser-accessible workspace tools
+- `code-server` and `ttyd` for browser-accessible workspace tools
 - Deputies sandbox bridge build output at `/opt/deputies/sandbox-bridge`
 
 Build locally:

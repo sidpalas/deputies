@@ -591,11 +591,13 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     });
     const singleConnectionStore = new PostgresStore(singleConnectionPool);
     const promotionResult = await singleConnectionStore.withPrivateSessionWriteLease(owner.id, privateChild.id, () =>
-      singleConnectionStore.updateSessionMetadataWithEvent({
-        id: privateChild.id,
-        promoteToTenant: true,
-        updatedAt: new Date(),
-      }),
+      singleConnectionStore.withSandboxLifecycleLock(privateChild.id, 'fake', () =>
+        singleConnectionStore.updateSessionMetadataWithEvent({
+          id: privateChild.id,
+          promoteToTenant: true,
+          updatedAt: new Date(),
+        }),
+      ),
     );
     await singleConnectionStore.close();
     const promotedChild = promotionResult.session;

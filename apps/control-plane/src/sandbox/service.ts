@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { EventService } from '../events/service.js';
 import type { CreateSandboxRecord, SandboxRecord, SandboxStore } from '../store/types.js';
-import { withNewSandboxRuntime, withSandboxRuntimeMetadata } from './runtime.js';
-import type { SandboxHandle, SandboxProvider } from './types.js';
+import { sandboxRuntimeId, withNewSandboxRuntime, withSandboxRuntimeMetadata } from './runtime.js';
+import { SandboxProviderUnavailableError, type SandboxHandle, type SandboxProvider } from './types.js';
 
 export type EnsureSandboxResult = {
   sandbox: SandboxHandle;
@@ -15,7 +15,11 @@ export type EnsureSandboxOptions = {
   allowCreate?: boolean;
 };
 
+export class SandboxLifecycleUnavailableError extends Error {}
+
 export class SandboxLifecycleService {
+  private readonly localLifecycleLocks = new Map<string, Promise<void>>();
+
   constructor(
     private readonly store: SandboxStore,
     private readonly provider: SandboxProvider,
@@ -27,6 +31,10 @@ export class SandboxLifecycleService {
     options: EnsureSandboxOptions & { allowCreate: false },
   ): Promise<EnsureSandboxResult | null>;
   async ensure(sessionId: string, options: EnsureSandboxOptions = {}): Promise<EnsureSandboxResult | null> {
+    return this.withLifecycleLock(sessionId, () => this.ensureUnlocked(sessionId, options));
+  }
+
+  private async ensureUnlocked(sessionId: string, options: EnsureSandboxOptions): Promise<EnsureSandboxResult | null> {
     const existing = await this.store.getActiveSandbox(sessionId, this.provider.name);
     if (existing) {
       const connected = await this.tryConnect(existing, options);
@@ -67,13 +75,37 @@ export class SandboxLifecycleService {
     return { sandbox: { ...sandbox, metadata: record.metadata }, record, created: true, restarted: false };
   }
 
+  private async withLifecycleLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const key = `${this.provider.name}:${sessionId}`;
+    const previous = this.localLifecycleLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.then(() => current);
+    this.localLifecycleLocks.set(key, queued);
+    await previous;
+    try {
+      return await this.store.withSandboxLifecycleLock(sessionId, this.provider.name, operation);
+    } finally {
+      release();
+      if (this.localLifecycleLocks.get(key) === queued) this.localLifecycleLocks.delete(key);
+    }
+  }
+
   private async tryConnect(
     record: SandboxRecord,
     options: EnsureSandboxOptions,
   ): Promise<Omit<EnsureSandboxResult, 'created'> | null> {
     const checkedAt = new Date();
-    const health = await this.provider.health(record);
-    let restarted = record.status === 'stopped';
+    let health;
+    try {
+      health = await this.provider.health(record);
+    } catch (cause) {
+      if (!(cause instanceof SandboxProviderUnavailableError)) throw cause;
+      throw new SandboxLifecycleUnavailableError('Sandbox health check failed', { cause });
+    }
+    let restarted = record.status !== 'ready' || health.status === 'stopped' || health.status === 'starting';
     const checkedRecord: SandboxRecord = {
       ...record,
       status: health.status === 'ready' ? 'ready' : health.status === 'stopped' ? 'stopped' : 'unhealthy',
@@ -84,9 +116,14 @@ export class SandboxLifecycleService {
 
     if (health.status === 'stopped') {
       if (!this.provider.start) return null;
-      await this.provider.start(record);
+      try {
+        await this.provider.start(record);
+      } catch (cause) {
+        if (!(cause instanceof SandboxProviderUnavailableError)) throw cause;
+        throw new SandboxLifecycleUnavailableError('Sandbox resume failed', { cause });
+      }
       restarted = true;
-    } else if (health.status !== 'ready') {
+    } else if (health.status !== 'ready' && !(health.status === 'starting' && options.allowCreate === false)) {
       return null;
     }
 
@@ -100,7 +137,8 @@ export class SandboxLifecycleService {
         metadata: record.metadata,
         secrets,
       });
-    } catch {
+    } catch (cause) {
+      if (!(cause instanceof SandboxProviderUnavailableError)) throw cause;
       await this.store.updateSandbox({
         ...checkedRecord,
         status: 'unhealthy',
@@ -109,8 +147,22 @@ export class SandboxLifecycleService {
       return null;
     }
 
+    if (
+      sandbox.provider !== this.provider.name ||
+      sandbox.providerSandboxId !== record.providerSandboxId ||
+      sandbox.sessionId !== record.sessionId
+    )
+      throw new Error(`Sandbox identity changed while reconnecting ${record.providerSandboxId}`);
+    const current = await this.store.getActiveSandbox(record.sessionId, this.provider.name);
+    if (
+      !current ||
+      current.id !== record.id ||
+      current.providerSandboxId !== record.providerSandboxId ||
+      sandboxRuntimeId(current) !== sandboxRuntimeId(checkedRecord)
+    )
+      throw new Error(`Sandbox record changed while reconnecting ${record.providerSandboxId}`);
     if (sandbox.secrets) await this.store.setSandboxSecrets(record.id, sandbox.secrets);
-    const baseRecord = restarted ? withNewSandboxRuntime(checkedRecord) : checkedRecord;
+    const baseRecord = restarted ? withNewSandboxRuntime(current) : current;
     const updated = await this.store.updateSandbox({
       ...baseRecord,
       status: 'ready',
@@ -170,36 +222,38 @@ export class SandboxKeepaliveService {
     maxDurationMs: number;
     port?: number;
   }): Promise<SandboxKeepaliveResult | null> {
-    const sandbox = await this.store.getActiveSandbox(input.sessionId, this.provider.name);
-    if (!sandbox || sandbox.status !== 'ready') return null;
+    return this.store.withSandboxLifecycleLock(input.sessionId, this.provider.name, async () => {
+      const sandbox = await this.store.getActiveSandbox(input.sessionId, this.provider.name);
+      if (!sandbox || sandbox.status !== 'ready') return null;
 
-    const durationMs = input.durationMs;
-    const now = new Date();
-    const baseTime =
-      sandbox.keepaliveUntil && sandbox.keepaliveUntil > now ? sandbox.keepaliveUntil.getTime() : now.getTime();
-    const maxUntilMs = now.getTime() + input.maxDurationMs;
-    const requestedUntilMs = baseTime + durationMs;
-    const keepaliveUntil = new Date(Math.min(requestedUntilMs, maxUntilMs));
-    const updated = await this.store.updateSandbox({
-      ...sandbox,
-      keepaliveUntil,
-      updatedAt: now,
+      const durationMs = input.durationMs;
+      const now = new Date();
+      const baseTime =
+        sandbox.keepaliveUntil && sandbox.keepaliveUntil > now ? sandbox.keepaliveUntil.getTime() : now.getTime();
+      const maxUntilMs = now.getTime() + input.maxDurationMs;
+      const requestedUntilMs = baseTime + durationMs;
+      const keepaliveUntil = new Date(Math.min(requestedUntilMs, maxUntilMs));
+      const updated = await this.store.updateSandbox({
+        ...sandbox,
+        keepaliveUntil,
+        updatedAt: now,
+      });
+      const providerSync = await this.syncProviderKeepalive(updated, durationMs);
+      await this.events.append({
+        sessionId: sandbox.sessionId,
+        type: 'sandbox_keepalive_extended',
+        payload: {
+          reason: 'manual_extend',
+          provider: sandbox.provider,
+          providerSandboxId: sandbox.providerSandboxId,
+          keepaliveUntil: updated.keepaliveUntil!.toISOString(),
+          extendedBySeconds: Math.ceil(durationMs / 1000),
+          providerSync,
+          ...(input.port ? { port: input.port } : {}),
+        },
+      });
+      return { record: updated, keepaliveUntil: updated.keepaliveUntil!, providerSync };
     });
-    const providerSync = await this.syncProviderKeepalive(updated, durationMs);
-    await this.events.append({
-      sessionId: sandbox.sessionId,
-      type: 'sandbox_keepalive_extended',
-      payload: {
-        reason: 'manual_extend',
-        provider: sandbox.provider,
-        providerSandboxId: sandbox.providerSandboxId,
-        keepaliveUntil: updated.keepaliveUntil!.toISOString(),
-        extendedBySeconds: Math.ceil(durationMs / 1000),
-        providerSync,
-        ...(input.port ? { port: input.port } : {}),
-      },
-    });
-    return { record: updated, keepaliveUntil: updated.keepaliveUntil!, providerSync };
   }
 
   private async syncProviderKeepalive(
@@ -259,17 +313,20 @@ export class SandboxCleanupService {
 
     for (const sandbox of sandboxes) {
       try {
-        const current = await this.currentActiveSandbox(sandbox);
-        if (!current || isKeepaliveActive(current)) continue;
-        await this.provider.stop?.(current);
-        const stoppedAt = new Date();
-        await this.store.updateSandbox({ ...current, status: 'stopped', updatedAt: stoppedAt });
-        await this.events.append({
-          sessionId: current.sessionId,
-          type: 'sandbox_stopped',
-          payload: { reason, provider: current.provider, providerSandboxId: current.providerSandboxId },
+        const didStop = await this.store.withSandboxLifecycleLock(sandbox.sessionId, sandbox.provider, async () => {
+          const current = await this.currentActiveSandbox(sandbox);
+          if (!current || isKeepaliveActive(current)) return false;
+          await this.provider.stop?.(current);
+          const stoppedAt = new Date();
+          await this.store.updateSandbox({ ...current, status: 'stopped', updatedAt: stoppedAt });
+          await this.events.append({
+            sessionId: current.sessionId,
+            type: 'sandbox_stopped',
+            payload: { reason, provider: current.provider, providerSandboxId: current.providerSandboxId },
+          });
+          return true;
         });
-        stopped += 1;
+        if (didStop) stopped += 1;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown sandbox stop error';
         await this.events.append({
@@ -294,26 +351,29 @@ export class SandboxCleanupService {
 
     for (const sandbox of sandboxes) {
       try {
-        const current = await this.currentActiveSandbox(sandbox);
-        if (!current || (options.respectKeepalive && isKeepaliveActive(current))) continue;
-        await this.provider.destroy(current);
-        const destroyedAt = new Date();
-        await this.store.updateSandbox({
-          ...current,
-          status: 'destroyed',
-          updatedAt: destroyedAt,
-          destroyedAt,
+        const didDestroy = await this.store.withSandboxLifecycleLock(sandbox.sessionId, sandbox.provider, async () => {
+          const current = await this.currentActiveSandbox(sandbox);
+          if (!current || (options.respectKeepalive && isKeepaliveActive(current))) return false;
+          await this.provider.destroy(current);
+          const destroyedAt = new Date();
+          await this.store.updateSandbox({
+            ...current,
+            status: 'destroyed',
+            updatedAt: destroyedAt,
+            destroyedAt,
+          });
+          await this.events.append({
+            sessionId: current.sessionId,
+            type: 'sandbox_destroyed',
+            payload: {
+              reason,
+              provider: current.provider,
+              providerSandboxId: current.providerSandboxId,
+            },
+          });
+          return true;
         });
-        await this.events.append({
-          sessionId: current.sessionId,
-          type: 'sandbox_destroyed',
-          payload: {
-            reason,
-            provider: current.provider,
-            providerSandboxId: current.providerSandboxId,
-          },
-        });
-        destroyed += 1;
+        if (didDestroy) destroyed += 1;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown sandbox destroy error';
         await this.events.append({

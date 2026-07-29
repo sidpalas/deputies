@@ -8,10 +8,12 @@ import {
   GitCompare,
   Globe2,
   LockKeyhole,
+  MessageSquare,
   PanelLeftOpen,
   Pencil,
   Plus,
   Star,
+  Terminal,
   Wrench,
   X,
 } from 'lucide-react';
@@ -30,12 +32,14 @@ type ThreadHeaderProps = {
   workspaceToolsDisabled?: boolean;
   selectedSession: Session;
   showOpenSidebar: boolean;
+  threadView: 'conversation' | 'changes';
   openSidebarLabel?: string;
   workspaceToolsUnavailableReason?: string;
   onArchive: () => void;
   onPromoteSession?: () => void;
   onSessionStarChange: (sessionId: string, starred: boolean) => void;
   onOpenSidebar: () => void;
+  onThreadViewChange: (view: 'conversation' | 'changes') => void;
   onUpdateTags: (tags: string[]) => Promise<boolean>;
   onUpdateTitle: (title: string) => Promise<boolean>;
   onOpenWorkspaceTool: (toolId: WorkspaceToolId) => Promise<void>;
@@ -44,7 +48,7 @@ type ThreadHeaderProps = {
 
 const workspaceToolOptions = [
   { id: 'ide' as const, label: 'VS Code', Icon: Code2 },
-  { id: 'diff' as const, label: 'Hunk Diff', Icon: GitCompare },
+  { id: 'terminal' as const, label: 'Terminal', Icon: Terminal },
 ];
 
 export function ThreadHeader(props: ThreadHeaderProps) {
@@ -181,6 +185,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
     props.onSessionStarChange(props.selectedSession.id, !props.selectedSession.starred);
   }
 
+  function toggleThreadView() {
+    setActionsOpen(false);
+    props.onThreadViewChange(props.threadView === 'conversation' ? 'changes' : 'conversation');
+  }
+
   function archiveSession() {
     setActionsOpen(false);
     if (!props.canWriteSession) return;
@@ -288,17 +297,21 @@ export function ThreadHeader(props: ThreadHeaderProps) {
         >
           {displayStatus}
         </Badge>
-        <Button
-          className="hidden h-9 gap-2 sm:inline-flex"
-          type="button"
-          variant="secondary"
-          onClick={() => props.onSessionStarChange(props.selectedSession.id, !props.selectedSession.starred)}
-          aria-pressed={props.selectedSession.starred === true}
-          title={props.selectedSession.starred ? 'Unstar session' : 'Star session'}
-        >
-          <Star className={cn('h-4 w-4', props.selectedSession.starred && 'fill-current text-warning')} />
-          <span>{props.selectedSession.starred ? 'Starred' : 'Star'}</span>
-        </Button>
+        {props.canWriteSession ? (
+          <Button
+            className="hidden h-9 w-28 justify-center gap-2 sm:inline-flex"
+            type="button"
+            variant="secondary"
+            onClick={toggleThreadView}
+          >
+            {props.threadView === 'conversation' ? (
+              <GitCompare className="h-4 w-4" />
+            ) : (
+              <MessageSquare className="h-4 w-4" />
+            )}
+            <span>{props.threadView === 'conversation' ? 'Changes' : 'Chat'}</span>
+          </Button>
+        ) : null}
         <div className="relative" ref={actionsRef}>
           <Button
             className="h-9 w-9 gap-2 p-0 sm:w-auto sm:px-3"
@@ -323,7 +336,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             >
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground sm:hidden"
+                className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground"
                 role="menuitem"
                 onClick={toggleStarSession}
               >
@@ -332,9 +345,24 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                   {props.selectedSession.starred ? 'Unstar session' : 'Star session'}
                 </span>
               </button>
+              {props.canWriteSession ? (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground sm:hidden"
+                  role="menuitem"
+                  onClick={toggleThreadView}
+                >
+                  {props.threadView === 'conversation' ? (
+                    <GitCompare className="h-4 w-4" />
+                  ) : (
+                    <MessageSquare className="h-4 w-4" />
+                  )}
+                  <span className="min-w-0 flex-1">{props.threadView === 'conversation' ? 'Changes' : 'Chat'}</span>
+                </button>
+              ) : null}
               {canOpenWorkspaceTools ? (
                 <>
-                  <div className="my-1 h-px bg-border sm:hidden" />
+                  <div className="my-1 h-px bg-border" />
                   <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Workspace Tools</p>
                   {workspaceUnavailableReason ? (
                     <p className="px-2 py-2 text-muted-foreground">{workspaceUnavailableReason}</p>
@@ -381,7 +409,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               ) : null}
               {props.selectedSession.status !== 'archived' ? (
                 <>
-                  <div className={cn('my-1 h-px bg-border', !canOpenWorkspaceTools && 'sm:hidden')} />
+                  <div className="my-1 h-px bg-border" />
                   <button
                     type="button"
                     className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60"

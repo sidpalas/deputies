@@ -28,6 +28,7 @@ import type {
   SandboxServiceEndpoint,
   SandboxServiceEndpointInput,
 } from './types.js';
+import { SandboxProviderUnavailableError } from './types.js';
 
 const defaultBridgePort = 3584;
 const defaultHooksPort = 9000;
@@ -167,19 +168,32 @@ export class LambdaMicrovmSandboxProvider implements SandboxProvider {
 
     const bridgeToken = input.secrets?.bridgeToken ?? readMetadata(input.metadata ?? {}).bridgeToken;
     if (!bridgeToken) throw new Error('Lambda MicroVM sandbox secrets are missing bridgeToken');
-    const info = await this.client.get(input.providerSandboxId);
+    let info;
+    try {
+      info = await this.client.get(input.providerSandboxId);
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Lambda MicroVM sandbox connection failed', { cause });
+    }
     const descriptor = this.descriptor(info, input.sessionId, bridgeToken, input.metadata ?? {});
-    await waitForBridge(
-      descriptor,
-      (port, options) => this.authToken(descriptor.providerSandboxId, port, options),
-      this.readyTimeoutMs,
-    );
+    try {
+      await waitForBridge(
+        descriptor,
+        (port, options) => this.authToken(descriptor.providerSandboxId, port, options),
+        this.readyTimeoutMs,
+      );
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Lambda MicroVM sandbox bridge connection failed', { cause });
+    }
     this.descriptors.set(descriptor.providerSandboxId, descriptor);
     return this.toHandle(descriptor);
   }
 
   async start(input: SandboxRef): Promise<void> {
-    await this.client.resume(input.providerSandboxId);
+    try {
+      await this.client.resume(input.providerSandboxId);
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Lambda MicroVM sandbox resume failed', { cause });
+    }
   }
 
   async stop(input: SandboxRef): Promise<void> {
@@ -198,12 +212,14 @@ export class LambdaMicrovmSandboxProvider implements SandboxProvider {
   }
 
   async health(input: SandboxRef): Promise<SandboxHealth> {
+    let info;
     try {
-      return lambdaMicrovmHealth(await this.client.get(input.providerSandboxId));
+      info = await this.client.get(input.providerSandboxId);
     } catch (error) {
       if (isLambdaMicrovmMissingError(error)) return { status: 'missing', checkedAt: new Date() };
-      throw error;
+      throw new SandboxProviderUnavailableError('Lambda MicroVM sandbox health check failed', { cause: error });
     }
+    return lambdaMicrovmHealth(info);
   }
 
   async getServiceEndpoint(input: SandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {

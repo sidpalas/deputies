@@ -43,15 +43,7 @@ export class FakeSandboxProvider implements SandboxProvider {
   async connect(input: ConnectSandboxInput): Promise<SandboxHandle> {
     const existing = this.sandboxes.get(input.providerSandboxId);
     if (existing) return existing;
-
-    const handle = createFakeHandle({
-      providerSandboxId: input.providerSandboxId,
-      sessionId: input.sessionId,
-      metadata: input.metadata ?? {},
-    });
-    this.sandboxes.set(handle.providerSandboxId, handle);
-    this.stopped.delete(handle.providerSandboxId);
-    return handle;
+    throw new Error(`Fake sandbox not found: ${input.providerSandboxId}`);
   }
 
   async destroy(input: SandboxRef): Promise<void> {
@@ -62,9 +54,8 @@ export class FakeSandboxProvider implements SandboxProvider {
 
   async start(input: SandboxRef): Promise<void> {
     this.starts += 1;
-    if (!this.sandboxes.has(input.providerSandboxId)) {
-      this.sandboxes.set(input.providerSandboxId, createFakeHandle({ ...input, metadata: {} }));
-    }
+    if (!this.sandboxes.has(input.providerSandboxId))
+      throw new Error(`Fake sandbox not found: ${input.providerSandboxId}`);
     this.stopped.delete(input.providerSandboxId);
   }
 

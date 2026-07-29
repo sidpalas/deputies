@@ -131,6 +131,59 @@ export type SessionPage = {
   nextCursor: string | null;
 };
 
+export type WorkspaceIndexChange =
+  | 'added'
+  | 'modified'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  | 'type_changed'
+  | 'unmerged';
+export type WorkspaceWorktreeChange =
+  | 'modified'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  | 'type_changed'
+  | 'untracked'
+  | 'unmerged';
+export type WorkspaceChangeFile = {
+  id: string;
+  path: string;
+  oldPath?: string;
+  indexChange?: WorkspaceIndexChange;
+  worktreeChange?: WorkspaceWorktreeChange;
+};
+export type WorkspaceChangesRepository = {
+  id: string;
+  owner: string;
+  name: string;
+  isPrimary: boolean;
+  branch: string | null;
+  headOid: string | null;
+  status: 'ready' | 'not_repository' | 'timed_out' | 'error';
+  complete: boolean;
+  truncated: boolean;
+  files: WorkspaceChangeFile[];
+};
+export type WorkspaceChanges = {
+  source: 'live';
+  sandboxRuntimeId: string | null;
+  observedAt: string;
+  repositories: WorkspaceChangesRepository[];
+};
+export type WorkspacePatchLayer = 'index' | 'worktree' | 'combined';
+export type WorkspaceChangePatch = {
+  repositoryId: string;
+  fileId: string;
+  path: string;
+  layer: WorkspacePatchLayer;
+  patch: string;
+  truncated: boolean;
+  binary: boolean;
+  observedAt: string;
+};
+
 export type NotepadActor =
   | { kind: 'human'; userId: string }
   | { kind: 'agent'; sessionId: string; runId: string }
@@ -521,7 +574,7 @@ export type SandboxKeepalive = {
   maxKeepaliveUntil?: string;
 };
 
-export type WorkspaceToolId = 'ide' | 'diff';
+export type WorkspaceToolId = 'ide' | 'terminal';
 
 export type WorkspaceToolOpenResponse = {
   tool: { id: WorkspaceToolId; label: string };
@@ -1744,6 +1797,36 @@ export async function openWorkspaceTool(input: {
     method: 'POST',
     token: input.token,
     body: {},
+  });
+}
+
+export async function getWorkspaceChanges(input: {
+  sessionId: string;
+  token: string;
+  signal?: AbortSignal;
+}): Promise<WorkspaceChanges> {
+  return request<WorkspaceChanges>(`/sessions/${input.sessionId}/workspace-changes`, {
+    token: input.token,
+    ...(input.signal ? { signal: input.signal } : {}),
+  });
+}
+
+export async function getWorkspaceChangePatch(input: {
+  sessionId: string;
+  repositoryId: string;
+  fileId: string;
+  layer: WorkspacePatchLayer;
+  token: string;
+  signal?: AbortSignal;
+}): Promise<WorkspaceChangePatch> {
+  const query = new URLSearchParams({
+    repository: input.repositoryId,
+    file: input.fileId,
+    layer: input.layer,
+  });
+  return request<WorkspaceChangePatch>(`/sessions/${input.sessionId}/workspace-changes/patch?${query}`, {
+    token: input.token,
+    ...(input.signal ? { signal: input.signal } : {}),
   });
 }
 

@@ -195,6 +195,7 @@ const storeMethods = [
   'withUserWriteLease',
   'withPrivateSessionWriteLease',
   'withExternalThreadLock',
+  'withSandboxLifecycleLock',
 ] as const satisfies readonly StoreMethod[];
 
 type MissingStoreMethod = Exclude<StoreMethod, (typeof storeMethods)[number]>;

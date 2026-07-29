@@ -2309,6 +2309,10 @@ export class MemoryStore implements AppStore {
     return (await this.listActiveSandboxes(sessionId, provider))[0] ?? null;
   }
 
+  async withSandboxLifecycleLock<T>(sessionId: string, provider: string, fn: () => Promise<T>): Promise<T> {
+    return this.withOperationLock(`sandbox-lifecycle:${provider}:${sessionId}`, fn);
+  }
+
   async getLatestSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null> {
     return this.latestSandbox((sandbox) => sandbox.sessionId === sessionId && sandbox.provider === provider);
   }

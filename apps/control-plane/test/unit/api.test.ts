@@ -1743,6 +1743,50 @@ describe('core API', () => {
     await expect(unarchive.json()).resolves.toMatchObject({ session: { status: 'idle' } });
   });
 
+  it('serves lifecycle-neutral workspace change observations without caching source data', async () => {
+    await closeServer(server);
+    const provider = new FakeSandboxProvider();
+    server = createServer(loadConfig({ API_AUTH_MODE: 'none' }), createServices(store, { sandboxProvider: provider }));
+    baseUrl = await listen(server);
+
+    const created = await postJson(`${baseUrl}/sessions`, { title: 'Inspect changes' });
+    const { session } = (await created.json()) as { session: { id: string } };
+    const storedSession = await store.getSession(session.id);
+    if (!storedSession) throw new Error('Expected session');
+    await store.updateSession({
+      ...storedSession,
+      context: { repository: { provider: 'github', owner: 'acme', repo: 'api' } },
+    });
+    const sandbox = await provider.create({ sessionId: session.id });
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000503',
+      sessionId: session.id,
+      provider: provider.name,
+      providerSandboxId: sandbox.providerSandboxId,
+      status: 'ready',
+      workspacePath: sandbox.workspacePath,
+      metadata: { runtimeId: 'runtime-workspace-changes' },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const response = await fetch(`${baseUrl}/sessions/${session.id}/workspace-changes`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toMatchObject({
+      source: 'live',
+      sandboxRuntimeId: 'runtime-workspace-changes',
+      repositories: [{ owner: 'acme', name: 'api', isPrimary: true }],
+    });
+    expect(provider.starts).toBe(0);
+
+    const invalidPatch = await fetch(`${baseUrl}/sessions/${session.id}/workspace-changes/patch`);
+    expect(invalidPatch.status).toBe(400);
+    expect(invalidPatch.headers.get('cache-control')).toBe('private, no-store');
+    await expect(invalidPatch.json()).resolves.toMatchObject({ error: 'invalid_request' });
+  });
+
   it('destroys active session sandboxes when archiving', async () => {
     await closeServer(server);
     const provider = new FakeSandboxProvider();

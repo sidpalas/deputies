@@ -1294,6 +1294,7 @@ export interface RunStore {
 }
 
 export interface SandboxStore {
+  withSandboxLifecycleLock<T>(sessionId: string, provider: string, fn: () => Promise<T>): Promise<T>;
   getActiveSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null>;
   getLatestSandbox(sessionId: string, provider: string): Promise<SandboxRecord | null>;
   getLatestSandboxForSession(sessionId: string, preferredProvider?: string): Promise<SandboxRecord | null>;

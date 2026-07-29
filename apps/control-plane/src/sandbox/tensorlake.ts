@@ -36,6 +36,7 @@ import type {
   SandboxServiceProcess,
   SandboxServiceProcessInput,
 } from './types.js';
+import { SandboxProviderUnavailableError } from './types.js';
 
 export type TensorlakeSandboxProviderOptions = {
   client?: TensorlakeClientLike;
@@ -130,10 +131,14 @@ export class TensorlakeSandboxProvider implements SandboxProvider {
   }
 
   async connect(input: ConnectSandboxInput): Promise<SandboxHandle> {
-    const info = await this.client.get(input.providerSandboxId);
-    const sandbox = await this.client.connect(input.providerSandboxId);
-    await ensureWorkspace(sandbox, this.workspacePath);
-    return this.toHandle(sandbox, info, input.sessionId, input.metadata ?? {}, input.secrets);
+    try {
+      const info = await this.client.get(input.providerSandboxId);
+      const sandbox = await this.client.connect(input.providerSandboxId);
+      await ensureWorkspace(sandbox, this.workspacePath);
+      return await this.toHandle(sandbox, info, input.sessionId, input.metadata ?? {}, input.secrets);
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Tensorlake sandbox connection failed', { cause });
+    }
   }
 
   async destroy(input: SandboxRef): Promise<void> {
@@ -146,7 +151,11 @@ export class TensorlakeSandboxProvider implements SandboxProvider {
   }
 
   async start(input: SandboxRef): Promise<void> {
-    await this.client.resume(input.providerSandboxId);
+    try {
+      await this.client.resume(input.providerSandboxId);
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Tensorlake sandbox resume failed', { cause });
+    }
   }
 
   async stop(input: SandboxRef): Promise<void> {
@@ -154,13 +163,14 @@ export class TensorlakeSandboxProvider implements SandboxProvider {
   }
 
   async health(input: SandboxRef): Promise<SandboxHealth> {
+    let info;
     try {
-      const info = await this.client.get(input.providerSandboxId);
-      return tensorlakeHealth(info);
+      info = await this.client.get(input.providerSandboxId);
     } catch (error) {
       if (isTensorlakeNotFoundError(error)) return { status: 'missing', checkedAt: new Date() };
-      throw error;
+      throw new SandboxProviderUnavailableError('Tensorlake sandbox health check failed', { cause: error });
     }
+    return tensorlakeHealth(info);
   }
 
   async getServiceEndpoint(input: SandboxServiceEndpointInput): Promise<SandboxServiceEndpoint | null> {

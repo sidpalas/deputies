@@ -18,6 +18,7 @@ import type {
   SandboxProviderCheck,
   SandboxRef,
 } from './types.js';
+import { SandboxProviderUnavailableError } from './types.js';
 
 const bridgePort = 3584;
 const defaultDockerCliTimeoutMs = 30_000;
@@ -250,12 +251,19 @@ export class InProcessDockerOrchestrator implements DockerOrchestrator {
       return { status: 'unhealthy', message: `Docker container state: ${inspected.state}`, checkedAt: new Date() };
     } catch (error) {
       if (isDockerMissingError(error)) return { status: 'missing', checkedAt: new Date() };
-      throw error;
+      throw new SandboxProviderUnavailableError('Docker sandbox health check failed', { cause: error });
     }
   }
 
   async start(input: DockerSandboxRef): Promise<void> {
-    await this.docker(['start', input.providerSandboxId]);
+    try {
+      await this.docker(['start', input.providerSandboxId]);
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError(
+        cause instanceof Error ? cause.message : 'Docker sandbox resume failed',
+        { cause },
+      );
+    }
   }
 
   async stop(input: DockerSandboxRef): Promise<void> {

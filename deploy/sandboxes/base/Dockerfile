@@ -42,7 +42,6 @@ FROM ubuntu:24.04 AS full
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG CODE_SERVER_VERSION=4.118.0
-ARG HUNKDIFF_VERSION=0.12.1
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -71,9 +70,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   && corepack enable
 
 RUN curl -fsSL https://code-server.dev/install.sh | sh -s -- --version "${CODE_SERVER_VERSION}"
-
-RUN --mount=type=cache,target=/root/.npm \
-  npm install -g "hunkdiff@${HUNKDIFF_VERSION}"
 
 RUN curl -fsSL https://mise.run | sh \
   && mv /root/.local/bin/mise /usr/local/bin/mise

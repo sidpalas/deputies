@@ -132,6 +132,9 @@ describe('LambdaMicrovmSandboxProvider', () => {
         message: 'Lambda MicroVM is suspended with auto-resume',
       });
       await provider.start({ providerSandboxId: 'mvm-1', sessionId: 'session-1' });
+      await expect(provider.connect({ providerSandboxId: 'mvm-1', sessionId: 'session-1' })).resolves.toMatchObject({
+        providerSandboxId: 'mvm-1',
+      });
       await expect(provider.health({ providerSandboxId: 'mvm-1', sessionId: 'session-1' })).resolves.toMatchObject({
         status: 'ready',
       });

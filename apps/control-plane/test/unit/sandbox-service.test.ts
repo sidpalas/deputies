@@ -1,8 +1,17 @@
-import { SandboxCleanupService, SandboxLifecycleService } from '../../src/sandbox/service.js';
+import {
+  SandboxCleanupService,
+  SandboxLifecycleService,
+  SandboxLifecycleUnavailableError,
+} from '../../src/sandbox/service.js';
 import { EventService } from '../../src/events/service.js';
 import { sandboxRuntimeId } from '../../src/sandbox/runtime.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import type { SandboxCapabilities, SandboxHandle, SandboxProvider } from '../../src/sandbox/types.js';
+import {
+  type SandboxCapabilities,
+  type SandboxHandle,
+  type SandboxProvider,
+  SandboxProviderUnavailableError,
+} from '../../src/sandbox/types.js';
 import { type CreateSandboxRecord, type SandboxRecord, type SandboxStore } from '../../src/store/types.js';
 
 const capabilities: SandboxCapabilities = {
@@ -67,6 +76,85 @@ describe('SandboxLifecycleService', () => {
     expect(sandboxRuntimeId(result.record)).toBeDefined();
     expect(sandboxRuntimeId(result.record)).not.toBe('old-runtime');
     expect(sandboxRuntimeId({ metadata: result.sandbox.metadata })).toBe(sandboxRuntimeId(result.record));
+  });
+
+  it('serializes concurrent resumes of the same stopped sandbox across lifecycle services', async () => {
+    const store = new MemoryStore();
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000010',
+      sessionId: 'session-1',
+      provider: 'fake',
+      providerSandboxId: 'sandbox-1',
+      status: 'stopped',
+      workspacePath: '/workspace',
+      metadata: { runtimeId: 'old-runtime' },
+      createdAt: now,
+      updatedAt: now,
+    });
+    const handle = createHandle('sandbox-1');
+    const provider = createProvider(handle);
+    let stopped = true;
+    let releaseStart!: () => void;
+    const startReleased = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    vi.mocked(provider.health).mockImplementation(async () => ({
+      status: stopped ? 'stopped' : 'ready',
+      checkedAt: new Date(),
+    }));
+    provider.start = vi.fn(async () => {
+      await startReleased;
+      stopped = false;
+    });
+    const firstLifecycle = new SandboxLifecycleService(store, provider);
+    const secondLifecycle = new SandboxLifecycleService(store, provider);
+
+    const first = firstLifecycle.ensure('session-1', { allowCreate: false });
+    const second = secondLifecycle.ensure('session-1', { allowCreate: false });
+    await vi.waitFor(() => expect(provider.start).toHaveBeenCalledOnce());
+    releaseStart();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(provider.start).toHaveBeenCalledOnce();
+    expect(provider.create).not.toHaveBeenCalled();
+    expect(firstResult?.record.metadata.runtimeId).toBe(secondResult?.record.metadata.runtimeId);
+    expect(firstResult?.record.status).toBe('ready');
+    expect(secondResult?.record.status).toBe('ready');
+  });
+
+  it('distinguishes provider availability failures from provider invariant errors', async () => {
+    const store = new MemoryStore();
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000011',
+      sessionId: 'session-1',
+      provider: 'fake',
+      providerSandboxId: 'sandbox-1',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    const provider = createProvider(createHandle('sandbox-1'));
+    const lifecycle = new SandboxLifecycleService(store, provider);
+
+    vi.mocked(provider.health).mockRejectedValueOnce(new SandboxProviderUnavailableError('provider offline'));
+    await expect(lifecycle.ensure('session-1', { allowCreate: false })).rejects.toBeInstanceOf(
+      SandboxLifecycleUnavailableError,
+    );
+
+    const invariantError = new Error('malformed provider health response');
+    vi.mocked(provider.health).mockRejectedValueOnce(invariantError);
+    await expect(lifecycle.ensure('session-1', { allowCreate: false })).rejects.toBe(invariantError);
+
+    const connectInvariant = new Error('malformed provider connection response');
+    vi.mocked(provider.connect).mockRejectedValueOnce(connectInvariant);
+    await expect(lifecycle.ensure('session-1', { allowCreate: false })).rejects.toBe(connectInvariant);
+
+    vi.mocked(provider.connect).mockRejectedValueOnce(new SandboxProviderUnavailableError('provider offline'));
+    await expect(lifecycle.ensure('session-1', { allowCreate: false })).resolves.toBeNull();
   });
 
   it('persists provider secrets and supplies them on reconnect', async () => {
@@ -141,6 +229,69 @@ describe('SandboxLifecycleService', () => {
     expect(provider.destroy).not.toHaveBeenCalled();
     expect(provider.connect).not.toHaveBeenCalled();
     expect(provider.create).not.toHaveBeenCalled();
+  });
+
+  it('does not create when no existing sandbox is available and creation is disabled', async () => {
+    const provider = createProvider(createHandle('sandbox-1'));
+    const lifecycle = new SandboxLifecycleService(new MemoryStore(), provider);
+
+    await expect(lifecycle.ensure('session-1', { allowCreate: false })).resolves.toBeNull();
+
+    expect(provider.create).not.toHaveBeenCalled();
+    expect(provider.connect).not.toHaveBeenCalled();
+  });
+
+  it('connects an existing starting sandbox without creating a replacement', async () => {
+    const store = new MemoryStore();
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000005',
+      sessionId: 'session-1',
+      provider: 'fake',
+      providerSandboxId: 'sandbox-1',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: { runtimeId: 'old-runtime' },
+      createdAt: now,
+      updatedAt: now,
+    });
+    const provider = createProvider(createHandle('sandbox-1'));
+    vi.mocked(provider.health).mockResolvedValueOnce({ status: 'starting', checkedAt: new Date() });
+    const lifecycle = new SandboxLifecycleService(store, provider);
+
+    const result = await lifecycle.ensure('session-1', { allowCreate: false });
+
+    expect(result?.sandbox.providerSandboxId).toBe('sandbox-1');
+    expect(result?.restarted).toBe(true);
+    expect(sandboxRuntimeId(result!.record)).not.toBe('old-runtime');
+    expect(provider.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a provider handle that substitutes another sandbox identity', async () => {
+    const store = new MemoryStore();
+    const now = new Date();
+    await store.createSandbox({
+      id: '00000000-0000-4000-8000-000000000006',
+      sessionId: 'session-1',
+      provider: 'fake',
+      providerSandboxId: 'sandbox-1',
+      status: 'ready',
+      workspacePath: '/workspace',
+      metadata: { runtimeId: 'runtime-1' },
+      createdAt: now,
+      updatedAt: now,
+    });
+    const provider = createProvider(createHandle('sandbox-2'));
+    const lifecycle = new SandboxLifecycleService(store, provider);
+
+    await expect(lifecycle.ensure('session-1', { allowCreate: false })).rejects.toThrow(
+      'Sandbox identity changed while reconnecting sandbox-1',
+    );
+
+    expect(provider.create).not.toHaveBeenCalled();
+    await expect(store.getActiveSandbox('session-1', 'fake')).resolves.toMatchObject({
+      providerSandboxId: 'sandbox-1',
+    });
   });
 
   it('does not persist a sandbox record when transactional secret persistence fails', async () => {
@@ -264,6 +415,10 @@ function createHandle(providerSandboxId: string): SandboxHandle {
 
 class FailingCreateSandboxStore implements SandboxStore {
   constructor(private readonly error: Error) {}
+
+  async withSandboxLifecycleLock<T>(_sessionId: string, _provider: string, fn: () => Promise<T>): Promise<T> {
+    return fn();
+  }
 
   async getActiveSandbox(): Promise<SandboxRecord | null> {
     return null;

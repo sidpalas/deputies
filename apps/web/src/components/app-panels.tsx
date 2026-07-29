@@ -23,4 +23,5 @@ export type { SidebarFooterProps } from './app-panels/sidebar-footer.js';
 export { SetupGuidePanel } from './app-panels/setup-guide-panel.js';
 export { ThreadHeader } from './app-panels/thread-header.js';
 export { ThreadSidebar } from './app-panels/session-sidebar.js';
+export { WorkspaceChangesPanel } from './app-panels/workspace-changes-panel.js';
 export type { ConnectionStatus, ThemePreference } from './app-panels/types.js';

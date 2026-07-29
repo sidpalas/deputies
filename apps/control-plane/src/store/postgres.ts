@@ -170,6 +170,7 @@ export type PostgresEventListener = {
 export class PostgresStore implements AppStore {
   private readonly pool: Pool;
   private readonly coordinationPool: Pool;
+  private readonly sandboxLifecyclePool: Pool;
   private readonly heldCoordinationLocks = new AsyncLocalStorage<ReadonlySet<string>>();
   private readonly skillStore: PostgresSkillStore;
   private readonly agentProfileStore: PostgresAgentProfileStore;
@@ -181,6 +182,10 @@ export class PostgresStore implements AppStore {
       typeof databaseUrl === 'string'
         ? new Pool({ connectionString: databaseUrl })
         : new Pool(Object.defineProperties({}, Object.getOwnPropertyDescriptors(databaseUrl.options)));
+    this.sandboxLifecyclePool =
+      typeof databaseUrl === 'string'
+        ? new Pool({ connectionString: databaseUrl })
+        : new Pool(Object.defineProperties({}, Object.getOwnPropertyDescriptors(databaseUrl.options)));
     this.skillStore = new PostgresSkillStore(this.pool);
     this.agentProfileStore = new PostgresAgentProfileStore(this.pool);
     if (options.sandboxSecretEncryptionKey)
@@ -188,7 +193,7 @@ export class PostgresStore implements AppStore {
   }
 
   async close(): Promise<void> {
-    await Promise.all([this.pool.end(), this.coordinationPool.end()]);
+    await Promise.all([this.pool.end(), this.coordinationPool.end(), this.sandboxLifecyclePool.end()]);
   }
 
   async getSessionNotepad(sessionId: string): Promise<SessionNotepadRecord | null> {
@@ -1055,6 +1060,40 @@ export class PostgresStore implements AppStore {
       await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]);
       client.release();
     }
+  }
+
+  async withSandboxLifecycleLock<T>(sessionId: string, provider: string, fn: () => Promise<T>): Promise<T> {
+    const client = await this.sandboxLifecyclePool.connect();
+    const lockKey = `sandbox-lifecycle:${provider}:${sessionId}`;
+    try {
+      await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
+    } catch (error) {
+      client.release(error instanceof Error ? error : new Error('Sandbox lifecycle lock failed'));
+      throw error;
+    }
+    let result: T | undefined;
+    let operationFailed = false;
+    let operationError: unknown;
+    try {
+      result = await fn();
+    } catch (error) {
+      operationFailed = true;
+      operationError = error;
+    }
+    let releaseError: Error | undefined;
+    try {
+      const unlocked = await client.query<{ unlocked: boolean }>(
+        'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked',
+        [lockKey],
+      );
+      if (!unlocked.rows[0]?.unlocked) throw new Error(`Failed to release sandbox lifecycle lock for ${lockKey}`);
+    } catch (error) {
+      releaseError = error instanceof Error ? error : new Error('Sandbox lifecycle unlock failed');
+    }
+    client.release(releaseError);
+    if (releaseError) throw releaseError;
+    if (operationFailed) throw operationError;
+    return result as T;
   }
 
   async upsertAuthUserForAccount(record: UpsertAuthUserForAccountRecord): Promise<AuthUserRecord> {

@@ -1,48 +1,17 @@
-import { workspaceTool, workspaceToolWorkingDirectory } from '../../src/app/workspace-tools.js';
+import { workspaceTool } from '../../src/app/workspace-tools.js';
 
 describe('workspace tools', () => {
-  it('opens Hunk Diff as a one-shot diff viewer', () => {
-    const tool = workspaceTool('diff');
+  it('opens a writable browser terminal at the workspace root', () => {
+    const tool = workspaceTool('terminal');
 
-    const command = tool?.command({ cwd: '/workspace/repo', workspacePath: '/workspace' });
+    const command = tool?.command({ cwd: '/workspace', workspacePath: '/workspace' });
 
-    expect(command).toContain('command hunk diff');
-    expect(command).toContain('git status --porcelain --untracked-files=normal');
-    expect(command).not.toContain('--watch');
-    expect(command).not.toContain('--exclude-untracked');
+    expect(tool).toMatchObject({ id: 'terminal', label: 'Terminal', port: 7681 });
+    expect(command).toContain('ttyd -i 0.0.0.0 -p 7681 -W bash -l');
+    expect(command).not.toContain('hunk');
   });
 
-  it('uses the active repository workspace for Hunk Diff', () => {
-    const tool = workspaceTool('diff');
-    expect(tool).toBeTruthy();
-
-    expect(
-      workspaceToolWorkingDirectory(
-        tool!,
-        {
-          repository: { provider: 'github', owner: 'acme', repo: 'api' },
-        },
-        '/workspace',
-      ),
-    ).toBe('/workspace/acme/api');
-
-    expect(
-      workspaceToolWorkingDirectory(
-        tool!,
-        {
-          environment: {
-            id: 'env-1',
-            name: 'Product surface',
-            codebase: {
-              repositories: [
-                { provider: 'github', owner: 'acme', repo: 'web', primary: false },
-                { provider: 'github', owner: 'acme', repo: 'api', primary: true },
-              ],
-            },
-          },
-        },
-        '/workspace',
-      ),
-    ).toBe('/workspace/acme/api');
+  it('does not expose the removed diff workspace tool', () => {
+    expect(workspaceTool('diff')).toBeNull();
   });
 });

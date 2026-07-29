@@ -23,6 +23,7 @@ import type {
   SandboxProviderCheck,
   SandboxRef,
 } from './types.js';
+import { SandboxProviderUnavailableError } from './types.js';
 
 export type DaytonaClientLike = {
   create(params?: Record<string, unknown>, options?: { timeout?: number }): Promise<DaytonaSandboxLike>;
@@ -128,8 +129,12 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   }
 
   async connect(input: ConnectSandboxInput): Promise<SandboxHandle> {
-    const sandbox = await this.client.get(input.providerSandboxId);
-    return this.toHandle(sandbox, input.sessionId, input.metadata ?? {}, input.secrets);
+    try {
+      const sandbox = await this.client.get(input.providerSandboxId);
+      return await this.toHandle(sandbox, input.sessionId, input.metadata ?? {}, input.secrets);
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Daytona sandbox connection failed', { cause });
+    }
   }
 
   async destroy(input: SandboxRef): Promise<void> {
@@ -143,8 +148,12 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   }
 
   async start(input: SandboxRef): Promise<void> {
-    const sandbox = await this.client.get(input.providerSandboxId);
-    await sandbox.start();
+    try {
+      const sandbox = await this.client.get(input.providerSandboxId);
+      await sandbox.start();
+    } catch (cause) {
+      throw new SandboxProviderUnavailableError('Daytona sandbox resume failed', { cause });
+    }
   }
 
   async stop(input: SandboxRef): Promise<void> {
@@ -165,7 +174,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       };
     } catch (error) {
       if (isNotFoundError(error)) return { status: 'missing', checkedAt: new Date() };
-      throw error;
+      throw new SandboxProviderUnavailableError('Daytona sandbox health check failed', { cause: error });
     }
   }
 

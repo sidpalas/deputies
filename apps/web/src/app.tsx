@@ -202,6 +202,7 @@ import {
   StartupLoadingPanel,
   ThreadHeader,
   ThreadSidebar,
+  WorkspaceChangesPanel,
   type SidebarFooterProps,
 } from './components/app-panels.js';
 import { ResponsiveNotepadsPanel } from './components/app-panels/notepads-panel.js';
@@ -505,6 +506,10 @@ export function App() {
   const [notepadAssociationVersions, setNotepadAssociationVersions] = useState(new Map<string, number>());
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [threadViewState, setThreadViewState] = useState<{
+    sessionId: string;
+    view: 'conversation' | 'changes';
+  }>({ sessionId: '', view: 'conversation' });
   const {
     selectedSessionId,
     sidebarPanel,
@@ -515,6 +520,10 @@ export function App() {
     selectedEnvironmentId,
     selectedEnvironmentRevisionId,
   } = navigation;
+  const threadView = threadViewState.sessionId === selectedSessionId ? threadViewState.view : 'conversation';
+  function setThreadView(view: 'conversation' | 'changes') {
+    setThreadViewState({ sessionId: selectedSessionId, view });
+  }
   const { messages, events, activeProgress, artifacts, services, externalResources, callbacks } = sessionDetail;
   const eventCursor = useRef(0);
   const mountedRef = useRef(false);
@@ -5205,11 +5214,13 @@ export function App() {
                       }
                       promotingSession={promotingSessionId === selectedSession.id}
                       showOpenSidebar={!sidebarOpen}
+                      threadView={threadView}
                       openSidebarLabel={sidebarNavigation.openLabel}
                       onArchive={fireAndForget(handleArchiveSession)}
                       onPromoteSession={fireAndForget(handlePromoteSession)}
                       onSessionStarChange={fireAndForget(handleSetSessionStarred)}
                       onOpenSidebar={expandSidebar}
+                      onThreadViewChange={setThreadView}
                       onUpdateTags={handleUpdateSessionTags}
                       onUpdateTitle={handleUpdateTitle}
                       sessionTagOptions={sessionTagOptions}
@@ -5217,82 +5228,100 @@ export function App() {
                     />
                     <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem]">
                       <section className="flex min-h-0 min-w-0 flex-col px-3 pt-4 md:px-8 xl:px-20">
-                        <div className="relative min-h-0 flex-1">
-                          <div
-                            className="h-full overflow-y-auto overflow-x-hidden pb-4"
-                            ref={threadScrollRef}
-                            onScroll={handleThreadScroll}
-                            role="log"
-                            aria-label="Session messages"
-                          >
-                            {selectedSessionDetailLoading ? (
-                              <ThreadDetailLoadingPanel />
-                            ) : (
-                              <>
-                                <MobileContextPanel
-                                  notepadsHostRef={mobileNotepadsHostRef}
-                                  lineage={selectedSessionLineage}
-                                  environment={selectedSessionEnvironment}
-                                  repository={selectedRepository}
-                                  branch={selectedSessionBranch || null}
-                                  artifacts={artifacts}
-                                  services={services}
-                                  externalResources={externalResources}
-                                  callbacks={callbacks}
-                                  canWriteSession={canWriteSelectedSession}
-                                  onExtendSandbox={fireAndForget(handleExtendSandbox)}
-                                  onReplayCallback={fireAndForget(handleReplayCallback)}
-                                />
-                                <ChatPanel
-                                  artifacts={artifacts}
-                                  services={services}
-                                  editingMessageId={editingMessageId}
-                                  activeProgress={activeProgressDisplayText(activeProgress, messages)}
-                                  events={events}
-                                  messageDraft={messageDraft}
-                                  messages={messages}
-                                  canRetryMessages={canWriteSelectedSession && !selectedSessionArchived}
-                                  canWriteSession={canWriteSelectedSession}
-                                  onCancelEdit={() => void finishEditingMessage(true)}
-                                  onCancelQueuedMessage={fireAndForget(cancelQueuedMessage)}
-                                  onCancelRun={fireAndForget(cancelRun)}
-                                  onEditMessage={fireAndForget(startEditingMessage)}
-                                  onMessageDraftChange={setMessageDraft}
-                                  onToggleSteering={fireAndForget(toggleMessageSteering)}
-                                  steeringMessageIds={steeringMessageIds}
-                                  openableManagedSkillIds={skillsWorkspace.model.openableManagedSkillIds}
-                                  onOpenSkill={skillsWorkspace.actions.select}
-                                  onOpenSession={selectSession}
-                                  onRetryFailedMessages={fireAndForget(retryFailedMessages)}
-                                  onSaveEdit={fireAndForget(saveMessageEdit)}
-                                  onExtendSandbox={fireAndForget(handleExtendSandbox)}
-                                  onLoadArtifactPreview={(artifact) =>
-                                    getArtifactPreview({
-                                      sessionId: artifact.sessionId,
-                                      artifactId: artifact.id,
-                                      token,
-                                    })
-                                  }
-                                />
-                              </>
-                            )}
-                            <div ref={threadEndRef} />
+                        {threadView === 'changes' && canWriteSelectedSession ? (
+                          <div className="min-h-0 flex-1 pb-4">
+                            <WorkspaceChangesPanel
+                              key={selectedSession.id}
+                              sessionId={selectedSession.id}
+                              token={token}
+                              active={['active', 'queued', 'running'].includes(selectedSession.status)}
+                              onWorkspaceConnected={() => {
+                                const context = selectedResourceContext(selectedSession.id);
+                                if (!isSelectedResourceContextCurrent(context)) return;
+                                markSessionSummaryChanged(context.sessionId);
+                                void refreshLoadedSessionSummary(context.sessionId);
+                              }}
+                            />
                           </div>
-                          {showJumpToLatest ? (
-                            <Button
-                              className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 shadow-xl"
-                              type="button"
-                              variant="secondary"
-                              onClick={jumpToLatestThreadActivity}
+                        ) : (
+                          <div className="relative min-h-0 flex-1">
+                            <div
+                              className="h-full overflow-y-auto overflow-x-hidden pb-4"
+                              ref={threadScrollRef}
+                              onScroll={handleThreadScroll}
+                              role="log"
+                              aria-label="Session messages"
                             >
-                              <ChevronDown className="h-4 w-4" /> Jump to latest
-                            </Button>
-                          ) : null}
-                        </div>
-                        {selectedSessionArchived ? (
+                              {selectedSessionDetailLoading ? (
+                                <ThreadDetailLoadingPanel />
+                              ) : (
+                                <>
+                                  <MobileContextPanel
+                                    notepadsHostRef={mobileNotepadsHostRef}
+                                    lineage={selectedSessionLineage}
+                                    environment={selectedSessionEnvironment}
+                                    repository={selectedRepository}
+                                    branch={selectedSessionBranch || null}
+                                    artifacts={artifacts}
+                                    services={services}
+                                    externalResources={externalResources}
+                                    callbacks={callbacks}
+                                    canWriteSession={canWriteSelectedSession}
+                                    onExtendSandbox={fireAndForget(handleExtendSandbox)}
+                                    onReplayCallback={fireAndForget(handleReplayCallback)}
+                                  />
+                                  <ChatPanel
+                                    artifacts={artifacts}
+                                    services={services}
+                                    editingMessageId={editingMessageId}
+                                    activeProgress={activeProgressDisplayText(activeProgress, messages)}
+                                    events={events}
+                                    messageDraft={messageDraft}
+                                    messages={messages}
+                                    canRetryMessages={canWriteSelectedSession && !selectedSessionArchived}
+                                    canWriteSession={canWriteSelectedSession}
+                                    onCancelEdit={() => void finishEditingMessage(true)}
+                                    onCancelQueuedMessage={fireAndForget(cancelQueuedMessage)}
+                                    onCancelRun={fireAndForget(cancelRun)}
+                                    onEditMessage={fireAndForget(startEditingMessage)}
+                                    onMessageDraftChange={setMessageDraft}
+                                    onToggleSteering={fireAndForget(toggleMessageSteering)}
+                                    steeringMessageIds={steeringMessageIds}
+                                    openableManagedSkillIds={skillsWorkspace.model.openableManagedSkillIds}
+                                    onOpenSkill={skillsWorkspace.actions.select}
+                                    onOpenSession={selectSession}
+                                    onRetryFailedMessages={fireAndForget(retryFailedMessages)}
+                                    onSaveEdit={fireAndForget(saveMessageEdit)}
+                                    onExtendSandbox={fireAndForget(handleExtendSandbox)}
+                                    onLoadArtifactPreview={(artifact) =>
+                                      getArtifactPreview({
+                                        sessionId: artifact.sessionId,
+                                        artifactId: artifact.id,
+                                        token,
+                                      })
+                                    }
+                                  />
+                                </>
+                              )}
+                              <div ref={threadEndRef} />
+                            </div>
+                            {showJumpToLatest ? (
+                              <Button
+                                className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 shadow-xl"
+                                type="button"
+                                variant="secondary"
+                                onClick={jumpToLatestThreadActivity}
+                              >
+                                <ChevronDown className="h-4 w-4" /> Jump to latest
+                              </Button>
+                            ) : null}
+                          </div>
+                        )}
+                        {(threadView === 'conversation' || !canWriteSelectedSession) && selectedSessionArchived ? (
                           <ArchivedSessionNotice onRestore={fireAndForget(restoreSelectedSession)} />
                         ) : null}
-                        {selectedSessionDetailLoading ? null : sessionDetail.followUps ? (
+                        {threadView === 'changes' &&
+                        canWriteSelectedSession ? null : selectedSessionDetailLoading ? null : sessionDetail.followUps ? (
                           <ScheduledFollowUpsPanel
                             followUps={sessionDetail.followUps.scheduledFollowUps}
                             hasMore={sessionDetail.followUps.hasMore}
@@ -5413,7 +5442,8 @@ export function App() {
                             }}
                           />
                         ) : null}
-                        {selectedSessionDetailLoading ? null : (
+                        {threadView === 'changes' &&
+                        canWriteSelectedSession ? null : selectedSessionDetailLoading ? null : (
                           <MessageComposer
                             key={selectedSession.id}
                             archived={selectedSessionArchived}

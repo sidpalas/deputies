@@ -93,6 +93,12 @@ import {
   readJsonBody,
 } from './request.js';
 import {
+  connectReadyWorkspace,
+  inspectWorkspaceChanges,
+  inspectWorkspacePatch,
+  requireWorkspaceWrite,
+} from './workspace-changes.js';
+import {
   destroyedSandboxWorkspaceMessage,
   publishWorkspaceToolService,
   startWorkspaceTool,
@@ -101,7 +107,6 @@ import {
   workspaceToolKeepaliveMs,
   workspaceToolServiceMetadata,
   workspaceToolServicePath,
-  workspaceToolWorkingDirectory,
 } from './workspace-tools.js';
 
 export type AppVariables = {
@@ -389,6 +394,37 @@ export function createApp(config: AppConfig, services = createServices()) {
       throw error;
     }
     return c.json({ session: await serializeSessionWithSandbox(config, services, session) }, 201);
+  });
+
+  app.get('/sessions/:sessionId/workspace-changes', async (c) => {
+    c.header('Cache-Control', 'private, no-store');
+    const sessionId = c.req.param('sessionId');
+    const session = getAuthorizedSession(c, sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+    requireWorkspaceWrite(await requireRequestAuthorization(config, services.store, c), session);
+    const { sandbox, record } = await connectReadyWorkspace({
+      sessionId,
+      lifecycle: services.sandboxLifecycle,
+    });
+    return c.json(await inspectWorkspaceChanges(session, sandbox, sandboxRuntimeId(record)));
+  });
+
+  app.get('/sessions/:sessionId/workspace-changes/patch', async (c) => {
+    c.header('Cache-Control', 'private, no-store');
+    const sessionId = c.req.param('sessionId');
+    const session = getAuthorizedSession(c, sessionId);
+    if (!session) return writeError(c, 404, 'not_found', 'Session not found');
+    requireWorkspaceWrite(await requireRequestAuthorization(config, services.store, c), session);
+    const repository = c.req.query('repository');
+    const file = c.req.query('file');
+    const layer = c.req.query('layer');
+    if (!repository || !file || !layer)
+      throw new HttpRequestError(400, 'invalid_request', 'Expected repository, file, and layer query parameters');
+    const { sandbox } = await connectReadyWorkspace({
+      sessionId,
+      lifecycle: services.sandboxLifecycle,
+    });
+    return c.json(await inspectWorkspacePatch({ session, sandbox, repository, file, layer }));
   });
 
   app.get('/sessions', async (c) => {
@@ -997,28 +1033,36 @@ export function createApp(config: AppConfig, services = createServices()) {
     if (latest.status === 'destroyed') {
       return writeError(c, 409, 'sandbox_destroyed', destroyedSandboxWorkspaceMessage);
     }
+    const markDestroyedIfMissing = () =>
+      services.store.withSandboxLifecycleLock(sessionId, services.sandboxProvider!.name, async () => {
+        const current = await services.store.getLatestSandbox(sessionId, services.sandboxProvider!.name);
+        if (!current || current.status === 'destroyed') return current?.status === 'destroyed';
+        const health = await services.sandboxProvider!.health(current);
+        if (health.status !== 'missing') return false;
+        const destroyedAt = new Date();
+        await services.store.updateSandbox({
+          ...current,
+          status: 'destroyed',
+          updatedAt: destroyedAt,
+          destroyedAt,
+        });
+        return true;
+      });
     const latestHealth = await services.sandboxProvider.health(latest);
     if (latestHealth.status === 'missing') {
-      const destroyedAt = new Date();
-      await services.store.updateSandbox({ ...latest, status: 'destroyed', updatedAt: destroyedAt, destroyedAt });
+      await markDestroyedIfMissing();
       return writeError(c, 409, 'sandbox_destroyed', destroyedSandboxWorkspaceMessage);
     }
 
     const ensured = await services.sandboxLifecycle.ensure(sessionId, { allowCreate: false });
     if (!ensured) {
-      const health = await services.sandboxProvider.health(latest);
-      if (health.status === 'missing') {
-        const destroyedAt = new Date();
-        await services.store.updateSandbox({ ...latest, status: 'destroyed', updatedAt: destroyedAt, destroyedAt });
+      const destroyed = await markDestroyedIfMissing();
+      if (destroyed) {
         return writeError(c, 409, 'sandbox_destroyed', destroyedSandboxWorkspaceMessage);
       }
       return writeError(c, 404, 'not_found', 'Active sandbox is not available');
     }
-    await startWorkspaceTool(
-      ensured.sandbox,
-      tool,
-      workspaceToolWorkingDirectory(tool, session.context ?? {}, ensured.sandbox.workspacePath),
-    );
+    await startWorkspaceTool(ensured.sandbox, tool, ensured.sandbox.workspacePath);
     const keepalive = await services.sandboxKeepalive.extend({
       sessionId,
       durationMs: workspaceToolKeepaliveMs,

@@ -610,10 +610,12 @@ function StaticSessionView(props: {
         canOpenWorkspaceTools
         workspaceToolsDisabled
         showOpenSidebar
+        threadView="conversation"
         workspaceToolsUnavailableReason=""
         onArchive={() => undefined}
         onSessionStarChange={props.onSessionStarChange}
         onOpenSidebar={props.onOpenSidebar}
+        onThreadViewChange={() => undefined}
         onUpdateTags={async () => false}
         onUpdateTitle={async () => false}
         onOpenWorkspaceTool={async () => undefined}

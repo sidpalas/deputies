@@ -5,7 +5,6 @@ ARG PLAYWRIGHT_CHROMIUM_REVISION=1217
 ARG PLAYWRIGHT_CHROMIUM_VERSION=147.0.7727.15
 ARG PLAYWRIGHT_INSTALL_TIMEOUT=12m
 ARG CODE_SERVER_VERSION=4.118.0
-ARG HUNKDIFF_VERSION=0.12.1
 ARG TTYD_VERSION=1.7.7
 
 FROM node:24-trixie-slim AS playwright-browsers
@@ -46,7 +45,6 @@ FROM node:24-trixie-slim
 ARG PLAYWRIGHT_VERSION
 ARG PLAYWRIGHT_INSTALL_TIMEOUT
 ARG CODE_SERVER_VERSION
-ARG HUNKDIFF_VERSION
 ARG TTYD_VERSION
 ARG TARGETARCH
 
@@ -99,7 +97,7 @@ RUN set -eux; \
   rm -f /tmp/ttyd /tmp/ttyd.SHA256SUMS /tmp/ttyd.sha256
 
 RUN --mount=type=cache,target=/root/.npm \
-  npm install -g "hunkdiff@${HUNKDIFF_VERSION}" "playwright@${PLAYWRIGHT_VERSION}"
+  npm install -g "playwright@${PLAYWRIGHT_VERSION}"
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \

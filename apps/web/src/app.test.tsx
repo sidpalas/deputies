@@ -131,8 +131,10 @@ type MockApiOptions = {
     sessionId: string;
   }) => Response | Promise<Response> | undefined;
   onListServicesRequest?: (count: number) => Response | Promise<Response> | undefined;
+  onWorkspaceChangesRequest?: () => Response | Promise<Response>;
+  workspaceChangesResponse?: unknown;
   workspaceToolResponse?: {
-    tool: { id: 'ide' | 'diff'; label: string };
+    tool: { id: 'ide' | 'terminal'; label: string };
     service: { port: number; url: string; status?: 'available' | 'unavailable' | 'unknown' };
     session: typeof session & {
       sandbox?: { id: string; provider: string; providerSandboxId: string; status: string; updatedAt: string };
@@ -1670,7 +1672,17 @@ it('keeps sidebar session actions exposed on mobile', async () => {
 });
 
 it('groups header session actions in a generic actions menu', async () => {
-  mockApi();
+  mockApi({
+    sessionOverride: {
+      sandbox: {
+        id: '00000000-0000-4000-8000-000000000501',
+        provider: 'fake',
+        providerSandboxId: 'sandbox-1',
+        status: 'ready',
+        updatedAt: session.updatedAt,
+      },
+    },
+  });
   render(<App />);
 
   const heading = await screen.findByRole('heading', { name: 'Existing session' });
@@ -1680,12 +1692,106 @@ it('groups header session actions in a generic actions menu', async () => {
   const headerQueries = within(header as HTMLElement);
   expect(headerQueries.getByRole('img', { name: 'Session status: idle' })).toHaveClass('sm:hidden');
   expect(headerQueries.getByText('idle')).toHaveClass('hidden', 'sm:inline-flex');
-  expect(headerQueries.getByTitle('Star session')).toHaveClass('hidden', 'sm:inline-flex');
+  expect(headerQueries.queryByTitle('Star session')).not.toBeInTheDocument();
+  expect(headerQueries.getByRole('button', { name: 'Changes' })).toHaveClass('hidden', 'sm:inline-flex');
   fireEvent.click(headerQueries.getByRole('button', { name: 'Session actions' }));
 
-  expect(headerQueries.getByRole('menuitem', { name: 'Star session' })).toHaveClass('sm:hidden');
+  expect(headerQueries.getByRole('menuitem', { name: 'Star session' })).not.toHaveClass('sm:hidden');
+  expect(headerQueries.getByRole('menuitem', { name: 'Changes' })).toHaveClass('sm:hidden');
   expect(headerQueries.getByText('Workspace Tools')).toBeInTheDocument();
+  expect(headerQueries.getByRole('menuitem', { name: 'Terminal' })).toBeInTheDocument();
+  expect(headerQueries.queryByRole('menuitem', { name: /Hunk Diff/ })).not.toBeInTheDocument();
   expect(headerQueries.getByRole('menuitem', { name: 'Archive session' })).toBeInTheDocument();
+});
+
+it('switches between conversation and native changes from the tools menu', async () => {
+  mockApi();
+  render(<App />);
+
+  const heading = await screen.findByRole('heading', { name: 'Existing session' });
+  const header = heading.closest('section')!;
+  const headerQueries = within(header);
+
+  fireEvent.click(headerQueries.getByRole('button', { name: 'Changes' }));
+  expect(await screen.findByRole('heading', { name: 'Workspace Changes' })).toBeInTheDocument();
+  expect(screen.queryByRole('navigation', { name: 'Session view' })).not.toBeInTheDocument();
+
+  fireEvent.click(headerQueries.getByRole('button', { name: 'Chat' }));
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+});
+
+it('does not request changes for a newly selected session', async () => {
+  const requests: string[] = [];
+  const secondSession = {
+    ...session,
+    id: '00000000-0000-4000-8000-000000000002',
+    title: 'Second session',
+    updatedAt: '2026-05-05T11:00:00.000Z',
+  };
+  mockApi({
+    requests,
+    sessions: [session, secondSession],
+    workspaceChangesResponse: {
+      source: 'live',
+      sandboxRuntimeId: 'runtime-1',
+      observedAt: '2026-07-29T10:00:00Z',
+      repositories: [],
+    },
+  });
+  render(<App />);
+
+  const heading = await screen.findByRole('heading', { name: 'Existing session' });
+  fireEvent.click(within(heading.closest('section')!).getByRole('button', { name: 'Changes' }));
+  expect(await screen.findByRole('heading', { name: 'Workspace Changes' })).toBeInTheDocument();
+  await waitFor(() => expect(requests).toContain(`GET /sessions/${session.id}/workspace-changes`));
+
+  fireEvent.click(screen.getByRole('button', { name: /Second session/ }));
+
+  expect(await screen.findByRole('heading', { name: 'Second session' })).toBeInTheDocument();
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  expect(requests).not.toContain(`GET /sessions/${secondSession.id}/workspace-changes`);
+});
+
+it('reconciles the sidebar session summary after changes wakes the sandbox', async () => {
+  let workspaceConnected = false;
+  mockApi({
+    sessionOverride: { displayStatus: 'stopped' },
+    onWorkspaceChangesRequest: () => {
+      workspaceConnected = true;
+      return jsonResponse({
+        source: 'live',
+        sandboxRuntimeId: 'runtime-2',
+        observedAt: '2026-07-29T10:00:00Z',
+        repositories: [],
+      });
+    },
+    onGetSessionRequest: () => {
+      return jsonResponse({
+        session: {
+          ...session,
+          displayStatus: workspaceConnected ? 'idle' : 'stopped',
+          sandbox: {
+            id: '00000000-0000-4000-8000-000000000501',
+            provider: 'fake',
+            providerSandboxId: 'sandbox-1',
+            status: workspaceConnected ? 'ready' : 'stopped',
+            updatedAt: session.updatedAt,
+          },
+        },
+      });
+    },
+  });
+  render(<App />);
+
+  const heading = await screen.findByRole('heading', { name: 'Existing session' });
+  const header = heading.closest('section')!;
+  await waitFor(() => expect(within(header).getByRole('img', { name: 'Session status: stopped' })).toBeInTheDocument());
+
+  fireEvent.click(within(header).getByRole('button', { name: 'Changes' }));
+
+  await waitFor(() => expect(within(header).getByRole('img', { name: 'Session status: idle' })).toBeInTheDocument());
+  fireEvent.click(screen.getByRole('button', { name: 'Open sessions' }));
+  expect(screen.getAllByText('idle').length).toBeGreaterThan(1);
 });
 
 it('cycles the compact theme action through every theme preference', async () => {
@@ -2047,8 +2153,11 @@ it('rolls back a failed star mutation without reverting an interleaved tag edit'
   const heading = await screen.findByRole('heading', { name: 'Existing session' });
   const header = heading.closest('section');
   if (!header) throw new Error('Expected thread header');
-  fireEvent.click(within(header).getByTitle('Star session'));
-  await waitFor(() => expect(within(header).getByTitle('Unstar session')).toBeInTheDocument());
+  fireEvent.click(within(header).getByRole('button', { name: 'Session actions' }));
+  fireEvent.click(within(header).getByRole('menuitem', { name: 'Star session' }));
+  fireEvent.click(within(header).getByRole('button', { name: 'Session actions' }));
+  await waitFor(() => expect(within(header).getByRole('menuitem', { name: 'Unstar session' })).toBeInTheDocument());
+  fireEvent.click(within(header).getByRole('button', { name: 'Session actions' }));
 
   fireEvent.click(screen.getByRole('button', { name: '+ Tag' }));
   fireEvent.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'foo' }));
@@ -2059,7 +2168,8 @@ it('rolls back a failed star mutation without reverting an interleaved tag edit'
     await starResponse.promise;
   });
 
-  await waitFor(() => expect(within(header).getByTitle('Star session')).toBeInTheDocument());
+  fireEvent.click(within(header).getByRole('button', { name: 'Session actions' }));
+  await waitFor(() => expect(within(header).getByRole('menuitem', { name: 'Star session' })).toBeInTheDocument());
   expect(screen.getByRole('button', { name: 'Remove foo' })).toBeInTheDocument();
 });
 
@@ -5855,7 +5965,15 @@ function mockApi(options: MockApiOptions = {}) {
       return jsonResponse({ services: options.services ?? [] });
     }
 
-    if (url.pathname.match(/^\/sessions\/[^/]+\/workspace-tools\/(ide|diff)\/open$/) && method === 'POST') {
+    if (url.pathname.match(/^\/sessions\/[^/]+\/workspace-changes$/) && method === 'GET') {
+      const customResponse = options.onWorkspaceChangesRequest?.();
+      if (customResponse) return customResponse;
+      return options.workspaceChangesResponse
+        ? jsonResponse(options.workspaceChangesResponse)
+        : jsonResponse({ error: 'not_found', message: 'Workspace changes unavailable' }, 404);
+    }
+
+    if (url.pathname.match(/^\/sessions\/[^/]+\/workspace-tools\/(ide|terminal)\/open$/) && method === 'POST') {
       return options.workspaceToolResponse
         ? jsonResponse(options.workspaceToolResponse)
         : jsonResponse({ error: 'not_found', message: 'Workspace tool unavailable' }, 404);
