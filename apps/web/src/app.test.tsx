@@ -90,6 +90,7 @@ type MockApiOptions = {
   onRetryMessage?: (messageId: string) => void;
   onUpdateMessage?: (messageId: string, body: Record<string, unknown>) => void;
   onUpdateMessageRequest?: (messageId: string, body: Record<string, unknown>) => Response | Promise<Response>;
+  onHealthRequest?: (count: number) => Response | Promise<Response> | undefined;
   onReplayCallback?: (callbackId: string) => void;
   onMessageSubmitRequest?: (request: { count: number; body: Record<string, unknown> }) => Response | Promise<Response>;
   onStreamOpen?: (push: StreamEventPusher) => void;
@@ -4257,6 +4258,57 @@ it('uses a reconnecting wake state instead of generic slow request guidance afte
   expect(banner).not.toHaveTextContent('several windows');
 });
 
+it('replaces a wake warning with realtime reconnecting until the replacement stream opens', async () => {
+  const healthProbe = deferred<Response>();
+  const reopenedStream = deferred<Response>();
+  let healthRequestCount = 0;
+  let streamRequestCount = 0;
+  mockApi({
+    onHealthRequest: (count) => {
+      healthRequestCount = count;
+      return count === 2 ? healthProbe.promise : undefined;
+    },
+    onGlobalStreamRequest: (_url, count) => {
+      streamRequestCount = count;
+      return count === 2 ? reopenedStream.promise : undefined;
+    },
+  });
+  render(<App />);
+
+  expect(await screen.findByRole('log', { name: 'Session messages' })).toBeInTheDocument();
+  await waitFor(() => expect(streamRequestCount).toBe(1));
+
+  fireEvent(window, new Event('online'));
+  expect(screen.getByText('Reconnecting after sleep.')).toBeInTheDocument();
+  await waitFor(() => expect(healthRequestCount).toBe(2));
+  await waitFor(() => expect(streamRequestCount).toBe(2));
+
+  await act(async () => {
+    healthProbe.resolve(
+      jsonResponse({
+        status: 'ok',
+        runMode: 'combined',
+        apiAuthMode: 'none',
+        sandboxProvider: 'fake',
+        privateSessionsEnabled: true,
+        hideSetupPage: true,
+      }),
+    );
+    await healthProbe.promise;
+  });
+
+  expect(await screen.findByText('Realtime updates are reconnecting.')).toBeInTheDocument();
+  expect(screen.queryByText('Reconnecting after sleep.')).not.toBeInTheDocument();
+  expect(streamRequestCount).toBe(2);
+
+  await act(async () => {
+    reopenedStream.resolve(new Response(new ReadableStream(), { status: 200 }));
+    await reopenedStream.promise;
+  });
+
+  await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+});
+
 it('does not restore a wake warning when a pre-reconnect request times out', async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   const reopenedStream = deferred<Response>();
@@ -5455,6 +5507,7 @@ function mockApi(options: MockApiOptions = {}) {
   let currentUser = options.currentUser;
   let callbacks = options.callbacks ?? [];
   let messages = options.messages ?? [];
+  let healthRequestCount = 0;
   let sessionsRequestCount = 0;
   let sessionSkillsRequestCount = 0;
   let servicesRequestCount = 0;
@@ -5472,6 +5525,9 @@ function mockApi(options: MockApiOptions = {}) {
     options.requests?.push(`${method} ${url.pathname}${url.search}`);
 
     if (url.pathname === '/health') {
+      healthRequestCount += 1;
+      const customResponse = options.onHealthRequest?.(healthRequestCount);
+      if (customResponse) return customResponse;
       return jsonResponse({
         status: 'ok',
         runMode: 'combined',

@@ -1615,7 +1615,8 @@ export function App() {
       setConnectionStatus((current) => {
         if (isWakeRecoveryStatus(current)) {
           wakeRecoveryActive.current = false;
-          return initialConnectionStatus();
+          if (isStreamConnectionOk(event)) return initialConnectionStatus();
+          return { state: 'reconnecting', message: 'Realtime connection interrupted.' };
         }
         if (current.state === 'reconnecting' && !isStreamConnectionOk(event)) return current;
         wakeRecoveryActive.current = false;
@@ -1999,6 +2000,7 @@ export function App() {
         wakeRecoveryActive.current = true;
         setConnectionStatus(wakeRecoveryConnectionStatus());
         streamAbortRef.current?.abort();
+        void getHealth().catch(() => undefined);
         setStreamRestartGeneration((current) => current + 1);
       }
       return;
@@ -2011,6 +2013,7 @@ export function App() {
     wakeRecoveryActive.current = true;
     setConnectionStatus(wakeRecoveryConnectionStatus());
     streamAbortRef.current?.abort();
+    void getHealth().catch(() => undefined);
     setStreamRestartGeneration((current) => current + 1);
   }
 
