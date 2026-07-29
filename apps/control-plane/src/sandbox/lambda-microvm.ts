@@ -45,7 +45,6 @@ export const lambdaMicrovmCapabilities: SandboxCapabilities = {
   streamingLogs: false,
   portForwarding: true,
   serviceEndpoints: true,
-  objectStorageArtifacts: false,
 };
 
 export type LambdaMicrovmSandboxProviderOptions = {

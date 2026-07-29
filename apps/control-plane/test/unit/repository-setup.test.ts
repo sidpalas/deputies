@@ -107,7 +107,6 @@ function sandbox(workspacePath: string): SandboxHandle {
       streamingLogs: false,
       portForwarding: false,
       serviceEndpoints: false,
-      objectStorageArtifacts: false,
     },
     async exec() {
       return { exitCode: 0, stdout: '', stderr: '', startedAt: new Date(), completedAt: new Date() };

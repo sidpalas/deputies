@@ -3293,7 +3293,6 @@ class ServiceSandboxProvider extends FakeSandboxProvider {
     streamingLogs: false,
     portForwarding: false,
     serviceEndpoints: true,
-    objectStorageArtifacts: false,
   };
 
   constructor(private readonly upstreamBaseUrl: string) {

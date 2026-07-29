@@ -106,7 +106,6 @@ export const superserveCapabilities: SandboxCapabilities = {
   streamingLogs: false,
   portForwarding: true,
   serviceEndpoints: true,
-  objectStorageArtifacts: false,
 };
 
 export class SuperserveSandboxProvider implements SandboxProvider {

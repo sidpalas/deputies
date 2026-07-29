@@ -90,7 +90,6 @@ export type SandboxCapabilities = {
   streamingLogs: boolean;
   portForwarding: boolean;
   serviceEndpoints: boolean;
-  objectStorageArtifacts: boolean;
 };
 
 export type CreateSandboxInput = {
@@ -326,7 +325,6 @@ export const dockerCapabilities: SandboxCapabilities = {
   streamingLogs: false,
   portForwarding: false,
   serviceEndpoints: true,
-  objectStorageArtifacts: false,
 };
 ```
 

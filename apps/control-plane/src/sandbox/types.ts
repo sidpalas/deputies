@@ -7,7 +7,6 @@ export type SandboxCapabilities = {
   streamingLogs: boolean;
   portForwarding: boolean;
   serviceEndpoints: boolean;
-  objectStorageArtifacts: boolean;
 };
 
 export type CreateSandboxInput = {

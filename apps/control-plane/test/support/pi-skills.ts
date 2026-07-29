@@ -62,7 +62,6 @@ export function sandboxHandle(
       streamingLogs: false,
       portForwarding: false,
       serviceEndpoints: false,
-      objectStorageArtifacts: false,
     },
     ...(fs ? { fs } : {}),
     exec: exec ?? (async () => execResult(1, '', 'unsupported')),

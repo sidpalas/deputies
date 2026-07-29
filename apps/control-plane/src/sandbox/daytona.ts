@@ -88,7 +88,6 @@ export const daytonaCapabilities: SandboxCapabilities = {
   streamingLogs: false,
   portForwarding: true,
   serviceEndpoints: true,
-  objectStorageArtifacts: false,
 };
 
 export class DaytonaSandboxProvider implements SandboxProvider {

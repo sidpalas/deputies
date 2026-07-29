@@ -92,7 +92,6 @@ export const tensorlakeCapabilities: SandboxCapabilities = {
   streamingLogs: false,
   portForwarding: true,
   serviceEndpoints: true,
-  objectStorageArtifacts: false,
 };
 
 export class TensorlakeSandboxProvider implements SandboxProvider {

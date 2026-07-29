@@ -32,7 +32,6 @@ export const dockerCapabilities: SandboxCapabilities = {
   streamingLogs: false,
   portForwarding: false,
   serviceEndpoints: true,
-  objectStorageArtifacts: false,
 };
 
 export type DockerSandboxDescriptor = {

@@ -90,7 +90,6 @@ export const localCapabilities: SandboxCapabilities = {
   streamingLogs: false,
   portForwarding: false,
   serviceEndpoints: false,
-  objectStorageArtifacts: false,
 };
 
 export class LocalSandboxProvider implements SandboxProvider {

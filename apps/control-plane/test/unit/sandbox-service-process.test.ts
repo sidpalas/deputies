@@ -44,7 +44,6 @@ function createSandbox(overrides: Partial<SandboxHandle> = {}): SandboxHandle {
       streamingLogs: false,
       portForwarding: false,
       serviceEndpoints: true,
-      objectStorageArtifacts: false,
     },
     exec: vi.fn(async () => execResult()),
     ...overrides,

@@ -375,7 +375,6 @@ function localSandbox(workspacePath: string): SandboxHandle {
       streamingLogs: false,
       portForwarding: false,
       serviceEndpoints: false,
-      objectStorageArtifacts: false,
     },
     async exec(input: SandboxExecInput) {
       const startedAt = new Date();

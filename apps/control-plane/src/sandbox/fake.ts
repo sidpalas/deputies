@@ -17,7 +17,6 @@ const capabilities: SandboxCapabilities = {
   streamingLogs: false,
   portForwarding: false,
   serviceEndpoints: false,
-  objectStorageArtifacts: false,
 };
 
 export class FakeSandboxProvider implements SandboxProvider {

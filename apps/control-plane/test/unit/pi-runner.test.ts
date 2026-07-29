@@ -2626,7 +2626,6 @@ function createMemorySandbox(options: { execCalls?: ExecCall[] } = {}): SandboxH
       streamingLogs: false,
       portForwarding: false,
       serviceEndpoints: false,
-      objectStorageArtifacts: false,
     },
     fs,
     async exec(input) {
