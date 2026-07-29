@@ -3,6 +3,7 @@ import type { SyntheticEvent } from 'react';
 import {
   ChevronDown,
   FilePlus2,
+  ListFilter,
   ListTree,
   LockKeyhole,
   MessageCircle,
@@ -124,7 +125,7 @@ export function ThreadSidebar(props: {
   }
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
       <div className="mb-3 flex shrink-0 items-center gap-2">
         <Button
           className="shrink-0"
@@ -152,36 +153,38 @@ export function ThreadSidebar(props: {
           </Button>
         </div>
       </div>
-      <div className="relative mb-3 shrink-0">
-        <Input
-          className="pr-9"
-          value={props.searchQuery}
-          onChange={(event) => props.onSearchChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') props.onSearchChange('');
-          }}
-          placeholder="Search sessions..."
+      <div className="relative mb-3 flex shrink-0 items-center gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Input
+            className="pr-9"
+            value={props.searchQuery}
+            onChange={(event) => props.onSearchChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') props.onSearchChange('');
+            }}
+            placeholder="Search sessions..."
+          />
+          {props.searchQuery ? (
+            <Button
+              className="absolute right-1 top-1 h-8 w-8 p-0"
+              variant="ghost"
+              size="icon"
+              onClick={() => props.onSearchChange('')}
+              aria-label="Clear search"
+              title="Clear search"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
+        </div>
+        <SessionFilterControls
+          count={props.sessionFilterCount}
+          filters={props.sessionFilters}
+          tagOptions={props.sessionTagOptions}
+          onChange={props.onSessionFiltersChange}
+          onClear={props.onSessionFiltersClear}
         />
-        {props.searchQuery ? (
-          <Button
-            className="absolute right-1 top-1 h-8 w-8 p-0"
-            variant="ghost"
-            size="icon"
-            onClick={() => props.onSearchChange('')}
-            aria-label="Clear search"
-            title="Clear search"
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        ) : null}
       </div>
-      <SessionFilterControls
-        count={props.sessionFilterCount}
-        filters={props.sessionFilters}
-        tagOptions={props.sessionTagOptions}
-        onChange={props.onSessionFiltersChange}
-        onClear={props.onSessionFiltersClear}
-      />
       <div
         className="min-h-0 min-w-0 flex-1 overflow-auto"
         onPointerEnter={() => props.onSessionListHoverChange(true)}
@@ -460,13 +463,40 @@ function SessionFilterControls(props: {
   onChange: (filters: SessionFilters) => void;
   onClear: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [tagQueryDraft, setTagQueryDraft] = useState('');
+  const filterMenuRef = useRef<HTMLDivElement>(null);
   const tagPickerRef = useRef<HTMLDivElement>(null);
   const selectedTags = new Set(props.filters.tags);
   const availableTags = props.tagOptions.filter((option) => !selectedTags.has(option.tag));
   const tagQuery = normalizeTagQuery(tagQueryDraft);
   const filteredTags = availableTags.filter((option) => !tagQuery || option.tag.includes(tagQuery)).slice(0, 8);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (event.target instanceof Node && filterMenuRef.current?.contains(event.target)) return;
+      setOpen(false);
+      setTagPickerOpen(false);
+      setTagQueryDraft('');
+    }
+
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      setTagPickerOpen(false);
+      setTagQueryDraft('');
+    }
+
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!tagPickerOpen) return;
@@ -507,102 +537,130 @@ function SessionFilterControls(props: {
   }
 
   return (
-    <div className="mb-3 grid gap-2 rounded-md border border-border bg-muted/30 p-2 text-xs">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-medium text-muted-foreground">Filters{props.count ? ` (${props.count})` : ''}</span>
+    <div className="static shrink-0" ref={filterMenuRef}>
+      <Button
+        className={cn('relative', props.count && 'border-primary bg-primary/10 text-foreground')}
+        variant="secondary"
+        size="icon"
+        onClick={() => setOpen((current) => !current)}
+        aria-label="Filter sessions"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title="Filter sessions"
+      >
+        <ListFilter className="h-4 w-4" />
         {props.count ? (
-          <button
-            className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-            type="button"
-            onClick={props.onClear}
+          <span
+            className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground"
+            aria-hidden="true"
           >
-            Clear all
-          </button>
+            {props.count}
+          </span>
         ) : null}
-      </div>
-      <div className="grid grid-cols-3 gap-1">
-        <FilterChip
-          active={props.filters.starredByMe}
-          icon={Star}
-          label="Starred"
-          title="Sessions you starred"
-          onClick={() => toggle('starredByMe')}
-        />
-        <FilterChip
-          active={props.filters.createdByMe}
-          icon={FilePlus2}
-          label="Created"
-          title="Sessions you created"
-          onClick={() => toggle('createdByMe')}
-        />
-        <FilterChip
-          active={props.filters.participatedByMe}
-          icon={MessageCircle}
-          label="Joined"
-          title="Sessions where you sent a message"
-          onClick={() => toggle('participatedByMe')}
-        />
-      </div>
-      <div className="relative flex flex-wrap items-center gap-1.5" ref={tagPickerRef}>
-        {props.filters.tags.map((tag) => (
-          <Badge key={tag} className="gap-1 border border-border bg-background text-foreground">
-            {tag}
-            <button
-              type="button"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => update({ tags: props.filters.tags.filter((candidate) => candidate !== tag) })}
-              aria-label={`Remove ${tag} filter`}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </Badge>
-        ))}
-        <button
-          className="inline-flex h-[22px] min-w-0 items-center gap-1 rounded-md border border-border bg-background px-2 py-0 text-xs font-medium leading-none text-muted-foreground hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-          type="button"
-          disabled={!availableTags.length}
-          onClick={() => setTagPickerOpen((open) => !open)}
-          aria-expanded={tagPickerOpen}
-          aria-haspopup="listbox"
-          aria-label="Filter by tags"
-          title={availableTags.length ? 'Filter by tags' : 'No additional tags available'}
+      </Button>
+      {open ? (
+        <div
+          className="absolute left-0 right-0 top-[calc(100%+0.25rem)] z-40 grid gap-2 rounded-md border border-border bg-card p-2 text-xs text-card-foreground shadow-lg"
+          role="dialog"
+          aria-label="Session filters"
         >
-          <span>Tags</span>
-          <ChevronDown className="h-3 w-3" />
-        </button>
-        {tagPickerOpen ? (
-          <div className="absolute left-0 top-[calc(100%+0.25rem)] z-40 w-full rounded-md border border-border bg-card p-2 text-sm text-card-foreground shadow-lg">
-            <Input
-              className="h-8 text-xs"
-              placeholder="Search tags..."
-              value={tagQueryDraft}
-              onChange={(event) => setTagQueryDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter') return;
-                event.preventDefault();
-                const firstTag = filteredTags[0]?.tag;
-                if (firstTag) addTagFilter(firstTag);
-              }}
-            />
-            <div className="mt-2 max-h-52 overflow-auto" role="listbox">
-              {filteredTags.map((option) => (
-                <button
-                  key={option.tag}
-                  type="button"
-                  className="flex w-full items-center rounded-sm px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground"
-                  role="option"
-                  onClick={() => addTagFilter(option.tag)}
-                >
-                  <span className="min-w-0 truncate">{option.tag}</span>
-                </button>
-              ))}
-              {!filteredTags.length ? (
-                <p className="px-2 py-2 text-xs text-muted-foreground">No matching tags.</p>
-              ) : null}
-            </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-muted-foreground">Filters{props.count ? ` (${props.count})` : ''}</span>
+            {props.count ? (
+              <button
+                className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                type="button"
+                onClick={props.onClear}
+              >
+                Clear all
+              </button>
+            ) : null}
           </div>
-        ) : null}
-      </div>
+          <div className="grid grid-cols-3 gap-1">
+            <FilterChip
+              active={props.filters.starredByMe}
+              icon={Star}
+              label="Starred"
+              title="Sessions you starred"
+              onClick={() => toggle('starredByMe')}
+            />
+            <FilterChip
+              active={props.filters.createdByMe}
+              icon={FilePlus2}
+              label="Created"
+              title="Sessions you created"
+              onClick={() => toggle('createdByMe')}
+            />
+            <FilterChip
+              active={props.filters.participatedByMe}
+              icon={MessageCircle}
+              label="Joined"
+              title="Sessions where you sent a message"
+              onClick={() => toggle('participatedByMe')}
+            />
+          </div>
+          <div className="relative flex flex-wrap items-center gap-1.5" ref={tagPickerRef}>
+            {props.filters.tags.map((tag) => (
+              <Badge key={tag} className="gap-1 border border-border bg-background text-foreground">
+                {tag}
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={() => update({ tags: props.filters.tags.filter((candidate) => candidate !== tag) })}
+                  aria-label={`Remove ${tag} filter`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+            ))}
+            <button
+              className="inline-flex h-[22px] min-w-0 items-center gap-1 rounded-md border border-border bg-background px-2 py-0 text-xs font-medium leading-none text-muted-foreground hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              disabled={!availableTags.length}
+              onClick={() => setTagPickerOpen((current) => !current)}
+              aria-expanded={tagPickerOpen}
+              aria-haspopup="listbox"
+              aria-label="Filter by tags"
+              title={availableTags.length ? 'Filter by tags' : 'No additional tags available'}
+            >
+              <span>Tags</span>
+              <ChevronDown className="h-3 w-3" />
+            </button>
+            {tagPickerOpen ? (
+              <div className="absolute left-0 top-[calc(100%+0.25rem)] z-40 w-full rounded-md border border-border bg-card p-2 text-sm text-card-foreground shadow-lg">
+                <Input
+                  className="h-8 text-xs"
+                  placeholder="Search tags..."
+                  value={tagQueryDraft}
+                  onChange={(event) => setTagQueryDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return;
+                    event.preventDefault();
+                    const firstTag = filteredTags[0]?.tag;
+                    if (firstTag) addTagFilter(firstTag);
+                  }}
+                />
+                <div className="mt-2 max-h-52 overflow-auto" role="listbox">
+                  {filteredTags.map((option) => (
+                    <button
+                      key={option.tag}
+                      type="button"
+                      className="flex w-full items-center rounded-sm px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground"
+                      role="option"
+                      onClick={() => addTagFilter(option.tag)}
+                    >
+                      <span className="min-w-0 truncate">{option.tag}</span>
+                    </button>
+                  ))}
+                  {!filteredTags.length ? (
+                    <p className="px-2 py-2 text-xs text-muted-foreground">No matching tags.</p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -612,7 +670,7 @@ function FilterChip(props: { active: boolean; icon: LucideIcon; label: string; t
   return (
     <button
       className={cn(
-        'inline-flex min-w-0 items-center justify-center gap-1 rounded-full border border-border px-1.5 py-1 text-muted-foreground transition-colors hover:text-foreground',
+        'inline-flex min-w-0 items-center justify-center gap-0.5 rounded-full border border-border px-1 py-1 text-muted-foreground transition-colors hover:text-foreground',
         props.active && 'border-primary bg-primary/15 text-foreground',
       )}
       type="button"

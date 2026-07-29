@@ -2005,6 +2005,7 @@ it('uses the latest filters for the first session refresh after a filter change'
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Filter sessions' })[0]!);
   fireEvent.click(
     screen
       .getAllByRole('button', { name: 'Starred' })
@@ -2033,6 +2034,7 @@ it('keeps starred sessions grouped when other filters are active but not when fi
   expect(starredHeading.compareDocumentPosition(starredButton)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   expect(starredButton.compareDocumentPosition(regularButton)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
+  fireEvent.click(sidebar.getByRole('button', { name: 'Filter sessions' }));
   fireEvent.click(sidebar.getByRole('button', { name: 'Created' }));
 
   await waitFor(() => expect(sidebar.getByRole('heading', { name: 'Starred' })).toBeInTheDocument());
@@ -2069,6 +2071,7 @@ it('keeps loaded archived rows when a filtered active refresh completes', async 
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Filter sessions' })[0]!);
   fireEvent.click(
     screen
       .getAllByRole('button', { name: 'Starred' })
@@ -2118,6 +2121,7 @@ it('keeps the selected session open after unstarring it with the starred filter 
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Filter sessions' })[0]!);
   fireEvent.click(
     screen
       .getAllByRole('button', { name: 'Starred' })
@@ -2196,6 +2200,9 @@ it('filters sessions with the searchable sidebar tag picker', async () => {
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Existing session' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Filter by tags' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Filter sessions' })[0]!);
+  expect(screen.getByRole('dialog', { name: 'Session filters' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Filter by tags' }));
   const listbox = await screen.findByRole('listbox');
 
@@ -2266,6 +2273,7 @@ it('reveals a filtered search result in its fetched ancestor tree and can return
   render(<App />);
 
   await screen.findByRole('heading', { name: 'Sessions' });
+  fireEvent.click(screen.getAllByRole('button', { name: 'Filter sessions' })[0]!);
   fireEvent.click(
     screen
       .getAllByRole('button', { name: 'Created' })
@@ -2531,6 +2539,7 @@ it('preserves filtered load-more sessions when a refresh resolves later', async 
   render(<App />);
 
   expect(await screen.findByRole('heading', { name: 'Filtered first page' })).toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Filter sessions' })[0]!);
   fireEvent.click(
     screen
       .getAllByRole('button', { name: 'Starred' })
