@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.26.0](https://github.com/sidpalas/deputies/compare/v0.25.0...v0.26.0) (2026-07-29)
+
+
+### Features
+
+* add agents page to static demo ([3531c8a](https://github.com/sidpalas/deputies/commit/3531c8a8ab57a724f15c49e4b663435321eb6f0f))
+* add native workspace changes ([ca970fd](https://github.com/sidpalas/deputies/commit/ca970fd17a8261602966bdd50649d199dd3bab89))
+* move session filters into popover ([1bbefeb](https://github.com/sidpalas/deputies/commit/1bbefeb3e6c9a8e973fb0268ff970e1a83c70ec4))
+
+
+### Bug Fixes
+
+* bound low-memory ship workflow ([04ca0e5](https://github.com/sidpalas/deputies/commit/04ca0e536ca4ba0f3c1efc7dfa0f436a7b89a068))
+* include agents in static demo ([fddd023](https://github.com/sidpalas/deputies/commit/fddd0234ad4b47ecb92f99d18066732ef69a2c6a))
+
+
+### Documentation
+
+* refresh product and website documentation ([1972970](https://github.com/sidpalas/deputies/commit/19729707d6537d330853709c1580ee4bac51731c))
+
 ## [0.25.0](https://github.com/sidpalas/deputies/compare/v0.24.0...v0.25.0) (2026-07-28)
 
 
