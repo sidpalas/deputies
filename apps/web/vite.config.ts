@@ -70,6 +70,9 @@ export default defineConfig({
       '/': serviceProxy,
     },
   },
+  preview: {
+    allowedHosts,
+  },
 });
 
 function portlessUrlPlugin(): Plugin {

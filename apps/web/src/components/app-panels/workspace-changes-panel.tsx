@@ -20,6 +20,11 @@ type LoadChangesOptions = {
   notifyWorkspaceConnected?: boolean;
 };
 
+export type WorkspaceChangesSnapshot = {
+  changes: WorkspaceChanges;
+  patches: WorkspaceChangePatch[];
+};
+
 const maxRenderedDiffLines = 3_000;
 
 function patchKey(repositoryId: string, fileId: string, layer: WorkspacePatchLayer): string {
@@ -30,6 +35,7 @@ export function WorkspaceChangesPanel(props: {
   sessionId: string;
   token: string;
   active: boolean;
+  snapshot?: WorkspaceChangesSnapshot;
   onWorkspaceConnected?: () => void;
 }) {
   const [changes, setChanges] = useState<WorkspaceChanges | null>(null);
@@ -52,6 +58,13 @@ export function WorkspaceChangesPanel(props: {
   const loadChanges = useCallback(
     async (options: LoadChangesOptions = {}) => {
       const { background = false, supersede = true, notifyWorkspaceConnected = false } = options;
+      if (props.snapshot) {
+        setChanges(props.snapshot.changes);
+        setError('');
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
       if (!supersede && summaryAbortRef.current) return;
       summaryAbortRef.current?.abort();
       const controller = new AbortController();
@@ -81,7 +94,7 @@ export function WorkspaceChangesPanel(props: {
         }
       }
     },
-    [props.sessionId, props.token],
+    [props.sessionId, props.snapshot, props.token],
   );
 
   useEffect(() => {
@@ -100,17 +113,21 @@ export function WorkspaceChangesPanel(props: {
   }, [loadChanges]);
 
   useEffect(() => {
-    if (!props.active) return;
+    if (!props.active || props.snapshot) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void loadChanges({ background: true, supersede: false });
     }, 5_000);
     return () => window.clearInterval(timer);
-  }, [loadChanges, props.active]);
+  }, [loadChanges, props.active, props.snapshot]);
 
   useEffect(() => {
+    if (props.snapshot) {
+      wasActiveRef.current = props.active;
+      return;
+    }
     if (wasActiveRef.current && !props.active) void loadChanges({ background: true, notifyWorkspaceConnected: true });
     wasActiveRef.current = props.active;
-  }, [loadChanges, props.active]);
+  }, [loadChanges, props.active, props.snapshot]);
 
   useEffect(() => {
     if (!changes) return;
@@ -144,6 +161,17 @@ export function WorkspaceChangesPanel(props: {
     setPatch(null);
     setPatchLoading(true);
     setPatchError('');
+    if (props.snapshot) {
+      const capturedPatch = props.snapshot.patches.find(
+        (candidate) =>
+          candidate.repositoryId === selectedRepository.id &&
+          candidate.fileId === selectedFile.id &&
+          candidate.layer === layer,
+      );
+      setPatch(capturedPatch ?? null);
+      setPatchLoading(false);
+      return;
+    }
     getWorkspaceChangePatch({
       sessionId: props.sessionId,
       repositoryId: selectedRepository.id,
@@ -173,7 +201,7 @@ export function WorkspaceChangesPanel(props: {
         if (!controller.signal.aborted) setPatchLoading(false);
       });
     return () => controller.abort();
-  }, [layer, loadChanges, props.sessionId, props.token, selectedFile, selectedRepository]);
+  }, [layer, loadChanges, props.sessionId, props.snapshot, props.token, selectedFile, selectedRepository]);
 
   function selectChange(repository: WorkspaceChangesRepository, file: WorkspaceChangeFile) {
     const nextLayer = defaultLayer(file);
@@ -202,18 +230,22 @@ export function WorkspaceChangesPanel(props: {
           <p className="text-xs text-muted-foreground">
             {changes
               ? `${fileCount} changed ${fileCount === 1 ? 'file' : 'files'}${partial ? ' shown' : ''}${repositoryCount > 1 ? ` across ${repositoryCount} repositories` : ''}`
-              : 'Live uncommitted changes in the sandbox'}
+              : props.snapshot
+                ? 'Captured changes from this session'
+                : 'Live uncommitted changes in the sandbox'}
           </p>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={loading || refreshing}
-          onClick={() => void loadChanges({ background: true, notifyWorkspaceConnected: true })}
-        >
-          <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} /> Refresh
-        </Button>
+        {props.snapshot ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={loading || refreshing}
+            onClick={() => void loadChanges({ background: true, notifyWorkspaceConnected: true })}
+          >
+            <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} /> Refresh
+          </Button>
+        )}
       </header>
       {error && changes ? (
         <p className="border-b border-border bg-warning/10 px-3 py-2 text-xs text-warning-foreground">

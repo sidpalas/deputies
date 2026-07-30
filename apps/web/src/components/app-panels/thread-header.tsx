@@ -26,6 +26,7 @@ import { sessionDisplayStatus, sessionDisplayTooltip, statusTextClass } from './
 
 type ThreadHeaderProps = {
   canWriteSession: boolean;
+  canViewChanges?: boolean;
   canPromoteSession?: boolean;
   promotingSession?: boolean;
   canOpenWorkspaceTools?: boolean;
@@ -64,6 +65,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   const tagEditorRef = useRef<HTMLDivElement>(null);
   const tagButtonRef = useRef<HTMLButtonElement>(null);
   const canOpenWorkspaceTools = props.canOpenWorkspaceTools ?? props.canWriteSession;
+  const canViewChanges = props.canViewChanges ?? props.canWriteSession;
   const workspaceToolsDisabled = Boolean(props.workspaceToolsDisabled);
   const sessionTags = props.selectedSession.tags ?? [];
   const workspaceUnavailableReason =
@@ -297,7 +299,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
         >
           {displayStatus}
         </Badge>
-        {props.canWriteSession ? (
+        {canViewChanges ? (
           <Button
             className="hidden h-9 w-28 justify-center gap-2 sm:inline-flex"
             type="button"
@@ -345,7 +347,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                   {props.selectedSession.starred ? 'Unstar session' : 'Star session'}
                 </span>
               </button>
-              {props.canWriteSession ? (
+              {canViewChanges ? (
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground sm:hidden"

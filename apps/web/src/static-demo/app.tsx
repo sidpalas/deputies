@@ -16,6 +16,7 @@ import {
   SnippetsSidebar,
   ThreadHeader,
   ThreadSidebar,
+  WorkspaceChangesPanel,
 } from '../components/app-panels.js';
 import type { SidebarFooterProps, ThemePreference } from '../components/app-panels.js';
 import type { NavigationPage } from '../components/app-panels/sidebar-footer.js';
@@ -566,6 +567,7 @@ export function StaticDemoApp() {
           />
         ) : (
           <StaticSessionView
+            key={selected.session.id}
             demoSession={selected}
             onOpenSidebar={() => setSidebarOpen(true)}
             onSessionStarChange={changeSessionStar}
@@ -596,6 +598,7 @@ function StaticSessionView(props: {
   onOpenSkill: (skillId: string, revisionId: string) => void;
 }) {
   const { session } = props.demoSession;
+  const [threadView, setThreadView] = useState<'conversation' | 'changes'>('conversation');
   const repository = repositoryLabel(session.context?.repository);
   const branch = typeof session.context?.branch === 'string' ? session.context.branch : null;
   const model = typeof session.context?.model === 'string' ? session.context.model : '';
@@ -607,15 +610,16 @@ function StaticSessionView(props: {
       <ThreadHeader
         selectedSession={session}
         canWriteSession={false}
+        canViewChanges={Boolean(props.demoSession.workspaceChanges)}
         canOpenWorkspaceTools
         workspaceToolsDisabled
         showOpenSidebar
-        threadView="conversation"
+        threadView={threadView}
         workspaceToolsUnavailableReason=""
         onArchive={() => undefined}
         onSessionStarChange={props.onSessionStarChange}
         onOpenSidebar={props.onOpenSidebar}
-        onThreadViewChange={() => undefined}
+        onThreadViewChange={setThreadView}
         onUpdateTags={async () => false}
         onUpdateTitle={async () => false}
         onOpenWorkspaceTool={async () => undefined}
@@ -623,86 +627,99 @@ function StaticSessionView(props: {
       />
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_20rem]">
         <section className="flex min-h-0 min-w-0 flex-col overflow-hidden px-3 pt-4 md:px-8 xl:px-16">
-          <div className="min-h-0 flex-1 overflow-auto pb-5" role="log" aria-label="Static demo session messages">
-            <MobileContextPanel
-              environment={null}
-              repository={repository}
-              branch={branch}
-              artifacts={props.demoSession.artifacts}
-              services={services}
-              serviceLinksDisabled
-              externalResources={props.demoSession.externalResources}
-              callbacks={props.demoSession.callbacks}
-              canWriteSession={false}
-              onExtendSandbox={() => undefined}
-              onReplayCallback={() => undefined}
-            />
-            <ChatPanel
-              activeProgress={{}}
-              artifacts={props.demoSession.artifacts}
-              canWriteSession={false}
-              services={services}
-              serviceLinksDisabled
-              canRetryMessages={false}
-              editingMessageId=""
-              events={props.demoSession.events}
-              messageDraft=""
-              messages={props.demoSession.messages}
-              onCancelEdit={() => undefined}
-              onCancelQueuedMessage={() => undefined}
-              onCancelRun={() => undefined}
-              onEditMessage={() => undefined}
-              onToggleSteering={() => undefined}
-              steeringMessageIds={new Set()}
-              onMessageDraftChange={() => undefined}
-              onRetryFailedMessages={() => undefined}
-              onSaveEdit={() => undefined}
-              onExtendSandbox={() => undefined}
-              onLoadArtifactPreview={loadStaticArtifactPreview}
-              openableManagedSkillIds={demoManagedSkillIds}
-              onOpenSkill={props.onOpenSkill}
-            />
-          </div>
-          <MessageComposer
-            key={session.id}
-            archived={session.status === 'archived'}
-            readOnly
-            compactInput
-            environmentId=""
-            environmentBranchOverrides={{}}
-            environmentOptions={[]}
-            environmentOptionsLoading={false}
-            environmentOptionsError=""
-            repository=""
-            inheritedEnvironment={null}
-            inheritedCodebaseLabel={repository ?? ''}
-            inheritedRepository={repository ?? ''}
-            repositoryOptions={[]}
-            repositoryOptionsLoading={false}
-            repositoryOptionsError=""
-            branch=""
-            inheritedBranch={branch ?? ''}
-            branchOptions={[]}
-            branchOptionsLoading={false}
-            branchOptionsError=""
-            model={model}
-            inheritedModel={model}
-            modelChoices={modelChoices}
-            modelUnavailableReason=""
-            reasoningLevel=""
-            inheritedReasoningLevel=""
-            defaultReasoningLevel=""
-            skills={[]}
-            skillsEnabled={false}
-            onCodebaseChange={() => undefined}
-            onEnvironmentBranchOverridesChange={() => undefined}
-            onEnvironmentRepositoryBranchesLoad={async () => []}
-            onBranchChange={() => undefined}
-            onModelChange={() => undefined}
-            onReasoningLevelChange={() => undefined}
-            onFocusChange={() => undefined}
-            onSubmit={async () => false}
-          />
+          {threadView === 'changes' && props.demoSession.workspaceChanges ? (
+            <div className="min-h-0 flex-1 pb-4">
+              <WorkspaceChangesPanel
+                sessionId={session.id}
+                token=""
+                active={false}
+                snapshot={props.demoSession.workspaceChanges}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="min-h-0 flex-1 overflow-auto pb-5" role="log" aria-label="Static demo session messages">
+                <MobileContextPanel
+                  environment={null}
+                  repository={repository}
+                  branch={branch}
+                  artifacts={props.demoSession.artifacts}
+                  services={services}
+                  serviceLinksDisabled
+                  externalResources={props.demoSession.externalResources}
+                  callbacks={props.demoSession.callbacks}
+                  canWriteSession={false}
+                  onExtendSandbox={() => undefined}
+                  onReplayCallback={() => undefined}
+                />
+                <ChatPanel
+                  activeProgress={{}}
+                  artifacts={props.demoSession.artifacts}
+                  canWriteSession={false}
+                  services={services}
+                  serviceLinksDisabled
+                  canRetryMessages={false}
+                  editingMessageId=""
+                  events={props.demoSession.events}
+                  messageDraft=""
+                  messages={props.demoSession.messages}
+                  onCancelEdit={() => undefined}
+                  onCancelQueuedMessage={() => undefined}
+                  onCancelRun={() => undefined}
+                  onEditMessage={() => undefined}
+                  onToggleSteering={() => undefined}
+                  steeringMessageIds={new Set()}
+                  onMessageDraftChange={() => undefined}
+                  onRetryFailedMessages={() => undefined}
+                  onSaveEdit={() => undefined}
+                  onExtendSandbox={() => undefined}
+                  onLoadArtifactPreview={loadStaticArtifactPreview}
+                  openableManagedSkillIds={demoManagedSkillIds}
+                  onOpenSkill={props.onOpenSkill}
+                />
+              </div>
+              <MessageComposer
+                key={session.id}
+                archived={session.status === 'archived'}
+                readOnly
+                compactInput
+                environmentId=""
+                environmentBranchOverrides={{}}
+                environmentOptions={[]}
+                environmentOptionsLoading={false}
+                environmentOptionsError=""
+                repository=""
+                inheritedEnvironment={null}
+                inheritedCodebaseLabel={repository ?? ''}
+                inheritedRepository={repository ?? ''}
+                repositoryOptions={[]}
+                repositoryOptionsLoading={false}
+                repositoryOptionsError=""
+                branch=""
+                inheritedBranch={branch ?? ''}
+                branchOptions={[]}
+                branchOptionsLoading={false}
+                branchOptionsError=""
+                model={model}
+                inheritedModel={model}
+                modelChoices={modelChoices}
+                modelUnavailableReason=""
+                reasoningLevel=""
+                inheritedReasoningLevel=""
+                defaultReasoningLevel=""
+                skills={[]}
+                skillsEnabled={false}
+                onCodebaseChange={() => undefined}
+                onEnvironmentBranchOverridesChange={() => undefined}
+                onEnvironmentRepositoryBranchesLoad={async () => []}
+                onBranchChange={() => undefined}
+                onModelChange={() => undefined}
+                onReasoningLevelChange={() => undefined}
+                onFocusChange={() => undefined}
+                onSubmit={async () => false}
+              />
+            </>
+          )}
         </section>
         <DesktopContextPanel
           environment={null}

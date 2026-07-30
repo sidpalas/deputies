@@ -7,6 +7,7 @@ import type {
   SandboxService,
   Session,
 } from '../api.js';
+import type { WorkspaceChangesSnapshot } from '../components/app-panels/workspace-changes-panel.js';
 
 export type StaticDemoSession = {
   session: Session;
@@ -16,6 +17,7 @@ export type StaticDemoSession = {
   externalResources: ExternalResource[];
   callbacks: CallbackDelivery[];
   services?: SandboxService[];
+  workspaceChanges?: WorkspaceChangesSnapshot;
 };
 
 export type StaticDemoData = {

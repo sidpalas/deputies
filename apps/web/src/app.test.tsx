@@ -5464,6 +5464,26 @@ it('shows Instance access and Setup only to admins', async () => {
   expect(screen.queryByRole('menuitem', { name: /Setup/ })).not.toBeInTheDocument();
 });
 
+it('shows captured workspace changes associated with a static demo session', async () => {
+  window.history.replaceState({}, '', '/?session=demo-session-workspace-changes');
+  const fetchMock = vi
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValue(jsonResponse({ generatedAt: '2026-07-29T00:00:00.000Z', sessions: [] }));
+  render(<StaticDemoApp />);
+
+  const heading = await screen.findByRole('heading', { name: 'Prioritize starred sessions' });
+  expect(screen.getByText(/Update apps\/web\/src\/components\/app-panels\/session-sidebar\.tsx/)).toBeInTheDocument();
+
+  fireEvent.click(within(heading.closest('section')!).getByRole('button', { name: 'Changes' }));
+
+  expect(await screen.findByText('2 changed files')).toBeInTheDocument();
+  expect(screen.getAllByText('apps/web/src/components/app-panels/session-sidebar.tsx')).not.toHaveLength(0);
+  expect(
+    screen.getAllByText(/visibleSessions = props\.sessions/).some((line) => line.textContent?.startsWith('+')),
+  ).toBe(true);
+  expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/workspace-changes'))).toBe(false);
+});
+
 it('opens read-only instance access in the static demo', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     jsonResponse({ generatedAt: '2026-07-18T00:00:00.000Z', sessions: [] }),
