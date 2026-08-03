@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.27.0](https://github.com/sidpalas/deputies/compare/v0.26.0...v0.27.0) (2026-08-03)
+
+
+### Features
+
+* persist integration credentials in postgres ([d6e4ed9](https://github.com/sidpalas/deputies/commit/d6e4ed91b539e5b9c2232c9b979c4005e38138c5))
+* **web:** showcase workspace changes in static demo ([001496f](https://github.com/sidpalas/deputies/commit/001496f7e66e9616586d8a7b8336df712f1e5cb5))
+
+
+### Bug Fixes
+
+* configure credential key for kubernetes smoke test ([a581060](https://github.com/sidpalas/deputies/commit/a58106007de863aa4863b5ebc2d7f23ba7fccbec))
+* recover mobile connection status after wake ([1cb3faa](https://github.com/sidpalas/deputies/commit/1cb3faae4c8a31f985658699b799d1ba81560351))
+
+
+### Code Refactoring
+
+* remove unused objectStorageArtifacts sandbox capability field ([435d63d](https://github.com/sidpalas/deputies/commit/435d63d9d2b863f516d5090e2790591389f8c5e7))
+
 ## [0.26.0](https://github.com/sidpalas/deputies/compare/v0.25.0...v0.26.0) (2026-07-29)
 
 
