@@ -1,4 +1,6 @@
-FROM node:24-alpine AS build
+# The static bundle is architecture-independent. Build it on the native runner
+# instead of running Node and pnpm under QEMU for cross-platform images.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS build
 
 WORKDIR /app
 RUN corepack enable
