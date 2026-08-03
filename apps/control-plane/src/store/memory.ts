@@ -7,7 +7,7 @@ import {
 } from '../scheduled-follow-ups/recurrence.js';
 import { MemorySkillStore } from './memory-skills.js';
 import { MemoryAgentProfileStore } from './memory-agent-profiles.js';
-import { notepadRevisionRetentionLimit, StoreConflictError } from './types.js';
+import { assertCanonicalSandboxLifecycle, notepadRevisionRetentionLimit, StoreConflictError } from './types.js';
 import type {
   AppStore,
   AgentProfileRecord,
@@ -2390,8 +2390,10 @@ export class MemoryStore implements AppStore {
   }
 
   async updateSandbox(record: SandboxRecord): Promise<SandboxRecord> {
+    assertCanonicalSandboxLifecycle(record);
     if (!this.sandboxes.has(record.id)) throw new Error(`Sandbox does not exist: ${record.id}`);
     this.sandboxes.set(record.id, record);
+    if (record.status === 'destroyed' && record.destroyedAt) this.sandboxSecrets.delete(record.id);
     return record;
   }
 
@@ -2400,7 +2402,10 @@ export class MemoryStore implements AppStore {
   }
 
   async setSandboxSecrets(sandboxId: string, secrets: SandboxSecrets): Promise<void> {
-    if (!this.sandboxes.has(sandboxId)) throw new Error(`Sandbox does not exist: ${sandboxId}`);
+    const sandbox = this.sandboxes.get(sandboxId);
+    if (!sandbox) throw new Error(`Sandbox does not exist: ${sandboxId}`);
+    if (sandbox.status === 'destroyed' || sandbox.destroyedAt)
+      throw new Error(`Cannot set secrets for destroyed sandbox: ${sandboxId}`);
     this.sandboxSecrets.set(sandboxId, { ...secrets });
   }
 

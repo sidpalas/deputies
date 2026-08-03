@@ -418,6 +418,11 @@ export type SandboxRecord = {
   destroyedAt?: Date;
 };
 
+export function assertCanonicalSandboxLifecycle(record: SandboxRecord): void {
+  if ((record.status === 'destroyed') !== Boolean(record.destroyedAt))
+    throw new Error('Destroyed sandboxes must have both destroyed status and destroyedAt');
+}
+
 export type SandboxSecrets = Record<string, string>;
 
 export type ArtifactRecord = {
@@ -754,7 +759,7 @@ export type CreateSandboxRecord = {
   sessionId: string;
   provider: string;
   providerSandboxId: string;
-  status: SandboxStatus;
+  status: Exclude<SandboxStatus, 'destroyed'>;
   workspacePath: string;
   metadata: Record<string, unknown>;
   createdAt: Date;

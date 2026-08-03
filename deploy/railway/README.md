@@ -51,11 +51,16 @@ OPENAI_API_KEY=<secret>
 OPENCODE_API_KEY=<secret>
 ```
 
-For OpenAI Codex subscription auth, prefer a Railway variable containing base64-encoded auth JSON:
+For OpenAI Codex subscription auth, use PostgreSQL-backed storage so refresh-token rotation survives redeploys and remains serialized across worker replicas:
 
 ```sh
-OPENAI_CODEX_AUTH_BASE64=<base64-auth-json>
+OPENAI_CODEX_AUTH_STORAGE=postgres
+OPENAI_CODEX_AUTH_BASE64=<base64-auth-json-bootstrap-seed>
+INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID=2026-07
+INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS={"2026-07":"<base64-random-32-byte-key>"}
 ```
+
+After integration credential migration 026 is applied, start compatible workers to create the absent credential row. Verify Codex model access, then remove `OPENAI_CODEX_AUTH_BASE64` and scale workers. Keep the active encryption key and every historical key still referenced by the database or retained backups. Never run an older base64/in-memory worker concurrently against the same Codex grant during cutover. Deployments that do not use Codex may omit the bootstrap seed.
 
 ## Configure A Real Sandbox Provider
 

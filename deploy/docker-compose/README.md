@@ -23,7 +23,8 @@ The split variant also runs:
 
 - Docker Desktop or compatible Docker Engine.
 - `.env.local` in the repository root.
-- Optional Codex subscription auth at `~/.pi/agent/auth.json`.
+- An integration credential encryption keyring in `.env.local`.
+- When initially bootstrapping Codex, a base64 Pi auth value in `.env.local`.
 
 Copy `.env.example` to `.env.local` if needed:
 
@@ -61,10 +62,12 @@ With 1Password values in `.env.local`:
 mise run //deploy/docker-compose:up:split:1pass
 ```
 
-Scale split workers:
+Scale split workers directly; the base topology uses PostgreSQL-backed Codex auth:
 
 ```sh
-docker compose -f deploy/docker-compose/docker-compose.split.yml up -d --scale worker=4
+docker compose \
+  -f deploy/docker-compose/docker-compose.split.yml \
+  up -d --build --scale worker=4
 ```
 
 Automatic title generation is enabled by default and runs in the worker. Configure it in `.env.local`:
@@ -140,19 +143,42 @@ docker compose -f deploy/docker-compose/docker-compose.combined.yml ps -a
 
 ## Codex Auth
 
-Compose bind mounts the host Codex auth file into containers that run workers:
+Both Compose topologies explicitly use PostgreSQL-backed Codex auth. PostgreSQL is already included by
+`docker-compose.common.yml`, and `control-plane-migrate` applies the integration credential migrations before
+worker-capable services start.
+The integration credential keyring is therefore required for Compose startup, even when Codex is not yet configured.
 
-```yaml
-${HOME}/.pi/agent/auth.json:/run/secrets/openai-codex-auth.json
+Generate a credential encryption key:
+
+```sh
+openssl rand -base64 32
 ```
 
-If you use `RUNNER_MODEL_DEFAULT=openai-codex/<model>`, create the host auth file first:
+Compose deliberately does not generate or default this durable key. Keep it in `.env.local` or your secret manager across container recreation and database restores; replacing it without retaining the old key makes existing credentials undecryptable.
+
+Create a Pi auth file if needed:
 
 ```sh
 mise run //apps/control-plane:auth:login:openai-codex
 ```
 
-The Compose files set `OPENAI_CODEX_AUTH_FILE=/run/secrets/openai-codex-auth.json` for worker-capable containers.
+Encode that JSON file and configure the seed and keyring in `.env.local`:
+
+```sh
+base64 < "${HOME}/.pi/agent/auth.json" | tr -d '\n'
+```
+
+```txt
+OPENAI_CODEX_AUTH_BASE64=<base64-auth-json-bootstrap-seed>
+INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID=local-1
+INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS={"local-1":"<base64-random-32-byte-key>"}
+```
+
+On first startup, the optional environment value seeds an absent database row under the cross-replica credential lock. The
+database then becomes authoritative, including across container restarts, and subsequent refreshes are encrypted and
+persisted there. After verifying Codex requests, remove `OPENAI_CODEX_AUTH_BASE64` from `.env.local`; retain the
+keyring while its key IDs are referenced by the database or backups. See [Deployment](../../docs/deployment.md) for
+rotation and cutover details.
 
 ## Docker Sandbox Provider
 

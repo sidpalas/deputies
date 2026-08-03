@@ -7,6 +7,12 @@
 {{- if and .Values.controlPlane.agentSandboxOrchestrator.enabled .Values.secrets.create (not .Values.secrets.agentSandboxOrchestratorToken) -}}
 {{- fail "secrets.agentSandboxOrchestratorToken is required when controlPlane.agentSandboxOrchestrator.enabled=true and secrets.create=true" -}}
 {{- end -}}
+{{- if and .Values.secrets.create (or (not .Values.secrets.integrationCredentialActiveKeyId) (not .Values.secrets.integrationCredentialEncryptionKeys)) -}}
+{{- fail "PostgreSQL integration credential storage requires secrets.integrationCredentialActiveKeyId and secrets.integrationCredentialEncryptionKeys when secrets.create=true; generate a 32-byte key with: openssl rand -base64 32" -}}
+{{- end -}}
+{{- if and (not .Values.secrets.create) (not .Values.secrets.name) -}}
+{{- fail "secrets.name is required when secrets.create=false; the referenced Secret must contain INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID and INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS" -}}
+{{- end -}}
 {{- if and .Values.config.agentSandboxNamespace (ne .Values.config.agentSandboxNamespace .Release.Namespace) -}}
 {{- fail "config.agentSandboxNamespace must match the release namespace; cross-namespace Agent Sandbox orchestration is not supported yet" -}}
 {{- end -}}

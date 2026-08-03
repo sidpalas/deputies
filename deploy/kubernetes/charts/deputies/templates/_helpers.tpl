@@ -107,6 +107,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ $root.Values.config.serviceTrustForwardedHosts | quote }}
 - name: RUNNER_MODEL_DEFAULT
   value: {{ $root.Values.config.runnerModelDefault | quote }}
+- name: OPENAI_CODEX_AUTH_STORAGE
+  value: postgres
 - name: TITLE_GENERATION_ENABLED
   value: {{ $root.Values.config.titleGenerationEnabled | quote }}
 - name: PRIVATE_SESSIONS_ENABLED
@@ -193,6 +195,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 - name: DATABASE_URL
   value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DATABASE){{ ternary (printf "?sslmode=%s" $root.Values.postgres.sslMode) "" (ne $root.Values.postgres.sslMode "") }}
 {{- range $name, $value := $root.Values.config.extraEnv }}
+{{- if has $name (list "OPENAI_CODEX_AUTH_STORAGE" "OPENAI_CODEX_AUTH_BASE64" "INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID" "INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS") }}
+{{- fail (printf "config.extraEnv may not override Helm-managed credential variable %s" $name) }}
+{{- end }}
 - name: {{ $name }}
   value: {{ $value | quote }}
 {{- end }}

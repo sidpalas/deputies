@@ -1,41 +1,31 @@
 import { stdin as input, stdout as output } from 'node:process';
 import { createInterface } from 'node:readline/promises';
-import { loginOpenAICodex, type OAuthAuthInfo, type OAuthPrompt } from '@earendil-works/pi-ai/oauth';
-import {
-  defaultOpenAICodexAuthFile,
-  readOpenAICodexAuthFileIfPresent,
-  writeOpenAICodexAuthFile,
-} from './openai-codex-auth.js';
+import type { AuthEvent, AuthPrompt } from '@earendil-works/pi-ai';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { defaultOpenAICodexAuthFile, openAICodexProvider, promptForOpenAICodexAuth } from './openai-codex-auth.js';
 
 async function main(): Promise<void> {
   const authFile = process.env.OPENAI_CODEX_AUTH_FILE || defaultOpenAICodexAuthFile();
-  const credentials = await loginOpenAICodex({
-    originator: 'deputies',
-    onAuth: printAuthInfo,
-    onPrompt: question,
-    onProgress: printProgress,
+  const runtime = await ModelRuntime.create({ authPath: authFile });
+  await runtime.login(openAICodexProvider, 'oauth', {
+    prompt: question,
+    notify: printAuthEvent,
   });
-  const auth = await readOpenAICodexAuthFileIfPresent(authFile);
-  await writeOpenAICodexAuthFile(authFile, auth, credentials);
   output.write(`Saved OpenAI Codex OAuth credentials to ${authFile}\n`);
 }
 
-function printAuthInfo(info: OAuthAuthInfo): void {
-  output.write(`Open this URL to authenticate OpenAI Codex:\n${info.url}\n`);
-  if (info.instructions) output.write(`${info.instructions}\n`);
+function printAuthEvent(event: AuthEvent): void {
+  if (event.type === 'auth_url') {
+    output.write(`Open this URL to authenticate OpenAI Codex:\n${event.url}\n`);
+    if (event.instructions) output.write(`${event.instructions}\n`);
+  } else if (event.type === 'progress' || event.type === 'info') output.write(`${event.message}\n`);
+  else output.write(`Open ${event.verificationUri} and enter code ${event.userCode}\n`);
 }
 
-function printProgress(message: string): void {
-  output.write(`${message}\n`);
-}
-
-async function question(prompt: OAuthPrompt): Promise<string> {
+async function question(prompt: AuthPrompt): Promise<string> {
   const rl = createInterface({ input, output });
   try {
-    while (true) {
-      const answer = await rl.question(`${prompt.message} `);
-      if (answer || prompt.allowEmpty) return answer;
-    }
+    return await promptForOpenAICodexAuth(prompt, (message, options) => rl.question(message, options));
   } finally {
     rl.close();
   }

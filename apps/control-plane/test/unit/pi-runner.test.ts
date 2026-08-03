@@ -27,6 +27,8 @@ import { MemorySandboxFileSystem } from '../support/pi-skills.js';
 const piMock = vi.hoisted(() => ({
   createAgentSession: vi.fn(),
   completeSimple: vi.fn(),
+  modelRuntimeCreateOptions: [] as unknown[],
+  modelRuntimeInstances: [] as unknown[],
   openSessionCalls: [] as Array<{ sessionFile: string; agentDir: string; cwd: string; jsonl: string }>,
   openSessionError: undefined as Error | undefined,
   resourceLoaderOptions: [] as Array<{
@@ -47,32 +49,29 @@ vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
   const { readFileSync } = await import('node:fs');
   const actual = await importOriginal<typeof import('@earendil-works/pi-coding-agent')>();
 
-  class FakeAuthStorage {
-    static create() {
-      return new FakeAuthStorage();
+  class FakeModelRuntime {
+    static async create(options: unknown) {
+      const runtime = new FakeModelRuntime();
+      piMock.modelRuntimeCreateOptions.push(options);
+      piMock.modelRuntimeInstances.push(runtime);
+      return runtime;
     }
 
-    static inMemory() {
-      return new FakeAuthStorage();
-    }
-  }
-
-  class FakeModelRegistry {
-    static create() {
-      return new FakeModelRegistry();
-    }
-
-    getAll() {
+    getModels() {
       return [];
     }
 
     registerProvider() {}
 
-    async getApiKeyAndHeaders() {
-      return { ok: true as const, apiKey: 'test-key' };
+    async getAuth() {
+      return { auth: { apiKey: 'test-key' } };
     }
 
-    find(provider: string, id: string) {
+    completeSimple(...args: unknown[]) {
+      return piMock.completeSimple(...args);
+    }
+
+    getModel(provider: string, id: string) {
       const reasoningContent = [
         'reasoning-content-model',
         'explicit-thinking-model',
@@ -157,8 +156,7 @@ vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
 
   return {
     ...actual,
-    AuthStorage: FakeAuthStorage,
-    ModelRegistry: FakeModelRegistry,
+    ModelRuntime: FakeModelRuntime,
     DefaultResourceLoader: FakeResourceLoader,
     SessionManager: FakeSessionManager,
     getAgentDir: () => '/tmp/pi-agent',
@@ -175,6 +173,8 @@ describe('PiRunner', () => {
   beforeEach(() => {
     piMock.createAgentSession.mockReset();
     piMock.completeSimple.mockReset();
+    piMock.modelRuntimeCreateOptions.length = 0;
+    piMock.modelRuntimeInstances.length = 0;
     piMock.openSessionCalls.length = 0;
     piMock.openSessionError = undefined;
     piMock.resourceLoaderOptions.length = 0;
@@ -363,6 +363,12 @@ describe('PiRunner', () => {
   });
 
   it('uses minimal reasoning and a larger title budget without changing model compatibility', async () => {
+    const credentials = {
+      read: vi.fn(),
+      list: vi.fn().mockResolvedValue([]),
+      modify: vi.fn(),
+      delete: vi.fn(),
+    };
     piMock.completeSimple.mockResolvedValue({
       role: 'assistant',
       content: [{ type: 'text', text: 'Fix automatic titles' }],
@@ -371,7 +377,7 @@ describe('PiRunner', () => {
 
     const title = await new PiRunner({
       model: 'opencode/reasoning-content-model',
-      authBase64: Buffer.from('{}').toString('base64'),
+      credentials,
     }).generateTitle({ prompt: 'Please fix automatic title generation' });
 
     expect(title).toBe('Fix automatic titles');
@@ -384,7 +390,43 @@ describe('PiRunner', () => {
       expect.any(Object),
       expect.objectContaining({ maxTokens: 4_096, reasoning: 'minimal' }),
     );
+    expect(piMock.modelRuntimeCreateOptions[0]).toEqual({
+      credentials,
+      modelsPath: '/tmp/pi-agent/models.json',
+    });
     expect(piMock.completeSimple.mock.calls[0]![0].compat).not.toHaveProperty('thinkingFormat');
+  });
+
+  it('passes file auth directly and rejects contradictory credential sources', async () => {
+    piMock.completeSimple.mockResolvedValue({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'File auth title' }],
+      stopReason: 'stop',
+    });
+    await new PiRunner({
+      model: 'opencode/non-reasoning-content-model',
+      authFile: '/tmp/custom-pi/auth.json',
+    }).generateTitle({ prompt: 'Title with file auth' });
+    expect(piMock.modelRuntimeCreateOptions[0]).toEqual({
+      authPath: '/tmp/custom-pi/auth.json',
+      modelsPath: '/tmp/custom-pi/models.json',
+    });
+
+    expect(
+      () =>
+        new PiRunner({
+          model: 'opencode/non-reasoning-content-model',
+          authFile: '/tmp/custom-pi/auth.json',
+          authBase64: Buffer.from('{}').toString('base64'),
+        }),
+    ).toThrow('only one credential source');
+    expect(
+      () =>
+        new PiRunner({
+          model: 'opencode/non-reasoning-content-model',
+          authBase64: 'not-json',
+        }),
+    ).toThrow();
   });
 
   it('diagnoses thinking-only title responses without logging their content or prompt', async () => {
@@ -463,6 +505,12 @@ describe('PiRunner', () => {
   });
 
   it('does not inject title compatibility into normal agent runs', async () => {
+    const credentials = {
+      read: vi.fn(),
+      list: vi.fn().mockResolvedValue([]),
+      modify: vi.fn(),
+      delete: vi.fn(),
+    };
     piMock.createAgentSession.mockImplementation(async (_options) => ({
       session: {
         sessionId: 'pi-session',
@@ -477,7 +525,7 @@ describe('PiRunner', () => {
 
     await new PiRunner({
       model: 'opencode/reasoning-content-model',
-      authBase64: Buffer.from('{}').toString('base64'),
+      credentials,
     }).run({
       sessionId: 'session-1',
       runId: 'run-1',
@@ -492,6 +540,10 @@ describe('PiRunner', () => {
       id: 'reasoning-content-model',
       compat: expect.not.objectContaining({ thinkingFormat: expect.anything() }),
     });
+    expect(piMock.modelRuntimeCreateOptions).toEqual([
+      expect.objectContaining({ credentials, modelsPath: '/tmp/pi-agent/models.json' }),
+    ]);
+    expect(piMock.createAgentSession.mock.calls[0]![0].modelRuntime).toBe(piMock.modelRuntimeInstances[0]);
   });
 
   it('runs a Pi session and normalizes streamed text and tool events', async () => {
@@ -1057,6 +1109,12 @@ describe('PiRunner', () => {
 
     expect(result.text).toBe('leaf result');
     expect(createCount).toBe(5);
+    expect(piMock.modelRuntimeInstances).toHaveLength(1);
+    expect(
+      piMock.createAgentSession.mock.calls.every(
+        ([options]) => options.modelRuntime === piMock.modelRuntimeInstances[0],
+      ),
+    ).toBe(true);
     expect(piMock.createAgentSession.mock.calls.slice(1).map(([options]) => options.model.id)).toEqual([
       'child-model',
       'child-model',

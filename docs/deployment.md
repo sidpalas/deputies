@@ -421,15 +421,35 @@ OpenAI Codex subscription auth:
 mise run //apps/control-plane:auth:login:openai-codex
 ```
 
-The login task writes OAuth credentials to `~/.pi/agent/auth.json` by default. Use `OPENAI_CODEX_AUTH_FILE` when the runtime should read a mounted copy from another path.
+The login task writes OAuth credentials to `~/.pi/agent/auth.json` by default. In local file mode, use `OPENAI_CODEX_AUTH_FILE` to select another writable path.
+
+Use PostgreSQL-backed integration credential storage for nearly all deployments, including single-replica container, VM, Compose, and Kubernetes installations. It preserves refreshed credentials across process and container replacement, supports future horizontal scaling, and coordinates refresh-token rotation across workers:
 
 ```sh
 RUNNER_MODEL_DEFAULT=openai-codex/gpt-5.5
-OPENAI_CODEX_AUTH_FILE=/run/secrets/openai-codex-auth.json
-OPENAI_CODEX_AUTH_BASE64=<base64-auth-json>
+OPENAI_CODEX_AUTH_STORAGE=postgres
+OPENAI_CODEX_AUTH_BASE64=<base64-auth-json-bootstrap-seed>
+INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID=2026-07
+INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS='{"2026-07":"<base64-random-32-byte-key>"}'
 ```
 
-Prefer a mounted secret file or `OPENAI_CODEX_AUTH_BASE64` for hosted deployments.
+Apply integration credential migration 026 before enabling this mode. A deployment that does not use Codex may omit `OPENAI_CODEX_AUTH_BASE64`; PostgreSQL storage then remains empty until Codex is configured. To configure Codex, start compatible workers with the seed, verify model auth works and the row revision changes after a refresh, then remove `OPENAI_CODEX_AUTH_BASE64`. An existing database credential always wins over the base64 seed. Keep every encryption key still referenced by live rows or retained backups.
+
+Before a potentially rotating provider callback, Deputies persists an operation fence. If the callback outcome cannot be established, the fence prevents another replica from replaying the observed refresh token and Codex fails closed with a reconnection error. PostgreSQL-mode logout/deletion is intentionally disabled until an explicit reconnect workflow can distinguish a deliberately disconnected credential from a never-initialized database. Operators repairing an uncertain credential must complete a fresh Codex login and deliberately replace the database credential; never clear the fence merely to retry the old refresh token.
+
+To repair a fenced credential before an in-app reconnect flow exists, stop every compatible worker, complete a fresh Codex login, replace `OPENAI_CODEX_AUTH_BASE64` with that new grant, and delete the `tenant/model-provider/openai-codex` row. Restart compatible workers to bootstrap the new grant, verify it, and remove the seed again. Do not perform the row deletion while any worker or old grant consumer is running.
+
+Do not run old base64/in-memory workers alongside PostgreSQL-backed workers using the same Codex grant. After OpenAI rotates that grant, rollback requires a fresh Codex login or rolling forward with the database credential.
+
+File storage is primarily a local-development convenience for a single control-plane process. It avoids database bootstrap configuration and works naturally with the Pi login task's default file:
+
+```sh
+RUNNER_MODEL_DEFAULT=openai-codex/gpt-5.5
+OPENAI_CODEX_AUTH_STORAGE=file
+OPENAI_CODEX_AUTH_FILE="${HOME}/.pi/agent/auth.json"
+```
+
+The file must be writable so refreshed access and refresh tokens can replace the previous credential. Do not use a read-only mounted Secret, ephemeral container filesystem, or independent per-replica files as authoritative hosted credential storage. If local development runs multiple workers, use PostgreSQL instead.
 
 ## Web Search Tool
 
@@ -809,6 +829,7 @@ OPENAI_API_KEY
 OPENCODE_API_KEY
 OPENAI_CODEX_AUTH_FILE contents
 OPENAI_CODEX_AUTH_BASE64
+INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS
 DAYTONA_API_KEY
 DOCKER_ORCHESTRATOR_TOKEN
 SANDBOX_SECRET_ENCRYPTION_KEY

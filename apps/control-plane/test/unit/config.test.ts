@@ -6,6 +6,89 @@ import {
 } from '../../src/config/index.js';
 
 describe('loadConfig', () => {
+  const codexPostgres = {
+    API_AUTH_MODE: 'none',
+    APP_DATA_STORE: 'postgres',
+    DATABASE_URL: 'postgres://example/test',
+    OPENAI_CODEX_AUTH_STORAGE: 'postgres',
+    INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID: 'active',
+    INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS: JSON.stringify({ active: Buffer.alloc(32, 7).toString('base64') }),
+  };
+
+  it('validates every explicit OpenAI Codex auth storage mode', () => {
+    expect(() =>
+      loadConfig({ API_AUTH_MODE: 'none', OPENAI_CODEX_AUTH_STORAGE: 'file', OPENAI_CODEX_AUTH_BASE64: 'seed' }),
+    ).toThrow('file rejects');
+    expect(() => loadConfig({ API_AUTH_MODE: 'none', OPENAI_CODEX_AUTH_STORAGE: 'legacy-base64' })).toThrow(
+      'requires base64',
+    );
+    expect(() =>
+      loadConfig({
+        API_AUTH_MODE: 'none',
+        OPENAI_CODEX_AUTH_STORAGE: 'legacy-base64',
+        OPENAI_CODEX_AUTH_BASE64: 'seed',
+        OPENAI_CODEX_AUTH_FILE: '/secret/auth.json',
+      }),
+    ).toThrow('rejects an auth file');
+    expect(() => loadConfig({ ...codexPostgres, OPENAI_CODEX_AUTH_FILE: '/secret/auth.json' })).toThrow(
+      'rejects an auth file',
+    );
+    expect(() => loadConfig({ ...codexPostgres, APP_DATA_STORE: 'memory' })).toThrow('requires PostgreSQL');
+    expect(() => loadConfig({ ...codexPostgres, DATABASE_URL: '' })).toThrow('requires PostgreSQL');
+    expect(() => loadConfig({ ...codexPostgres, INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID: '' })).toThrow(
+      'requires INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID and INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS',
+    );
+    expect(() => loadConfig({ ...codexPostgres, INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS: '' })).toThrow(
+      'openssl rand -base64 32',
+    );
+    const defaultFile = loadConfig({ API_AUTH_MODE: 'none', OPENAI_CODEX_AUTH_STORAGE: 'file' });
+    expect(defaultFile.openaiCodexAuth).toEqual({ mode: 'file' });
+    expect(defaultFile.runnerModelChoices.some((model) => model.startsWith('openai-codex/'))).toBe(true);
+    expect(loadConfig(codexPostgres).openaiCodexAuth).toMatchObject({ mode: 'postgres' });
+  });
+
+  it('validates the PostgreSQL credential keyring during config loading without leaking values', () => {
+    const secret = 'DO_NOT_DISCLOSE_CONFIG_SECRET';
+    for (const env of [
+      { ...codexPostgres, INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS: `{${secret}` },
+      { ...codexPostgres, INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS: JSON.stringify({ active: secret }) },
+      { ...codexPostgres, INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID: secret },
+    ]) {
+      let message = '';
+      try {
+        loadConfig(env);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toBeTruthy();
+      expect(message).not.toContain(secret);
+    }
+  });
+
+  it('preserves unset-storage base64 behavior and warns that refresh is nondurable', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const config = loadConfig({ API_AUTH_MODE: 'none', OPENAI_CODEX_AUTH_BASE64: 'legacy-seed' });
+    expect(config.openaiCodexAuth).toEqual({ mode: 'legacy-base64', authBase64: 'legacy-seed' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('nondurable'));
+    warn.mockRestore();
+  });
+
+  it('preserves file precedence when storage is unset and both legacy sources are configured', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const config = loadConfig({
+      API_AUTH_MODE: 'none',
+      OPENAI_CODEX_AUTH_FILE: '/tmp/pi-auth.json',
+      OPENAI_CODEX_AUTH_BASE64: 'legacy-seed',
+    });
+    expect(config.openaiCodexAuth).toEqual({ mode: 'file', authFile: '/tmp/pi-auth.json' });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('derives Codex model choices from PostgreSQL auth after the bootstrap seed is removed', () => {
+    const config = loadConfig(codexPostgres);
+    expect(config.runnerModelChoices.some((model) => model.startsWith('openai-codex/'))).toBe(true);
+  });
   it('requires API_AUTH_MODE to be explicit', () => {
     expect(() => loadConfig({})).toThrow('API_AUTH_MODE is required');
     expect(() => loadConfig({ RUN_MODE: 'api' })).toThrow('API_AUTH_MODE is required');
@@ -91,6 +174,7 @@ describe('loadConfig', () => {
       runnerStateStore: 'postgres',
       runnerModelChoices: [],
       titleGenerationEnabled: true,
+      openaiCodexAuth: { mode: 'default' },
       webSearchProvider: 'auto',
       webSearchMaxResults: 10,
       webSearchContentMaxChars: 5000,
@@ -353,8 +437,7 @@ describe('loadConfig', () => {
       runnerReasoningLevelDefault: 'max',
       titleGenerationEnabled: false,
       titleGenerationModel: 'opencode/big-pickle',
-      openaiCodexAuthFile: '/tmp/pi-auth.json',
-      openaiCodexAuthBase64: 'eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19',
+      openaiCodexAuth: { mode: 'file', authFile: '/tmp/pi-auth.json' },
       runnerStateStore: 'memory',
       webSearchProvider: 'brave',
       webSearchBraveApiKey: 'brave-key',
@@ -527,7 +610,7 @@ describe('loadConfig', () => {
     ).toBe('deputies-sandbox');
   });
 
-  it.each(['docker', 'k8s-agent-sandbox'])(
+  it.each(['docker', 'daytona', 'tensorlake', 'superserve', 'k8s-agent-sandbox'])(
     'requires an app secret encryption key for postgres-backed %s sandboxes',
     (provider) => {
       expect(() =>

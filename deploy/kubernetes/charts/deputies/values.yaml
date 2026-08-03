@@ -136,7 +136,12 @@ secrets:
   anthropicApiKey: ''
   openaiApiKey: ''
   opencodeApiKey: ''
+  # In postgres mode this is an absent-row bootstrap seed and may be removed after cutover.
   openaiCodexAuthBase64: ''
+  # Required when this chart creates the Secret. The chart does not generate encryption keys.
+  integrationCredentialActiveKeyId: ''
+  # JSON map from stable key IDs to base64-encoded random 32-byte AES keys.
+  integrationCredentialEncryptionKeys: ''
   artifactStorageS3AccessKeyId: seaweed
   artifactStorageS3SecretAccessKey: seaweed
   githubOAuthClientId: ''

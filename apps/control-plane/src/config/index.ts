@@ -1,4 +1,5 @@
 import { getModels, type KnownProvider } from '@earendil-works/pi-ai/compat';
+import { IntegrationCredentialCipher, parseIntegrationCredentialKeyring } from '../integration-credentials/cipher.js';
 import { sanitizeMcpNamePart } from '../mcp/client.js';
 import type { McpServerConfig } from '../mcp/types.js';
 import { AMAZON_BEDROCK_INFERENCE_PROFILE_MODEL_IDS, AMAZON_BEDROCK_PROVIDER } from '../runner/bedrock.js';
@@ -24,6 +25,12 @@ export type AuthCookieSameSite = 'lax' | 'none';
 export type ArtifactStorageKind = 'disabled' | 'filesystem' | 's3';
 export type AuthGithubDefaultRole = 'viewer' | 'member' | 'admin';
 export type WebSearchProviderKind = 'disabled' | 'auto' | 'brave' | 'duckduckgo';
+export type OpenAICodexAuthStorage = 'file' | 'postgres' | 'legacy-base64';
+export type OpenAICodexAuthConfig =
+  | { mode: 'default' }
+  | { mode: 'file'; authFile?: string }
+  | { mode: 'legacy-base64'; authBase64: string }
+  | { mode: 'postgres'; seedBase64?: string; cipher: IntegrationCredentialCipher };
 
 const MODEL_PROVIDER_AUTH: Array<{ provider: KnownProvider; env: string[] }> = [
   {
@@ -112,8 +119,7 @@ export type AppConfig = {
   runnerReasoningLevelDefault?: ReasoningLevel;
   titleGenerationEnabled: boolean;
   titleGenerationModel?: string;
-  openaiCodexAuthFile?: string;
-  openaiCodexAuthBase64?: string;
+  openaiCodexAuth: OpenAICodexAuthConfig;
   webSearchProvider: WebSearchProviderKind;
   webSearchBraveApiKey?: string;
   webSearchMaxResults: number;
@@ -193,6 +199,8 @@ export type AppConfig = {
 
 export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   const runMode = parseEnum(env.RUN_MODE, ['combined', 'all', 'api', 'worker'], 'combined');
+  const appDataStore = parseEnum(env.APP_DATA_STORE, ['memory', 'postgres'], 'memory');
+  const databaseUrl = env.DATABASE_URL;
   const config: AppConfig = {
     port: parsePort(env.PORT),
     maxJsonBodyBytes: parsePositiveInteger(env.MAX_JSON_BODY_BYTES, 1_048_576, 'MAX_JSON_BODY_BYTES'),
@@ -260,7 +268,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     agentSandboxOrchestratorMode: parseEnum(env.AGENT_SANDBOX_ORCHESTRATOR_MODE, ['in-process', 'http'], 'in-process'),
     agentSandboxImage: env.AGENT_SANDBOX_IMAGE ?? 'ghcr.io/sidpalas/deputies-docker-sandbox:sha-ac8a459',
     agentSandboxStorageSize: env.AGENT_SANDBOX_STORAGE_SIZE ?? '1Gi',
-    appDataStore: parseEnum(env.APP_DATA_STORE, ['memory', 'postgres'], 'memory'),
+    appDataStore,
     apiAuthMode: runModeStartsApi(runMode)
       ? parseRequiredEnum(env.API_AUTH_MODE, ['none', 'bearer', 'session'], 'API_AUTH_MODE')
       : parseEnum(env.API_AUTH_MODE, ['none', 'bearer', 'session'], 'none'),
@@ -277,6 +285,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     authGithubDefaultRole: parseEnum(env.AUTH_GITHUB_DEFAULT_ROLE, ['viewer', 'member', 'admin'], 'member'),
     unsafeAuthGithubAllowAll: parseBoolean(env.UNSAFE_AUTH_GITHUB_ALLOW_ALL, false, 'UNSAFE_AUTH_GITHUB_ALLOW_ALL'),
     runnerStateStore: parseEnum(env.RUNNER_STATE_STORE, ['postgres', 'memory'], 'postgres'),
+    openaiCodexAuth: parseOpenAICodexAuthConfig(env, appDataStore, databaseUrl),
     runnerModelChoices: parseStringList(env.RUNNER_MODEL_CHOICES),
     titleGenerationEnabled: parseBoolean(env.TITLE_GENERATION_ENABLED, true, 'TITLE_GENERATION_ENABLED'),
     webSearchProvider: parseEnum(env.WEB_SEARCH_PROVIDER, ['disabled', 'auto', 'brave', 'duckduckgo'], 'auto'),
@@ -372,7 +381,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.GITHUB_OAUTH_CLIENT_ID) config.githubOAuthClientId = env.GITHUB_OAUTH_CLIENT_ID;
   if (env.GITHUB_OAUTH_CLIENT_SECRET) config.githubOAuthClientSecret = env.GITHUB_OAUTH_CLIENT_SECRET;
   if (env.GITHUB_OAUTH_CALLBACK_URL) config.githubOAuthCallbackUrl = env.GITHUB_OAUTH_CALLBACK_URL;
-  if (env.DATABASE_URL) config.databaseUrl = env.DATABASE_URL;
+  if (databaseUrl) config.databaseUrl = databaseUrl;
   if (env.RUNNER_MODEL_DEFAULT) config.runnerModelDefault = env.RUNNER_MODEL_DEFAULT;
   if (env.RUNNER_REASONING_LEVEL_DEFAULT) {
     config.runnerReasoningLevelDefault = parseEnum(
@@ -382,8 +391,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     );
   }
   if (env.TITLE_GENERATION_MODEL) config.titleGenerationModel = env.TITLE_GENERATION_MODEL;
-  if (env.OPENAI_CODEX_AUTH_FILE) config.openaiCodexAuthFile = env.OPENAI_CODEX_AUTH_FILE;
-  if (env.OPENAI_CODEX_AUTH_BASE64) config.openaiCodexAuthBase64 = env.OPENAI_CODEX_AUTH_BASE64;
   const webSearchBraveApiKey = env.WEB_SEARCH_BRAVE_API_KEY ?? env.BRAVE_API_KEY;
   if (webSearchBraveApiKey) config.webSearchBraveApiKey = webSearchBraveApiKey;
   if (env.FAKE_RUNNER_ARTIFACT_JSON) {
@@ -459,7 +466,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (env.ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY)
     config.artifactStorageS3SecretAccessKey = env.ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY;
 
-  config.runnerModelChoices = deriveRunnerModelChoices(env, config.runnerModelChoices, config.runnerModelDefault);
+  config.runnerModelChoices = deriveRunnerModelChoices(
+    env,
+    config.openaiCodexAuth,
+    config.runnerModelChoices,
+    config.runnerModelDefault,
+  );
 
   if (runModeStartsApi(config.runMode)) {
     validateProductAuthConfig(config);
@@ -518,6 +530,9 @@ function validateLambdaMicrovmConfig(config: AppConfig): void {
 function validateSandboxSecretConfig(config: AppConfig, env: NodeJS.ProcessEnv): void {
   const sandboxSecretsRequired =
     config.sandboxProvider === 'docker' ||
+    config.sandboxProvider === 'daytona' ||
+    config.sandboxProvider === 'tensorlake' ||
+    config.sandboxProvider === 'superserve' ||
     config.sandboxProvider === 'k8s-agent-sandbox' ||
     config.sandboxProvider === 'lambda-microvm';
   if (config.appDataStore === 'postgres' && sandboxSecretsRequired && !config.sandboxSecretEncryptionKey) {
@@ -528,6 +543,51 @@ function validateSandboxSecretConfig(config: AppConfig, env: NodeJS.ProcessEnv):
   if (env.NODE_ENV === 'production' && config.sandboxSecretEncryptionKey === sandboxSecretEncryptionKeyPlaceholder) {
     throw new Error('SANDBOX_SECRET_ENCRYPTION_KEY must not use the .env.example placeholder in production');
   }
+}
+
+function parseOpenAICodexAuthConfig(
+  env: NodeJS.ProcessEnv,
+  appDataStore: AppStoreKind,
+  databaseUrl: string | undefined,
+): OpenAICodexAuthConfig {
+  const mode = env.OPENAI_CODEX_AUTH_STORAGE
+    ? parseRequiredEnum(
+        env.OPENAI_CODEX_AUTH_STORAGE,
+        ['file', 'postgres', 'legacy-base64'],
+        'OPENAI_CODEX_AUTH_STORAGE',
+      )
+    : undefined;
+  if (mode === 'file' && env.OPENAI_CODEX_AUTH_BASE64)
+    throw new Error('OPENAI_CODEX_AUTH_STORAGE=file rejects OPENAI_CODEX_AUTH_BASE64');
+  if (mode === 'legacy-base64' && (!env.OPENAI_CODEX_AUTH_BASE64 || env.OPENAI_CODEX_AUTH_FILE))
+    throw new Error('OPENAI_CODEX_AUTH_STORAGE=legacy-base64 requires base64 and rejects an auth file');
+  if (mode === 'postgres') {
+    if (appDataStore !== 'postgres' || !databaseUrl)
+      throw new Error('OPENAI_CODEX_AUTH_STORAGE=postgres requires PostgreSQL');
+    if (env.OPENAI_CODEX_AUTH_FILE) throw new Error('OPENAI_CODEX_AUTH_STORAGE=postgres rejects an auth file');
+    if (!env.INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID || !env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS)
+      throw new Error(
+        'OPENAI_CODEX_AUTH_STORAGE=postgres requires INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID and INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS. Generate a 32-byte key with: openssl rand -base64 32',
+      );
+    return {
+      mode,
+      ...(env.OPENAI_CODEX_AUTH_BASE64 ? { seedBase64: env.OPENAI_CODEX_AUTH_BASE64 } : {}),
+      cipher: parseIntegrationCredentialKeyring(
+        env.INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID,
+        env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS,
+      ),
+    };
+  }
+  if (!mode && env.OPENAI_CODEX_AUTH_FILE) return { mode: 'file', authFile: env.OPENAI_CODEX_AUTH_FILE };
+  if (!mode && env.OPENAI_CODEX_AUTH_BASE64)
+    console.warn(
+      'OPENAI_CODEX_AUTH_STORAGE is unset; base64 Codex refresh is nondurable. Set postgres for durable refresh.',
+    );
+  if (mode === 'legacy-base64') console.warn('OpenAI Codex legacy-base64 auth refresh is nondurable.');
+  if (mode === 'legacy-base64' || (!mode && env.OPENAI_CODEX_AUTH_BASE64))
+    return { mode: 'legacy-base64', authBase64: env.OPENAI_CODEX_AUTH_BASE64! };
+  if (mode === 'file') return { mode, ...(env.OPENAI_CODEX_AUTH_FILE ? { authFile: env.OPENAI_CODEX_AUTH_FILE } : {}) };
+  return { mode: 'default' };
 }
 
 function validateArtifactStorageConfig(config: AppConfig): void {
@@ -892,21 +952,34 @@ function readMcpAllowedTools(value: unknown, index: number): string[] | undefine
 
 function deriveRunnerModelChoices(
   env: NodeJS.ProcessEnv,
+  openaiCodexAuth: OpenAICodexAuthConfig,
   explicitChoices: string[],
   defaultModel: string | undefined,
 ): string[] {
-  const derived = explicitChoices.length ? explicitChoices : providerDerivedRunnerModels(env);
+  const derived = explicitChoices.length ? explicitChoices : providerDerivedRunnerModels(env, openaiCodexAuth);
   return dedupeStrings(defaultModel ? [defaultModel, ...derived] : derived);
 }
 
-function providerDerivedRunnerModels(env: NodeJS.ProcessEnv): string[] {
+function providerDerivedRunnerModels(env: NodeJS.ProcessEnv, openaiCodexAuth: OpenAICodexAuthConfig): string[] {
   return MODEL_PROVIDER_AUTH.flatMap(({ provider, env: envNames }) =>
-    envNames.some((name) => env[name]) ? providerModels(provider).map((model) => `${provider}/${model}`) : [],
+    providerAuthConfigured(provider, envNames, env, openaiCodexAuth)
+      ? providerModels(provider).map((model) => `${provider}/${model}`)
+      : [],
   );
 }
 
+function providerAuthConfigured(
+  provider: KnownProvider,
+  envNames: string[],
+  env: NodeJS.ProcessEnv,
+  openaiCodexAuth: OpenAICodexAuthConfig,
+): boolean {
+  if (provider !== 'openai-codex') return envNames.some((name) => Boolean(env[name]));
+  return openaiCodexAuth.mode !== 'default';
+}
+
 function providerModels(provider: KnownProvider): string[] {
-  const catalogModels = getModels(provider).map((model) => model.id);
+  const catalogModels = provider === 'radius' ? [] : getModels(provider).map((model) => model.id);
   if (provider === AMAZON_BEDROCK_PROVIDER) return [...AMAZON_BEDROCK_INFERENCE_PROFILE_MODEL_IDS, ...catalogModels];
   return catalogModels;
 }

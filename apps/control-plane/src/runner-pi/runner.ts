@@ -3,11 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
-  ModelRegistry,
+  ModelRuntime,
   SessionManager,
   type AgentSession,
   type AgentSessionEvent,
@@ -17,14 +16,19 @@ import {
   type Skill,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
-import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
+import {
+  getSupportedThinkingLevels,
+  InMemoryCredentialStore,
+  type Credential,
+  type CredentialStore,
+} from '@earendil-works/pi-ai';
 import type { ArtifactService } from '../artifacts/service.js';
 import { readAppliedAgentProfileSnapshot } from '../agent-profiles/types.js';
 import type { EnvironmentService } from '../environments/service.js';
 import { validateEnvironmentContext } from '../environments/tool.js';
 import type { NormalizedEvent } from '../events/types.js';
 import type { ExternalResourceService } from '../external-resources/service.js';
-import { completeSimple, getModels, type Api, type Context, type Model } from '@earendil-works/pi-ai/compat';
+import { getModels, type Api, type Context, type Model } from '@earendil-works/pi-ai/compat';
 import type { RepositoryAccessProvider } from '../repositories/setup.js';
 import {
   checkoutRepositoryPreparation,
@@ -103,6 +107,7 @@ export type PiRunnerOptions = {
   reasoningLevelDefault?: ReasoningLevel;
   authFile?: string;
   authBase64?: string;
+  credentials?: CredentialStore;
   sessionStore?: PiSessionStore;
   repositoryAccess?: {
     github?: RepositoryAccessProvider;
@@ -125,6 +130,11 @@ export type PiRunnerOptions = {
   listAgentProfiles?: () => Promise<PiSubagentProfile[]>;
   listDeputyProfiles?: () => Promise<PiSubagentProfile[]>;
 };
+
+type PiRuntimeAuth =
+  | { kind: 'credentials'; credentials: CredentialStore }
+  | { kind: 'file'; authPath: string }
+  | { kind: 'default' };
 
 type PiSessionLease = {
   manager: SessionManager;
@@ -157,11 +167,11 @@ type PiMcpSetup = {
 
 export class PiRunner implements Runner {
   private readonly sessions = new Map<string, SessionManager>();
-  private readonly authStorage: AuthStorage;
+  private readonly runtimeAuth: Promise<PiRuntimeAuth>;
   private readonly agentDir: string;
 
   constructor(private readonly options: PiRunnerOptions) {
-    this.authStorage = createAuthStorage(options);
+    this.runtimeAuth = Promise.resolve(resolveRuntimeAuth(options));
     this.agentDir = options.authFile ? path.dirname(options.authFile) : getAgentDir();
   }
 
@@ -175,13 +185,11 @@ export class PiRunner implements Runner {
     const modelName = input.model ?? this.options.model;
     const unavailableReason = this.options.modelUnavailableReason?.(modelName);
     if (unavailableReason) throw new Error(unavailableReason);
-    const modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.agentDir, 'models.json'));
-    registerAmazonBedrockInferenceProfiles(modelRegistry, modelName);
+    const modelRuntime = await this.createModelRuntime();
+    registerAmazonBedrockInferenceProfiles(modelRuntime, modelName);
     const modelSelection = parseModelSelection(modelName);
-    const model = modelRegistry.find(modelSelection.provider, modelSelection.modelId);
+    const model = modelRuntime.getModel(modelSelection.provider, modelSelection.modelId);
     if (!model) throw new Error(`Pi model is not available: ${modelName}`);
-    const auth = await modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok) throw new Error(auth.error);
     // Reasoning and visible text share the output-token budget. A short budget
     // can therefore produce only thinking even though the requested title is
     // tiny. Keep ordinary models cheap, but let any reasoning-capable model
@@ -193,12 +201,9 @@ export class PiRunner implements Runner {
         'Create a brief, specific title for this software engineering session. Prefer 3-7 words and omit filler or unnecessary detail. Return only the title, with no quotes, markup, or explanation. Never exceed 64 characters.',
       messages: [{ role: 'user', content: input.prompt, timestamp: Date.now() }],
     };
-    const response = await completeSimple(model, context, {
+    const response = await modelRuntime.completeSimple(model, context, {
       maxTokens: titleTokenBudget,
       ...(titleReasoning ? { reasoning: titleReasoning } : {}),
-      ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
-      ...(auth.headers ? { headers: auth.headers } : {}),
-      ...(auth.env ? { env: auth.env } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
     });
     if (response.stopReason === 'error' || response.stopReason === 'aborted') {
@@ -245,13 +250,13 @@ export class PiRunner implements Runner {
       this.options.listAgentProfiles?.(),
       this.options.listDeputyProfiles?.(),
     ]);
-    const { lease, modelRegistry, modelSelection, model, resourceLoader } = await (async () => {
+    const { lease, modelRuntime, modelSelection, model, resourceLoader } = await (async () => {
       try {
         const lease = await this.getSessionLease(input.sessionId, cwd);
-        const modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.agentDir, 'models.json'));
-        registerAmazonBedrockInferenceProfiles(modelRegistry, modelName);
+        const modelRuntime = await this.createModelRuntime();
+        registerAmazonBedrockInferenceProfiles(modelRuntime, modelName);
         const modelSelection = parseModelSelection(modelName);
-        const model = modelRegistry.find(modelSelection.provider, modelSelection.modelId);
+        const model = modelRuntime.getModel(modelSelection.provider, modelSelection.modelId);
         if (!model) throw new Error(`Pi model is not available: ${modelName}`);
 
         const resourceLoader = createPiResourceLoader(
@@ -261,7 +266,7 @@ export class PiRunner implements Runner {
           preparedSkills.skills,
         );
         await resourceLoader.reload();
-        return { lease, modelRegistry, modelSelection, model, resourceLoader };
+        return { lease, modelRuntime, modelSelection, model, resourceLoader };
       } catch (error) {
         if (mcpSetup) {
           await closeMcpConnections(mcpSetup.connections);
@@ -292,9 +297,8 @@ export class PiRunner implements Runner {
       runPiSubagent({
         input,
         options: this.options,
-        authStorage: this.authStorage,
         agentDir: this.agentDir,
-        modelRegistry,
+        modelRuntime,
         modelName,
         ...(input.reasoningLevel ? { parentReasoningLevel: input.reasoningLevel } : {}),
         modelSelection,
@@ -414,8 +418,7 @@ export class PiRunner implements Runner {
       const created = await createAgentSession({
         cwd,
         agentDir: this.agentDir,
-        authStorage: this.authStorage,
-        modelRegistry,
+        modelRuntime,
         model,
         ...(thinkingLevel ? { thinkingLevel } : {}),
         sessionManager: lease.manager,
@@ -522,6 +525,16 @@ export class PiRunner implements Runner {
       if (mcpSetup) await closeMcpConnections(mcpSetup.connections);
       await this.persistAndCleanup(input, lease, completed);
     }
+  }
+
+  private createModelRuntime(): Promise<ModelRuntime> {
+    return this.runtimeAuth.then((auth) =>
+      ModelRuntime.create({
+        ...(auth.kind === 'credentials' ? { credentials: auth.credentials } : {}),
+        ...(auth.kind === 'file' ? { authPath: auth.authPath } : {}),
+        modelsPath: path.join(this.agentDir, 'models.json'),
+      }),
+    );
   }
 
   private async getSessionLease(sessionId: string, cwd: string): Promise<PiSessionLease> {
@@ -703,9 +716,8 @@ function createPiToolSet(
 type RunPiSubagentInput = {
   input: RunnerInput;
   options: PiRunnerOptions;
-  authStorage: AuthStorage;
   agentDir: string;
-  modelRegistry: ModelRegistry;
+  modelRuntime: ModelRuntime;
   modelName: string;
   parentReasoningLevel?: ReasoningLevel;
   modelSelection: PiModelSelection;
@@ -735,9 +747,9 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
   const modelName = profile.model ?? params.modelName;
   const unavailableReason = params.options.modelUnavailableReason?.(modelName);
   if (unavailableReason) throw new Error(unavailableReason);
-  registerAmazonBedrockInferenceProfiles(params.modelRegistry, modelName);
+  registerAmazonBedrockInferenceProfiles(params.modelRuntime, modelName);
   const modelSelection = parseModelSelection(modelName);
-  const model = params.modelRegistry.find(modelSelection.provider, modelSelection.modelId);
+  const model = params.modelRuntime.getModel(modelSelection.provider, modelSelection.modelId);
   if (!model) throw new Error(`Pi model is not available: ${modelName}`);
   const inheritedSkills = params.skills;
   const inheritedTraces = params.skillTraces;
@@ -788,8 +800,7 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
   const created = await createAgentSession({
     cwd,
     agentDir: params.agentDir,
-    authStorage: params.authStorage,
-    modelRegistry: params.modelRegistry,
+    modelRuntime: params.modelRuntime,
     model,
     ...(thinkingLevel ? { thinkingLevel } : {}),
     sessionManager,
@@ -870,10 +881,10 @@ async function runPiSubagent(params: RunPiSubagentInput): Promise<PiSubagentRunR
   }
 }
 
-function registerAmazonBedrockInferenceProfiles(modelRegistry: ModelRegistry, modelName: string): void {
+function registerAmazonBedrockInferenceProfiles(modelRuntime: ModelRuntime, modelName: string): void {
   if (!modelName.startsWith(`${AMAZON_BEDROCK_PROVIDER}/`)) return;
-  const models = modelRegistry
-    .getAll()
+  const models = modelRuntime
+    .getModels()
     .filter((model) => model.provider === AMAZON_BEDROCK_PROVIDER)
     .map((model) => ({
       id: model.id,
@@ -893,7 +904,7 @@ function registerAmazonBedrockInferenceProfiles(modelRegistry: ModelRegistry, mo
   for (const model of amazonBedrockInferenceProfileModels()) {
     if (!modelIds.has(model.id)) models.push(model);
   }
-  modelRegistry.registerProvider(AMAZON_BEDROCK_PROVIDER, {
+  modelRuntime.registerProvider(AMAZON_BEDROCK_PROVIDER, {
     api: BEDROCK_CONVERSE_STREAM_API,
     baseUrl: resolveBedrockRuntimeBaseUrl(),
     apiKey: BEDROCK_AUTHENTICATED_SENTINEL,
@@ -1077,15 +1088,26 @@ function safeFileName(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, '_') || 'session';
 }
 
-function createAuthStorage(options: Pick<PiRunnerOptions, 'authFile' | 'authBase64'>): AuthStorage {
-  if (options.authFile) return AuthStorage.create(options.authFile);
+function resolveRuntimeAuth(
+  options: Pick<PiRunnerOptions, 'authFile' | 'authBase64' | 'credentials'>,
+): PiRuntimeAuth | Promise<PiRuntimeAuth> {
+  const configured = [options.authFile, options.authBase64, options.credentials].filter(Boolean).length;
+  if (configured > 1) throw new Error('PiRunner accepts only one credential source');
+  if (options.credentials) return { kind: 'credentials', credentials: options.credentials };
+  if (options.authFile) return { kind: 'file', authPath: options.authFile };
   if (options.authBase64) {
-    const parsed = JSON.parse(Buffer.from(options.authBase64, 'base64').toString('utf8')) as Parameters<
-      typeof AuthStorage.inMemory
-    >[0];
-    return AuthStorage.inMemory(parsed);
+    const parsed = JSON.parse(Buffer.from(options.authBase64, 'base64').toString('utf8')) as Record<string, Credential>;
+    return createInMemoryRuntimeAuth(parsed);
   }
-  return AuthStorage.create();
+  return { kind: 'default' };
+}
+
+async function createInMemoryRuntimeAuth(parsed: Record<string, Credential>): Promise<PiRuntimeAuth> {
+  const store = new InMemoryCredentialStore();
+  for (const [providerId, credential] of Object.entries(parsed)) {
+    await store.modify(providerId, async () => credential);
+  }
+  return { kind: 'credentials', credentials: store };
 }
 
 function parseModelSelection(model: string): PiModelSelection {

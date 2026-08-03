@@ -33,6 +33,8 @@ Required local Portless app-chart values:
 
 Install with the reference platform chart:
 
+The install examples below require either chart-managed keyring values or the externally managed Secret configuration described under production secrets. The chart does not generate the durable integration credential encryption key.
+
 ```sh
 helm upgrade --install deputies deploy/kubernetes/charts/deputies --namespace deputies
 ```
@@ -78,7 +80,9 @@ helm upgrade --install deputies deploy/kubernetes/charts/deputies \
   --set secrets.name=deputies-app-secrets
 ```
 
-The referenced Secret should contain the environment-variable keys the app needs, such as `AUTH_SESSION_SECRET`, `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `DAYTONA_API_KEY`, `ANTHROPIC_API_KEY`, `OPENCODE_API_KEY`, `ARTIFACT_STORAGE_S3_ACCESS_KEY_ID`, and `ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY`.
+The referenced Secret should contain the environment-variable keys the app needs, such as `AUTH_SESSION_SECRET`, `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `DAYTONA_API_KEY`, `ANTHROPIC_API_KEY`, `OPENCODE_API_KEY`, `ARTIFACT_STORAGE_S3_ACCESS_KEY_ID`, and `ARTIFACT_STORAGE_S3_SECRET_ACCESS_KEY`. The chart always uses PostgreSQL-backed integration credentials, so the Secret must also contain `INTEGRATION_CREDENTIAL_ACTIVE_KEY_ID` and `INTEGRATION_CREDENTIAL_ENCRYPTION_KEYS`. To bootstrap Codex, include `OPENAI_CODEX_AUTH_BASE64`; it may be removed after the encrypted database credential has been verified.
+
+When the chart creates the Secret, provide the equivalent `secrets.integrationCredentialActiveKeyId`, `secrets.integrationCredentialEncryptionKeys`, and optional `secrets.openaiCodexAuthBase64` values. Generate each encryption key with `openssl rand -base64 32`. The chart deliberately does not generate this durable key: losing or replacing it would make stored credentials undecryptable. Helm fails during rendering when chart-managed keyring values are absent. For an externally managed Secret, Helm validates that `secrets.name` is set and the control plane validates the required keys at startup. Kubernetes Secret file mounts are not used as writable Codex credential storage because refreshes must remain durable and coordinated across replicas.
 
 Inline secret values are acceptable for short-lived local validation, but production users should manage secrets through their normal mechanism, such as External Secrets Operator, SOPS, Sealed Secrets, Vault, or cloud provider secret sync.
 

@@ -431,6 +431,43 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     ).resolves.toEqual([]);
   });
 
+  it('removes secrets while retaining a destroyed sandbox row', async () => {
+    const secretStore = new PostgresStore(databaseUrl, { sandboxSecretEncryptionKey: 'test-secret-key' });
+    try {
+      const session = await createServices(secretStore).sessions.create({ title: 'Sandbox secrets' });
+      const now = new Date();
+      const created = await secretStore.createSandboxWithSecrets(
+        {
+          id: '00000000-0000-4000-8000-000000000702',
+          sessionId: session.id,
+          provider: 'daytona',
+          providerSandboxId: 'sandbox-with-secrets',
+          status: 'ready',
+          workspacePath: '/workspace',
+          metadata: {},
+          createdAt: now,
+          updatedAt: now,
+        },
+        { TOKEN: 'plaintext-secret' },
+      );
+      expect((await pool.query('SELECT 1 FROM sandbox_secrets WHERE sandbox_id=$1', [created.id])).rowCount).toBe(1);
+      await expect(secretStore.updateSandbox({ ...created, status: 'destroyed', updatedAt: now })).rejects.toThrow(
+        'both destroyed status and destroyedAt',
+      );
+      await secretStore.updateSandbox({ ...created, status: 'destroyed', destroyedAt: now, updatedAt: now });
+      expect((await pool.query('SELECT 1 FROM sandbox_secrets WHERE sandbox_id=$1', [created.id])).rowCount).toBe(0);
+      expect((await pool.query('SELECT status FROM sandboxes WHERE id=$1', [created.id])).rows).toEqual([
+        { status: 'destroyed' },
+      ]);
+      await expect(secretStore.setSandboxSecrets(created.id, { TOKEN: 'reinserted' })).rejects.toThrow(
+        'does not exist or is destroyed',
+      );
+      expect((await pool.query('SELECT 1 FROM sandbox_secrets WHERE sandbox_id=$1', [created.id])).rowCount).toBe(0);
+    } finally {
+      await secretStore.close();
+    }
+  });
+
   it('lists sessions with their latest sandbox for one provider in a single batch', async () => {
     const services = createServices(store);
     const withSandboxes = await services.sessions.create({ title: 'Has sandboxes' });
@@ -438,16 +475,21 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     const withoutSandbox = await services.sessions.create({ title: 'No sandbox' });
     const now = new Date();
 
-    await store.createSandbox({
+    const destroyedSandbox = await store.createSandbox({
       id: '00000000-0000-4000-8000-000000000711',
       sessionId: withSandboxes.id,
       provider: 'fake',
       providerSandboxId: 'fake-sandbox-old',
-      status: 'destroyed',
+      status: 'ready',
       workspacePath: '/workspace',
       metadata: {},
       createdAt: new Date(now.getTime() - 2_000),
       updatedAt: new Date(now.getTime() - 2_000),
+    });
+    await store.updateSandbox({
+      ...destroyedSandbox,
+      status: 'destroyed',
+      destroyedAt: destroyedSandbox.updatedAt,
     });
     await store.createSandbox({
       id: '00000000-0000-4000-8000-000000000712',

@@ -173,6 +173,33 @@ describe('SandboxLifecycleService', () => {
     expect(provider.connect).toHaveBeenCalledWith(expect.objectContaining({ secrets: { bridgeToken: 'token-1' } }));
   });
 
+  it('removes secrets when a memory-backed sandbox is destroyed and rejects reinsertion', async () => {
+    const store = new MemoryStore();
+    const now = new Date();
+    const sandbox = await store.createSandboxWithSecrets(
+      {
+        id: '00000000-0000-4000-8000-000000000012',
+        sessionId: 'session-1',
+        provider: 'fake',
+        providerSandboxId: 'sandbox-1',
+        status: 'ready',
+        workspacePath: '/workspace',
+        metadata: {},
+        createdAt: now,
+        updatedAt: now,
+      },
+      { bridgeToken: 'token-1' },
+    );
+    await expect(store.updateSandbox({ ...sandbox, status: 'destroyed', updatedAt: now })).rejects.toThrow(
+      'both destroyed status and destroyedAt',
+    );
+    await store.updateSandbox({ ...sandbox, status: 'destroyed', destroyedAt: now, updatedAt: now });
+    await expect(store.getSandboxSecrets(sandbox.id)).resolves.toEqual({});
+    await expect(store.setSandboxSecrets(sandbox.id, { bridgeToken: 'replacement' })).rejects.toThrow(
+      'destroyed sandbox',
+    );
+  });
+
   it('destroys and recreates when sandbox secrets cannot be loaded', async () => {
     const store = new FailingGetSandboxSecretsStore(new Error('decrypt failed'));
     const consoleWarnMock = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -310,7 +337,7 @@ describe('SandboxLifecycleService', () => {
     const store = new MemoryStore();
     const events = new EventService(store);
     const now = new Date();
-    const oldRecord: SandboxRecord = {
+    const oldRecord: CreateSandboxRecord = {
       id: '00000000-0000-4000-8000-000000000002',
       sessionId: 'session-1',
       provider: 'fake',

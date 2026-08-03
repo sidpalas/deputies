@@ -51,6 +51,8 @@ import type { SandboxProvider } from './sandbox/types.js';
 import { startSessionSearchIndexer } from './search/indexer.js';
 import { MemoryStore } from './store/memory.js';
 import { PostgresStore } from './store/postgres.js';
+import { PostgresIntegrationCredentialRepository } from './integration-credentials/postgres.js';
+import { createPostgresCodexCredentialStore } from './runner-pi/postgres-credential-store.js';
 import { startTelemetry } from './telemetry/index.js';
 import { instrumentStore } from './telemetry/store.js';
 import type { WebSearchToolServices } from './web-search/tool.js';
@@ -419,11 +421,25 @@ async function createRunner(): Promise<Runner> {
 
   const model = requireRunnerModelDefault(config);
   const deputy = createDeputyToolServices();
+  let postgresCredentials;
+  if (config.openaiCodexAuth.mode === 'postgres') {
+    const repository = new PostgresIntegrationCredentialRepository(databaseUrl, config.openaiCodexAuth.cipher);
+    try {
+      postgresCredentials = await createPostgresCodexCredentialStore(repository, config.openaiCodexAuth.seedBase64);
+      resources.unshift(repository);
+    } catch (error) {
+      await repository.close().catch(() => undefined);
+      throw error;
+    }
+  }
   const piOptions: PiRunnerOptions = {
     model,
     ...(config.runnerReasoningLevelDefault ? { reasoningLevelDefault: config.runnerReasoningLevelDefault } : {}),
-    ...(config.openaiCodexAuthFile ? { authFile: config.openaiCodexAuthFile } : {}),
-    ...(config.openaiCodexAuthBase64 ? { authBase64: config.openaiCodexAuthBase64 } : {}),
+    ...(postgresCredentials ? { credentials: postgresCredentials } : {}),
+    ...(config.openaiCodexAuth.mode === 'file' && config.openaiCodexAuth.authFile
+      ? { authFile: config.openaiCodexAuth.authFile }
+      : {}),
+    ...(config.openaiCodexAuth.mode === 'legacy-base64' ? { authBase64: config.openaiCodexAuth.authBase64 } : {}),
     modelUnavailableReason: (inputModel: string | undefined) =>
       services.modelAvailability.unavailableFor(inputModel || model)?.reason,
     setupScript: repositorySetupScript,

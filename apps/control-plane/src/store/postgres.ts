@@ -9,7 +9,7 @@ import {
 } from '../scheduled-follow-ups/recurrence.js';
 import { PostgresSkillStore } from './postgres/skills.js';
 import { PostgresAgentProfileStore } from './postgres/agent-profiles.js';
-import { StoreConflictError } from './types.js';
+import { assertCanonicalSandboxLifecycle, StoreConflictError } from './types.js';
 import type {
   AppStore,
   AgentProfileRecord,
@@ -3780,7 +3780,19 @@ export class PostgresStore implements AppStore {
   }
 
   async updateSandbox(record: SandboxRecord): Promise<SandboxRecord> {
-    const result = await this.pool.query<SandboxRow>(
+    assertCanonicalSandboxLifecycle(record);
+    if (record.status === 'destroyed' && record.destroyedAt) {
+      return this.transaction(async (client) => {
+        const updated = await this.updateSandboxRow(client, record);
+        await client.query('DELETE FROM sandbox_secrets WHERE sandbox_id=$1', [record.id]);
+        return updated;
+      });
+    }
+    return this.updateSandboxRow(this.pool, record);
+  }
+
+  private async updateSandboxRow(client: Pool | PoolClient, record: SandboxRecord): Promise<SandboxRecord> {
+    const result = await client.query<SandboxRow>(
       `UPDATE sandboxes
        SET status = $2,
            workspace_path = $3,
@@ -3825,19 +3837,27 @@ export class PostgresStore implements AppStore {
     if (!Object.keys(secrets).length) return;
     const cipher = this.requireSandboxSecretCipher();
     const now = new Date();
-    for (const [name, value] of Object.entries(secrets)) {
-      const encrypted = cipher.encrypt(value);
-      await this.pool.query(
-        `INSERT INTO sandbox_secrets (sandbox_id, name, ciphertext, iv, tag, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (sandbox_id, name) DO UPDATE
-         SET ciphertext = EXCLUDED.ciphertext,
-             iv = EXCLUDED.iv,
-             tag = EXCLUDED.tag,
-             updated_at = EXCLUDED.updated_at`,
-        [sandboxId, name, encrypted.ciphertext, encrypted.iv, encrypted.tag, now, now],
+    await this.transaction(async (client) => {
+      const sandbox = await client.query<{ status: string; destroyed_at: Date | null }>(
+        'SELECT status,destroyed_at FROM sandboxes WHERE id=$1 FOR UPDATE',
+        [sandboxId],
       );
-    }
+      if (!sandbox.rows[0] || sandbox.rows[0].status === 'destroyed' || sandbox.rows[0].destroyed_at)
+        throw new Error(`Sandbox does not exist or is destroyed: ${sandboxId}`);
+      for (const [name, value] of Object.entries(secrets)) {
+        const encrypted = cipher.encrypt(value);
+        await client.query(
+          `INSERT INTO sandbox_secrets (sandbox_id, name, ciphertext, iv, tag, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (sandbox_id, name) DO UPDATE
+           SET ciphertext = EXCLUDED.ciphertext,
+               iv = EXCLUDED.iv,
+               tag = EXCLUDED.tag,
+               updated_at = EXCLUDED.updated_at`,
+          [sandboxId, name, encrypted.ciphertext, encrypted.iv, encrypted.tag, now, now],
+        );
+      }
+    });
   }
 
   private requireSandboxSecretCipher(): SecretCipher {
