@@ -5,7 +5,7 @@
 
 ### Bug Fixes
 
-* use  for web container image ([5d3bb7c](https://github.com/sidpalas/deputies/commit/5d3bb7c14a857588fab1bd18b4823ec4346be360))
+* use $BUILDPLATFORM for web container image ([5d3bb7c](https://github.com/sidpalas/deputies/commit/5d3bb7c14a857588fab1bd18b4823ec4346be360))
 
 ## [0.27.0](https://github.com/sidpalas/deputies/compare/v0.26.0...v0.27.0) (2026-08-03)
 
