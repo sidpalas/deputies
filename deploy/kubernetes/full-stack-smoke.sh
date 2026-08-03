@@ -95,6 +95,7 @@ wait_for_pod_selector app.kubernetes.io/component=postgres 180
 wait_for_pod_selector app.kubernetes.io/component=seaweedfs 180
 
 SMOKE_VALUES="$(mktemp)"
+INTEGRATION_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 cat >"$SMOKE_VALUES" <<YAML
 controlPlane:
   image:
@@ -118,6 +119,8 @@ config:
     FAKE_RUNNER_ARTIFACT_JSON: '{"type":"file","title":"Smoke Artifact","content":"hello artifact storage","contentType":"text/plain","fileName":"smoke-artifact.txt"}'
 secrets:
   sandboxSecretEncryptionKey: "deputies-smoke-sandbox-secret"
+  integrationCredentialActiveKeyId: "smoke-1"
+  integrationCredentialEncryptionKeys: '{"smoke-1":"$INTEGRATION_CREDENTIAL_ENCRYPTION_KEY"}'
   anthropicApiKey: ""
   openaiApiKey: ""
   daytonaApiKey: ""
