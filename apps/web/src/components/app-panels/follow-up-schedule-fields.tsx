@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ScheduledFollowUpPreview, ScheduledFollowUpSchedule } from '../../api.js';
+import { Select } from '../ui/select.js';
 import { civilInstant, formatInZone, inclusiveEndOfDay, scheduleKey } from './follow-up-schedule.js';
 
 export type RecurrencePattern = 'hourly' | 'daily' | 'weekly' | 'weekdays';
@@ -93,10 +94,10 @@ export function FollowUpScheduleFields(props: {
       <div className="flex flex-wrap gap-2">
         <label className="text-xs">
           Schedule{' '}
-          <select className={inputClass} value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+          <Select className={inputClass} value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
             <option value="once">Once</option>
             <option value="recurring">Recurring</option>
-          </select>
+          </Select>
         </label>
         <label className="text-xs">
           Date and time{' '}
@@ -122,7 +123,7 @@ export function FollowUpScheduleFields(props: {
           <>
             <label className="text-xs">
               Repeat{' '}
-              <select
+              <Select
                 className={inputClass}
                 value={pattern}
                 onChange={(e) => setPattern(e.target.value as RecurrencePattern)}
@@ -131,7 +132,7 @@ export function FollowUpScheduleFields(props: {
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
                 <option value="weekdays">Weekdays</option>
-              </select>
+              </Select>
             </label>
             <label className="text-xs">
               End date{' '}

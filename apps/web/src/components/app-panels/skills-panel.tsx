@@ -4,6 +4,7 @@ import { createSkill, listSkillRevisions, updateSkill, type Skill } from '../../
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
 import { Input } from '../ui/input.js';
+import { Select } from '../ui/select.js';
 import { Textarea } from '../ui/textarea.js';
 import { RevisionSelector, useRevisionViewer } from './revision-selector.js';
 import { slugNameValidationError, UnsavedIndicator } from './shared.js';
@@ -213,7 +214,7 @@ export function SkillsPanel(props: {
                     htmlFor="skill-scope"
                     hint="Personal skills are manually invoked and visible only to you."
                   >
-                    <select
+                    <Select
                       id="skill-scope"
                       className="h-10 rounded-md border border-input bg-background px-3 text-sm"
                       value={form.scope}
@@ -227,7 +228,7 @@ export function SkillsPanel(props: {
                       <option value="tenant" disabled={props.canCreateTenantSkills === false}>
                         Tenant
                       </option>
-                    </select>
+                    </Select>
                   </Field>
                 ) : (
                   <p className="text-sm text-muted-foreground">

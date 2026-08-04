@@ -3,6 +3,7 @@ import { PanelLeftOpen } from 'lucide-react';
 import { ApiError, listUsers, updateUserRole, type AuthUser } from '../../api.js';
 import { Button } from '../ui/button.js';
 import { Card } from '../ui/card.js';
+import { Select } from '../ui/select.js';
 
 export function InstanceAccessPanel(props: {
   token: string;
@@ -92,7 +93,7 @@ export function InstanceAccessPanel(props: {
                 <label className="sr-only" htmlFor={`role-${user.id}`}>
                   Role for {user.username}
                 </label>
-                <select
+                <Select
                   id={`role-${user.id}`}
                   className="rounded-md border border-input bg-background px-3 py-2 text-sm"
                   value={user.role}
@@ -102,7 +103,7 @@ export function InstanceAccessPanel(props: {
                   <option value="viewer">Viewer</option>
                   <option value="member">Member</option>
                   <option value="admin">Admin</option>
-                </select>
+                </Select>
               </div>
             ))
           )}
