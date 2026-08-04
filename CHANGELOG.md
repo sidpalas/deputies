@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.2](https://github.com/sidpalas/deputies/compare/v0.27.1...v0.27.2) (2026-08-04)
+
+
+### Bug Fixes
+
+* inset native select chevrons ([60c7e18](https://github.com/sidpalas/deputies/commit/60c7e186187839a52d56c23d57cf9e22fe9cd5b4))
+
 ## [0.27.1](https://github.com/sidpalas/deputies/compare/v0.27.0...v0.27.1) (2026-08-03)
 
 
