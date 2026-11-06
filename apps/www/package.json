@@ -11,10 +11,11 @@
     "preview": "astro preview --host 0.0.0.0"
   },
   "devDependencies": {
-    "@astrojs/mdx": "^5.0.6",
+    "@astrojs/markdown-remark": "^7.3.5",
+    "@astrojs/mdx": "^8.1.2",
     "@astrojs/rss": "^4.0.19",
     "@playwright/test": "^1.64.1",
-    "astro": "^6.4.8",
+    "astro": "^7.4.5",
     "sharp": "^0.34.5"
   }
 }
