@@ -169,6 +169,8 @@ This starts two supervised services and prints the `Deputies` portal URL:
 
 Restart a service with `amp orb service restart web` or `amp orb service restart api` after changing web code or control-plane code; neither service watches files. Read logs with `amp orb service logs <name>`.
 
+Stop the `web` service before running `mise run //apps/web:e2e`. Outside CI, Playwright reuses any server already listening on port `5173`, so the tests would run against the session-auth preview instead of their own dev server and fail with `Missing or invalid session`.
+
 ## Health Checks
 
 ```sh
