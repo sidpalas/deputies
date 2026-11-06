@@ -804,11 +804,13 @@ GET /setup/status
 
 Setup status checks auth, Slack, GitHub webhooks, runner, sandbox provider, GitHub App runtime access, model providers, artifact storage, Postgres, and migrations. Use it after deployment and after secret changes.
 
-Set this only if you intentionally want to hide the setup checklist UI:
+Set this on the API (or combined API/worker) process to skip automatically opening the setup guide at startup:
 
 ```sh
 HIDE_SETUP_PAGE=true
 ```
+
+The web UI reads this setting from `/health`. It does not disable the setup APIs or configure missing providers.
 
 ## Secrets
 

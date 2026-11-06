@@ -13,6 +13,7 @@ Deployment target docs:
 - `kubernetes/`: Helm charts for Kubernetes deployments.
 - `aws/`: Terraform reference deployment for ECS Fargate, RDS, S3, and Lambda MicroVM sandboxes.
 - `railway/`: Railway template notes and post-deploy variable setup.
+- [`cycle/`](cycle/README.md): disposable three-container Cycle experiment, private API/Postgres, DNS delegation, TLS, and known validation limits.
 
 Contributor local support services:
 
