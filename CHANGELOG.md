@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.28.0](https://github.com/sidpalas/deputies/compare/v0.27.1...v0.28.0) (2026-11-06)
+
+
+### Features
+
+* add Cycle agent access skill ([7aef06c](https://github.com/sidpalas/deputies/commit/7aef06cbd1d626d7a8117d347ee1d48fbb7d474b))
+* run the Deputies preview as Amp orb services ([9801526](https://github.com/sidpalas/deputies/commit/9801526d5b223b59fe25818b5e36a44553a37d28))
+
+
+### Bug Fixes
+
+* inset native select chevrons ([60c7e18](https://github.com/sidpalas/deputies/commit/60c7e186187839a52d56c23d57cf9e22fe9cd5b4))
+* install Playwright browsers for the version apps/web uses ([6252fc7](https://github.com/sidpalas/deputies/commit/6252fc746cf2cbe1ae89bf206f8eb350fee448e4))
+* restore www Markdown tables with Astro 7 ([411ec54](https://github.com/sidpalas/deputies/commit/411ec549152b583f1732e15af01fd6754ed46659))
+* run web e2e in the Playwright 1.64.1 container ([372b274](https://github.com/sidpalas/deputies/commit/372b2745073b5694316eecd3b7bc6fe6d14715d2))
+
+
+### Chores
+
+* **deps:** update dependencies within current majors ([b8dabfa](https://github.com/sidpalas/deputies/commit/b8dabfa62af6608f6c89e674db8bdaee2e59a8fa))
+
+
+### Documentation
+
+* document the Cycle deployment experiment ([d0db8c8](https://github.com/sidpalas/deputies/commit/d0db8c83cfd248a053a84aa9e5a2f6a8b8460dd3))
+* note that web e2e reuses the orb preview port ([02c375f](https://github.com/sidpalas/deputies/commit/02c375f79b8605da8c62d6eb3000d197060d5dfe))
+
 ## [0.27.1](https://github.com/sidpalas/deputies/compare/v0.27.0...v0.27.1) (2026-08-03)
 
 
