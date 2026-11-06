@@ -1,0 +1,10 @@
+{
+  "cycle": {
+    "url": "${CYCLE_MCP_URL}",
+    "headers": {
+      "Authorization": "Bearer ${CYCLE_API_KEY}",
+      "X-Hub-Id": "${CYCLE_HUB_ID}"
+    },
+    "includeTools": ["*"]
+  }
+}
