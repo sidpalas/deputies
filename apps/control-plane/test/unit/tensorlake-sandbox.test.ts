@@ -301,11 +301,12 @@ function createMockTensorlakeSandbox(input: { ingressEndpoint?: string } = {}): 
     startedProcesses,
     async info() {
       const info = {
+        autoResume: true,
         sandboxId: 'sandbox-1',
         namespace: 'default',
         status: SandboxStatus.RUNNING,
         image: 'deputies-daytona-sandbox-ubuntu24-node24',
-        resources: { cpus: 2, memoryMb: 4096, ephemeralDiskMb: 20480 },
+        resources: { cpus: 2, memoryMb: 4096, diskMb: 20480 },
         name: 'deputies-session-1',
         exposedPorts,
       };

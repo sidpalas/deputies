@@ -231,7 +231,7 @@ function bindStoreMethod<TStore extends InstrumentableStore>(
   method: StoreMethod,
   options: { kind: StoreKind },
 ): void {
-  const original = store[method] as unknown;
+  const original: unknown = Reflect.get(store, method);
   if (typeof original !== 'function') return;
   const bound = original.bind(store) as StoreFunction;
   defineMethod(
@@ -246,7 +246,7 @@ function bindExtraMethod<TStore extends InstrumentableStore>(
   store: TStore,
   method: keyof AdvisoryLockStore,
 ): void {
-  const original = store[method] as unknown;
+  const original: unknown = Reflect.get(store, method);
   if (typeof original === 'function') defineMethod(wrapped, method, original.bind(store) as StoreFunction);
 }
 

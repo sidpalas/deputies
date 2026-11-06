@@ -25,34 +25,34 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@aws-sdk/client-lambda-microvms": "^3.1075.0",
-    "@aws-sdk/client-s3": "^3.1045.0",
+    "@aws-sdk/client-lambda-microvms": "^3.1161.0",
+    "@aws-sdk/client-s3": "^3.1161.0",
     "@daytona/sdk": "^0.185.0",
     "@deputies/browser-milestones": "workspace:*",
     "@earendil-works/pi-ai": "0.83.0",
     "@earendil-works/pi-coding-agent": "0.83.0",
-    "@hono/node-server": "^2.0.1",
+    "@hono/node-server": "^2.1.6",
     "@js-temporal/polyfill": "0.5.1",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/exporter-metrics-otlp-proto": "^0.217.0",
-    "@opentelemetry/exporter-trace-otlp-proto": "^0.217.0",
-    "@opentelemetry/resources": "^2.2.0",
-    "@opentelemetry/sdk-metrics": "^2.2.0",
-    "@opentelemetry/sdk-node": "^0.217.0",
+    "@opentelemetry/api": "~1.9.1",
+    "@opentelemetry/exporter-metrics-otlp-proto": "^0.223.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.223.0",
+    "@opentelemetry/resources": "^2.12.0",
+    "@opentelemetry/sdk-metrics": "^2.12.0",
+    "@opentelemetry/sdk-node": "^0.223.0",
     "@superserve/sdk": "0.7.7",
-    "hono": "^4.12.25",
-    "pg": "^8.20.0",
+    "hono": "^4.13.16",
+    "pg": "^8.23.1",
     "rrule": "2.8.1",
-    "tensorlake": "^0.5.40"
+    "tensorlake": "^0.5.160"
   },
   "devDependencies": {
     "@deputies/sandbox-bridge": "workspace:*",
-    "@types/node": "^22.10.10",
-    "@types/pg": "^8.20.0",
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
     "emulate": "^0.5.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.9.2",
-    "vitest": "^4.1.5"
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   }
 }
