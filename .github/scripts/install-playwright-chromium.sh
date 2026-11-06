@@ -9,27 +9,16 @@ cd "$ROOT_DIR"
 read -r CHROMIUM_REVISION CHROMIUM_VERSION HEADLESS_SHELL_REVISION HEADLESS_SHELL_VERSION < <(
   node --input-type=module <<'NODE'
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
-const root = process.cwd();
-const candidates = [
-  path.join(root, 'node_modules/playwright-core/browsers.json'),
-  path.join(root, 'apps/web/node_modules/playwright-core/browsers.json'),
-];
-
-const pnpmRoot = path.join(root, 'node_modules/.pnpm');
-if (fs.existsSync(pnpmRoot)) {
-  for (const entry of fs.readdirSync(pnpmRoot)) {
-    if (entry.startsWith('playwright-core@')) {
-      candidates.push(path.join(pnpmRoot, entry, 'node_modules/playwright-core/browsers.json'));
-    }
-  }
-}
-
-const browsersJson = candidates.find(candidate => fs.existsSync(candidate));
-if (!browsersJson) {
-  throw new Error('Could not find playwright-core browsers.json');
-}
+// Resolve the playwright-core that apps/web's @playwright/test uses. Scanning
+// node_modules/.pnpm can pick a stale version that pnpm left after an upgrade.
+const resolveFrom = (from, request) => createRequire(from).resolve(request);
+const testPackage = resolveFrom(path.join(process.cwd(), 'apps/web/package.json'), '@playwright/test/package.json');
+const playwrightPackage = resolveFrom(testPackage, 'playwright/package.json');
+const corePackage = resolveFrom(playwrightPackage, 'playwright-core/package.json');
+const browsersJson = path.join(path.dirname(corePackage), 'browsers.json');
 
 const browsers = JSON.parse(fs.readFileSync(browsersJson, 'utf8')).browsers;
 const chromium = browsers.find(browser => browser.name === 'chromium');
