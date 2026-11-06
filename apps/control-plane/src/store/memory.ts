@@ -2945,8 +2945,7 @@ export class MemoryStore implements AppStore {
         : undefined;
     if (input.resolvedContext.status === 'valid') {
       const snapshot = input.resolvedContext.overrides.environment as
-        | { id?: unknown; revisionId?: unknown }
-        | undefined;
+        { id?: unknown; revisionId?: unknown } | undefined;
       if (typeof snapshot?.id === 'string' && typeof snapshot.revisionId === 'string') {
         const environment = this.environments.get(snapshot.id);
         const revision = this.environmentRevisions.get(snapshot.revisionId);

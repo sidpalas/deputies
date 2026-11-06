@@ -132,21 +132,9 @@ export type SessionPage = {
 };
 
 export type WorkspaceIndexChange =
-  | 'added'
-  | 'modified'
-  | 'deleted'
-  | 'renamed'
-  | 'copied'
-  | 'type_changed'
-  | 'unmerged';
+  'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'type_changed' | 'unmerged';
 export type WorkspaceWorktreeChange =
-  | 'modified'
-  | 'deleted'
-  | 'renamed'
-  | 'copied'
-  | 'type_changed'
-  | 'untracked'
-  | 'unmerged';
+  'modified' | 'deleted' | 'renamed' | 'copied' | 'type_changed' | 'untracked' | 'unmerged';
 export type WorkspaceChangeFile = {
   id: string;
   path: string;
@@ -185,9 +173,7 @@ export type WorkspaceChangePatch = {
 };
 
 export type NotepadActor =
-  | { kind: 'human'; userId: string }
-  | { kind: 'agent'; sessionId: string; runId: string }
-  | { kind: 'system' };
+  { kind: 'human'; userId: string } | { kind: 'agent'; sessionId: string; runId: string } | { kind: 'system' };
 export type SessionNotepad = {
   sessionId: string;
   revision: number;

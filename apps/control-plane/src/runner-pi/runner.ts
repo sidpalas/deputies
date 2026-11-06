@@ -132,9 +132,7 @@ export type PiRunnerOptions = {
 };
 
 type PiRuntimeAuth =
-  | { kind: 'credentials'; credentials: CredentialStore }
-  | { kind: 'file'; authPath: string }
-  | { kind: 'default' };
+  { kind: 'credentials'; credentials: CredentialStore } | { kind: 'file'; authPath: string } | { kind: 'default' };
 
 type PiSessionLease = {
   manager: SessionManager;

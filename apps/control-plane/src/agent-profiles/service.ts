@@ -37,13 +37,7 @@ export type TenantAgentProfileConfigurationView = {
 export class AgentProfileError extends Error {
   constructor(
     readonly code:
-      | 'not_found'
-      | 'immutable_builtin'
-      | 'name_collision'
-      | 'invalid'
-      | 'incompatible'
-      | 'conflict'
-      | 'in_use',
+      'not_found' | 'immutable_builtin' | 'name_collision' | 'invalid' | 'incompatible' | 'conflict' | 'in_use',
     message: string,
   ) {
     super(message);

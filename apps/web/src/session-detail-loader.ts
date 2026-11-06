@@ -14,13 +14,7 @@ import {
 } from './api.js';
 
 export type SessionDetailComponent =
-  | 'messages'
-  | 'events'
-  | 'artifacts'
-  | 'external_resources'
-  | 'callbacks'
-  | 'services'
-  | 'render';
+  'messages' | 'events' | 'artifacts' | 'external_resources' | 'callbacks' | 'services' | 'render';
 
 export type SessionDetailComponentError = Error & { component: SessionDetailComponent; cause: unknown };
 

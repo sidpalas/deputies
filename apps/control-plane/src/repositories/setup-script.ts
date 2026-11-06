@@ -9,9 +9,7 @@ const repositorySetupClonedPattern = /(?:^|\n)deputies-repo-setup:cloned=(0|1)(?
 export type RepositorySetupScriptPolicy = { enabled: boolean; timeoutMs: number };
 
 export type SetupScriptResult =
-  | { status: 'absent' | 'skipped' | 'disabled' }
-  | ProbeFailedSetupScriptResult
-  | RanSetupScriptResult;
+  { status: 'absent' | 'skipped' | 'disabled' } | ProbeFailedSetupScriptResult | RanSetupScriptResult;
 
 type FailedSetupScriptResultFields = {
   exitCode: number;

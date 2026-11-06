@@ -66,8 +66,7 @@ export type DeputyToolServices = DeputyToolBaseServices & {
 };
 
 export type DeputyToolResult =
-  | ({ ok: true; action: DeputyAction } & Record<string, unknown>)
-  | { ok: false; action?: DeputyAction; error: string };
+  ({ ok: true; action: DeputyAction } & Record<string, unknown>) | { ok: false; action?: DeputyAction; error: string };
 
 type DeputyAction = 'spawn' | 'list_sessions' | 'get_session' | 'send_message' | 'cancel' | 'archive' | 'restore';
 type ListScope = 'children' | 'tenant';

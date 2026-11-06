@@ -221,17 +221,14 @@ function buildSessionFixture(input: {
     };
   });
 
-  const services = Array.from(
-    { length: input.serviceCount },
-    (_, index): SandboxService => ({
-      port: 3_000 + index,
-      url: `https://service-${index + 1}.example.test`,
-      status: 'available',
-      label: `Synthetic service ${index + 1}`,
-      path: '/',
-      shutdownAt: timestamp(3_600_000),
-    }),
-  );
+  const services = Array.from({ length: input.serviceCount }, (_, index): SandboxService => ({
+    port: 3_000 + index,
+    url: `https://service-${index + 1}.example.test`,
+    status: 'available',
+    label: `Synthetic service ${index + 1}`,
+    path: '/',
+    shutdownAt: timestamp(3_600_000),
+  }));
 
   return { session, messages, events, artifacts, externalResources, callbacks, services };
 }

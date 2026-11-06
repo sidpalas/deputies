@@ -629,14 +629,7 @@ Provider errors should be normalized.
 export class SandboxProviderError extends Error {
   provider: string;
   code:
-    | 'not_found'
-    | 'auth_failed'
-    | 'quota_exceeded'
-    | 'timeout'
-    | 'network'
-    | 'unhealthy'
-    | 'unsupported'
-    | 'unknown';
+    'not_found' | 'auth_failed' | 'quota_exceeded' | 'timeout' | 'network' | 'unhealthy' | 'unsupported' | 'unknown';
   retryable: boolean;
   details?: unknown;
 }

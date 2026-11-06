@@ -309,8 +309,7 @@ export class ScheduledFollowUpService {
           : (parseReasoningLevelBody(value.reasoningLevel) ?? null)
         : undefined;
       let skillContext:
-        | { skills: string[]; skillRefs: import('../skills/invocation.js').SkillInvocationRef[] }
-        | undefined;
+        { skills: string[]; skillRefs: import('../skills/invocation.js').SkillInvocationRef[] } | undefined;
       if (has('skills') || has('skillRefs')) {
         const contextServices = this.contextServices;
         if (!contextServices) this.invalid('Skills are unavailable');

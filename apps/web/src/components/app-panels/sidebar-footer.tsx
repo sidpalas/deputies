@@ -22,14 +22,7 @@ import { Button } from '../ui/button.js';
 import type { ThemePreference } from './types.js';
 
 export type NavigationPage =
-  | 'sessions'
-  | 'setup'
-  | 'groups'
-  | 'automations'
-  | 'environments'
-  | 'agents'
-  | 'skills'
-  | 'snippets';
+  'sessions' | 'setup' | 'groups' | 'automations' | 'environments' | 'agents' | 'skills' | 'snippets';
 
 const navigationPages: Array<{
   id: NavigationPage;

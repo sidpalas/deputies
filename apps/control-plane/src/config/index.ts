@@ -8,14 +8,7 @@ import { REASONING_LEVELS, type ReasoningLevel } from '../runner/reasoning.js';
 export type RunMode = 'combined' | 'all' | 'api' | 'worker';
 export type RunnerKind = 'fake' | 'pi';
 export type SandboxProviderKind =
-  | 'fake'
-  | 'unsafe-local'
-  | 'docker'
-  | 'daytona'
-  | 'tensorlake'
-  | 'superserve'
-  | 'lambda-microvm'
-  | 'k8s-agent-sandbox';
+  'fake' | 'unsafe-local' | 'docker' | 'daytona' | 'tensorlake' | 'superserve' | 'lambda-microvm' | 'k8s-agent-sandbox';
 export type DockerOrchestratorMode = 'in-process' | 'http';
 export type AgentSandboxOrchestratorMode = 'in-process' | 'http';
 export type AppStoreKind = 'memory' | 'postgres';

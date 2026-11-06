@@ -312,7 +312,4 @@ export type NormalizedEventType =
   | 'callback_replay_requested';
 
 export type NormalizedEmptyEventType =
-  | 'session_archived'
-  | 'session_unarchived'
-  | 'session_queue_paused'
-  | 'session_queue_resumed';
+  'session_archived' | 'session_unarchived' | 'session_queue_paused' | 'session_queue_resumed';

@@ -1,25 +1,10 @@
 import type { NormalizedEvent, NormalizedEventType } from '../events/types.js';
 
 export type SessionStatus =
-  | 'created'
-  | 'queued'
-  | 'active'
-  | 'idle'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'archived';
+  'created' | 'queued' | 'active' | 'idle' | 'completed' | 'failed' | 'cancelled' | 'archived';
 export type MessageStatus = 'pending' | 'processing' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
 export type RunStatus =
-  | 'starting'
-  | 'running'
-  | 'completing'
-  | 'cancelling'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'timed_out'
-  | 'stale';
+  'starting' | 'running' | 'completing' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'stale';
 export type IntegrationDeliveryStatus = 'received' | 'processed' | 'failed';
 export type SandboxStatus = 'ready' | 'stopped' | 'unhealthy' | 'destroyed' | 'failed';
 export type CallbackDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed';
@@ -135,9 +120,7 @@ export type SessionRecord = {
 };
 
 export type NotepadActor =
-  | { kind: 'human'; userId: string }
-  | { kind: 'agent'; sessionId: string; runId: string }
-  | { kind: 'system' };
+  { kind: 'human'; userId: string } | { kind: 'agent'; sessionId: string; runId: string } | { kind: 'system' };
 export const notepadRevisionRetentionLimit = 50;
 export type NotepadMutationKind = 'replace' | 'patch' | 'append' | 'restore';
 export type ExplicitNotepadRecord = {

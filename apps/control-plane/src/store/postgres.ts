@@ -4636,8 +4636,7 @@ export class PostgresStore implements AppStore {
       let environmentChanged = false;
       if (input.resolvedContext.status === 'valid') {
         const environment = input.resolvedContext.overrides.environment as
-          | { id?: unknown; revisionId?: unknown }
-          | undefined;
+          { id?: unknown; revisionId?: unknown } | undefined;
         if (typeof environment?.id === 'string' && typeof environment.revisionId === 'string') {
           const current = await client.query<{ archived_at: Date | null; revision_exists: boolean }>(
             `SELECT e.archived_at, EXISTS(SELECT 1 FROM environment_revisions r WHERE r.id=$2 AND r.environment_id=e.id) revision_exists

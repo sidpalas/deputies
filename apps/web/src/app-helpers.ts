@@ -84,12 +84,7 @@ export function loadInitialSetupGuideOpen(): boolean {
 }
 
 export function loadInitialSidebarPanel():
-  | 'sessions'
-  | 'automations'
-  | 'environments'
-  | 'agents'
-  | 'skills'
-  | 'snippets' {
+  'sessions' | 'automations' | 'environments' | 'agents' | 'skills' | 'snippets' {
   const query = new URLSearchParams(window.location.search);
   if (query.get('session')) return 'sessions';
   if (query.get('automation')) return 'automations';

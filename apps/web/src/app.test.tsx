@@ -5974,8 +5974,7 @@ function mockApi(options: MockApiOptions = {}) {
       const customResponse = options.onUpdateMessageRequest?.(messageId, body);
       if (customResponse) return customResponse;
       const currentMessage = messages.find((message) => (message as { id?: string }).id === messageId) as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       const updatedMessage = { ...currentMessage, ...body };
       messages = messages.map((message) => ((message as { id?: string }).id === messageId ? updatedMessage : message));
       return jsonResponse({ message: updatedMessage });
@@ -5986,8 +5985,7 @@ function mockApi(options: MockApiOptions = {}) {
       const messageId = retryMessageMatch[1]!;
       options.onRetryMessage?.(messageId);
       const failedMessage = messages.find((message) => (message as { id?: string }).id === messageId) as
-        | { prompt?: string; source?: string; context?: Record<string, unknown> }
-        | undefined;
+        { prompt?: string; source?: string; context?: Record<string, unknown> } | undefined;
       const retriedMessage = {
         id: `00000000-0000-4000-8000-0000000009${messages.length + 1}`,
         sessionId: currentSession.id,

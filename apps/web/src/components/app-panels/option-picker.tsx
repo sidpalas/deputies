@@ -224,8 +224,7 @@ export function CodebasePicker(props: {
 }
 
 export type CodebasePickerSelection =
-  | { kind: 'environment'; environmentId: string }
-  | { kind: 'repository'; repository: string };
+  { kind: 'environment'; environmentId: string } | { kind: 'repository'; repository: string };
 
 const codebaseEnvironmentPrefix = 'environment:';
 const codebaseRepositoryPrefix = 'repository:';

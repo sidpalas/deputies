@@ -25,9 +25,7 @@ type WorkerStore = RunStore & SessionStore & MessageStore & SandboxStore & Callb
 const titleGenerationTimeoutMs = 30_000;
 
 type DeputyNotificationOutcome =
-  | { status: 'completed' }
-  | { status: 'failed'; error: string }
-  | { status: 'cancelled' };
+  { status: 'completed' } | { status: 'failed'; error: string } | { status: 'cancelled' };
 
 export type RunProgressNotifier = {
   onRunStarted?(input: { message: MessageRecord; run: RunRecord }): Promise<void>;

@@ -771,8 +771,7 @@ describe.skipIf(!testDatabaseUrl)('PostgresStore', () => {
     ];
 
     let cursor = undefined as
-      | Awaited<ReturnType<PostgresStore['listSessionsWithLatestSandbox']>>['nextCursor']
-      | undefined;
+      Awaited<ReturnType<PostgresStore['listSessionsWithLatestSandbox']>>['nextCursor'] | undefined;
     const seen: string[] = [];
     for (;;) {
       const page = await store.listSessionsWithLatestSandbox('fake', {
