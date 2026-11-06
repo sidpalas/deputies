@@ -99,7 +99,9 @@ This is not the standard repository or ship check. It starts Postgres, installs 
 
 ## Previewing This Branch As A Sandbox Service
 
-When asked to run or preview the Deputies app from this checkout inside the sandbox (login, sessions, and web/API UX through the outer instance's service preview), follow [docs/deputies-app-preview.md](docs/deputies-app-preview.md).
+In an Amp orb, run `amp orb services ensure` to start the web app, control-plane API, and worker from `.amp/services.yaml` and get a portal URL; sign in with `dev` / `dev-secret`. See [docs/contributing-local-development.md](docs/contributing-local-development.md#run-in-an-amp-orb).
+
+When asked to run or preview the Deputies app from this checkout inside a Deputies sandbox (login, sessions, and web/API UX through the outer instance's service preview), follow [docs/deputies-app-preview.md](docs/deputies-app-preview.md).
 
 ## Common Test Commands
 

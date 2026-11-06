@@ -4,6 +4,8 @@ This runbook explains how to run a full inner Deputies app from this checkout in
 
 The workflow validates login, sessions, and the normal web/API path for UX changes. It intentionally does not support the inner instance's own service previews.
 
+In an Amp orb rather than a Deputies sandbox, use `amp orb services ensure` with the checked-in `.amp/services.yaml` instead; see [Run In An Amp Orb](./contributing-local-development.md#run-in-an-amp-orb).
+
 ## Inner Web Routing
 
 The outer instance must keep service-host routing enabled, usually with the default `SERVICE_HOST_REGEX=^s-`. The inner web process must disable its own service-host routing:

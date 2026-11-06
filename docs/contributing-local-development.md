@@ -154,6 +154,21 @@ mise run //apps/web:dev
 
 Open `https://deputies.localhost` and sign in with `dev` / `dev-secret`.
 
+## Run In An Amp Orb
+
+Amp orbs have no Docker, SeaweedFS, or Portless, so `.amp/services.yaml` runs a self-contained preview instead. `.agents/setup` installs the toolchain and Postgres, starts Postgres, and runs migrations; `.agents/resume` restarts Postgres when the orb wakes. Start the app with:
+
+```sh
+amp orb services ensure
+```
+
+This starts two supervised services and prints the `Deputies` portal URL:
+
+- `web` builds `apps/web` and serves it with `vite preview` on port `5173`, proxying API routes to `http://127.0.0.1:3583`. `vite preview` ignores the `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` value Amp sets for the dev server, so the service passes the portal domain in `VITE_DEV_ALLOWED_HOSTS`; without it the portal shows Vite's `Blocked request` page.
+- `api` loads `.env.local`, then overrides it for the orb: `RUN_MODE=combined` (API and worker), Postgres-backed app and runner state, static session auth (`dev` / `dev-secret`) with secure cookies, `WEB_BASE_URL` set to the web portal origin, the fake runner and sandbox, and filesystem artifact storage under `/tmp/deputies-artifacts`. It generates a stable `AUTH_SESSION_SECRET` in `~/.local/state/deputies/` and runs migrations before starting.
+
+Restart a service with `amp orb service restart web` or `amp orb service restart api` after changing web code or control-plane code; neither service watches files. Read logs with `amp orb service logs <name>`.
+
 ## Health Checks
 
 ```sh

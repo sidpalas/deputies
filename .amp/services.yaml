@@ -1,0 +1,47 @@
+services:
+  # Built web app served by `vite preview`, which proxies API routes to the control plane.
+  # Preview ignores Amp's __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS, so allow the portal domain explicitly.
+  web:
+    port: 5173
+    command: |
+      set -euo pipefail
+      export VITE_API_PROXY_TARGET=http://127.0.0.1:3583
+      export VITE_DEV_ALLOWED_HOSTS=".${AMP_PORTAL_DOMAIN:-onamp.dev},.localhost"
+      mise exec -- pnpm --dir apps/web exec vite build
+      exec mise exec -- pnpm --dir apps/web exec vite preview --host 0.0.0.0 --port "$PORT" --strictPort
+    health: /
+    portal:
+      title: Deputies
+      description: Sign in with dev / dev-secret.
+
+  # Control-plane API and worker (RUN_MODE=combined) on the orb's Postgres, with the fake runner
+  # and sandbox because orbs have no Docker, SeaweedFS, or model credentials by default.
+  api:
+    port: 3583
+    command: |
+      set -euo pipefail
+      web_base_url="$DEPUTIES_WEB_PUBLIC_URL"
+      if [ -f .env.local ]; then set -a; . ./.env.local; set +a; fi
+      secret_file="$HOME/.local/state/deputies/auth-session-secret"
+      if [ ! -s "$secret_file" ]; then
+        mkdir -p "$(dirname "$secret_file")"
+        openssl rand -hex 32 > "$secret_file"
+      fi
+      export AUTH_SESSION_SECRET="$(cat "$secret_file")"
+      export WEB_BASE_URL="$web_base_url"
+      export PORT=3583
+      export RUN_MODE=combined
+      export APP_DATA_STORE=postgres RUNNER_STATE_STORE=postgres
+      export DATABASE_URL=postgres://deputies:deputies@127.0.0.1:5432/deputies
+      export API_AUTH_MODE=session AUTH_PROVIDER=static
+      export AUTH_STATIC_USERNAME=dev AUTH_STATIC_PASSWORD=dev-secret
+      export AUTH_COOKIE_SECURE=true AUTH_COOKIE_SAME_SITE=lax AUTH_COOKIE_DOMAIN=
+      export RUNNER=fake SANDBOX_PROVIDER=fake
+      export ARTIFACT_STORAGE_PROVIDER=filesystem ARTIFACT_STORAGE_FILESYSTEM_PATH=/tmp/deputies-artifacts
+      # .agents/resume restarts Postgres on wake; wait for it instead of exhausting service restarts.
+      for _ in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -p 5432 && break; sleep 2; done
+      mise run //apps/control-plane:db:migrate
+      exec mise exec -- pnpm --dir apps/control-plane exec tsx src/index.ts
+    env:
+      DEPUTIES_WEB_PUBLIC_URL: ${services.web.publicURL}
+    health: /health
