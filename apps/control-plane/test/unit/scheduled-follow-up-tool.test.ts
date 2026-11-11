@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { JsonObject } from '@earendil-works/pi-ai';
 import { validateToolArguments } from '@earendil-works/pi-ai/compat';
 import { createServices } from '../../src/app/server.js';
 import { createPiScheduledFollowUpsToolDefinition } from '../../src/runner-pi/scheduled-follow-ups-tool.js';
@@ -84,12 +85,12 @@ describe('scheduled follow-ups tool authorization', () => {
     });
     const schedule = future();
     const input = { action: 'create', prompt: 'later', schedule: JSON.stringify(schedule), idempotencyKey: 'key' };
-    const validate = (args: Record<string, unknown>) =>
+    const validate = (args: JsonObject) =>
       validateToolArguments(tool, {
         type: 'toolCall',
         id: 'tool-call',
         name: tool.name,
-        arguments: tool.prepareArguments?.(args) ?? args,
+        arguments: (tool.prepareArguments?.(args) ?? args) as JsonObject,
       });
 
     expect(validate(input)).toEqual({ ...input, schedule });
