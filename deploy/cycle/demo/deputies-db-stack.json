@@ -1,0 +1,50 @@
+{
+  "version": "1.0",
+  "about": {
+    "description": "Deputies database: Postgres, unversioned so every app deployment shares it"
+  },
+  "containers": {
+    "postgres": {
+      "name": "postgres",
+      "stateful": true,
+      "image": {
+        "origin": {
+          "type": "docker-hub",
+          "details": {
+            "target": "postgres:17.11-alpine"
+          }
+        }
+      },
+      "config": {
+        "network": {
+          "public": "disable",
+          "hostname": "postgres"
+        },
+        "deploy": {
+          "instances": 1,
+          "constraints": {
+            "node": {
+              "tags": {
+                "all": ["deputies"]
+              }
+            }
+          }
+        },
+        "runtime": {
+          "environment_vars": {
+            "POSTGRES_DB": "deputies",
+            "POSTGRES_USER": "deputies"
+          }
+        }
+      },
+      "volumes": [
+        {
+          "destination": "/var/lib/postgresql/data",
+          "local": {
+            "max_size": "5G"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+  "about": {
+    "description": "Control-plane disconnect test: a privileged container in the host network namespace that firewalls the node from Cycle for a fixed time, then removes its rules."
+  },
+  "containers": {
+    "netcut": {
+      "name": "netcut",
+      "stateful": false,
+      "image": {
+        "origin": {
+          "type": "docker-hub",
+          "details": {
+            "target": "nicolaka/netshoot:v0.13"
+          }
+        }
+      },
+      "config": {
+        "network": {
+          "public": "disable",
+          "hostname": "netcut"
+        },
+        "deploy": {
+          "instances": 1,
+          "constraints": {
+            "node": {
+              "tags": {
+                "all": ["deputies", "cherry"]
+              }
+            }
+          }
+        },
+        "runtime": {
+          "privileged": true,
+          "namespaces": ["ipc", "uts", "mount", "cgroup"],
+          "command": {
+            "path": "/bin/bash",
+            "args": "/netcut/netcut.sh"
+          },
+          "environment_vars": {
+            "MODE": "probe",
+            "CUT_SECONDS": "600"
+          }
+        }
+      }
+    }
+  }
+}

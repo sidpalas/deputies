@@ -1,0 +1,112 @@
+{
+  "version": "1.0",
+  "about": {
+    "description": "Deputies app: combined API/worker and Caddy web front end. Deploy each release as a Cycle deployment version."
+  },
+  "containers": {
+    "api": {
+      "name": "api",
+      "stateful": false,
+      "image": {
+        "origin": {
+          "type": "oci-registry",
+          "details": {
+            "url": "ghcr.io",
+            "target": "sidpalas/deputies-control-plane:0.28.0"
+          }
+        }
+      },
+      "config": {
+        "network": {
+          "public": "egress-only",
+          "hostname": "api"
+        },
+        "deploy": {
+          "instances": 1,
+          "constraints": {
+            "node": {
+              "tags": {
+                "all": ["deputies"]
+              }
+            }
+          },
+          "restart": {
+            "condition": "always",
+            "delay": "5s",
+            "max_attempts": 100
+          }
+        },
+        "runtime": {
+          "command": {
+            "path": "node",
+            "args": "--import=data:text/javascript,await%20(await%20import('file%3A%2F%2F%2Fapp%2Fapps%2Fcontrol-plane%2Fdist%2Fdb%2Fmigrate.js')).runMigrations(process.env.DATABASE_URL) apps/control-plane/dist/index.js"
+          },
+          "environment_vars": {
+            "PORT": "3583",
+            "RUN_MODE": "combined",
+            "APP_DATA_STORE": "postgres",
+            "RUNNER_STATE_STORE": "postgres",
+            "RUNNER": "pi",
+            "SANDBOX_PROVIDER": "daytona",
+            "WORKER_CONCURRENCY": "1",
+            "ARTIFACT_STORAGE_PROVIDER": "disabled",
+            "WEB_SEARCH_PROVIDER": "disabled",
+            "OTEL_SDK_DISABLED": "true",
+            "API_AUTH_MODE": "session",
+            "AUTH_PROVIDER": "static",
+            "AUTH_STATIC_USERNAME": "deputies",
+            "AUTH_COOKIE_SECURE": "true",
+            "WEB_BASE_URL": "https://cycle.deputies.dev",
+            "HIDE_SETUP_PAGE": "true",
+            "RUNNER_MODEL_DEFAULT": "anthropic/claude-haiku-5-5",
+            "RUNNER_MODEL_CHOICES": "anthropic/claude-haiku-5-5",
+            "DAYTONA_IMAGE": "ghcr.io/sidpalas/deputies-daytona-sandbox:0.28.0",
+            "SANDBOX_WORKSPACE_PATH": "/workspace"
+          }
+        }
+      }
+    },
+    "web": {
+      "name": "web",
+      "stateful": false,
+      "image": {
+        "origin": {
+          "type": "oci-registry",
+          "details": {
+            "url": "ghcr.io",
+            "target": "sidpalas/deputies-web:0.28.0"
+          }
+        }
+      },
+      "config": {
+        "network": {
+          "public": "enable",
+          "hostname": "web",
+          "ports": ["80:5173", "443:5173"]
+        },
+        "deploy": {
+          "instances": 1,
+          "constraints": {
+            "node": {
+              "tags": {
+                "all": ["deputies"]
+              }
+            }
+          },
+          "restart": {
+            "condition": "always",
+            "delay": "5s",
+            "max_attempts": 100
+          }
+        },
+        "runtime": {
+          "environment_vars": {
+            "PORT": "5173",
+            "API_UPSTREAM": "http://api:3583",
+            "SERVICE_HOST_REGEX": "^$"
+          }
+        }
+      }
+    }
+  }
+}

@@ -2,7 +2,7 @@
 
 This runbook records a disposable Deputies deployment on Cycle. It uses real Postgres, API, worker, and browser authentication, but fake agent execution. It is not a production reference deployment or an automated deployment template.
 
-See the [general deployment guide](../../docs/deployment.md) for provider-independent configuration.
+See the [general deployment guide](../../docs/deployment.md) for provider-independent configuration. The validated video demo (real runner, zero-downtime releases, AWS-to-Cherry move, control-plane disconnect test) is in [demo/](demo/README.md).
 
 ## Topology And Placement
 
