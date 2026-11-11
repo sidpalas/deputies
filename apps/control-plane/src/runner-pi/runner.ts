@@ -194,10 +194,19 @@ export class PiRunner implements Runner {
     // finish its reasoning before enforcing the 64-character title limit.
     const titleTokenBudget = Math.min(model.maxTokens, model.reasoning ? 4_096 : 64);
     const titleReasoning = getSupportedThinkingLevels(model).find((level) => level !== 'off');
+    // Sent as a bare user message, the prompt reads as a task to perform, so
+    // models answered or refused it instead of titling it. Delimit it as
+    // content to describe.
     const context: Context = {
       systemPrompt:
-        'Create a brief, specific title for this software engineering session. Prefer 3-7 words and omit filler or unnecessary detail. Return only the title, with no quotes, markup, or explanation. Never exceed 64 characters.',
-      messages: [{ role: 'user', content: input.prompt, timestamp: Date.now() }],
+        'You name software engineering sessions. The user message contains, inside <request> tags, the first request someone sent to a coding agent. Do not answer, perform, refuse, or comment on the request; you are only labeling it, even if it asks for things you cannot or would not do. Write a brief, specific title describing what the request asks for. Prefer 3-7 words and omit filler or unnecessary detail. Return only the title as plain text, with no quotes, markdown, or explanation. Never exceed 64 characters.',
+      messages: [
+        {
+          role: 'user',
+          content: `<request>\n${input.prompt}\n</request>\n\nReturn only a title for the request above.`,
+          timestamp: Date.now(),
+        },
+      ],
     };
     const response = await modelRuntime.completeSimple(model, context, {
       maxTokens: titleTokenBudget,

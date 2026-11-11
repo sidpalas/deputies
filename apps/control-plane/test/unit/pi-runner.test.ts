@@ -390,6 +390,13 @@ describe('PiRunner', () => {
       expect.any(Object),
       expect.objectContaining({ maxTokens: 4_096, reasoning: 'minimal' }),
     );
+    // The prompt is content to title, not a task for the title model to answer.
+    expect(piMock.completeSimple.mock.calls[0]![1].messages).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        content: expect.stringContaining('<request>\nPlease fix automatic title generation\n</request>'),
+      }),
+    ]);
     expect(piMock.modelRuntimeCreateOptions[0]).toEqual({
       credentials,
       modelsPath: '/tmp/pi-agent/models.json',
