@@ -103,7 +103,7 @@ Don't film an in-place reimage: with one instance, reimaging `api` took the site
 1. **"Push":** the release is Deputies 0.28.0. In the editor, show the diff between `deputies-app-stack-0.27.1.json` and `deputies-app-stack.json`: three image tags, and the Pi workaround lines removed.
 2. **Deploy alongside:** `./release.sh deputies-app-stack.json v0.28.0 && ./tag.sh next v0.28.0`. Took 53 s; 0 of 76 live-site checks failed meanwhile. (The earlier 0.27.0 → 0.27.1 rehearsal took 96 s, also with 0 failures.)
 3. **Smoke-test the candidate** on `https://next.cycle.deputies.dev`: log in and run a task. It answered on 0.28.0 using `claude-haiku-5-5` natively.
-4. **Flip:** `./tag.sh live v0.28.0` returns in about 1 s. On the default (native) load balancer, traffic moves 0.1 to 6 s later, and most flips drop a few requests with `503 no routers for desired route`. Switch the environment's load balancer to HAProxy before filming, or flip with traffic-splitting weights instead (see Tag Flip Result); both measured 0 errors.
+4. **Flip:** `./tag.sh live v0.28.0` returns in about 1 s. On the default (native) load balancer, traffic moves 0.1 to 6 s later, and most flips drop a few requests with `503 no routers for desired route`. Switch the environment's load balancer to HAProxy before filming, or flip with traffic-splitting weights instead (see Tag Flip Result); both measured 0 errors at the flip.
 5. **Roll back:** `./tag.sh live v0.27.1`, then flip forward again. In the Deputies rehearsals (six flips on the native load balancer), two flips each dropped one request; the 50-flip test below shows that's typical, not bad luck.
 6. **Retire the old version:** stop its two containers, then Environment → Deployments → Prune (`deployments.prune`), which removes versions without a tag. The live site kept serving after the old version stopped (0 of 30 checks failed), which proves traffic had moved.
 
@@ -194,15 +194,40 @@ What it shows:
 - **The error is the native load balancer briefly having no route.** Every failure was `503 Service Unavailable` with body `no routers for desired route` (a few `no routers exist for controller`), 1 to 4 requests in a 0.2 to 0.5 s window, while both versions were up. It isn't DNS (the probe used the IP) and it isn't the app. Repointing a record fails the same way, so it happens whenever a route's destinations are replaced, not only for tags.
 - **The native load balancer applies changes on a cycle of about 6 s.** Traffic moved anywhere from 0.1 to 6 s after the job completed, drifting by about 1.2 s per flip at 7 s spacing. So `tag.sh` returning doesn't mean traffic has moved.
 - **HAProxy removes both effects.** With the environment's load balancer set to HAProxy (Environment → Services → Load Balancer, or `POST /v1/environments/{id}/services/lb/tasks` with `{"action":"reconfigure","contents":{"config":{"type":"haproxy","details":null,"ipv4":true,"ipv6":true,"performance":false}}}`), 10 flips had no errors, traffic moved about 1 s after the job each time, and latency stayed flat (max 245 ms against a 226 ms median). It served TLS for the LINKED records with no other change. Switching back to native brought the errors back (control run). To switch back, send `"type":"default"`; `"type":"v1"` with `details: null` was accepted but left HAProxy running.
-- **Traffic splitting avoids it on the native load balancer.** A LINKED record can carry `routing.traffic_splitting.variants`, weighted destinations (0 to 1000) that can each be a deployment tag. With variants `blue` (v1) and `green` (v2), a flip only changes weights, so the route never empties: 0 errors in 40 flips. Snag: the record's own destination also gets a share (about 11%: 19 of 168 requests went to a weight-0 variant's version), so move the record's tag with the weights in the same PATCH.
+- **Traffic splitting avoids the 503s, with caveats.** A LINKED record can carry `routing.traffic_splitting.variants`, weighted destinations (0 to 1000) that can each be a deployment tag. With variants `blue` (v1) and `green` (v2), a full swap only changes weights, so the route never empties: 0 errors in 60 swaps across two runs. Retested on 2026-11-12 (see Traffic Splitting Retest below): it works for full cutovers but not for gradual shifts, and moving the idle color's tag briefly leaks live traffic to it.
 - **`destination_retries` doesn't help.** The native default is already 3. It retries an unreachable destination, while this error means no route at all.
 - **Not tested:** whether HAProxy also removes the in-place restart errors (In-Place Deploy Result), and its feature differences from the native load balancer (WAF, URL telemetry, router options). The HAProxy run is 10 flips, against 23 of 30 native tag flips with errors.
 
-**For the §3 release shot:** keep tag flips and set the environment's load balancer to HAProxy before filming; `tag.sh` stays the on-camera action and measured 0 errors. Rehearse the full sequence on HAProxy once first (Deputies, and the §4 move), since the earlier validation ran on the native load balancer. If HAProxy causes trouble, use a traffic-splitting record with `blue`/`green` tags instead (0 errors, but a release becomes a record PATCH rather than a tag move). Fair line on camera: "with the right load balancer setting, the flip drops nothing".
+**For the §3 release shot:** keep tag flips and set the environment's load balancer to HAProxy before filming; `tag.sh` stays the on-camera action and measured 0 errors. Rehearse the full sequence on HAProxy once first (Deputies, and the §4 move), since the earlier validation ran on the native load balancer. If HAProxy causes trouble, a traffic-splitting record with `blue`/`green` tags is a fallback for full cutovers only (0 errors, but a release becomes a tag move plus a record PATCH, and the tag move briefly sends some live traffic to the new version; see the retest). Fair line on camera: "with the right load balancer setting, the flip drops nothing".
 
 Standalone repro for Cycle: [tag-flip-repro.sh](tag-flip-repro.sh) needs only bash, curl, jq and dig, an environment on a cluster with a live server, and a Cycle-hosted zone. `setup` deploys whoami as versions v1 and v2, tags `live`, and creates the LINKED record (60 s); `flip` moves `live` 10 times while two curl loops hit the load balancer IP, and prints each failure's body; `cleanup` removes what `setup` made. Validated on 2026-11-12 on a fresh node: 50 of 839 requests failed over 15 flips, and every flip had at least one failure. 26 were `503 no routers for desired route` or `no routers exist for controller`, and 2 were connection failures from the first run, before the script recorded curl errors. In one flip, new connections also failed TLS for about 2.7 s (`tlsv1 alert internal error`, 22 requests), which suggests the native load balancer briefly drops the hostname's certificate along with its route; the earlier probe runs didn't show that.
 
 The fuller test harness: create a stack from `flip-test-stack.json`, run `./flip-test.sh setup`, add a LINKED record for container `web` and tag `live`, start the environment, then `HOST=<record> ./flip-test.sh run 20 6`. The header of `flip-test.sh` lists the record-repoint and traffic-splitting modes.
+
+### Traffic Splitting Retest
+
+Retested on 2026-11-12 on a fresh node with three versions (`v1`, `v2`, `v3`) tagged `blue`, `green` and `other`, and one traffic-splitting record with variants `blue` and `green`. About 200 to 250 requests per measurement, measured after a 10 s settle.
+
+| Record's own target       | Weights (blue / green) | Traffic                |
+| ------------------------- | ---------------------- | ---------------------- |
+| blue (v1)                 | 1000 / 0               | v1 100%                |
+| blue (v1)                 | 0 / 1000               | v2 91%, v1 9%          |
+| green (v2)                | 1000 / 0               | v1 91%, v2 9%          |
+| other (v3, not a variant) | 1000 / 0               | v1 88%, v3 12%         |
+| other (v3, not a variant) | 500 / 500              | v1 44%, v2 47%, v3 9%  |
+| other (v3, not a variant) | 750 / 250              | v1 69%, v2 21%, v3 10% |
+| blue (v1)                 | 750 / 250              | v1 22%, v2 78%         |
+| blue (v1)                 | 500 / 500              | v1 18%, v2 82%         |
+| blue (v1)                 | 250 / 750              | v1 12%, v2 88%         |
+| green (v2)                | 750 / 250              | v1 89%, v2 11%         |
+| live (another tag on v1)  | 750 / 250              | v1 25%, v2 75%         |
+
+- **The extra share belongs to the record's own target, not to zero-weight variants.** The target gets about 10% whatever the weights are, even when it's a third version that isn't a variant. A zero-weight variant gets nothing unless it's also the target.
+- **Weights are only proportional when the target is outside the variants.** When the target and a variant are the same version (even through a different tag name), that variant loses most of its weight. So a gradual canary can't be done cleanly: either a variant's share is distorted, or a third version takes about 10%.
+- **Full cutovers work.** Swapping 1000/0 to 0/1000 and moving the record's target in the same PATCH sent 100% to the new version: 0 errors in 20 swaps (2,104 requests), with the native load balancer's usual 0 to 6 s delay. A control run of plain `live` tag flips on the same node still failed (7 of 10 flips, 19 of 1,133 requests, all `503 no routers for desired route`).
+- **Moving the idle color's tag leaks live traffic.** With all traffic on `blue` (1000/0), moving `green` between `v2` and `v3` caused no errors, but for up to about 6.7 s after each move, 6 to 28% of requests went to the idle version (98 of 645 over six moves). A single move followed by a wait showed no lasting effect. In a release, that means some users briefly hit the new version before the PATCH that's meant to switch them.
+
+So the weights workaround is a two-update release (move the idle tag, then PATCH weights and target together) that works for full cutovers but briefly exposes the new version at the first step and can't do clean gradual shifts. HAProxy with a plain tag move stays the recommendation.
 
 ## Reset Between Takes
 
