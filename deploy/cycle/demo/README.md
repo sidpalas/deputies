@@ -6,18 +6,19 @@ The build is continuous: §1 adds an AWS node, §2 a Cherry node, §3 deploys De
 
 ## Files
 
-| File                                                             | Purpose                                                                                                                |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| [deputies-db-stack.json](deputies-db-stack.json)                 | Postgres, unversioned so every app version shares it                                                                   |
-| [deputies-app-stack.json](deputies-app-stack.json)               | Deputies 0.28.0: combined API/worker (Pi runner, Claude Haiku 5.5, Daytona sandboxes) and the Caddy web front end      |
-| [deputies-app-stack-0.27.1.json](deputies-app-stack-0.27.1.json) | The "before" version for the release shot (Deputies 0.27.1)                                                            |
-| [pi-models.json](pi-models.json)                                 | Only for 0.27.1: adds Claude Haiku 5.5 to its older Pi (0.83.0)                                                        |
-| [create-scoped-variables.sh](create-scoped-variables.sh)         | Creates the secret scoped variables and the Pi models file; writes the login to `deputies-login.txt`                   |
-| [release.sh](release.sh)                                         | Pushes a stack file, builds it, deploys the build (optionally as a deployment version) and starts it                   |
-| [tag.sh](tag.sh)                                                 | Points a deployment tag (`live`, `next`) at a version; DNS and the load balancer follow the tag                        |
-| [smoke.sh](smoke.sh)                                             | Logs in, runs one real agent task, prints the tool calls and the reply                                                 |
-| [watch-health.sh](watch-health.sh)                               | The on-camera curl loop: `/health` once a second with elapsed time, answering IP and total downtime                    |
-| [netcut-stack.json](netcut-stack.json), [netcut.sh](netcut.sh)   | §5: a privileged container that firewalls its node from Cycle's control plane for a fixed time, then removes the rules |
+| File                                                             | Purpose                                                                                                                 |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| [deputies-db-stack.json](deputies-db-stack.json)                 | Postgres, unversioned so every app version shares it                                                                    |
+| [deputies-app-stack.json](deputies-app-stack.json)               | Deputies 0.28.0: combined API/worker (Pi runner, Claude Haiku 5.5, Daytona sandboxes) and the Caddy web front end       |
+| [deputies-app-stack-0.27.1.json](deputies-app-stack-0.27.1.json) | The "before" version for the release shot (Deputies 0.27.1)                                                             |
+| [pi-models.json](pi-models.json)                                 | Only for 0.27.1: adds Claude Haiku 5.5 to its older Pi (0.83.0)                                                         |
+| [create-scoped-variables.sh](create-scoped-variables.sh)         | Creates the secret scoped variables and the Pi models file; writes the login to `deputies-login.txt`                    |
+| [release.sh](release.sh)                                         | Pushes a stack file, builds it, deploys the build (optionally as a deployment version) and starts it                    |
+| [tag.sh](tag.sh)                                                 | Points a deployment tag (`live`, `next`) at a version; DNS and the load balancer follow the tag                         |
+| [smoke.sh](smoke.sh)                                             | Logs in, runs one real agent task, prints the tool calls and the reply                                                  |
+| [watch-health.sh](watch-health.sh)                               | The on-camera curl loop: `/health` once a second with elapsed time, answering IP and total downtime                     |
+| [netcut-stack.json](netcut-stack.json), [netcut.sh](netcut.sh)   | §5: a privileged container that firewalls its node from Cycle's control plane for a fixed time, then removes the rules  |
+| [inplace-test-stack.json](inplace-test-stack.json)               | Test only: 2-instance `traefik/whoami` plus an unchanged Postgres in one unversioned stack (see In-Place Deploy Result) |
 
 The scripts read `CYCLE_API_KEY`, `CYCLE_HUB_ID` and `CYCLE_API_BASE_URL` (`https://api.cycle.io/v1`) from the environment and print no secrets. `create-scoped-variables.sh` also reads `ANTHROPIC_API_KEY` and `DAYTONA_API_KEY`.
 
@@ -95,7 +96,7 @@ Before rolling (off camera):
 
 ### Shot 4 (§3): Push, release and roll back without downtime
 
-Don't film an in-place reimage: with one instance, reimaging `api` took the site down for 38 s, and rolling back took 15 s. Use Cycle deployments instead. Each release runs alongside the old one, and the load balancer and DNS follow a tag.
+Don't film an in-place reimage: with one instance, reimaging `api` took the site down for 38 s, and rolling back took 15 s. With two instances it drops to a blip, but still not zero (see In-Place Deploy Result). Use Cycle deployments instead. Each release runs alongside the old one, and the load balancer and DNS follow a tag.
 
 1. **"Push":** the release is Deputies 0.28.0. In the editor, show the diff between `deputies-app-stack-0.27.1.json` and `deputies-app-stack.json`: three image tags, and the Pi workaround lines removed.
 2. **Deploy alongside:** `./release.sh deputies-app-stack.json v0.28.0 && ./tag.sh next v0.28.0`. Took 53 s; 0 of 76 live-site checks failed meanwhile. (The earlier 0.27.0 → 0.27.1 rehearsal took 96 s, also with 0 failures.)
@@ -144,6 +145,34 @@ The claim holds for serving, with a caveat about getting control back.
 - **Operations stopped.** The node's last check-in froze at 21:06:36. Cycle flagged it `online: false` about 2.5 minutes later and `offline` after about 6 minutes. A container restart submitted during the cut was accepted and reported `completed`, but the container sat in `starting` and the real instance was never touched. Console streaming and SSH-based commands returned nothing.
 - **Check-in recovered; job delivery did not.** The netcut rules lifted at about 21:14:50, and the node checked in again at 21:15:26. But for the next 18 minutes, until the node was deleted, no job reached it: a container restart, a reconfigure, starting new containers, `compute.restart` and a server restart were all accepted and reported complete, yet nothing changed on the node. Deleting its environment left the app running on the node (Cycle listed no instances while the site still answered) until the server was force-decommissioned.
 - **What's verified and what isn't:** the node checked in over one path but executed nothing. Two explanations fit: Cycle's command channel didn't reconnect after its sockets were killed, or part of the test's firewall state survived its cleanup (check-in may use IPv6 while the command channel used IPv4). There was no host access to tell which. Ask Cycle before claiming "it recovers on its own". On camera, "a Cycle outage isn't a customer-facing incident" is supported; "everything resumes when Cycle is back" was not shown.
+
+## In-Place Deploy Result
+
+Question: can one unversioned stack with 2 app instances release in place without downtime, instead of the two-stack, versioned setup above? Tested on 2026-11-11/12 with [inplace-test-stack.json](inplace-test-stack.json): `web` is `traefik/whoami` (2 instances, its `Name:` line shows the release label) and `db` is stock `postgres:17.11-alpine` with a local volume and a seeded marker row. Two t3a.medium AWS nodes in a throwaway environment, LINKED record on `validate.cycle.deputies.dev`, then torn down. Each release pushed a new stack file, built it, and deployed the build into the same environment. A probe hit the site 4 to 8 times a second on fresh connections, `watch-health.sh` ran alongside, and the instance states were polled every second.
+
+**Answer: near zero, not zero.** Every instance restart cost about one failed request (a 502 or a refused connection), about 0.5 to 1.5 s of errors per instance. Cycle stops each instance in place while the load balancer still sends it new connections; there's no drain and no start-new-before-stopping-old.
+
+| Run | Change                                | Deploy `update`                       | Failed probe checks | Failed `watch-health` checks | Instance restarts                                                  |
+| --- | ------------------------------------- | ------------------------------------- | ------------------- | ---------------------------- | ------------------------------------------------------------------ |
+| 1   | v1 → v2 (image + env), 1 server       | none (`release.sh` as is)             | 0                   | 0                            | none: the build deployed, but nothing changed                      |
+| 2   | same build                            | `web` and `db`: reimage + reconfigure | 1 of 64             | 1 of 25                      | `web` one at a time, about 1 s apart; `db` restarted               |
+| 3   | v2 → v3, 1 server                     | `web`: reimage + reconfigure          | 1 of 62             | 0 of 26                      | one at a time, overlapping by about 1 s                            |
+| 4   | v3 → v4, adds `update.stagger: 30s`   | `web`: reimage + reconfigure          | 3 of 186            | 2 of 39                      | each instance twice                                                |
+| 5   | v4 → v5, stagger 30 s                 | `web`: reimage + reconfigure          | 6 of 268            | 1 of 59                      | 4 restarts over 48 s; v4 and v5 served side by side for about 25 s |
+| 6   | image only, stagger 30 s              | `web`: reimage only                   | 2 of 254            | 1 of 53                      | both within 1 s (random draw)                                      |
+| 7   | image only, stagger 30 s              | `web`: reimage only                   | 2 of 234            | 1 of about 50                | 20 s apart                                                         |
+| 8   | v5 → v6, instances on **two servers** | `web`: reimage + reconfigure          | 4 of 217            | 0 of 47                      | 4 restarts over 22 s                                               |
+| 9   | Postgres unchanged                    | `db`: reimage only                    | 0 of 113            | 0                            | `db` restarted (3.6 s)                                             |
+
+What it shows:
+
+- **A plain build deploy changes nothing.** Deploying a build into an environment that already has the containers, without `update`, completes but leaves them on the old build. An in-place release needs `contents.update.containers.<name>: {reimage, reconfigure}` on the build's `deploy` task (portal: the per-container Reimage and Reconfigure options).
+- **One at a time, by default.** Without a stagger, instances restarted about 1 s apart, so one was usually serving. Reimage and reconfigure in the same deploy can restart each instance twice (runs 4, 5, 8), doubling the errors.
+- **Stagger exists but doesn't help.** `config.deploy.update.stagger` gives each instance a random start delay from 0 to the duration. It spreads restarts out, but they can still land together (run 6), it takes effect only once already applied (run 4 restarted on the old setting, then again), and old and new versions serve side by side meanwhile (run 5). It doesn't drain the load balancer, so each restart still costs about one error. There's also `deploy.startup.delay` and `deploy.shutdown.graceful_timeout`; neither adds draining, so they weren't tested.
+- **Two servers don't change it** (run 8): the errors come from the load balancer routing to a stopping instance, not from the host.
+- **Postgres is touched only if listed.** With `db` in `update`, the unchanged Postgres restarts (about 4 s; runs 2 and 9: `pg_postmaster_start_time` moved each time). With `db` left out, it isn't touched (runs 3 to 8). The marker row survived every restart. For Deputies, a Postgres restart also kills the API (Snag 9), so a single-stack release must leave `postgres` out of `update`.
+
+**For the §3 release shot:** keep the two-stack, deployment-tag approach. It measured 0 failed checks while deploying alongside and at most one error at a flip, and rollback is a 1 s tag move with no rebuild. An in-place release with 2 instances gives one to six failed checks per release in this test, for a 1 s-to-start test server; Deputies' API starts slower and runs migrations at startup, so expect no better. Fair line on camera: "a rolling in-place update with two instances is a blip, not an outage; for zero, use deployments".
 
 ## Reset Between Takes
 

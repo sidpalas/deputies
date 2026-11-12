@@ -1,0 +1,84 @@
+{
+  "version": "1.0",
+  "about": {
+    "description": "In-place deploy test: a 2-instance HTTP server that reports its version, and an unchanged stateful Postgres, in one unversioned stack"
+  },
+  "containers": {
+    "web": {
+      "name": "web",
+      "stateful": false,
+      "image": {
+        "origin": {
+          "type": "docker-hub",
+          "details": {
+            "target": "traefik/whoami:v1.10.3"
+          }
+        }
+      },
+      "config": {
+        "network": {
+          "public": "enable",
+          "hostname": "web",
+          "ports": ["80:8080", "443:8080"]
+        },
+        "deploy": {
+          "instances": 2,
+          "constraints": {
+            "node": {
+              "tags": {
+                "all": ["inplace"]
+              }
+            }
+          }
+        },
+        "runtime": {
+          "environment_vars": {
+            "WHOAMI_PORT_NUMBER": "8080",
+            "WHOAMI_NAME": "v1"
+          }
+        }
+      }
+    },
+    "db": {
+      "name": "db",
+      "stateful": true,
+      "image": {
+        "origin": {
+          "type": "docker-hub",
+          "details": {
+            "target": "postgres:17.11-alpine"
+          }
+        }
+      },
+      "config": {
+        "network": {
+          "public": "disable",
+          "hostname": "db"
+        },
+        "deploy": {
+          "instances": 1,
+          "constraints": {
+            "node": {
+              "tags": {
+                "all": ["inplace"]
+              }
+            }
+          }
+        },
+        "runtime": {
+          "environment_vars": {
+            "POSTGRES_PASSWORD": "throwaway-test-only"
+          }
+        }
+      },
+      "volumes": [
+        {
+          "destination": "/var/lib/postgresql/data",
+          "local": {
+            "max_size": "1G"
+          }
+        }
+      ]
+    }
+  }
+}
