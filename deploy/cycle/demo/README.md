@@ -26,7 +26,16 @@ The scripts read `CYCLE_API_KEY`, `CYCLE_HUB_ID` and `CYCLE_API_BASE_URL` (`http
 
 ## Configuration
 
-The files are set up for the filming environment, `Deputies on Cycle` in cluster `development`, serving `https://cycle.deputies.dev`.
+The files are set up for the filming environment, `Deputies filming` (identifier `deputies-filming`, ID `6af601d4d7d6a986d8260c3c`) in cluster `development`, serving `https://cycle.deputies.dev`. It replaced the earlier `Deputies on Cycle` environment, which was deleted with its old `Deputies` stack on 2026-11-12.
+
+Setup on 2026-11-12, all through the API:
+
+- Environment created in `development`. Cycle can't initialize an environment in a cluster with no servers (`unable to create discovery service: ... no servers meet deployment criteria`), so it was initialized (`POST /v1/environments/{id}/tasks` with `{"action":"initialize"}`) on a temporary `ksk-staging` t3a.medium.
+- All eight scoped variables from `create-scoped-variables.sh`, run from a directory outside the repo so the login file stays out of git.
+- Stacks `deputies-db` (`6af60261612fa4ab449637ef`) and `deputies-app` (`6af60262a86694d6b33ec752`), created from the files in this directory.
+- Both LINKED records below, in the hub's `cycle.deputies.dev` zone.
+- Load-balancer HA left **off**: see the Pre-Provision list for why and when to turn it on.
+- Smoke test on the temporary node: deployed `deputies-db`, `v0.27.1` tagged `live` and `v0.28.0` tagged `next`. `https://cycle.deputies.dev` and `https://next.cycle.deputies.dev` served `/health` over HTTPS with valid certificates, and `smoke.sh` ran the fib.py task (write, then run in a separate step, correct output) in 27 s with a cold sandbox. Then reset with the checklist in Reset Between Takes, the deployment tags cleared, and the server deleted: `GET /v1/infrastructure/servers` returned no servers and the hub had no IP pools left.
 
 - **Placement:** every container requires the server tag `deputies`. Tag the AWS node in §1 and add the tag to the Cherry node at the start of §4. This replaces the old `aws-us-east-1` constraint, so nothing in the stack needs loosening before the move.
 - **Network:** only `web` is public (`80:5173`, `443:5173`). `api` is `egress-only`, because it calls Anthropic and Daytona. Postgres has no public network.
@@ -46,7 +55,7 @@ Scoped variables (each scoped to one container; `create-scoped-variables.sh` cre
 | `daytona-api-key`               | `api`      | `DAYTONA_API_KEY`                                     | yes    |
 | `pi-models`                     | `api`      | file `/home/node/.pi/agent/models.json` (0.27.1 only) | no     |
 
-`Deputies on Cycle` already has the first four. Add the rest by hand, or with the same `jq | curl` calls the script makes; running the whole script against it would create duplicates of the first four.
+`Deputies filming` has all eight. Running the script again would create duplicates; to rotate a value, update that variable instead.
 
 Two LINKED DNS records in the hosted zone, both targeting a deployment tag, not a container:
 
@@ -59,11 +68,13 @@ Two LINKED DNS records in the hosted zone, both targeting a deployment tag, not 
 
 Before rolling (off camera):
 
-- [ ] Hub integrations exist (`ksk-staging` for AWS, `cherry`); cluster `development` has no servers.
-- [ ] In `Deputies on Cycle`, delete the three old stopped containers and the old `Deputies` stack, and add the new scoped variables.
-- [ ] Create stacks `deputies-db` and `deputies-app` from the files (portal: Stacks → Create → Raw; API: `POST /v1/stacks` with `source: {type: raw, details: <file contents>}`).
-- [ ] Change the `@` record to the deployment-tag form and add `next`. Don't request either hostname before its record exists: a negative answer gets cached for up to 20 minutes (see Snags).
-- [ ] Turn on load-balancer high availability (Environment → Services → Load Balancer). Without it, Cycle publishes only one load-balancer IP, and the §4 move can't hand over gradually.
+- [x] Hub integrations exist (`ksk-staging` for AWS, `cherry`); cluster `development` has no servers.
+- [x] Create the environment `Deputies filming` with all the scoped variables (done 2026-11-12; see Configuration). The old `Deputies on Cycle` environment, its three stopped containers and the old `Deputies` stack are deleted.
+- [x] Create stacks `deputies-db` and `deputies-app` from the files (portal: Stacks → Create → Raw; API: `POST /v1/stacks` with `source: {type: raw, details: <file contents>}`).
+- [x] Point `@` at container `web`, tag `live`, and add `next` for tag `next`. Don't request either hostname before its record exists: a negative answer gets cached for up to 20 minutes (see Snags).
+- [ ] Load-balancer high availability stays **off** until the Cherry node is online (start of §4, see Shot 5). With HA on and one server, starting the environment fails (`cannot start lb service: only 1 server meets deployment criteria, HA requires 2 or more`) and no load balancer runs, so §3 would break. Turning it on while running on one server is also refused. Without HA, Cycle publishes only one load-balancer IP, so it has to be on before §4 step 2.
+- [ ] Decide on the load balancer type: Tag Flip Result recommends HAProxy for the §3 flip and a rehearsal on it first. `Deputies filming` is still on the default (native) load balancer.
+- [ ] Before filming §3, check `dig +short @ns1.cycle.io cycle.deputies.dev` once the environment is started (see Snag 18).
 - [ ] Open `./watch-health.sh https://cycle.deputies.dev` in a terminal sized for a corner, on a machine using a public resolver.
 - [ ] Have the login ready (`deputies-login.txt`, or the `auth-password` scoped variable in the portal).
 
@@ -75,6 +86,7 @@ Before rolling (off camera):
 
 - **UI:** Infrastructure → Servers → Deploy → `ksk-staging` (AWS) → `us-east-1`, zone `us-east-1a` → `t3a.medium` (about $27/month) → cluster `development` → Deploy.
 - **Then:** add the tag `deputies` to the server. Keep Allow Pool and Allow Services on.
+- **Then, off camera:** start `Deputies filming` (Environment → Start; API `POST /v1/environments/{id}/tasks` with `{"action":"start"}`), then reconfigure its discovery service without changes (API `POST /v1/environments/{id}/services/discovery/tasks` with `{"action":"reconfigure","contents":{"high_availability":false}}`). Check that the `Environment Discovery (DNS)` container has a running instance. After a reset, the start brings back only the load balancer; without discovery, `api` crashes with `getaddrinfo EAI_AGAIN postgres` (see Snag 17). Both steps were verified on 2026-11-12.
 - **Took:** EC2 created the instance in 18 s; the node was online and checking in 3 min 27 s after Deploy. A second run took about 4.5 min. Film the click live and speed up the wait.
 - **Points:** no VPC, IAM or cluster code: pick a provider, region and size. CycleOS boots and joins; there's no AMI, node pool or bootstrap script. Fair line: Cycle does need an AWS integration with permissions in your account, and it creates the instance and an Elastic IP per load balancer there. The exact security groups and IAM weren't inspected; there was no AWS console access during validation.
 - **Avoid:** the earlier runbook hit an unsupported availability zone. `us-east-1a` worked both times.
@@ -115,7 +127,7 @@ Keep `watch-health.sh` in the corner throughout. The validated sequence:
 
 | Step | Action (portal, or API)                                                                                                                                                                                 | Took            | Failed checks                                                                                                       |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------- |
-| 1    | Add the tag `deputies` to the Cherry server                                                                                                                                                             | instant         | 0                                                                                                                   |
+| 1    | Add the tag `deputies` to the Cherry server, then turn on load-balancer HA (Environment → Services → Load Balancer; not verified with two servers on `Deputies filming`)                                | instant         | 0                                                                                                                   |
 | 2    | Add one instance each of the environment's load balancer, discovery and scheduler on Cherry (container → Instances → Add, choose the server; API `POST /v1/containers/{id}/instances` with `server_id`) | 23 s to running | 0                                                                                                                   |
 | 3    | With load-balancer HA on, the LINKED record now returns both load-balancer IPs                                                                                                                          | 6 s             | 0                                                                                                                   |
 | 4    | Add `web` and `api` instances on Cherry the same way                                                                                                                                                    | 18 s to running | 0                                                                                                                   |
@@ -234,10 +246,11 @@ So the weights workaround is a two-update release (move the idle tag, then PATCH
 Back to "nothing provisioned" (before shot 1):
 
 - [ ] Stop `watch-health.sh`.
-- [ ] In `Deputies on Cycle`, delete the app containers (every deployment version), `postgres` (this deletes the volume and the demo history), and `netcut` if used. Keep the stacks to redeploy, or delete them.
+- [ ] In `Deputies filming`, stop the environment, then delete the app containers (every deployment version), `postgres` (this deletes the volume and the demo history), and `netcut` if used. Keep the stacks to redeploy, or delete them. Clear the deployment tags (`POST /v1/environments/{id}/tasks` with `{"action":"deployments.reconfigure","contents":{"tags":{}}}`) so the next take starts with none.
 - [ ] Remove every container instance on each server, including stopped ones and a migration's retained source (kept 3 hours), then decommission the servers. If a decommission is refused for leftover instances, the server can stay in `deleting`. `DELETE /v1/infrastructure/servers/{id}` finishes it, and `{"options": {"force": true}}` handles a node that no longer responds.
 - [ ] Confirm `GET /v1/infrastructure/servers` returns no servers, and that the instances are gone at AWS and Cherry.
 - [ ] Keep the environment, scoped variables, zone and records. LINKED records with no target simply stop resolving.
+- [ ] Next take: after §1, do its off-camera environment start and discovery reconfigure again; removing the service instances is what makes it necessary.
 
 Back to "deployed on AWS" (before shot 4 or 5): keep the AWS node, deploy `v0.27.1`, tag `live`, delete other versions and seed a session. To redo only the move, add the instances back on AWS, migrate Postgres back (or use Migrate → Revert within 3 hours), and wait out the DNS TTL before rolling again.
 
@@ -260,3 +273,6 @@ Marked ★: worth a line on camera when talking about Cycle's opinions.
 13. **Negative DNS caching.** Requesting a hostname a few seconds before its record propagates got NXDOMAIN cached by some 8.8.8.8 caches (the zone's negative TTL is up to 20 minutes).
 14. **Logs:** aggregated logs were empty for the API; the instance console (MCP `capture_stream`) showed its output.
 15. **Validation DNS:** there was no Cloudflare access during validation, so it used a separate Cycle-hosted zone, `validate.cycle.deputies.dev`, which Cycle's nameservers serve under the existing `cycle` delegation. Filming on `cycle.deputies.dev` needs no Cloudflare change.
+16. **An environment needs a server to initialize.** Creating one in a cluster with no servers leaves it in `new` with `no servers meet deployment criteria`. Add a server, then `POST /v1/environments/{id}/tasks` with `{"action":"initialize"}`. `Deputies filming` is already initialized.
+17. **Service instances don't all come back.** Decommissioning needs every instance gone, including the environment's own discovery, load balancer, scheduler and VPN instances. On the next start, Cycle recreated only the load balancer; discovery stayed at zero instances until its service was reconfigured, and `api` crashed on `getaddrinfo EAI_AGAIN postgres` meanwhile. Releasing before starting the environment gave the same crash (the restart policy recovered it after the start).
+18. **`@` was slow to resolve once.** After the `@` record was switched from container form to the deployment-tag form and the load balancer came up, Cycle's nameservers answered NODATA for `@` for about 4 minutes, although HTTPS through the load balancer's IP already worked. It resolved right after two other records were created in the zone; whether that triggered it is unknown. `next`, created in tag form, resolved as soon as its tag was set. Query only Cycle's nameserver (`dig @ns1.cycle.io`) until it answers, so no public resolver caches the empty answer (Snag 13).
