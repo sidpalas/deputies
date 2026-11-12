@@ -1,0 +1,36 @@
+{
+  "version": "1.0",
+  "about": {
+    "description": "Tag-flip test: traefik/whoami answering with its deployment version. Deploy it twice as deployment versions and point a LINKED record at a tag."
+  },
+  "containers": {
+    "web": {
+      "name": "web",
+      "stateful": false,
+      "image": {
+        "origin": {
+          "type": "docker-hub",
+          "details": {
+            "target": "traefik/whoami:v1.11.0"
+          }
+        }
+      },
+      "config": {
+        "network": {
+          "public": "enable",
+          "hostname": "web",
+          "ports": ["80:8080", "443:8080"]
+        },
+        "deploy": {
+          "instances": 1
+        },
+        "runtime": {
+          "environment_vars": {
+            "WHOAMI_PORT_NUMBER": "8080",
+            "WHOAMI_NAME": "set-by-flip-test"
+          }
+        }
+      }
+    }
+  }
+}

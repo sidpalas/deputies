@@ -6,19 +6,20 @@ The build is continuous: §1 adds an AWS node, §2 a Cherry node, §3 deploys De
 
 ## Files
 
-| File                                                             | Purpose                                                                                                                 |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| [deputies-db-stack.json](deputies-db-stack.json)                 | Postgres, unversioned so every app version shares it                                                                    |
-| [deputies-app-stack.json](deputies-app-stack.json)               | Deputies 0.28.0: combined API/worker (Pi runner, Claude Haiku 5.5, Daytona sandboxes) and the Caddy web front end       |
-| [deputies-app-stack-0.27.1.json](deputies-app-stack-0.27.1.json) | The "before" version for the release shot (Deputies 0.27.1)                                                             |
-| [pi-models.json](pi-models.json)                                 | Only for 0.27.1: adds Claude Haiku 5.5 to its older Pi (0.83.0)                                                         |
-| [create-scoped-variables.sh](create-scoped-variables.sh)         | Creates the secret scoped variables and the Pi models file; writes the login to `deputies-login.txt`                    |
-| [release.sh](release.sh)                                         | Pushes a stack file, builds it, deploys the build (optionally as a deployment version) and starts it                    |
-| [tag.sh](tag.sh)                                                 | Points a deployment tag (`live`, `next`) at a version; DNS and the load balancer follow the tag                         |
-| [smoke.sh](smoke.sh)                                             | Logs in, runs one real agent task, prints the tool calls and the reply                                                  |
-| [watch-health.sh](watch-health.sh)                               | The on-camera curl loop: `/health` once a second with elapsed time, answering IP and total downtime                     |
-| [netcut-stack.json](netcut-stack.json), [netcut.sh](netcut.sh)   | §5: a privileged container that firewalls its node from Cycle's control plane for a fixed time, then removes the rules  |
-| [inplace-test-stack.json](inplace-test-stack.json)               | Test only: 2-instance `traefik/whoami` plus an unchanged Postgres in one unversioned stack (see In-Place Deploy Result) |
+| File                                                                                                       | Purpose                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| [deputies-db-stack.json](deputies-db-stack.json)                                                           | Postgres, unversioned so every app version shares it                                                                    |
+| [deputies-app-stack.json](deputies-app-stack.json)                                                         | Deputies 0.28.0: combined API/worker (Pi runner, Claude Haiku 5.5, Daytona sandboxes) and the Caddy web front end       |
+| [deputies-app-stack-0.27.1.json](deputies-app-stack-0.27.1.json)                                           | The "before" version for the release shot (Deputies 0.27.1)                                                             |
+| [pi-models.json](pi-models.json)                                                                           | Only for 0.27.1: adds Claude Haiku 5.5 to its older Pi (0.83.0)                                                         |
+| [create-scoped-variables.sh](create-scoped-variables.sh)                                                   | Creates the secret scoped variables and the Pi models file; writes the login to `deputies-login.txt`                    |
+| [release.sh](release.sh)                                                                                   | Pushes a stack file, builds it, deploys the build (optionally as a deployment version) and starts it                    |
+| [tag.sh](tag.sh)                                                                                           | Points a deployment tag (`live`, `next`) at a version; DNS and the load balancer follow the tag                         |
+| [smoke.sh](smoke.sh)                                                                                       | Logs in, runs one real agent task, prints the tool calls and the reply                                                  |
+| [watch-health.sh](watch-health.sh)                                                                         | The on-camera curl loop: `/health` once a second with elapsed time, answering IP and total downtime                     |
+| [netcut-stack.json](netcut-stack.json), [netcut.sh](netcut.sh)                                             | §5: a privileged container that firewalls its node from Cycle's control plane for a fixed time, then removes the rules  |
+| [inplace-test-stack.json](inplace-test-stack.json)                                                         | Test only: 2-instance `traefik/whoami` plus an unchanged Postgres in one unversioned stack (see In-Place Deploy Result) |
+| [flip-test.sh](flip-test.sh), [flip-probe.py](flip-probe.py), [flip-test-stack.json](flip-test-stack.json) | Test only: repro for errors at a tag flip, and the settings that remove them (see Tag Flip Result)                      |
 
 The scripts read `CYCLE_API_KEY`, `CYCLE_HUB_ID` and `CYCLE_API_BASE_URL` (`https://api.cycle.io/v1`) from the environment and print no secrets. `create-scoped-variables.sh` also reads `ANTHROPIC_API_KEY` and `DAYTONA_API_KEY`.
 
@@ -101,8 +102,8 @@ Don't film an in-place reimage: with one instance, reimaging `api` took the site
 1. **"Push":** the release is Deputies 0.28.0. In the editor, show the diff between `deputies-app-stack-0.27.1.json` and `deputies-app-stack.json`: three image tags, and the Pi workaround lines removed.
 2. **Deploy alongside:** `./release.sh deputies-app-stack.json v0.28.0 && ./tag.sh next v0.28.0`. Took 53 s; 0 of 76 live-site checks failed meanwhile. (The earlier 0.27.0 → 0.27.1 rehearsal took 96 s, also with 0 failures.)
 3. **Smoke-test the candidate** on `https://next.cycle.deputies.dev`: log in and run a task. It answered on 0.28.0 using `claude-haiku-5-5` natively.
-4. **Flip:** `./tag.sh live v0.28.0` takes about 1 s.
-5. **Roll back:** `./tag.sh live v0.27.1`, then flip forward again; about 1 s each. Across the two rehearsals (six flips), the only errors were one 503 at the first flip and one at the rollback in the second rehearsal, so expect at most a single error at the moment of switching.
+4. **Flip:** `./tag.sh live v0.28.0` returns in about 1 s. On the default (native) load balancer, traffic moves 0.1 to 6 s later, and most flips drop a few requests with `503 no routers for desired route`. Switch the environment's load balancer to HAProxy before filming, or flip with traffic-splitting weights instead (see Tag Flip Result); both measured 0 errors.
+5. **Roll back:** `./tag.sh live v0.27.1`, then flip forward again. In the Deputies rehearsals (six flips on the native load balancer), two flips each dropped one request; the 50-flip test below shows that's typical, not bad luck.
 6. **Retire the old version:** stop its two containers, then Environment → Deployments → Prune (`deployments.prune`), which removes versions without a tag. The live site kept serving after the old version stopped (0 of 30 checks failed), which proves traffic had moved.
 
 - **Points:** blue/green is a built-in primitive (versions plus tags), not an add-on, and rollback is moving a tag, with no rebuild. Caveat: while both versions run, both workers process the same queue; that's fine for 0.27.1 → 0.28.0 (no schema changes) but needs care across migrations.
@@ -172,7 +173,33 @@ What it shows:
 - **Two servers don't change it** (run 8): the errors come from the load balancer routing to a stopping instance, not from the host.
 - **Postgres is touched only if listed.** With `db` in `update`, the unchanged Postgres restarts (about 4 s; runs 2 and 9: `pg_postmaster_start_time` moved each time). With `db` left out, it isn't touched (runs 3 to 8). The marker row survived every restart. For Deputies, a Postgres restart also kills the API (Snag 9), so a single-stack release must leave `postgres` out of `update`.
 
-**For the §3 release shot:** keep the two-stack, deployment-tag approach. It measured 0 failed checks while deploying alongside and at most one error at a flip, and rollback is a 1 s tag move with no rebuild. An in-place release with 2 instances gives one to six failed checks per release in this test, for a 1 s-to-start test server; Deputies' API starts slower and runs migrations at startup, so expect no better. Fair line on camera: "a rolling in-place update with two instances is a blip, not an outage; for zero, use deployments".
+**For the §3 release shot:** keep the two-stack, deployment-tag approach. It measured 0 failed checks while deploying alongside and, with the load-balancer setting in Tag Flip Result, 0 errors at a flip, and rollback is a 1 s tag move with no rebuild. An in-place release with 2 instances gives one to six failed checks per release in this test, for a 1 s-to-start test server; Deputies' API starts slower and runs migrations at startup, so expect no better. Fair line on camera: "a rolling in-place update with two instances is a blip, not an outage; for zero, use deployments".
+
+## Tag Flip Result
+
+Question: why did tag flips drop requests, and which settings help? Tested on 2026-11-12 with [flip-test.sh](flip-test.sh): `traefik/whoami` deployed twice as deployment versions `v1` and `v2` (it answers with its version), one t3a.medium AWS node, a throwaway environment and LINKED records on `validate.cycle.deputies.dev`, then torn down. A probe ([flip-probe.py](flip-probe.py)) sent about 15 requests a second to the load balancer's IP, each on a fresh TLS connection, and saved the body of every failure. Both versions kept running throughout, so every failure is the switch itself.
+
+| Run            | How it flipped                                               | Load balancer    | Flips | Flips with errors | Failed requests | When traffic moved (after the call returned)     |
+| -------------- | ------------------------------------------------------------ | ---------------- | ----- | ----------------- | --------------- | ------------------------------------------------ |
+| baseline       | move tag `live` (`tag.sh`, `deployments.reconfigure`)        | native (default) | 20    | 16                | 43 of 2,167     | 0.1 to 6 s                                       |
+| repoint        | repoint a plain LINKED record from tag `blue` to `green`     | native           | 20    | 14                | 46 of 2,088     | 0.1 to 6 s                                       |
+| split          | swap traffic-splitting weights, record's own tag unchanged   | native           | 20    | 0                 | 0 of 2,092      | 0 to 6 s, but about 11% stays on the old version |
+| splitbase      | swap weights and move the record's own tag in the same PATCH | native           | 20    | 0                 | 0 of 2,096      | 0 to 6 s, then 100% new                          |
+| haproxy        | move tag `live`                                              | HAProxy          | 10    | 0                 | 0 of 1,164      | 0.8 to 1.1 s                                     |
+| native-control | move tag `live`, after switching back                        | native           | 10    | 7                 | 21 of 1,136     | 0.3 to 6 s                                       |
+
+What it shows:
+
+- **The error is the native load balancer briefly having no route.** Every failure was `503 Service Unavailable` with body `no routers for desired route` (a few `no routers exist for controller`), 1 to 4 requests in a 0.2 to 0.5 s window, while both versions were up. It isn't DNS (the probe used the IP) and it isn't the app. Repointing a record fails the same way, so it happens whenever a route's destinations are replaced, not only for tags.
+- **The native load balancer applies changes on a cycle of about 6 s.** Traffic moved anywhere from 0.1 to 6 s after the job completed, drifting by about 1.2 s per flip at 7 s spacing. So `tag.sh` returning doesn't mean traffic has moved.
+- **HAProxy removes both effects.** With the environment's load balancer set to HAProxy (Environment → Services → Load Balancer, or `POST /v1/environments/{id}/services/lb/tasks` with `{"action":"reconfigure","contents":{"config":{"type":"haproxy","details":null,"ipv4":true,"ipv6":true,"performance":false}}}`), 10 flips had no errors, traffic moved about 1 s after the job each time, and latency stayed flat (max 245 ms against a 226 ms median). It served TLS for the LINKED records with no other change. Switching back to native brought the errors back (control run). To switch back, send `"type":"default"`; `"type":"v1"` with `details: null` was accepted but left HAProxy running.
+- **Traffic splitting avoids it on the native load balancer.** A LINKED record can carry `routing.traffic_splitting.variants`, weighted destinations (0 to 1000) that can each be a deployment tag. With variants `blue` (v1) and `green` (v2), a flip only changes weights, so the route never empties: 0 errors in 40 flips. Snag: the record's own destination also gets a share (about 11%: 19 of 168 requests went to a weight-0 variant's version), so move the record's tag with the weights in the same PATCH.
+- **`destination_retries` doesn't help.** The native default is already 3. It retries an unreachable destination, while this error means no route at all.
+- **Not tested:** whether HAProxy also removes the in-place restart errors (In-Place Deploy Result), and its feature differences from the native load balancer (WAF, URL telemetry, router options). The HAProxy run is 10 flips, against 23 of 30 native tag flips with errors.
+
+**For the §3 release shot:** keep tag flips and set the environment's load balancer to HAProxy before filming; `tag.sh` stays the on-camera action and measured 0 errors. Rehearse the full sequence on HAProxy once first (Deputies, and the §4 move), since the earlier validation ran on the native load balancer. If HAProxy causes trouble, use a traffic-splitting record with `blue`/`green` tags instead (0 errors, but a release becomes a record PATCH rather than a tag move). Fair line on camera: "with the right load balancer setting, the flip drops nothing".
+
+To reproduce: create a stack from `flip-test-stack.json`, run `./flip-test.sh setup`, add a LINKED record for container `web` and tag `live`, start the environment, then `HOST=<record> ./flip-test.sh run 20 6`. The header of `flip-test.sh` lists the record-repoint and traffic-splitting modes.
 
 ## Reset Between Takes
 
