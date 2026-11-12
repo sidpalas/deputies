@@ -20,6 +20,7 @@ The build is continuous: §1 adds an AWS node, §2 a Cherry node, §3 deploys De
 | [netcut-stack.json](netcut-stack.json), [netcut.sh](netcut.sh)                                             | §5: a privileged container that firewalls its node from Cycle's control plane for a fixed time, then removes the rules  |
 | [inplace-test-stack.json](inplace-test-stack.json)                                                         | Test only: 2-instance `traefik/whoami` plus an unchanged Postgres in one unversioned stack (see In-Place Deploy Result) |
 | [flip-test.sh](flip-test.sh), [flip-probe.py](flip-probe.py), [flip-test-stack.json](flip-test-stack.json) | Test only: repro for errors at a tag flip, and the settings that remove them (see Tag Flip Result)                      |
+| [tag-flip-repro.sh](tag-flip-repro.sh)                                                                     | Standalone single-file repro of the tag-flip 503s, to share with Cycle (see Tag Flip Result)                            |
 
 The scripts read `CYCLE_API_KEY`, `CYCLE_HUB_ID` and `CYCLE_API_BASE_URL` (`https://api.cycle.io/v1`) from the environment and print no secrets. `create-scoped-variables.sh` also reads `ANTHROPIC_API_KEY` and `DAYTONA_API_KEY`.
 
@@ -199,7 +200,9 @@ What it shows:
 
 **For the §3 release shot:** keep tag flips and set the environment's load balancer to HAProxy before filming; `tag.sh` stays the on-camera action and measured 0 errors. Rehearse the full sequence on HAProxy once first (Deputies, and the §4 move), since the earlier validation ran on the native load balancer. If HAProxy causes trouble, use a traffic-splitting record with `blue`/`green` tags instead (0 errors, but a release becomes a record PATCH rather than a tag move). Fair line on camera: "with the right load balancer setting, the flip drops nothing".
 
-To reproduce: create a stack from `flip-test-stack.json`, run `./flip-test.sh setup`, add a LINKED record for container `web` and tag `live`, start the environment, then `HOST=<record> ./flip-test.sh run 20 6`. The header of `flip-test.sh` lists the record-repoint and traffic-splitting modes.
+Standalone repro for Cycle: [tag-flip-repro.sh](tag-flip-repro.sh) needs only bash, curl, jq and dig, an environment on a cluster with a live server, and a Cycle-hosted zone. `setup` deploys whoami as versions v1 and v2, tags `live`, and creates the LINKED record (60 s); `flip` moves `live` 10 times while two curl loops hit the load balancer IP, and prints each failure's body; `cleanup` removes what `setup` made. Validated on 2026-11-12 on a fresh node: 50 of 839 requests failed over 15 flips, and every flip had at least one failure. 26 were `503 no routers for desired route` or `no routers exist for controller`, and 2 were connection failures from the first run, before the script recorded curl errors. In one flip, new connections also failed TLS for about 2.7 s (`tlsv1 alert internal error`, 22 requests), which suggests the native load balancer briefly drops the hostname's certificate along with its route; the earlier probe runs didn't show that.
+
+The fuller test harness: create a stack from `flip-test-stack.json`, run `./flip-test.sh setup`, add a LINKED record for container `web` and tag `live`, start the environment, then `HOST=<record> ./flip-test.sh run 20 6`. The header of `flip-test.sh` lists the record-repoint and traffic-splitting modes.
 
 ## Reset Between Takes
 
