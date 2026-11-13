@@ -2,14 +2,17 @@
 # Creates the scoped variables Deputies needs in a Cycle environment.
 # Usage: ENVIRONMENT_ID=<24-char id> ./create-scoped-variables.sh
 #
-# Reads CYCLE_API_KEY, CYCLE_HUB_ID, CYCLE_API_BASE_URL, ANTHROPIC_API_KEY and
-# DAYTONA_API_KEY from the environment. Generates fresh random values for the
-# database password, login password, session secret and sandbox-secret key
-# unless PGPW, LOGINPW, SESSSECRET and SANDBOXKEY are already set.
+# Reads CYCLE_API_KEY, CYCLE_HUB_ID, CYCLE_API_BASE_URL, ANTHROPIC_API_KEY,
+# TENSORLAKE_API_KEY and DAYTONA_API_KEY from the environment. The stacks use
+# Tensorlake; the Daytona key stays as a fallback. Generates fresh random
+# values for the database password, login password, session secret and
+# sandbox-secret key unless PGPW, LOGINPW, SESSSECRET and SANDBOXKEY are
+# already set.
 # Prints only identifiers; the login is written to ./deputies-login.txt (mode 600).
 set -euo pipefail
 : "${ENVIRONMENT_ID:?set ENVIRONMENT_ID}"
 : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}"
+: "${TENSORLAKE_API_KEY:?set TENSORLAKE_API_KEY}"
 : "${DAYTONA_API_KEY:?set DAYTONA_API_KEY}"
 umask 077
 here=$(cd "$(dirname "$0")" && pwd)
@@ -41,6 +44,7 @@ secret auth-password api AUTH_STATIC_PASSWORD "$LOGINPW"
 secret auth-session-secret api AUTH_SESSION_SECRET "$SESSSECRET"
 secret sandbox-secret-encryption-key api SANDBOX_SECRET_ENCRYPTION_KEY "$SANDBOXKEY"
 secret anthropic-api-key api ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+secret tensorlake-api-key api TENSORLAKE_API_KEY "$TENSORLAKE_API_KEY"
 secret daytona-api-key api DAYTONA_API_KEY "$DAYTONA_API_KEY"
 
 # Only Deputies 0.27.x reads this: its Pi (0.83.0) predates Claude Haiku 5.5,

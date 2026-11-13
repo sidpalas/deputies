@@ -9,7 +9,7 @@ The build is continuous: §1 adds an AWS node, §2 a Cherry node, §3 deploys De
 | File                                                                                                       | Purpose                                                                                                                 |
 | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | [deputies-db-stack.json](deputies-db-stack.json)                                                           | Postgres, unversioned so every app version shares it                                                                    |
-| [deputies-app-stack.json](deputies-app-stack.json)                                                         | Deputies 0.28.0: combined API/worker (Pi runner, Claude Haiku 5.5, Daytona sandboxes) and the Caddy web front end       |
+| [deputies-app-stack.json](deputies-app-stack.json)                                                         | Deputies 0.28.0: combined API/worker (Pi runner, Claude Haiku 5.5, Tensorlake sandboxes) and the Caddy web front end    |
 | [deputies-app-stack-0.27.1.json](deputies-app-stack-0.27.1.json)                                           | The "before" version for the release shot (Deputies 0.27.1)                                                             |
 | [pi-models.json](pi-models.json)                                                                           | Only for 0.27.1: adds Claude Haiku 5.5 to its older Pi (0.83.0)                                                         |
 | [create-scoped-variables.sh](create-scoped-variables.sh)                                                   | Creates the secret scoped variables and the Pi models file; writes the login to `deputies-login.txt`                    |
@@ -22,7 +22,7 @@ The build is continuous: §1 adds an AWS node, §2 a Cherry node, §3 deploys De
 | [flip-test.sh](flip-test.sh), [flip-probe.py](flip-probe.py), [flip-test-stack.json](flip-test-stack.json) | Test only: repro for errors at a tag flip, and the settings that remove them (see Tag Flip Result)                      |
 | [tag-flip-repro.sh](tag-flip-repro.sh)                                                                     | Standalone single-file repro of the tag-flip 503s, to share with Cycle (see Tag Flip Result)                            |
 
-The scripts read `CYCLE_API_KEY`, `CYCLE_HUB_ID` and `CYCLE_API_BASE_URL` (`https://api.cycle.io/v1`) from the environment and print no secrets. `create-scoped-variables.sh` also reads `ANTHROPIC_API_KEY` and `DAYTONA_API_KEY`.
+The scripts read `CYCLE_API_KEY`, `CYCLE_HUB_ID` and `CYCLE_API_BASE_URL` (`https://api.cycle.io/v1`) from the environment and print no secrets. `create-scoped-variables.sh` also reads `ANTHROPIC_API_KEY`, `TENSORLAKE_API_KEY` and `DAYTONA_API_KEY`.
 
 ## Configuration
 
@@ -38,7 +38,8 @@ Setup on 2026-11-12, all through the API:
 - Smoke test on the temporary node: deployed `deputies-db`, `v0.27.1` tagged `live` and `v0.28.0` tagged `next`. `https://cycle.deputies.dev` and `https://next.cycle.deputies.dev` served `/health` over HTTPS with valid certificates, and `smoke.sh` ran the fib.py task (write, then run in a separate step, correct output) in 27 s with a cold sandbox. Then reset with the checklist in Reset Between Takes, the deployment tags cleared, and the server deleted: `GET /v1/infrastructure/servers` returned no servers and the hub had no IP pools left.
 
 - **Placement:** every container requires the server tag `deputies`. Tag the AWS node in §1 and add the tag to the Cherry node at the start of §4. This replaces the old `aws-us-east-1` constraint, so nothing in the stack needs loosening before the move.
-- **Network:** only `web` is public (`80:5173`, `443:5173`). `api` is `egress-only`, because it calls Anthropic and Daytona. Postgres has no public network.
+- **Network:** only `web` is public (`80:5173`, `443:5173`). `api` is `egress-only`, because it calls Anthropic and Tensorlake. Postgres has no public network.
+- **Sandboxes:** `SANDBOX_PROVIDER=tensorlake` with `TENSORLAKE_REGISTERED_IMAGE=deputies`, a registered Tensorlake image. `DAYTONA_IMAGE` and the `daytona-api-key` variable stay, so switching back to Daytona only means changing `SANDBOX_PROVIDER`. The smoke-test and agent-task timings in this runbook were measured with Daytona.
 - **Restart policy:** `api` and `web` have `restart: {condition: always, delay: 5s}`. The API process exits when Postgres restarts (see Snags), and Cycle restarts it.
 - **0.27.1 only:** `PI_CODING_AGENT_DIR=/home/node/.pi/agent` plus the `pi-models` file. Cycle runs the image's process as root, not as its `node` user, so without the variable Pi looks in `/root/.pi/agent`. 0.28.0 ships Pi 1.5.0, which knows Haiku 5.5, and needs neither.
 
@@ -52,10 +53,11 @@ Scoped variables (each scoped to one container; `create-scoped-variables.sh` cre
 | `auth-session-secret`           | `api`      | `AUTH_SESSION_SECRET`                                 | yes    |
 | `sandbox-secret-encryption-key` | `api`      | `SANDBOX_SECRET_ENCRYPTION_KEY`                       | yes    |
 | `anthropic-api-key`             | `api`      | `ANTHROPIC_API_KEY`                                   | yes    |
+| `tensorlake-api-key`            | `api`      | `TENSORLAKE_API_KEY`                                  | yes    |
 | `daytona-api-key`               | `api`      | `DAYTONA_API_KEY`                                     | yes    |
 | `pi-models`                     | `api`      | file `/home/node/.pi/agent/models.json` (0.27.1 only) | no     |
 
-`Deputies filming` has all eight. Running the script again would create duplicates; to rotate a value, update that variable instead.
+`Deputies filming` has all nine. Running the script again would create duplicates; to rotate a value, update that variable instead.
 
 Two LINKED DNS records in the hosted zone, both targeting a deployment tag, not a container:
 
@@ -265,7 +267,7 @@ Marked ★: worth a line on camera when talking about Cycle's opinions.
 5. **Starting an environment** fails until the cluster has a live server.
 6. **Cycle runs the process as root**, ignoring the image's `USER node`. That's why Pi needed `PI_CODING_AGENT_DIR` on 0.27.1. Set `runtime.user` if you want the image's user.
 7. **Haiku 5.5 on 0.27.x.** Pi 0.83.0 doesn't know `claude-haiku-5-5` ("Pi model is not available"). Once added, it needs `compat.forceAdaptiveThinking`, because Anthropic rejects `thinking.type.enabled` for it. Fixed natively in 0.28.0.
-8. **Real-runner config** also needs `SANDBOX_SECRET_ENCRYPTION_KEY` (required with Postgres and Daytona) and egress on `api`.
+8. **Real-runner config** also needs `SANDBOX_SECRET_ENCRYPTION_KEY` (required with Postgres and a real sandbox provider) and egress on `api`.
 9. **Postgres restarts kill the API.** The control plane's `pg` pools have no `error` listener, so an idle connection terminated by a Postgres restart crashes the process (instance `failed`, then 502s). The stack's restart policy covers it; a Deputies fix was suggested separately.
 10. **Stack variables can't be used in image targets** (`{{api_tag}}` fails validation), so releases edit the tag in the file.
 11. **`deployment.stop` returns 500** (`gob: type not registered for interface: environmentTasks.Deployment`). Stop the containers directly or prune.

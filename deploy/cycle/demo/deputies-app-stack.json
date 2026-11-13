@@ -47,7 +47,7 @@
             "APP_DATA_STORE": "postgres",
             "RUNNER_STATE_STORE": "postgres",
             "RUNNER": "pi",
-            "SANDBOX_PROVIDER": "daytona",
+            "SANDBOX_PROVIDER": "tensorlake",
             "WORKER_CONCURRENCY": "1",
             "ARTIFACT_STORAGE_PROVIDER": "disabled",
             "WEB_SEARCH_PROVIDER": "disabled",
@@ -61,6 +61,7 @@
             "RUNNER_MODEL_DEFAULT": "anthropic/claude-haiku-5-5",
             "RUNNER_MODEL_CHOICES": "anthropic/claude-haiku-5-5",
             "DAYTONA_IMAGE": "ghcr.io/sidpalas/deputies-daytona-sandbox:0.28.0",
+            "TENSORLAKE_REGISTERED_IMAGE": "deputies",
             "SANDBOX_WORKSPACE_PATH": "/workspace"
           }
         }
